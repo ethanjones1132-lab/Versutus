@@ -104,6 +104,9 @@ test('a listed origin may read the streaming contract, and may send the turn id'
     // session a streamed turn belongs to, nor how long to wait for a heartbeat.
     assert.match(res.headers.get('access-control-expose-headers') ?? '', /X-Versutus-Session-Id/);
     assert.match(res.headers.get('access-control-expose-headers') ?? '', /X-Versutus-Keepalive-Ms/);
+    // Nor whether a resent turn is being replayed instead of run a second time,
+    // which is how a browser build knows its retry was exactly-once.
+    assert.match(res.headers.get('access-control-expose-headers') ?? '', /X-Versutus-Turn-Resumed/);
 
     // The preflight must admit the turn-id header the streamed turn relies on.
     const preflight = await fetch(`${gateBase(gate)}/v1/chat/completions`, {

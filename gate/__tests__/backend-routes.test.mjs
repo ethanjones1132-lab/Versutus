@@ -3113,11 +3113,12 @@ test('a stopped turn ends quietly, and is not reported as one that came back emp
   }
 });
 
-test('a turn id already in use is refused, and the turn that owns it stays stoppable', async () => {
-  // The turn id is how Stop finds a turn, so the map entry is ownership of it.
-  // A second turn claiming the same id used to take that entry: the first
-  // turn's `finally` then deleted the second turn's entry, and the second turn
-  // could not be stopped by anyone — not by its own phone, not by close().
+test('a turn id already in use is a replay of that turn, not a second one', async () => {
+  // The turn id is how Stop finds a turn, so the map entry is ownership of it —
+  // but a client that re-sends under an id the Gate already accepted is retrying
+  // an accepted send, not starting a second turn. The old 409 left such a client
+  // with no way to learn what happened to its turn, and letting the request
+  // through ran the same prompt twice.
   const turns = [];
   // A delta per turn so every accepted stream flushes its headers at once: a
   // turn that says nothing never flushes them, and a client waiting on them
@@ -3134,30 +3135,27 @@ test('a turn id already in use is refused, and the turn that owns it stays stopp
     first.catch(() => undefined);
     assert.ok(await until(() => turns.length === 1), 'the turn never reached the backend');
 
-    // Refused as a request, before any stream header: a 200 with an
-    // `text/event-stream` body would read to the client as a second live turn.
+    // The retry is answered as a stream of the turn that is already running,
+    // never as a request error and never as a second turn.
     const second = await streamingTurn(gate, { turnId: TURN_ID });
-    assert.equal(second.status, 409);
-    assert.match(second.headers.get('content-type'), /application\/json/);
-    assert.equal(second.headers.get('x-versutus-session-id'), null, 'no turn was opened to stream');
-    assert.equal((await second.json()).error.code, 'turn_id_in_use');
-    assert.equal(turns.length, 1, 'the refused turn must never reach the backend');
+    assert.equal(second.status, 200);
+    assert.match(second.headers.get('content-type'), /text\/event-stream/);
+    assert.equal(second.headers.get('x-versutus-turn-resumed'), '1');
+    assert.equal(turns.length, 1, 'the retry must never reach the backend again');
 
     // The turn that owns the id is still the one Stop reaches.
     assert.deepEqual(await (await cancel(TURN_ID)).json(), { cancelled: true });
     assert.ok(await until(() => turns[0].signal?.aborted === true), 'Stop must abort the turn it names');
     await first.catch(() => undefined);
 
-    // And the id is free again once that turn has ended, so a client that
-    // retries with it is served rather than refused forever.
-    let reused = null;
-    for (let attempt = 0; attempt < 100 && !reused; attempt += 1) {
-      const attempt_ = await streamingTurn(gate, { turnId: TURN_ID });
-      if (attempt_.status !== 409) reused = attempt_;
-      else await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    assert.ok(reused, 'a turn id must be usable again once the turn it named has ended');
-    assert.deepEqual(await (await cancel(TURN_ID)).json(), { cancelled: true });
+    // And the id stays that turn's: a later send under it replays the turn that
+    // is on record rather than running a second one.
+    const later = await streamingTurn(gate, { turnId: TURN_ID });
+    assert.equal(later.status, 200);
+    assert.equal(later.headers.get('x-versutus-turn-resumed'), '1');
+    assert.match(await later.text(), /thinking/, 'the replay carries the frames the turn really streamed');
+    assert.equal(turns.length, 1, 'a turn id is never freed for a second turn');
+    assert.deepEqual(await (await cancel(TURN_ID)).json(), { cancelled: false });
   } finally {
     await gate.close();
   }
@@ -3177,9 +3175,16 @@ test('Stop needs the Gate\'s own credential', async () => {
   }
 });
 
-test('no more than eight turns may run unseen; the ninth is cancelled as before', async () => {
+test('a runaway guard refuses a new detach; it never cancels a running turn', async () => {
+  // The count used to be process-wide and the ninth close was read as a Stop:
+  // an operator who had asked for nine replies lost the ninth without a word.
+  // It is now a per-caller guard on how many turns may run unseen, and past it
+  // the NEW detach is refused — the turn keeps running.
   const turns = [];
-  const { gate } = await makeGate({ registry: parkedTurnRegistry(turns) });
+  const { gate } = await makeGate({
+    registry: parkedTurnRegistry(turns),
+    gateOptions: { detachedTurnMaxMs: 30_000, detachedStallMs: 30_000, detachedTurnLimit: 8 },
+  });
   const controllers = Array.from({ length: 9 }, () => new AbortController());
   try {
     const pendings = controllers.map((controller, index) => streamingTurn(gate, {
@@ -3188,17 +3193,16 @@ test('no more than eight turns may run unseen; the ninth is cancelled as before'
     pendings.forEach((pending) => pending.catch(() => undefined));
     assert.ok(await until(() => turns.length === 9), `only ${turns.length} of 9 turns started`);
 
-    // One at a time, so which close crossed the cap is unambiguous. Which turn
+    // One at a time, so which close crossed the guard is unambiguous. Which turn
     // each close belongs to is read back from the backend, not assumed: the
     // requests reach the Gate in whatever order the pool hands them out.
     for (let index = 0; index < controllers.length; index += 1) {
       controllers[index].abort();
       await new Promise((resolve) => setTimeout(resolve, 30));
-      const cancelled = turns.filter((turn) => turn.signal?.aborted).map((turn) => turn.text);
       assert.deepEqual(
-        cancelled,
-        index === 8 ? ['turn number 8'] : [],
-        `after ${index + 1} detached turns, the cancelled set should be ${index === 8 ? "['turn number 8']" : 'empty'}`,
+        turns.filter((turn) => turn.signal?.aborted).map((turn) => turn.text),
+        [],
+        `turn number ${index} was cancelled by the runaway guard`,
       );
     }
   } finally {
@@ -3369,11 +3373,11 @@ test('a turn that finished on a live socket arms no timer to reap it', async () 
   }
 });
 
-test('a detached turn does arm one, and the turn ending clears it', async () => {
+test('a detached turn does arm its bounds, and the turn ending clears them', async () => {
   const turns = [];
   const { gate } = await makeGate({
     registry: parkedTurnRegistry(turns),
-    gateOptions: { detachedTurnMaxMs: DETACHED_AGE_MS },
+    gateOptions: { detachedTurnMaxMs: DETACHED_AGE_MS, detachedStallMs: 2 * DETACHED_AGE_MS },
   });
   const timers = trackLongTimers(DETACHED_AGE_MS / 2);
   const controller = new AbortController();
@@ -3383,14 +3387,16 @@ test('a detached turn does arm one, and the turn ending clears it', async () => 
     assert.ok(await until(() => turns.length === 1));
     controller.abort();
     await pending.catch(() => undefined);
-    // The watch is proved by this turn: it is the case that must arm one.
-    assert.ok(await until(() => timers.armed > 0), 'a detached turn must be bounded by its age');
-    assert.equal(timers.pending, 1);
+    // The watch is proved by this turn: it is the case that must arm them. Two
+    // bounds now start here — the stall watchdog and the safety ceiling — and
+    // neither of them is a countdown that cancels the turn on its own.
+    assert.ok(await until(() => timers.armed > 0), 'a detached turn must be bounded');
+    assert.equal(timers.pending, 2);
 
     turns[0].resolve(answer('the whole answer'));
     assert.ok(
       await until(() => timers.pending === 0),
-      'the timer must not outlive the turn it was reaping',
+      'no bound may outlive the turn it was reaping',
     );
   } finally {
     timers.restore();

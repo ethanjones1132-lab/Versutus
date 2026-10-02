@@ -20,10 +20,10 @@
 const ALLOWED_METHODS = 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS';
 
 // Response headers a browser client may read. CORS exposes nothing by default,
-// so a streamed turn's contract — which session it belongs to, and how long to
-// wait for a heartbeat — would be invisible to the web build even though the
-// Gate sent it.
-const EXPOSED_HEADERS = 'X-Versutus-Session-Id, X-Versutus-Keepalive-Ms';
+// so a streamed turn's contract — which session it belongs to, how long to wait
+// for a heartbeat, and whether a resent turn is being replayed rather than run
+// again — would be invisible to the web build even though the Gate sent it.
+const EXPOSED_HEADERS = 'X-Versutus-Session-Id, X-Versutus-Keepalive-Ms, X-Versutus-Turn-Resumed';
 
 /** "http://A:8081, https://b" -> ["http://a:8081","https://b"] (trimmed, lowercased, deduped). */
 export function parseAllowedOrigins(raw) {

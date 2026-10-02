@@ -14,6 +14,7 @@ import { buildManifest } from './manifest.mjs';
 import { tailnetIpv4FromInterfaces } from './reachability.mjs';
 import { createSerialReload, createDebouncedReload } from './serial-reload.mjs';
 import { createSessionIndex, parseSessionIndexKey, sessionIndexKey } from './session-index.mjs';
+import { createTurnJournal } from './turns/turn-journal.mjs';
 import { toGatewaySession } from './cli-environments/backends/hermes.mjs';
 import { ProviderStore } from './providers/store.mjs';
 import { migrateLegacyProviders } from './providers/migrate-v1.mjs';
@@ -77,12 +78,21 @@ const AUTH_MAX_BODY_BYTES = 64 * 1024 * 1024;
 
 // A phone that names its turn can detach from it: a backgrounded app has its
 // socket suspended or killed by Android, which says nothing about the turn
-// still running on the Gate. Such a turn is kept alive (see streamBackendTurn)
-// and reaped by three bounds, because a turn nobody can see must not be able to
-// run forever: an explicit cancel, this age, and this many at a time.
+// still running on the Gate. A close is therefore NOT a cancel and NOT a
+// countdown - it is a subscriber going away (docs/design/durable-turns.md 3.4).
+// A detached turn ends only when it finishes, when the phone says Stop, when it
+// goes quiet for this long, or at the twelve-hour safety ceiling below. A tool
+// that takes twenty minutes is working, not hanging - but only for as long as it
+// keeps saying so: its progress frames re-arm the stall clock like any other
+// event, so a tool card nobody ever closes cannot pin a turn open forever.
 const TURN_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
-const DEFAULT_DETACHED_TURN_MAX_MS = 10 * 60 * 1000;
-const DETACHED_TURN_LIMIT = 8;
+const DEFAULT_DETACHED_TURN_MAX_MS = 12 * 60 * 60 * 1000;
+const DEFAULT_DETACHED_STALL_MS = 30 * 60 * 1000;
+// How many turns one caller may leave running unseen. A runaway guard, not a
+// reaper: past it a NEW detach is refused (with a log line) and the turn keeps
+// streaming attached, because the alternative - reading the ninth close as a
+// Stop - killed a turn the operator had asked for and was told nothing about.
+const DEFAULT_DETACHED_TURN_LIMIT = 256;
 // A vendor that accepts the request and never answers would otherwise hold it
 // for undici's default forever. This bounds the wait for RESPONSE HEADERS
 // only: a slow stream keeps streaming for as long as it is making progress.
@@ -145,48 +155,151 @@ function lastUserText(messages = []) {
   return '';
 }
 
+/** The frame every attached turn is ended with when the Gate itself goes down. */
+const GATE_RESTART_FRAME = JSON.stringify({
+  error: { code: 'gate_restart', message: 'The Gate restarted while this turn was running.' },
+});
+
+/** How the Gate says it ended a turn itself, per reason (design 3.4). */
+const GATE_STOP_FRAMES = {
+  stalled: {
+    code: 'turn_stalled',
+    message: 'The backend stopped producing anything, so the Gate ended this turn.',
+  },
+  max_age: {
+    code: 'turn_max_age',
+    message: 'This turn ran past the Gate\'s ceiling, so the Gate ended it.',
+  },
+};
+
+/**
+ * How many of one caller's turns are running with nobody watching them.
+ *
+ * Per caller, because the count is about one phone's behaviour: a second phone
+ * leaving mid-turn says nothing about what the first one may still have in
+ * flight.
+ */
+function detachedTurnCount(inFlightTurns, callerId) {
+  let count = 0;
+  for (const entry of inFlightTurns.values()) {
+    if (entry.detached && entry.callerId === callerId) count += 1;
+  }
+  return count;
+}
+
+/**
+ * Replay a journalled turn into a response and then follow it live.
+ *
+ * One implementation for two callers: the phone re-attaching at
+ * `/v1/turns/{id}/events?after=<seq>`, and a retry of a send the Gate already
+ * accepted, which must not run a second turn (design 3.3). The frames are the
+ * ones the live stream carried, so the app's existing stream parser reads a
+ * replay with no new code.
+ *
+ * Answers false without touching the response when this caller has no such
+ * turn, which is the caller's cue to write its own 404.
+ */
+async function replayTurnStream(journal, callerId, turnId, res, {
+  after = 0,
+  keepaliveIntervalMs,
+  headers = {},
+} = {}) {
+  const known = await journal.get(callerId, turnId);
+  if (!known) return false;
+  res.writeHead(200, sseHeaders({
+    ...headers,
+    // The same header a live turn answers with, so the phone knows which thread
+    // this stream belongs to without reading a body.
+    ...(safeHeaderValue(known.sessionId) ? { 'X-Versutus-Session-Id': known.sessionId } : {}),
+  }));
+  // The heartbeat stops itself on the response's own close/finish, which is what
+  // a finished turn and a phone that walked away both produce.
+  startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
+  let ended = false;
+  let unsubscribe = () => {};
+  // The phone leaving a replay releases the subscription and touches nothing
+  // else: the turn keeps running, and the journal is there to replay again.
+  res.on('close', () => { ended = true; unsubscribe(); });
+  unsubscribe = await journal.subscribe(callerId, turnId, after, (event) => {
+    if (ended) return;
+    if (!event) {
+      ended = true;
+      res.write('data: [DONE]\n\n');
+      res.end();
+      return;
+    }
+    res.write(`id: ${event.seq}\ndata: ${event.data}\n\n`);
+  });
+  // A phone that left while the replay was still reading the file would
+  // otherwise hold a subscription nothing will ever release.
+  if (ended) unsubscribe();
+  return true;
+}
+
 /**
  * Relay a native-environment turn as OpenAI-shaped SSE, through the one turn
  * runner typed and spoken turns share. The runner reports deltas, tool calls
  * and the model that ran; this writer only shapes them onto the wire and adds
  * the empty-turn guarantee.
  *
- * A turn that named itself is detachable. A phone that locks mid-reply has its
- * socket suspended or killed, which is indistinguishable from the user pressing
- * Stop, and reading it as the latter threw the answer away with the reply: no
- * stream, and no notification either, because a dropped turn has no text to
- * report. So a close on a named turn detaches instead of aborting — the turn
- * finishes on the Gate and its reply arrives as a push — while an unnamed turn
- * (every client before this header existed) keeps the old meaning of a close.
+ * A turn that named itself belongs to the Gate, not to this request (design
+ * section 2). So every frame is journalled as it happens, and closing the phone
+ * is a subscriber going away rather than a cancel: the turn finishes here and
+ * the answer reaches the phone as a push, or as a replay it asks for later. An
+ * unnamed turn (every client before the turn-id header existed) keeps the old
+ * meaning of a close, because a turn nobody can name is a turn nobody can find
+ * again.
  */
 async function streamBackendTurn(backend, sessionId, { text, model }, res, {
   callerId = 'anonymous',
   turnId = null,
+  backendId = null,
+  botId = null,
+  modelLabel = null,
   inFlightTurns,
+  journal = null,
   keepaliveIntervalMs,
   detachedTurnMaxMs = DEFAULT_DETACHED_TURN_MAX_MS,
+  detachedStallMs = DEFAULT_DETACHED_STALL_MS,
+  detachedTurnLimit = DEFAULT_DETACHED_TURN_LIMIT,
   // How this turn's verdict reaches the model-health table, and under which
   // qualifier (see createGate). Optional: a caller with no table to write
   // passes neither and the turn is scored by nobody.
   recordOutcome,
   healthKey,
+  onGateStopped = null,
 } = {}) {
-  // One turn per turn id, per caller. The id is how Stop finds this turn, so a
-  // second turn claiming an id that is still in use would take the entry with
-  // it: the first turn's `finally` would then delete the SECOND turn's entry,
-  // leaving it unstoppable, invisible to close() and uncounted against the
-  // detached bound. Refused here, before any stream header is written, so the
-  // client gets a JSON answer rather than a 200 it would read as a turn.
   const key = turnId && inFlightTurns ? `${callerId}:${turnId}` : null;
-  if (key && inFlightTurns.has(key)) {
-    res.writeHead(409, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      error: {
-        message: `Turn "${turnId}" is already running. Send it under a new turn id, or stop that one first.`,
-        code: 'turn_id_in_use',
-      },
-    }));
-    return null;
+
+  // A response that closes before we finish is a subscriber walking away (a
+  // locked screen, a lost network, the app being killed) — not the turn
+  // failing. `res.end()` is only ever called from the bottom of this function,
+  // so any 'close' observed before that point is premature.
+  let clientDisconnected = false;
+
+  // Every frame leaves through here: recorded first, then written to the phone
+  // if it is still listening. That is the whole durability contract — a replay
+  // carries exactly what the live stream carried, in the same order.
+  //
+  // The turn's journal is opened BEFORE the status line, so a request that
+  // finds the turn id already running can still answer as a replay of it
+  // instead of taking its record over.
+  let journalTurn = null;
+  if (journal && turnId) {
+    try {
+      journalTurn = journal.begin({ callerId, turnId, sessionId, backendId, botId, model: modelLabel });
+    } catch (error) {
+      if (error?.code !== 'turn_exists') throw error;
+      // Two requests both found this id unused and then both started one
+      // (design 3.3): a retry is never a second turn, so this one becomes a
+      // subscriber of the turn already running, exactly as a retry over HTTP is.
+      await replayTurnStream(journal, callerId, turnId, res, {
+        after: 0,
+        keepaliveIntervalMs,
+        headers: { 'X-Versutus-Turn-Resumed': '1' },
+      });
+      return null;
+    }
   }
 
   res.writeHead(200, sseHeaders({
@@ -197,53 +310,148 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res, {
   }));
   const stopKeepalive = startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
 
-  // A response that closes before we finish is the client walking away (the
-  // app's "stop" affordance aborting its fetch, or the network dropping) —
-  // not the turn failing. `res.end()` is only ever called from the bottom of
-  // this function, so any 'close' observed before that point is premature.
-  let clientDisconnected = false;
-  res.on('close', () => { clientDisconnected = true; });
+
+  const emit = (data) => {
+    try {
+      journalTurn?.append(data);
+    } catch {
+      // The journal already swallows its own faults; this is the belt to that
+      // braces, because a live reply is worth more than its record.
+    }
+    if (!clientDisconnected) res.write(`data: ${data}\n\n`);
+    // Every frame is a sign of life, so the stall watchdog is measured from the
+    // last one rather than from the moment the phone left: a turn that keeps
+    // streaming is working, however long it takes.
+    if (turn?.detached) armStall();
+  };
 
   const controller = new AbortController();
   const turn = key
-    ? { controller, startedAt: Date.now(), detached: false, finished: false, timer: null }
+    ? {
+      key,
+      callerId,
+      controller,
+      startedAt: Date.now(),
+      detached: false,
+      finished: false,
+      stallTimer: null,
+      ageTimer: null,
+      endedBy: null,
+    }
     : null;
-  if (turn) inFlightTurns.set(key, turn);
+
+  function clearDetachTimers() {
+    if (!turn) return;
+    if (turn.stallTimer) clearTimeout(turn.stallTimer);
+    if (turn.ageTimer) clearTimeout(turn.ageTimer);
+    turn.stallTimer = null;
+    turn.ageTimer = null;
+  }
+
+  /**
+   * Close the turn's journal with the one status that describes how it ended,
+   * and release the map entry Stop finds it through. Called from every ending,
+   * and idempotent: the first ending is the true one.
+   */
+  function endTurn(status, detail) {
+    if (!turn || turn.finished) return;
+    turn.finished = true;
+    clearDetachTimers();
+    try {
+      journalTurn?.finish(status, detail);
+    } catch {
+      // As above: the record is worth less than the reply.
+    }
+    // Only the turn that owns the key may release it: a turn that outlived a
+    // close() that cleared the map must not evict an entry its Stop is found
+    // through.
+    if (inFlightTurns.get(turn.key) === turn) inFlightTurns.delete(turn.key);
+  }
+
+  /**
+   * The Gate ending a turn itself: a stall, the safety ceiling, or a restart.
+   *
+   * Recorded, told to the phone, pushed (a phone that walked away is the only
+   * one that needs telling) and only then aborted — in that order, so a turn
+   * that ends this way is never a turn that ends as a success.
+   */
+  function endByGate(reason) {
+    if (!turn || turn.finished) return;
+    turn.endedBy = reason;
+    // The frame is journalled BEFORE the turn is closed: a closed journal entry
+    // takes no more events, so a frame written after `endTurn` would reach the
+    // attached phone only, and a follower or a later replay would end on `[DONE]`
+    // with the half answer looking finished.
+    if (reason === 'gate_restart') emit(GATE_RESTART_FRAME);
+    else emit(JSON.stringify({ error: GATE_STOP_FRAMES[reason] }));
+    endTurn('interrupted', { reason });
+    onGateStopped?.({ reason, turnId, sessionId, botId });
+    controller.abort();
+  }
+
+  /**
+   * The stall watchdog, re-armed by every event this turn produces.
+   *
+   * A long tool is kept off the clock by its progress, not by the mere fact that
+   * it is open: `onToolCall` calls in here like any other frame, so a tool that
+   * starts and then never reports again (a wedged CLI, a card the backend
+   * forgets to close) runs out the same bound as a silent model. Freezing the
+   * clock while a tool was open would have handed the only unbounded case -
+   * a tool that never ends - the one bound there is.
+   */
+  function armStall() {
+    if (!turn || turn.finished) return;
+    if (turn.stallTimer) clearTimeout(turn.stallTimer);
+    turn.stallTimer = setTimeout(() => endByGate('stalled'), detachedStallMs);
+    turn.stallTimer.unref?.();
+  }
+
+  function armCeiling() {
+    if (!turn || turn.finished || turn.ageTimer) return;
+    // The ceiling runs from the moment the phone left, for the full bound. How
+    // long the turn had already been running attached says nothing about whether
+    // it is still working — the old arithmetic took that as the remaining budget
+    // and killed a healthy turn the instant its socket closed.
+    turn.ageTimer = setTimeout(() => endByGate('max_age'), detachedTurnMaxMs);
+    turn.ageTimer.unref?.();
+  }
+
+  if (turn) {
+    turn.endByGate = endByGate;
+    inFlightTurns.set(key, turn);
+  }
   res.on('close', () => {
+    clientDisconnected = true;
     if (!turn) {
-      // A client that walks away must also stop the upstream turn, or the
-      // request keeps streaming into a socket nobody is reading.
+      // A client that walks away from an unnamed turn must also stop the
+      // upstream turn, or the request keeps streaming into a socket nobody is
+      // reading.
       controller.abort();
       return;
     }
     // Node emits `close` after `finish` on a normal completion, so a turn that
-    // already ran to its end reaches this handler too. A finished turn cannot
-    // be detached: its `finally` has cleared the timer and left the map, so
-    // arming one here would hold it for the whole age bound with nothing to
-    // reap and nothing able to clear it.
-    if (turn.finished) return;
-    // An explicit cancel already stopped it; the turn is on its way out.
-    if (controller.signal.aborted) return;
-    // The bound on how many turns may run unseen. Past it a close is read as
-    // the stop it used to be: an unbounded set of invisible turns is how a
-    // Gate ends up paying for replies nobody will ever read.
-    if ([...inFlightTurns.values()].filter((entry) => entry.detached).length >= DETACHED_TURN_LIMIT) {
-      controller.abort();
+    // already ran to its end reaches this handler too; and a Stop has already
+    // ended it. Neither is a detach.
+    if (turn.finished || turn.detached || controller.signal.aborted) return;
+    // The runaway guard, per caller. Past it a NEW detach is refused and the
+    // turn keeps running: reading this close as the Stop it used to be killed a
+    // turn the operator had asked for, and told them nothing at all.
+    const unseen = detachedTurnCount(inFlightTurns, callerId);
+    if (unseen >= detachedTurnLimit) {
+      console.warn(
+        `Refusing to detach turn ${turnId}: ${unseen} of this caller's turns are already running unseen.`,
+      );
       return;
     }
+    // No wall-clock countdown starts here and nothing is cancelled: from this
+    // point the turn is only reachable through the journal.
     turn.detached = true;
-    // Writes past here are already suppressed by clientDisconnected, so the
-    // turn simply runs to its own conclusion under the age bound.
-    turn.timer = setTimeout(
-      () => controller.abort(),
-      Math.max(0, detachedTurnMaxMs - (Date.now() - turn.startedAt)),
-    );
-    turn.timer.unref?.();
+    armStall();
+    armCeiling();
   });
 
-  // The reply text so far (capped): returned to the caller for the push
-  // notifier when the turn completes. A stopped or dropped turn returns null
-  // instead — silence, not a "finished" notice for work that never landed.
+  // The reply text so far (capped): what this turn's verdict is judged by. The
+  // push carries the journal's own assembled text instead (design 3.6).
   let collected = '';
   const collectDelta = (delta) => {
     if (typeof delta !== 'string' || !delta) return;
@@ -251,27 +459,31 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res, {
     collected += delta.slice(0, 2000 - collected.length);
   };
 
+  let stopped = false;
   try {
     const { hasContent, report, aborted } = await runBackendTurn(backend, sessionId, { text, model }, {
       signal: controller.signal,
       onDelta: collectDelta,
-      // Raw OpenAI-shaped payloads, relayed verbatim so a frame the runner
-      // cannot read is still forwarded rather than dropped.
-      onChunk: (data) => {
-        if (!clientDisconnected) res.write(`data: ${data}\n\n`);
+      // Tool frames are progress the Gate can see, so they re-arm the stall
+      // watchdog exactly as a delta does (design 3.4).
+      onToolCall: () => {
+        if (turn?.detached) armStall();
       },
+      // Raw OpenAI-shaped payloads, relayed verbatim so a frame the runner
+      // cannot read is still forwarded rather than dropped — and journalled.
+      onChunk: (data) => emit(data),
     });
 
     // An aborted turn came back empty BECAUSE it was stopped, and `empty_turn`
     // is the phone's verdict that nothing answered. The runner reports an abort
     // as contentless (turn-runner's ABORTED_OUTCOME), so without this a turn the
-    // caller itself ended — Stop, which now cancels over /v1/chat/cancel while
-    // the socket is deliberately still open — arrives as "The backend completed
-    // the turn with no assistant content.", which the app raises as a
+    // caller itself ended — Stop, which cancels over /v1/chat/cancel while the
+    // socket is deliberately still open — arrives as "The backend completed the
+    // turn with no assistant content.", which the app raises as a
     // streamError before it checks its own abort and shows as "The model did
     // not answer", with advice to pick another model. The caller stopped it, so
     // the only thing left to say is that the stream is over.
-    const stopped = aborted === true || controller.signal.aborted;
+    stopped = aborted === true || controller.signal.aborted;
 
     // What this turn says about the model. Nothing is recorded for a turn the
     // caller ended or walked away from — Stop, a dropped phone, or the Gate's
@@ -281,49 +493,54 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res, {
     if (!stopped && !clientDisconnected) recordOutcome?.(healthKey, { text: collected, hasContent });
 
     // Same truth the non-streaming path reports: which model actually ran.
-    if (!clientDisconnected && report.model) {
-      res.write(`data: ${JSON.stringify({ ...report, choices: [] })}\n\n`);
-    }
+    if (report.model) emit(JSON.stringify({ ...report, choices: [] }));
 
-    if (!clientDisconnected && !stopped && !hasContent) {
+    if (!stopped && !hasContent) {
       // The backend reported the turn as done, but nothing came back that
       // the user could see — a clean [DONE] here would render as a silent
       // empty bubble with no indication anything went wrong.
-      res.write(`data: ${JSON.stringify({
-        error: { message: 'The backend completed the turn with no assistant content.', code: 'empty_turn' },
-      })}\n\n`);
+      const error = { message: 'The backend completed the turn with no assistant content.', code: 'empty_turn' };
+      emit(JSON.stringify({ error }));
+      endTurn('failed', { error });
+    } else if (!stopped) {
+      endTurn('done');
     }
   } catch (error) {
     // Same truth as above, from the other direction: an abort that surfaced as
     // a throw is still the caller's stop, not a backend failure to report.
-    if (!clientDisconnected && !controller.signal.aborted) {
+    if (!controller.signal.aborted) {
       // A throw is where the app's turns actually end: it always streams, so a
       // backend that refuses a turn outright (non-2xx, 429, 5xx, a stall) never
       // reaches the outcome recorded above and would otherwise never be scored.
-      recordOutcome?.(healthKey, { reason: error?.message, error });
       const code = typeof error?.code === 'string' && /^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/.test(error.code)
         ? error.code : 'backend_error';
-      res.write(`data: ${JSON.stringify({ error: { message: error.message, code } })}\n\n`);
+      if (!clientDisconnected) {
+        recordOutcome?.(healthKey, { reason: error?.message, error });
+        emit(JSON.stringify({ error: { message: error.message, code } }));
+      }
+      endTurn('failed', { error: { message: error.message, code } });
     }
   } finally {
+    // Every other ending is recorded by the code that caused it (Stop through
+    // the cancel route, a Gate ending through endByGate). A named turn still
+    // open here was stopped by the phone.
+    if (turn && !turn.finished && (stopped || controller.signal.aborted)) endTurn('cancelled');
     stopKeepalive();
     if (!clientDisconnected) {
-      res.write('data: [DONE]\n\n');
+      // A restart ends the stream with its error frame and NO terminator: the
+      // phone's stream parser reads `[DONE]` as "this reply is complete", and
+      // finalising a half answer — tool cards and all — as a finished one is
+      // exactly what a restart must not do.
+      if (turn?.endedBy !== 'gate_restart') res.write('data: [DONE]\n\n');
       res.end();
-    }
-    if (turn) {
-      turn.finished = true;
-      clearTimeout(turn.timer);
-      // Only the turn that owns the key may release it: a turn that was
-      // replaced under its id (or one that outlived a close() that cleared the
-      // map) must not evict the entry its Stop is found through.
-      if (inFlightTurns.get(key) === turn) inFlightTurns.delete(key);
     }
   }
   // An aborted turn never earned a notice, however much text it had already
   // streamed: the phone asked it to stop. A detached turn that ran to its end
-  // has an answer, and this is the only way that answer can reach the phone.
-  return controller.signal.aborted || !collected ? null : collected;
+  // has an answer, and this is the only way that answer can reach the phone —
+  // as the journal's own text, not a 2000-character sample of it.
+  const reply = journalTurn ? journalTurn.text : collected;
+  return controller.signal.aborted || !reply ? null : reply;
 }
 
 /**
@@ -335,6 +552,18 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res, {
  */
 function safeHeaderValue(value) {
   return typeof value === 'string' && /^[\t -~\x80-\xff]{1,512}$/.test(value);
+}
+
+/**
+ * A turn this caller cannot see is a 404, never somebody else's turn and never
+ * a different status: the routes are scoped by the authenticated device, so
+ * "no such turn" is the whole truth about an id that belongs to another phone.
+ */
+function writeUnknownTurn(res) {
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    error: { message: 'No such turn for this caller.', code: 'unknown_turn' },
+  }));
 }
 
 /** Backend models are `providerId/modelId`, since a CLI reaches many vendors. */
@@ -734,10 +963,14 @@ export async function createGate(config = {}) {
     terminalSessions: injectedTerminalSessions,
     pushFetch,
     // Bounds the three things that cannot be inferred from a socket: how long a
-    // detached turn may run unseen, how often a silent stream proves it is
-    // alive, and how long a vendor may take to send response headers. Injected
-    // so the tests can watch each one fire in milliseconds.
+    // detached turn may go without producing anything, how long it may run
+    // unseen at all, how many turns one caller may leave unseen, how often a
+    // silent stream proves it is alive, and how long a vendor may take to send
+    // response headers. Injected so the tests can watch each one fire in
+    // milliseconds.
     detachedTurnMaxMs = Number(process.env.VERSUTUS_GATE_DETACHED_TURN_MAX_MS) || DEFAULT_DETACHED_TURN_MAX_MS,
+    detachedStallMs = DEFAULT_DETACHED_STALL_MS,
+    detachedTurnLimit = DEFAULT_DETACHED_TURN_LIMIT,
     keepaliveIntervalMs,
     upstreamHeadersTimeoutMs = DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS,
     outcomeReloadDelayMs = DEFAULT_OUTCOME_RELOAD_DELAY_MS,
@@ -767,6 +1000,11 @@ export async function createGate(config = {}) {
     // and the shutdown without a python, a GPU or twenty seconds of model load.
     voicePool = null,
     voiceWarmStart = true,
+    // The turn journal and where it lives (docs/design/durable-turns.md 3.2).
+    // Injected whole, or by directory, so a test can watch a restart recover
+    // what the previous process left running without waiting for one.
+    turnJournal: injectedTurnJournal,
+    turnsDir,
   } = config;
 
   await migrateLegacyProviders({ sourceRoot: root, gateHome });
@@ -780,6 +1018,19 @@ export async function createGate(config = {}) {
    * close() aborts whatever is left.
    */
   const inFlightTurns = new Map();
+  /**
+   * Every named chat turn, recorded as it happens.
+   *
+   * A turn belongs to the Gate rather than to the request that started it, and
+   * the journal is what makes that true across a disconnect AND across a
+   * restart: the frames are on disk under the Gate home before the first
+   * upstream byte, so a phone that comes back can replay them, and a Gate that
+   * comes back can say honestly what it interrupted.
+   */
+  const turnJournal = injectedTurnJournal ?? createTurnJournal({
+    dir: turnsDir ?? join(gateHome, 'turns'),
+    log: (line) => console.warn(line),
+  });
   const providerStore = new ProviderStore(gateHome);
   const vault = injectedVault ?? new CredentialVault({ gateHome });
   const oauth = new OAuthManager({ vault, profiles: releaseOAuthProfiles });
@@ -997,10 +1248,21 @@ export async function createGate(config = {}) {
     },
   });
   // Best-effort by design: a push failure must never break the Gate turn,
-  // run or approval it reports on.
+  // run or approval it reports on. It is logged, though — the reply it reports
+  // is still on the Gate, and an operator whose phone was never told has to be
+  // able to see that. The reason only: a push payload carries device tokens.
+  const logPushFailure = (error) => {
+    const reason = typeof error?.message === 'string' ? error.message : String(error ?? 'unknown');
+    console.warn('Push delivery failed:', reason);
+  };
   const notifyPush = (event) => {
     try {
-      pushNotifier.notify(event)?.catch?.(() => {});
+      // A delivery that never happened comes back either as a rejection or as a
+      // refusal the sender reported (`{ ok: false }`), so both are watched.
+      Promise.resolve(pushNotifier.notify(event)).then(
+        (result) => { if (result?.ok === false) logPushFailure(result.error); },
+        (error) => logPushFailure(error),
+      );
     } catch {
       // The notifier already swallows observer faults; this guards sync throws.
     }
@@ -1571,6 +1833,9 @@ export async function createGate(config = {}) {
         /^\/p\/[^/]+\/v1\/models$/.test(pathname) ||
         (pathname === '/v1/chat/completions' && method === 'POST') ||
         (pathname === '/v1/chat/cancel' && method === 'POST') ||
+        (pathname === '/v1/turns' && method === 'GET') ||
+        /^\/v1\/turns\/[^/]+\/events$/.test(pathname) ||
+        (method === 'GET' && /^\/v1\/turns\/[^/]+$/.test(pathname)) ||
         /^\/p\/[^/]+\/v1\/chat\/completions$/.test(pathname) ||
         (pathname === '/v1/backends' && method === 'GET') ||
         (pathname === '/v1/toolsets' && method === 'GET') ||
@@ -3139,6 +3404,22 @@ export async function createGate(config = {}) {
       if (pathname === '/v1/chat/completions' && method === 'POST') {
         const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
 
+        // Exactly-once (design 3.3): a turn id this caller already used is a
+        // RETRY of a send the Gate accepted, not a second turn. It is answered
+        // as a replay-then-follow of the journalled turn, before any routing,
+        // so the retry cannot open a session or reach a backend at all. This
+        // replaces the old 409: refusing it left the phone with no way to learn
+        // what happened, and letting it through ran the same prompt twice.
+        const namedTurnId = readTurnId(req.headers['x-versutus-turn-id']);
+        if (body.stream === true && namedTurnId) {
+          const resumed = await replayTurnStream(turnJournal, callerId, namedTurnId, res, {
+            after: 0,
+            keepaliveIntervalMs,
+            headers: { 'X-Versutus-Turn-Resumed': '1' },
+          });
+          if (resumed) return;
+        }
+
         // A backend-addressed turn runs inside the native environment, which is
         // what gives it that platform's sessions, tools and approvals.
         // Naming a Bot is naming an environment, exactly as naming a backend
@@ -3205,12 +3486,28 @@ export async function createGate(config = {}) {
             if (body.stream === true) {
               const streamed = await streamBackendTurn(backend, sessionId, { text, model }, res, {
                 callerId,
-                turnId: readTurnId(req.headers['x-versutus-turn-id']),
+                turnId: namedTurnId,
+                backendId: environmentId ?? null,
+                botId: botForTurn ?? null,
+                modelLabel: qualifiedModelId(body.model, body.providerId) ?? null,
                 inFlightTurns,
+                journal: turnJournal,
                 keepaliveIntervalMs,
                 detachedTurnMaxMs,
+                detachedStallMs,
+                detachedTurnLimit,
                 recordOutcome: recordTurnOutcome,
                 healthKey,
+                // A turn the Gate ended itself is the one a detached phone is
+                // owed a notice about: it has no answer to push, only the fact
+                // that it is over.
+                onGateStopped: ({ reason, turnId, sessionId: stoppedIn, botId: stoppedBot }) => notifyPush({
+                  trigger: 'final-response',
+                  sessionId: stoppedIn,
+                  ...(stoppedBot ? { botId: stoppedBot } : {}),
+                  turnId: turnId ?? nextTurnId(stoppedIn),
+                  text: `stopped: ${reason}`,
+                }),
               });
               // A completed turn reports as a Bot reply (a cron routine
               // session classifies to `routine` inside the notifier). A turn
@@ -3221,7 +3518,10 @@ export async function createGate(config = {}) {
                   trigger: 'final-response',
                   sessionId,
                   ...(botForTurn ? { botId: botForTurn } : {}),
-                  turnId: nextTurnId(sessionId),
+                  // The turn's own id, so the notice is per turn: the same turn
+                  // replayed collapses, and the session's next turn still
+                  // notifies even with identical text.
+                  turnId: namedTurnId ?? nextTurnId(sessionId),
                   text: streamed,
                 });
               }
@@ -3361,8 +3661,57 @@ export async function createGate(config = {}) {
         // Scoped to the caller: one phone's Stop must never end another's turn.
         const turn = turnId ? inFlightTurns.get(`${callerId}:${turnId}`) : null;
         if (turn) turn.controller.abort();
+        // The journal records the Stop as the ending it was. A turn still
+        // running here is cancelled now; one this process does not own (a
+        // replayed id, a restart survivor) is left with the status it really has,
+        // because stopping a turn that already ended is not a new fact.
+        if (turnId) await turnJournal.cancel(callerId, turnId);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ cancelled: Boolean(turn) }));
+        return;
+      }
+
+      // ─── Durable turns: what happened to this caller's turns ─────────────
+      // How a phone that was away learns what its turns did (design 4.2): ask
+      // what is still running, follow a running turn from the sequence number
+      // last seen, and settle a finished one from its meta and assembled text.
+      // Caller-scoped like every other `/v1` route — a turn belongs to the
+      // device that named it, so another device asking for it gets 404.
+      if (pathname === '/v1/turns' && method === 'GET') {
+        const data = await turnJournal.list(callerId, {
+          sessionId: url.searchParams.get('sessionId') || null,
+          status: url.searchParams.get('status') || null,
+          limit: Number(url.searchParams.get('limit')) || 50,
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ object: 'list', data }));
+        return;
+      }
+
+      const turnEventsMatch = pathname.match(/^\/v1\/turns\/([^/]+)\/events$/);
+      if (turnEventsMatch && method === 'GET') {
+        const after = Number(url.searchParams.get('after'));
+        const replayed = await replayTurnStream(
+          turnJournal,
+          callerId,
+          decodeURIComponent(turnEventsMatch[1]),
+          res,
+          { after: Number.isFinite(after) ? after : 0, keepaliveIntervalMs },
+        );
+        if (replayed) return;
+        writeUnknownTurn(res);
+        return;
+      }
+
+      const turnMatch = pathname.match(/^\/v1\/turns\/([^/]+)$/);
+      if (turnMatch && method === 'GET') {
+        const known = await turnJournal.get(callerId, decodeURIComponent(turnMatch[1]));
+        if (!known) {
+          writeUnknownTurn(res);
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(known));
         return;
       }
 
@@ -3517,13 +3866,20 @@ export async function createGate(config = {}) {
         terminalStreams.delete(stream);
         try { stream.end(); } catch { /* already gone */ }
       }
-      // Detached turns are still holding their request handlers, so the same
-      // rule applies to them: a restart is a named end, not a wait.
+      // A restart is a named end for every turn the Gate is still holding: the
+      // phone gets an honest error frame (attached streams only), the journal
+      // says `interrupted`/`gate_restart`, and only then is the upstream turn
+      // aborted. The old order — abort, and let the turn's `finally` write
+      // `[DONE]` — ended every attached stream as a SUCCESS carrying half an
+      // answer, and left no record anywhere that it had been cut off.
       for (const turn of [...inFlightTurns.values()]) {
-        clearTimeout(turn.timer);
-        turn.controller.abort();
+        turn.endByGate?.('gate_restart');
         inFlightTurns.clear();
       }
+      // The coalesced journal writes ARE that record, so they land before the
+      // listener goes away — with the background retention sweep settled too, so
+      // nothing is still touching the turns directory after this returns.
+      await turnJournal.close();
       return new Promise((resolve, reject) => {
         // A restart is a clean, named end for every live call, not a drop.
         voiceMedia.endAll?.('gate-restart');
@@ -3544,6 +3900,11 @@ export async function createGate(config = {}) {
   // replaying phone must find the runs that finished under the previous
   // process, not an empty list.
   await environmentService.init();
+  // And settle the turns that process left running: it is gone, so `close()`
+  // never got to end them, and the only true thing to say is that the Gate
+  // restarted while they ran. Without this the phone's next `GET /v1/turns`
+  // would report a turn that died with the process as still running.
+  await turnJournal.recoverInterrupted();
 
   // Start listening
   await gateObj.listen();

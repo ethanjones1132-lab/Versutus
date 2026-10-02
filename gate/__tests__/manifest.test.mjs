@@ -78,6 +78,9 @@ test('advertises design-spec transport, endpoints, and capabilities', () => {
     chat: '/v1/chat/completions',
     // A streamed turn can outlive its socket, so Stop is a route of its own.
     chatCancel: '/v1/chat/cancel',
+    // And the turn itself is durable, so what it did is readable and replayable.
+    turns: '/v1/turns',
+    turnEvents: '/v1/turns/{turnId}/events',
     providers: '/v1/providers',
     environments: '/v1/environments',
     capabilitiesRpc: '/v1/capabilities/rpc',

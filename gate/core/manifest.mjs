@@ -97,6 +97,11 @@ export function buildManifest({
       // that locks mid-reply), so the phone's Stop is a request of its own
       // rather than a dropped connection.
       chatCancel: '/v1/chat/cancel',
+      // What a turn did, for a phone that was away: the same turn, replayed from
+      // the sequence number last seen, and the list a reopened app reads to learn
+      // what is still running. Unconditional with the Gate itself, like Stop.
+      turns: '/v1/turns',
+      turnEvents: '/v1/turns/{turnId}/events',
       providers: '/v1/providers',
       environments: '/v1/environments',
       capabilitiesRpc: '/v1/capabilities/rpc',
