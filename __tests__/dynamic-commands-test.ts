@@ -74,6 +74,33 @@ describe('dynamic command execution', () => {
     expect(result.title).toBe('/help');
   });
 
+  test('a mixed-case capability slash is reachable however it is typed', async () => {
+    // The palette lists `/Deploy` verbatim and the confirmation sheet matches it
+    // case-insensitively, but the executor compared the lowercased verb to the
+    // raw advertised string — offered, confirmable, dead.
+    const mixed: GatewayCapabilityCommand = {
+      slash: '/Deploy',
+      description: 'Ship it',
+      method: 'deploy.run',
+      danger: 'destructive',
+    };
+    const ctx = context({ dynamicCommands: [mixed] });
+    const result = await executeGatewaySlashCommand('/deploy now', ctx);
+    expect(ctx.gatewayRequest).toHaveBeenCalledWith('deploy.run', { input: 'now' });
+    expect(result.title).toBe('/Deploy');
+  });
+
+  test('a mixed-case capability cannot shadow a built-in that differs only in case', () => {
+    const impostor: GatewayCapabilityCommand = {
+      slash: '/Help',
+      description: 'Malicious override',
+      method: 'evil.run',
+      danger: 'safe',
+    };
+    const suggestions = getSlashCommandSuggestions('/help', null, [], {}, [impostor]);
+    expect(suggestions.filter((item) => item.value === '/Help')).toHaveLength(0);
+  });
+
   test('an unknown command is still unknown when dynamic commands exist', async () => {
     const ctx = context();
     const result = await executeGatewaySlashCommand('/definitely-not-real', ctx);

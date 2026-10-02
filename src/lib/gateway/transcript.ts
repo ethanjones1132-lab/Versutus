@@ -31,7 +31,23 @@ function describeError(error: unknown): string {
 // failed task rejects its own caller without poisoning the queue.
 const mutationTails = new Map<string, Promise<void>>();
 
+// How many mutations are still queued or running for a key. A held copy must
+// not be evicted while one is in flight: the queued task reads it back, so
+// dropping it would lose the delta the write was about to persist.
+const busyKeys = new Map<string, number>();
+
+function markKeyBusy(key: string): void {
+  busyKeys.set(key, (busyKeys.get(key) ?? 0) + 1);
+}
+
+function releaseKeyBusy(key: string): void {
+  const remaining = (busyKeys.get(key) ?? 0) - 1;
+  if (remaining > 0) busyKeys.set(key, remaining);
+  else busyKeys.delete(key);
+}
+
 function enqueueTranscriptMutation<T>(key: string, task: () => Promise<T>): Promise<T> {
+  markKeyBusy(key);
   const result = (mutationTails.get(key) ?? Promise.resolve()).then(task);
   mutationTails.set(
     key,
@@ -39,6 +55,10 @@ function enqueueTranscriptMutation<T>(key: string, task: () => Promise<T>): Prom
       () => undefined,
       () => undefined,
     ),
+  );
+  void result.then(
+    () => releaseKeyBusy(key),
+    () => releaseKeyBusy(key),
   );
   return result;
 }
@@ -49,6 +69,33 @@ function enqueueTranscriptMutation<T>(key: string, task: () => Promise<T>): Prom
 // still queued.
 const entriesByKey = new Map<string, CommandTranscriptEntry[]>();
 const flushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * How many session transcripts this process keeps in memory. Each held copy is
+ * a full parsed list (up to 200 entries, each with its `raw`), and
+ * `loadTranscripts` runs on every thread switch, so an install that walks the
+ * Sessions sheet would otherwise retain one per visited thread for its whole
+ * lifetime. A small ring bounds that: the thread on screen plus recent ones
+ * stay hot, and a re-visit costs one storage read, never a lost write.
+ */
+const MAX_HELD_TRANSCRIPTS = 16;
+
+/**
+ * Hold a key's entries and evict the oldest if the ring is over budget. A key
+ * with a pending debounced write or an in-flight mutation is skipped — its held
+ * copy is what that write reads, so dropping it would lose the delta. Map
+ * insertion order is the age order (`loadTranscripts` re-inserts a hit).
+ */
+function holdEntries(key: string, entries: CommandTranscriptEntry[]): void {
+  entriesByKey.set(key, entries);
+  if (entriesByKey.size <= MAX_HELD_TRANSCRIPTS) return;
+  for (const candidate of [...entriesByKey.keys()]) {
+    if (entriesByKey.size <= MAX_HELD_TRANSCRIPTS) break;
+    if (flushTimers.has(candidate) || busyKeys.has(candidate)) continue;
+    entriesByKey.delete(candidate);
+    mutationTails.delete(candidate);
+  }
+}
 // Every write still owed to the store, so `flushTranscripts` can join the ones
 // its forced flush just enqueued.
 const pendingWrites = new Set<Promise<void>>();
@@ -135,7 +182,7 @@ async function readStoredEntries(key: string): Promise<CommandTranscriptEntry[]>
   try {
     const parsed = JSON.parse(raw) as CommandTranscriptEntry[];
     if (!Array.isArray(parsed)) return [];
-    entriesByKey.set(key, parsed);
+    holdEntries(key, parsed);
     return parsed;
   } catch {
     return [];
@@ -148,7 +195,13 @@ export async function loadTranscripts(gatewayId: string, sessionKey: string): Pr
   // an update was still queued would show the operator a transcript missing the
   // delta they are watching arrive.
   const held = entriesByKey.get(key);
-  if (held) return held;
+  if (held) {
+    // Refresh its place in the ring: the thread the operator is looking at must
+    // be the last evicted, not the first.
+    entriesByKey.delete(key);
+    entriesByKey.set(key, held);
+    return held;
+  }
   return readStoredEntries(key);
 }
 
@@ -156,7 +209,7 @@ export async function saveTranscripts(gatewayId: string, sessionKey: string, ent
   const key = transcriptKey(gatewayId, sessionKey);
   // Keep only the last N to avoid unbounded growth (plan implies bounded history)
   const limited = entries.slice(-200);
-  entriesByKey.set(key, limited);
+  holdEntries(key, limited);
   // A whole-list save is not a delta, so it writes through now instead of
   // waiting for a gap nobody is going to extend.
   cancelFlush(key);
@@ -174,7 +227,7 @@ async function mutateEntries(
     // The bound is applied here, so what a caller is handed is the list the
     // store will hold rather than a longer one it never sees again.
     const limited = apply(existing).slice(-200);
-    entriesByKey.set(key, limited);
+    holdEntries(key, limited);
     scheduleFlush(key);
     return limited;
   });

@@ -163,7 +163,12 @@ export default function CouncilScreen() {
   useEffect(() => {
     if (status !== 'connected') return undefined;
     const timer = setTimeout(() => {
-      void sweepPendingRooms(keyValueStorage, (roomId) => botGroups.deleteGroup(roomId));
+      void sweepPendingRooms(
+        keyValueStorage,
+        (roomId) => botGroups.deleteGroup(roomId),
+        Date.now(),
+        ROOM_DELETE_TIMEOUT_MS,
+      );
     }, 0);
     return () => clearTimeout(timer);
   }, [status, botGroups]);
@@ -278,7 +283,12 @@ export default function CouncilScreen() {
         liveRoomRef.current = undefined;
         dropRoom(created);
       }
-      void sweepPendingRooms(keyValueStorage, (id) => botGroups.deleteGroup(id));
+      void sweepPendingRooms(
+        keyValueStorage,
+        (id) => botGroups.deleteGroup(id),
+        Date.now(),
+        ROOM_DELETE_TIMEOUT_MS,
+      );
     }
   };
 

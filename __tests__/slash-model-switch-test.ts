@@ -113,6 +113,29 @@ describe('/model <name> direct switch', () => {
     expect(result.text).toMatch(/session will reopen/i);
   });
 
+  test('/model fallbacks reads the catalogue once for every id in one command', async () => {
+    // One 241 KB `models.list` per id used to cross the relayed link to answer
+    // a yes/no question; a memoised read shared by the whole command is one.
+    let modelsListCalls = 0;
+    const gatewayRequest = jest.fn();
+    gatewayRequest.mockImplementation(async (method: string) => {
+      if (method === 'models.list') {
+        modelsListCalls += 1;
+        return { models: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] };
+      }
+      if (method === 'config.get') {
+        return { hash: 'h1', config: { agents: { defaults: { model: { fallbacks: [] } } } } };
+      }
+      throw new Error(`unexpected: ${method}`);
+    });
+    await executeGatewaySlashCommand('/model fallbacks a,b,c', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(modelsListCalls).toBe(1);
+  });
+
   test('a bare /model <known-id> sets the override with no warning', async () => {
     const setModelOverride = jest.fn().mockResolvedValue(undefined);
     const gatewayRequest = jest.fn().mockResolvedValue({

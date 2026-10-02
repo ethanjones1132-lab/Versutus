@@ -198,6 +198,66 @@ describe('transcript write-behind', () => {
   });
 });
 
+describe('the held-transcript ring stays bounded', () => {
+  test('visiting many sessions does not retain every transcript in memory', async () => {
+    const gatewayId = freshGateway();
+    for (let index = 0; index < 40; index += 1) {
+      const session = `s${index}`;
+      mockBacking.set(
+        storageKey(gatewayId, session),
+        JSON.stringify([entry({ id: `cmd-${index}`, gatewayId, sessionKey: session })]),
+      );
+    }
+
+    for (let index = 0; index < 40; index += 1) {
+      await loadTranscripts(gatewayId, `s${index}`);
+    }
+
+    // s0 was evicted long before the end of the walk, so a re-read must go
+    // back to storage rather than answer from a copy held for the process's
+    // whole lifetime (the leak this ring bounds).
+    mockGet.mockClear();
+    const reread = await loadTranscripts(gatewayId, 's0');
+    expect(mockGet).toHaveBeenCalledWith(storageKey(gatewayId, 's0'));
+    expect(reread.map((item) => item.id)).toEqual(['cmd-0']);
+  });
+
+  test('a session with a pending write is never the one evicted', async () => {
+    // Fake timers keep the debounced write pending for the whole walk, so the
+    // assertion cannot race the real 250 ms flush.
+    jest.useFakeTimers();
+    try {
+      const gatewayId = freshGateway();
+      const pendingSession = 'pending';
+      const pendingKey = storageKey(gatewayId, pendingSession);
+      await appendTranscript(gatewayId, pendingSession, entry({ id: 'cmd-p', gatewayId, sessionKey: pendingSession }));
+
+      for (let index = 0; index < 40; index += 1) {
+        const session = `s${index}`;
+        mockBacking.set(
+          storageKey(gatewayId, session),
+          JSON.stringify([entry({ id: `cmd-${index}` })]),
+        );
+        await loadTranscripts(gatewayId, session);
+      }
+
+      // Its debounced write has not landed; evicting the held copy would drop
+      // the appended entry. The read answers from the held copy, so no storage
+      // hit for it.
+      mockGet.mockClear();
+      const held = await loadTranscripts(gatewayId, pendingSession);
+      expect(mockGet).not.toHaveBeenCalledWith(pendingKey);
+      expect(held.map((item) => item.id)).toEqual(['cmd-p']);
+
+      // Land the still-pending write so no fake timer leaks into the next test
+      // through the module's global flush queue.
+      await flushTranscripts();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
 describe('clearing a gateway', () => {
   test('drops the held copy and the write that was still pending', async () => {
     const gatewayId = freshGateway();

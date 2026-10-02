@@ -121,6 +121,33 @@ describe('the pending-room ledger', () => {
     expect(second.rows.has(COUNCIL_PENDING_ROOMS_KEY)).toBe(false);
   });
 
+  test('a hung delete cannot hold the rooms behind it, and settled rooms leave the ledger', async () => {
+    jest.useFakeTimers();
+    try {
+      const { store, rows } = fakeLedger();
+      await notePendingRoom(store, 'room-hung', T0);
+      await notePendingRoom(store, 'room-ok', T0);
+      const deleteRoom = jest.fn(async (roomId: string) => {
+        if (roomId === 'room-hung') return new Promise<never>(() => undefined);
+        return { ok: true };
+      });
+
+      const sweep = sweepPendingRooms(store, deleteRoom, T0 + COUNCIL_ROOM_LEAK_MS);
+      // The first delete never resolves; its own bound must expire and let the
+      // second room be attempted instead of parking the sweep forever.
+      await jest.advanceTimersByTimeAsync(8_000);
+      await sweep;
+
+      expect(deleteRoom).toHaveBeenCalledWith('room-hung');
+      expect(deleteRoom).toHaveBeenCalledWith('room-ok');
+      // room-ok settled as it landed; the hung room's failure must not discard
+      // that success the way the old all-or-nothing ledger write did.
+      expect(stored(rows)).toEqual([{ roomId: 'room-hung', createdAt: T0 }]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   test('a delete is not the only not-found shape, and a timeout is not one', () => {
     expect(councilRoomGone(new GatewayHttpError('gone', 404))).toBe(true);
     expect(councilRoomGone(new Error('Unknown room room-1'))).toBe(true);

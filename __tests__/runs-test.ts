@@ -317,6 +317,64 @@ describe('executeRun terminal-state handling', () => {
   });
 });
 
+describe('an abort during the approval wait is not a decision (V-2)', () => {
+  it('stops the run without posting a fabricated denial', async () => {
+    const controller = new AbortController();
+    const resolveApproval = jest.fn(async () => undefined);
+    const stopRun = jest.fn(async () => undefined);
+    const client: RunCapableClient = {
+      async startRun(): Promise<RunResponse> {
+        return { run_id: 'run-1', status: 'waiting-approval' };
+      },
+      async getRunStatus(): Promise<RunStatus> {
+        return { run_id: 'run-1', status: 'waiting-approval' };
+      },
+      async streamRunEvents() {},
+      resolveApproval,
+      stopRun,
+    };
+
+    const outcome = await executeRun(client, 'do the thing', {
+      signal: controller.signal,
+      onApprovalRequired: async () => {
+        // The operator stopped the run while the prompt was up; the provider's
+        // abort listener resolves the decision as `approved: false`.
+        controller.abort();
+        return { approved: false };
+      },
+      sleep: noSleep,
+    });
+
+    // The run was stopped, not denied — posting the abort as a denial would lie
+    // to the Gate about a decision nobody made.
+    expect(resolveApproval).not.toHaveBeenCalled();
+    expect(stopRun).toHaveBeenCalledWith('run-1');
+    expect(outcome.cancelled).toBe(true);
+  });
+});
+
+describe('executeRun bounds a stream that never ends (RUNS-2)', () => {
+  it('settles unresolved instead of parking on a keepalive-fed stream forever', async () => {
+    // The Gate's relay sends a keepalive every 15 s, so the transport's idle
+    // watchdog never fires; without a wall clock the driver parks inside this
+    // await for good and the Activity row reads "Working" forever.
+    const { client } = countedStatusClient({
+      fail: {},
+      status: () => 'running',
+      stream: () => new Promise<void>(() => undefined),
+    });
+
+    const outcome = await executeRun(client, 'do the thing', {
+      onApprovalRequired: async () => ({ approved: true }),
+      sleep: noSleep,
+      maxWallClockMs: 30,
+    });
+
+    expect(outcome.unresolved).toBe(true);
+    expect(outcome.status).toBe('running');
+  });
+});
+
 describe('A2 regression lock — the terminal-status classifier (isTerminalRunStatus)', () => {
   // The run reducer decides "is this done?" purely through this classifier.
   // A heuristic widening it into in-flight states (running/pending/unknown)

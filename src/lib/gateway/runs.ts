@@ -54,6 +54,12 @@ export type RunTaskOptions = {
   pollDelayMs?: number;
   /** Injectable for tests so no-progress backoff does not cost real time. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Wall-clock bound on the whole drive. Defaults to
+   * MAX_RUN_WALL_CLOCK_MS; a test can shorten it rather than wait out the
+   * production bound.
+   */
+  maxWallClockMs?: number;
 };
 
 /** App-side view of a run for activity surfaces (in-memory, per app session). */
@@ -197,6 +203,42 @@ const MAX_STATUS_POLLS = 120;
 const DEFAULT_POLL_DELAY_MS = 1000;
 
 /**
+ * The wall-clock bound on one run's event streaming.
+ *
+ * The Gate's run-events relay sends a keepalive every 15 s and the transport's
+ * idle watchdog is reset by any bytes, so a wedged-but-alive environment keeps
+ * the socket looking healthy while the run never reaches a terminal status.
+ * `MAX_STATUS_POLLS` cannot save it: the loop is parked inside one
+ * `streamRunEvents` await, not counting polls. A run that outlives this bound
+ * settles `unresolved` instead, and the reconnect path re-reads it.
+ */
+export const MAX_RUN_WALL_CLOCK_MS = 30 * 60 * 1000;
+
+/** Sentinel for `raceDeadline`: the wall clock ran out before the work did. */
+const RUN_DEADLINE = Symbol('run-deadline');
+
+/**
+ * Await `work`, but stop waiting after `remainingMs`. The work is not
+ * cancelled, only abandoned; its own signal (if any) is the caller's to abort.
+ * The timer is always cleared, so a settled race leaves none behind.
+ */
+async function raceDeadline<T>(
+  work: Promise<T>,
+  remainingMs: number,
+): Promise<T | typeof RUN_DEADLINE> {
+  if (remainingMs <= 0) return RUN_DEADLINE;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<typeof RUN_DEADLINE>((resolve) => {
+    timer = setTimeout(() => resolve(RUN_DEADLINE), remainingMs);
+  });
+  try {
+    return await Promise.race([work, expired]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
  * Spread of the no-progress poll wait around its base delay, so runs that
  * started together do not poll the gateway in lockstep under load.
  */
@@ -300,6 +342,7 @@ export async function executeRun(
 
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const pollDelayMs = options.pollDelayMs ?? DEFAULT_POLL_DELAY_MS;
+  const deadlineAt = Date.now() + (options.maxWallClockMs ?? MAX_RUN_WALL_CLOCK_MS);
 
   let approved: boolean | undefined;
   // The class the gateway attached to its approval event, if it sent one. The
@@ -334,6 +377,13 @@ export async function executeRun(
     if (runNeedsApproval(status)) {
       const decision = await options.onApprovalRequired(runId, prompt, commandClass);
       approved = decision.approved;
+      // A decision that arrived because the caller aborted is not a decision:
+      // the prompt was dismissed, not answered. Posting it would tell the Gate
+      // the run was denied for a run the operator merely stopped.
+      if (options.signal?.aborted) {
+        const stop = await requestStop(client, runId);
+        return { runId, status: 'cancelled', cancelled: true, approved, ...stop };
+      }
       // Deliberately non-fatal: the decision may well have registered even if
       // the response did not come back, so polling continues rather than
       // abandoning a run the user just approved. The status poll below decides.
@@ -362,24 +412,34 @@ export async function executeRun(
     // straight into the gap the drop just left is how one lost request ended
     // the driver.
     let streamFailed = false;
+    let streamTimedOut = false;
     try {
-      await client.streamRunEvents(
-        runId,
-        (event) => {
-          const data = event.data as Record<string, unknown> | undefined;
-          const eventStatus = String(data?.status ?? '');
-          if (runNeedsApproval(event.type) || (eventStatus && runNeedsApproval(eventStatus))) {
-            const klass = data?.risk ?? data?.action ?? data?.class;
-            if (typeof klass === 'string' && klass) commandClass = klass;
-            return;
-          }
-          options.onEvent?.(event);
-        },
-        options.signal,
+      const raced = await raceDeadline(
+        client.streamRunEvents(
+          runId,
+          (event) => {
+            const data = event.data as Record<string, unknown> | undefined;
+            const eventStatus = String(data?.status ?? '');
+            if (runNeedsApproval(event.type) || (eventStatus && runNeedsApproval(eventStatus))) {
+              const klass = data?.risk ?? data?.action ?? data?.class;
+              if (typeof klass === 'string' && klass) commandClass = klass;
+              return;
+            }
+            options.onEvent?.(event);
+          },
+          options.signal,
+        ),
+        deadlineAt - Date.now(),
       );
+      streamTimedOut = raced === RUN_DEADLINE;
     } catch {
       streamFailed = true;
     }
+
+    // The wall clock ran out mid-stream: stop driving and report unresolved.
+    // The run may still be going server-side, so `settleUnresolvedRuns` re-reads
+    // it on the next reconnect instead of the row living as "Working" forever.
+    if (streamTimedOut) break;
 
     if (options.signal?.aborted) {
       const stop = await requestStop(client, runId);

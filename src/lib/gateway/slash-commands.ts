@@ -407,14 +407,16 @@ export function getSlashCommandSuggestions(
 
   // Instance-contributed commands. A slash already claimed by a built-in is
   // dropped rather than shadowing it — the same precedence the executor uses.
+  // Lowercased so a capability advertising `/Deploy` is suppressed by the
+  // built-in `/deploy` it would shadow, not offered beside it.
   const builtInSlashes = new Set<string>([
     ...GATEWAY_COMMANDS.map((command) => command.slash).filter(
       (slash): slash is string => Boolean(slash),
     ),
     ...LOCAL_SUGGESTIONS.map((suggestion) => suggestion.value),
-  ]);
+  ].map((slash) => slash.toLowerCase()));
   const dynamicSuggestions: SlashCommandSuggestion[] = dynamicCommands
-    .filter((command) => !builtInSlashes.has(command.slash))
+    .filter((command) => !builtInSlashes.has(command.slash.toLowerCase()))
     .map((command) => ({
       value: command.slash,
       label: command.slash,
@@ -433,7 +435,7 @@ export function getSlashCommandSuggestions(
       family: 'Skill',
       unavailable: false,
     }))
-    .filter((item) => !builtInSlashes.has(item.value));
+    .filter((item) => !builtInSlashes.has(item.value.toLowerCase()));
 
   // One row per stored workflow: `/workflow <name>` completes the exact name,
   // so the operator taps instead of remembering it. CONTEXT.md reserves
@@ -648,7 +650,13 @@ export async function executeGatewaySlashCommand(
   if (!command) {
     // Reached only after every built-in dispatch above has declined, so a
     // gateway-advertised slash can never take precedence over a first-party one.
-    const dynamic = context.dynamicCommands?.find((entry) => entry.slash === commandName);
+    // `commandName` is already lowercased, and every built-in lookup is
+    // case-insensitive; the advertised slash must be normalised the same way or
+    // a mixed-case capability (`/Deploy`) is offered and confirmable but can
+    // never execute.
+    const dynamic = context.dynamicCommands?.find(
+      (entry) => entry.slash.toLowerCase() === commandName,
+    );
     if (dynamic) return runDynamicCommand(dynamic, argText, context);
     return textResult(`Unknown command: ${commandName}\n\n${formatHelp(context.hello, undefined, context.skills ?? [], context.methods)}`, commandName);
   }
@@ -2664,9 +2672,27 @@ function formatConfigWriteResult(result: unknown): string {
   return lines.join('\n');
 }
 
+/**
+ * The live catalogue, fetched at most once per slash-command context. Each
+ * `executeGatewaySlashCommand` call builds a fresh context object, so keying the
+ * in-flight read on it shares one `models.list` across every id a single
+ * command validates (`/model fallbacks a,b,c` used to fire three concurrent
+ * 241 KB reads) without caching across commands, where the catalogue may have
+ * changed. A WeakMap leaves the promise collectable with its context.
+ */
+const modelCatalogByContext = new WeakMap<SlashCommandContext, Promise<unknown>>();
+
+function readModelCatalog(context: SlashCommandContext): Promise<unknown> {
+  const cached = modelCatalogByContext.get(context);
+  if (cached) return cached;
+  const pending = context.gatewayRequest('models.list', {});
+  modelCatalogByContext.set(context, pending);
+  return pending;
+}
+
 async function validateModelId(modelId: string, context: SlashCommandContext): Promise<ModelValidation> {
   try {
-    const catalog = await context.gatewayRequest('models.list', {});
+    const catalog = await readModelCatalog(context);
     const models = readModelItems(catalog);
     if (models.length === 0) return { state: 'unknown', label: modelId, catalog };
 

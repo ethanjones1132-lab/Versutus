@@ -4539,6 +4539,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             return new Promise<{ approved: boolean; feedback?: string }>((resolve) => {
               const onAbort = () => {
                 runApprovalResolverRef.current = null;
+                // The run is being stopped, so the card must stop claiming it is
+                // waiting. Leaving it up showed "Waiting for you" for a run that
+                // was already gone, and its Approve/Deny silently dropped.
+                setPendingRunApproval(null);
                 resolve({ approved: false });
               };
               runApprovalResolverRef.current = (approved: boolean, feedback?: string) => {
@@ -4591,8 +4595,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         if (aborted) throw asCommandAbort(error);
         throw error;
       } finally {
-        runAbortControllerRef.current = null;
-        activeRunTaskIdRef.current = null;
+        // Only clear what this call installed. An overlapping run installs its
+        // own controller and run id synchronously before any await, so an
+        // unconditional clear here would wipe the later run's handle — Stop
+        // would abort nothing, skip the server-side stop, and paint the row
+        // cancelled anyway.
+        if (runAbortControllerRef.current === abortController) {
+          runAbortControllerRef.current = null;
+        }
+        if (activeRunTaskIdRef.current === trackedId.current) {
+          activeRunTaskIdRef.current = null;
+        }
       }
     },
     [patchActivityRuns, status],

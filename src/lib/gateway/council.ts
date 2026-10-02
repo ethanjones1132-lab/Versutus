@@ -197,6 +197,13 @@ export const COUNCIL_PENDING_ROOMS_KEY = 'versutus:council-pending-rooms';
 export const COUNCIL_ROOM_LEAK_MS = 120_000;
 /** Only so a repeatedly killed process cannot grow the key without end. */
 const COUNCIL_PENDING_ROOM_CAP = 8;
+/**
+ * The per-room bound the sweep gives each delete. The transport's own default
+ * is 30 s, which is far too long when several owed rooms are swept serially on
+ * a half-open link: one stall must not hold the rooms behind it, and the ledger
+ * must reflect each room the moment it lands.
+ */
+export const COUNCIL_SWEEP_DELETE_TIMEOUT_MS = 8_000;
 
 /** One transient room whose deletion this device still owes the Gate. */
 export type CouncilPendingRoom = { roomId: string; createdAt: number };
@@ -331,27 +338,37 @@ export async function clearPendingRoom(ledger: CouncilRoomLedger, roomId: string
 
 /**
  * Delete every room this device recorded and has owed for longer than the leak
- * bound, then drop the ones that are settled. A delete that fails for any other
+ * bound, dropping each one as it settles. A delete that fails for any other
  * reason keeps its record, so the next mount tries again instead of losing it.
+ *
+ * Each delete carries its own bound, so one half-open link cannot hold the
+ * rooms behind it for the transport's full 30 s apiece. The ledger is rewritten
+ * as each room lands rather than once after the loop, so a later stall never
+ * discards the deletions that already succeeded.
  */
 export async function sweepPendingRooms(
   ledger: CouncilRoomLedger,
   deleteRoom: (roomId: string) => Promise<unknown>,
   now: number = Date.now(),
+  boundMs: number = COUNCIL_SWEEP_DELETE_TIMEOUT_MS,
 ): Promise<void> {
   const stale = stalePendingRooms(await loadPendingRooms(ledger), now);
   if (stale.length === 0) return;
-  const settled: string[] = [];
   for (const record of stale) {
+    let settled = false;
     try {
-      await deleteRoom(record.roomId);
-      settled.push(record.roomId);
+      await boundedOperation(deleteRoom(record.roomId), boundMs);
+      settled = true;
     } catch (cause) {
-      if (councilRoomGone(cause)) settled.push(record.roomId);
+      if (councilRoomGone(cause)) settled = true;
     }
+    if (settled) await settleSweptRoom(ledger, record.roomId);
   }
-  if (settled.length === 0) return;
+}
+
+/** Drop one settled room from the ledger. Best-effort, like every ledger write. */
+async function settleSweptRoom(ledger: CouncilRoomLedger, roomId: string): Promise<void> {
   await enqueueLedgerMutation(async () => {
-    await savePendingRooms(ledger, forgetPendingRooms(await loadPendingRooms(ledger), settled));
+    await savePendingRooms(ledger, forgetPendingRooms(await loadPendingRooms(ledger), [roomId]));
   });
 }

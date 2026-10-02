@@ -182,9 +182,23 @@ export function mergeTranscriptRows<T extends TranscriptRowLike>(
   stored: GroupTranscriptEntry[],
 ): T[] {
   const known = new Set(current.map((row) => row.id));
-  const additions = transcriptToRoomEntries(stored).filter(
-    (row) => !known.has(row.id) && !current.some((local) => sameStoredLine(local, row)),
-  );
+  // Match-and-consume, not existence: one local optimistic row absorbs exactly
+  // one stored copy. A second stored line with the same text inside the window
+  // is a genuinely different message (another client sent the same words) and
+  // must land, so the local row that already matched its own copy cannot also
+  // suppress it.
+  const consumed = new Set<T>();
+  const additions = transcriptToRoomEntries(stored).filter((row) => {
+    if (known.has(row.id)) return false;
+    const local = current.find(
+      (candidate) => !consumed.has(candidate) && sameStoredLine(candidate, row),
+    );
+    if (local) {
+      consumed.add(local);
+      return false;
+    }
+    return true;
+  });
   return [...current, ...additions].sort(
     (a, b) => (a.at ?? Number.NEGATIVE_INFINITY) - (b.at ?? Number.NEGATIVE_INFINITY),
   ) as T[];

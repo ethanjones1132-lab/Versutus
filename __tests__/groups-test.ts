@@ -535,6 +535,23 @@ test('mergeTranscriptRows skips the Gate copy of a bot reply from this visit', (
   expect(mergeTranscriptRows(current, stored)).toEqual(current);
 });
 
+test('mergeTranscriptRows consumes one stored copy per local row — a second identical line still lands', () => {
+  // The local optimistic row absorbs exactly the Gate's copy of THIS phone's
+  // send. Another client posting the same short text inside the window is a
+  // genuinely different message, so the local row must not suppress both
+  // stored copies — the old existence test dropped it and no refresh recovered
+  // it until the room was remounted.
+  const local = { id: 'u-1', role: 'user', text: 'ok', at: NOW } as const;
+  const stored: GroupTranscriptEntry[] = [
+    { id: 'g-1', role: 'user', text: 'ok', at: NOW + 3 },
+    { id: 'g-2', role: 'user', text: 'ok', at: NOW + 4_000 },
+  ];
+  expect(mergeTranscriptRows([local], stored)).toEqual([
+    local,
+    { id: 'g-2', role: 'user', text: 'ok', at: NOW + 4_000 },
+  ]);
+});
+
 test('mergeTranscriptRows treats an identical line stamped outside the send window as a NEW message', () => {
   const current = [{ id: 'u-1', role: 'user', text: 'again?', at: NOW } as const];
   const stored: GroupTranscriptEntry[] = [
