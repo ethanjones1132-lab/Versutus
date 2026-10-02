@@ -186,3 +186,17 @@ def test_reset_restores_the_quiet_room_gate():
     # ordinary speech opens.
     events = _prob_segmenter([0.6] * 40, _calibrated_quiet(seg))
     assert "speech_start" in [event.kind for event in events]
+
+
+def test_reset_clears_the_playback_gate():
+    # The worker process is reused across calls, so the hardened echo gate is
+    # state: left on, the next call would refuse its operator's speech.
+    seg = VadSegmenter(start_ms=250)
+    _prob_segmenter([0.7] * 300, seg)
+    seg.set_playback(True)  # synthesizing when the call ended
+    seg.reset()
+    # The next call relearns the same loud room; this level of real speech is
+    # exactly what the leftover playback gate refuses.
+    _prob_segmenter([0.7] * 300, seg)
+    events = _prob_segmenter([0.87] * 60, seg)
+    assert "speech_start" in [event.kind for event in events]

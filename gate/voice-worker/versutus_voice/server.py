@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import time
 from pathlib import Path
 
 from .audio import (
@@ -22,12 +23,19 @@ from .audio import (
 
 _METHODS = ("open", "pushAudio", "speak", "cancelSpeech", "setMuted", "close")
 _PARTIAL_WINDOW_MS = 600
+# How often an undecodable chunk is named on the wire; a bad stream sends
+# hundreds of chunks a minute and stdout is the Gate's only channel.
+_BAD_CHUNK_ERROR_SECONDS = 1.0
 # Speech the VAD must hear before an utterance opens.
 SPEECH_START_MS = 250
 # The shortest held utterance that is transcribed as a turn at all.
 MIN_UTTERANCE_MS = 400
 # Audio kept from before an utterance opens, prepended when it does.
 PREROLL_MS = 400
+# The longest one utterance may grow to. A VAD that never hears silence (steady
+# noise above the gate) would otherwise buffer for the whole call and re-decode
+# the whole thing on every partial.
+MAX_UTTERANCE_SECONDS = 30
 # Whisper's own per-segment doubt: a segment it thinks is silence, or one it
 # barely believes, is dropped rather than sent as something the operator said.
 NO_SPEECH_PROB_MAX = 0.6
@@ -67,6 +75,7 @@ class VoicePipeline:
     ):
         self._vad = vad
         self._min_utterance_bytes = int(INPUT_SAMPLE_RATE * 2 * min_utterance_ms / 1000)
+        self._max_utterance_bytes = int(INPUT_SAMPLE_RATE * 2 * MAX_UTTERANCE_SECONDS)
         self._transcriber = transcriber
         self._turn = turn_judge
         self._synth = synthesizer
@@ -77,6 +86,26 @@ class VoicePipeline:
         # to be transcribed after the generation ends. Tests inject a
         # synchronous runner so events stay deterministic.
         self._spawn = spawn or (lambda fn: threading.Thread(target=fn, daemon=True).start())
+        # Speech jobs, oldest first, and the flag naming the thread currently
+        # draining them. One thread for the whole pipeline: a thread per
+        # sentence had sentence two in the loudspeaker while sentence one was
+        # still being generated, and the reply was heard twice (VOW-3).
+        self._synth_jobs = []
+        self._synth_worker = None
+        self._synth_lock = threading.Lock()
+        self._running_gen = None
+        # Recognition jobs and their worker flag. Whisper costs hundreds of ms
+        # per decode; run inline it stalled the audio loop, so barge-in was
+        # unheard and speech boundaries were judged late (VOW-4).
+        self._stt_jobs = []
+        self._stt_worker = None
+        self._stt_lock = threading.Lock()
+        # Counts the utterances of this call, so a queued partial is only ever
+        # replaced by a newer one of the same utterance.
+        self._utterance = 0
+        # Bumped by open/close. A decode or sentence still in flight belongs to
+        # the call that has already ended and must not emit into the next one.
+        self._epoch = 0
         self._buffer = bytearray()
         # Recent audio from before speech was recognised as speech: the VAD only
         # opens an utterance after SPEECH_START_MS, so the first words would
@@ -87,6 +116,7 @@ class VoicePipeline:
         self._muted = False
         self._speaking = False
         self._last_partial = 0
+        self._last_bad_chunk = float("-inf")
         # The generation currently being synthesized, so VAD speech during it
         # is a barge-in rather than a new turn (§4.6 step 5).
         self._synth_speaking = False
@@ -94,25 +124,53 @@ class VoicePipeline:
         # A pause the turn judge was not sure about. Held rather than sent, so
         # it can be re-judged / forced / merged with resumed speech (§4.6 step 3).
         self._pending = None
+        # What voice.ready names: the device Whisper really ran on, so a silent
+        # CUDA→CPU fallback is visible to the Gate and not only on stderr.
+        self.whisper_device = "cpu"
 
     def open(self, params):
+        self._reset()
         self._session = (params or {}).get("voiceSessionId")
+        return {"ok": True}
+
+    def close(self, params):
+        # The process stays warm across calls, so ending one ends all of its
+        # work: nothing may keep speaking or transcribing into the next call.
+        self._reset()
+        self._session = None
+        return {"ok": True}
+
+    def _reset(self):
+        """Leave no trace of the last call behind (VOW-6).
+
+        The Gate restarts generations at 0 for every call, so a cancellation
+        the synthesizer still remembers would silence the whole next one. The
+        turn judge and the transcriber hold no state of their own: what they
+        were given lives here, in ``_pending``, the buffers and the queues.
+        """
+        self._epoch += 1
+        self._cancel_speech_jobs()
+        with self._stt_lock:
+            self._stt_jobs.clear()
         self._muted = False
         self._speaking = False
         self._last_partial = 0
+        self._last_bad_chunk = float("-inf")
+        self._utterance = 0
         self._synth_speaking = False
         self._speech_gen = None
         self._pending = None
         self._buffer.clear()
         self._preroll = bytearray()
+        self._synth.reset()
         self._vad.reset()
-        return {"ok": True}
 
     def pushAudio(self, params):
         chunk = (params or {}).get("chunk") or {}
         try:
             pcm, rate, _channels = decode_chunk(chunk)
         except Exception as error:  # noqa: BLE001 - a bad chunk is answered, not fatal
+            self._report_bad_chunk(str(error))
             return {"ok": False, "error": str(error)}
         if self._muted:
             return {"ok": True}
@@ -135,48 +193,19 @@ class VoicePipeline:
             self._buffer.extend(pcm)
         for event in events:
             if event.kind == "speech_start":
-                if self._synth_speaking:
-                    # Starting to talk interrupts the PC's speech and returns
-                    # to listening; the generation stops at the next chunk.
-                    self._emit("voice.userSpeechStart", {"gen": self._speech_gen})
-                    if self._speech_gen is not None:
-                        self._synth.cancel(self._speech_gen)
-                    self._synth_speaking = False
-                # Speech resuming after a held pause is the same utterance: the
-                # held audio joins what follows rather than being sent or lost.
-                held = self._pending["pcm"] if self._pending is not None else b""
-                self._pending = None
-                self._speaking = True
-                self._last_partial = 0
-                self._buffer = bytearray(held) + (b"" if held else before) + pcm
-                self._preroll = bytearray()
+                self._start_speech(pcm, before)
             elif event.kind == "speech_end":
-                self._speaking = False
-                if self._buffer:
-                    utterance = bytes(self._buffer)
-                    self._buffer.clear()
-                    self._last_partial = 0
-                    if self._turn is None:
-                        # No Smart Turn installed: a pause ends the turn.
-                        self._finalize(utterance)
-                    elif len(utterance) < self._min_utterance_bytes:
-                        # A blip is not a turn, however confident the judge.
-                        pass
-                    elif self._turn.confident(utterance, silence_ms=self._vad.silence_ms):
-                        # A confident verdict at the first pause is an early
-                        # end: the Gate may start the Bot turn before the final.
-                        text = self._transcriber.final(utterance)
-                        if text:
-                            self._emit("voice.earlyEnd", {"text": text})
-                            self._emit("voice.final", {"text": text})
-                    else:
-                        # An unsure verdict is a thinking pause. Hold it and
-                        # re-judge at 600 ms of silence, forcing at 1.6 s.
-                        self._pending = {
-                            "pcm": utterance,
-                            "silence_ms": self._vad.silence_ms,
-                            "next_judge_ms": self._turn.rejudge_ms,
-                        }
+                self._end_speech()
+
+        # An utterance the VAD never closes would grow for the whole call and
+        # be re-decoded from the start on every partial. Past the cap it ends
+        # exactly as a speech-end would, and the audio that keeps arriving opens
+        # the next one.
+        if self._speaking and len(self._buffer) > self._max_utterance_bytes:
+            self._end_speech(force=True)
+            self._utterance += 1
+            self._speaking = True
+            self._last_partial = 0
 
         if self._pending is not None and not self._speaking:
             pending = self._pending
@@ -197,71 +226,316 @@ class VoicePipeline:
             window_bytes = int(INPUT_SAMPLE_RATE * _PARTIAL_WINDOW_MS / 1000) * 2
             if len(self._buffer) - self._last_partial >= window_bytes:
                 self._last_partial = len(self._buffer)
-                text = self._transcriber.partial(bytes(self._buffer))
-                if text:
-                    self._emit("voice.partial", {"text": text})
+                self._queue_recognition(("partial", self._utterance, self._partial_pcm(), False))
         return {"ok": True}
 
-    def _finalize(self, pcm):
+    def _report_bad_chunk(self, message):
+        """Name an undecodable chunk, which nobody else can hear about.
+
+        ``voice.pushAudio`` is a notification: the ``{"ok": false}`` it was
+        answered with was written nowhere, so a broken stream read as a silent
+        microphone. Once a second is enough — a bad stream sends hundreds of
+        chunks a minute.
+        """
+        now = time.monotonic()
+        if now - self._last_bad_chunk < _BAD_CHUNK_ERROR_SECONDS:
+            return
+        self._last_bad_chunk = now
+        self._emit(
+            "voice.error",
+            {"code": "bad_audio_chunk", "message": message, "fatal": False, "gen": None},
+        )
+
+    def _start_speech(self, pcm, before):
+        if self._synth_speaking:
+            # Starting to talk interrupts the PC's speech and returns
+            # to listening; the generation stops at the next chunk.
+            self._emit("voice.userSpeechStart", {"gen": self._speech_gen})
+            if self._speech_gen is not None:
+                self._synth.cancel(self._speech_gen)
+            self._synth_speaking = False
+        # Speech resuming after a held pause is the same utterance: the
+        # held audio joins what follows rather than being sent or lost.
+        held = self._pending["pcm"] if self._pending is not None else b""
+        self._pending = None
+        self._speaking = True
+        self._last_partial = 0
+        self._utterance += 1
+        self._buffer = bytearray(held) + (b"" if held else before) + pcm
+        self._preroll = bytearray()
+
+    def _end_speech(self, force=False):
+        """Close the open utterance: the VAD's speech_end, or the length cap.
+
+        Both go through the same finalisation. A capped one is *forced*: a cut
+        that lands mid-word is exactly what the judge is unsure about, and held
+        it would sit behind the segments that follow it (the finals arrive out
+        of order) or be overwritten by them and never be transcribed at all.
+        """
+        if force and self._pending is not None:
+            # Never overwrite a held segment with a newer one: it is earlier
+            # audio, so it is sent first.
+            held, self._pending = self._pending, None
+            self._finalize(held["pcm"])
+        self._speaking = False
+        if not self._buffer:
+            return
+        utterance = bytes(self._buffer)
+        self._buffer.clear()
+        self._last_partial = 0
+        if force:
+            self._finalize(utterance)
+        elif self._turn is None:
+            # No Smart Turn installed: a pause ends the turn.
+            self._finalize(utterance)
+        elif len(utterance) < self._min_utterance_bytes:
+            # A blip is not a turn, however confident the judge.
+            return
+        elif self._turn.confident(utterance, silence_ms=self._vad.silence_ms):
+            # A confident verdict at the first pause is an early end: the Gate
+            # may start the Bot turn before the final.
+            self._finalize(utterance, early_end=True)
+        else:
+            # An unsure verdict is a thinking pause. Hold it and
+            # re-judge at 600 ms of silence, forcing at 1.6 s.
+            self._pending = {
+                "pcm": utterance,
+                "silence_ms": self._vad.silence_ms,
+                "next_judge_ms": self._turn.rejudge_ms,
+            }
+
+    def _partial_pcm(self):
+        """Only the tail the transcriber will read is copied out of the buffer.
+
+        A partial re-reads the utterance every 600 ms; copying all of it each
+        time made a long utterance cost more than its own length.
+        """
+        window = getattr(self._transcriber, "window", None)
+        return bytes(window(self._buffer)) if callable(window) else bytes(self._buffer)
+
+    def _finalize(self, pcm, early_end=False):
         # Too short to be a sentence: a cough or a door is not a turn, and
         # sending it is what made calls "send prematurely".
         if len(pcm) < self._min_utterance_bytes:
             return
-        text = self._transcriber.final(pcm)
-        if text:
-            self._emit("voice.final", {"text": text})
+        self._queue_recognition(("final", self._utterance, pcm, early_end))
 
     def speak(self, params):
         params = params or {}
         gen = int(params.get("gen", 0))
         text = str(params.get("text", ""))
-        self._synth_speaking = True
-        self._speech_gen = gen
         # While the PC speaks, the mic hears the loudspeaker too: the phone's
         # AEC eats most of it, but what leaks through must not open speech, or
         # the Bot would barge in on itself. The VAD gates harder until the
         # generation ends; a real operator talking still opens (and cancels).
+        # Raised inside the queue's lock, so it cannot be undone by a worker
+        # that decided the queue was empty a moment earlier.
+        with self._synth_lock:
+            self._synth_speaking = True
+            self._speech_gen = gen
+            set_playback = getattr(self._vad, "set_playback", None)
+            if callable(set_playback):
+                set_playback(True)
+            self._synth_jobs.append((gen, text))
+            idle = self._synth_worker is None
+        # Only spawned when nobody is serving the queue: the sentences of one
+        # reply are spoken one after another, never on top of each other.
+        if idle:
+            self._spawn(self._drain_speech)
+        return {"ok": True}
+
+    def _drain_speech(self):
+        """The one synthesis worker: jobs oldest first, until the queue is empty.
+
+        The worker flag is handed back under the lock that found the queue
+        empty, so a job appended in the same breath is taken here rather than
+        stranded behind a worker that has already given up.
+        """
+        # Ownership is a token, not a flag: the worker hands the claim back under
+        # the lock that found the queue empty, and a NEWER worker may claim it
+        # before this one's `finally` runs - which must then leave that claim alone.
+        me = object()
+        with self._synth_lock:
+            if self._synth_worker is not None:
+                return
+            self._synth_worker = me
+        try:
+            while True:
+                with self._synth_lock:
+                    if not self._synth_jobs:
+                        self._synth_worker = None
+                        return
+                    gen, text = self._synth_jobs.pop(0)
+                    self._running_gen = gen
+                try:
+                    self._speak_one(gen, text)
+                finally:
+                    self._running_gen = None
+                with self._synth_lock:
+                    if not self._synth_jobs:
+                        # Decided and released under the same hold: a sentence
+                        # arriving between the two found the gate down, and the
+                        # gate is what keeps the echo of the loudspeaker out of
+                        # the VAD while it is being generated (VOW-3).
+                        self._release(gen)
+        finally:
+            # A thread that died mid-reply must not leave itself as the worker:
+            # nothing would be spoken or transcribed for the rest of the call.
+            with self._synth_lock:
+                if self._synth_worker is me:
+                    self._synth_worker = None
+
+    def _speak_one(self, gen, text):
+        epoch = self._epoch
+        try:
+            for chunk_gen, pcm in self._synth.speak(text, gen):
+                if epoch != self._epoch:
+                    # open()/close() while this sentence was being generated:
+                    # its audio is not the audio of the call that is running.
+                    return
+                self._emit(
+                    "voice.speechAudio",
+                    {"gen": chunk_gen, "chunk": encode_chunk(pcm, OUTPUT_SAMPLE_RATE)},
+                )
+            if not self._synth.is_cancelled(gen):
+                self._emit("voice.speechDone", {"gen": gen})
+        except Exception as error:  # noqa: BLE001 - a failed sentence is reported, not fatal
+            if epoch != self._epoch:
+                # The call ended while this sentence was being generated. The
+                # Gate restarts `gen` every call, so a speechDone {gen} from a
+                # dead call lands in the next one and ends its reply early.
+                return
+            self._emit(
+                "voice.error",
+                {"code": "tts_failed", "message": str(error), "fatal": False, "gen": gen},
+            )
+            # A generation that never announces itself leaves the Gate in
+            # "speaking" for the rest of the call, so a failed one still says
+            # it is done, and this thread goes on serving later jobs.
+            self._emit("voice.speechDone", {"gen": gen})
+
+    def _release(self, gen):
+        """Drop the playback gate once the last sentence of a reply is done.
+
+        Called under ``_synth_lock``, between jobs with the queue empty: a
+        sentence about to be synthesised would hear its own loudspeaker.
+        """
+        # A newer generation owns the flags now; do not clear its state.
+        if self._speech_gen == gen:
+            self._synth_speaking = False
+            self._speech_gen = None
         set_playback = getattr(self._vad, "set_playback", None)
         if callable(set_playback):
-            set_playback(True)
+            set_playback(False)
 
-        def run():
-            try:
-                for chunk_gen, pcm in self._synth.speak(text, gen):
-                    self._emit(
-                        "voice.speechAudio",
-                        {"gen": chunk_gen, "chunk": encode_chunk(pcm, OUTPUT_SAMPLE_RATE)},
-                    )
-                if not self._synth.is_cancelled(gen):
-                    self._emit("voice.speechDone", {"gen": gen})
-            finally:
-                # A newer generation owns the flags now; do not clear its state.
-                if self._speech_gen == gen:
-                    self._synth_speaking = False
-                    self._speech_gen = None
-                if callable(set_playback):
-                    set_playback(False)
-
-        self._spawn(run)
-        return {"ok": True}
+    def _cancel_speech_jobs(self):
+        """Stop every sentence still owed: queued ones are dropped, the running
+        one is cancelled and stops at its next chunk."""
+        with self._synth_lock:
+            gens = {gen for gen, _text in self._synth_jobs}
+            self._synth_jobs.clear()
+        if self._running_gen is not None:
+            gens.add(self._running_gen)
+        for gen in gens:
+            self._synth.cancel(gen)
 
     def cancelSpeech(self, params):
         gen = int((params or {}).get("gen", 0))
         self._synth.cancel(gen)
-        if self._speech_gen == gen:
-            self._synth_speaking = False
-            self._speech_gen = None
+        with self._synth_lock:
+            # A queued sentence of this generation is never spoken, so speech
+            # for a newer generation does not wait behind it.
+            self._synth_jobs = [job for job in self._synth_jobs if job[0] != gen]
+            if self._speech_gen == gen:
+                self._synth_speaking = False
+                self._speech_gen = None
+            # Nothing queued and nothing running means nothing is left to
+            # protect from its own loudspeaker: the drain that would have lowered
+            # the gate finds an empty queue and returns without doing it.
+            if not self._synth_jobs and self._running_gen is None:
+                set_playback = getattr(self._vad, "set_playback", None)
+                if callable(set_playback):
+                    set_playback(False)
         return {"ok": True}
 
     def setMuted(self, params):
         self._muted = bool((params or {}).get("muted"))
         return {"ok": True}
 
-    def close(self, params):
-        self._buffer.clear()
-        self._pending = None
-        self._session = None
-        return {"ok": True}
+    def _queue_recognition(self, job):
+        """Queue a decode for the recognition worker, keeping utterance order.
+
+        A queued partial is replaced rather than stacked: every partial is
+        another read of the same growing utterance, so only the newest is worth
+        decoding. A final is never replaced — it is the turn itself.
+        """
+        with self._stt_lock:
+            tail = self._stt_jobs[-1] if self._stt_jobs else None
+            if job[0] == "partial" and tail is not None and tail[:2] == job[:2]:
+                self._stt_jobs[-1] = job
+            else:
+                self._stt_jobs.append(job)
+            idle = self._stt_worker is None
+        if idle:
+            self._spawn(self._drain_recognition)
+
+    def _drain_recognition(self):
+        """The one recognition worker: decodes in queue order until it is empty.
+
+        The audio loop only ever queues here, so barge-in is heard while
+        Whisper is still busy, and the queue is what keeps a partial ahead of
+        the final of its own utterance.
+        """
+        me = object()
+        with self._stt_lock:
+            if self._stt_worker is not None:
+                return
+            self._stt_worker = me
+        try:
+            while True:
+                with self._stt_lock:
+                    if not self._stt_jobs:
+                        self._stt_worker = None
+                        return
+                    job = self._stt_jobs.pop(0)
+                self._recognise(job)
+        finally:
+            # As above: a worker that died must not silence recognition for the
+            # rest of the process's life - and must not take a newer worker's
+            # claim with it.
+            with self._stt_lock:
+                if self._stt_worker is me:
+                    self._stt_worker = None
+
+    def _recognise(self, job):
+        kind, _utterance, pcm, early_end = job
+        epoch = self._epoch
+        try:
+            text = self._transcriber.partial(pcm) if kind == "partial" else self._transcriber.final(pcm)
+        except Exception as error:  # noqa: BLE001 - one bad decode is not the end of the call
+            text = None
+            failure = error
+        else:
+            failure = None
+        if epoch != self._epoch:
+            # open()/close() while this decode ran: neither its words nor its
+            # failure belong to the call that is running now.
+            return
+        if failure is not None:
+            self._emit(
+                "voice.error",
+                {"code": "stt_failed", "message": str(failure), "fatal": False, "gen": None},
+            )
+            return
+        if not text:
+            return
+        if kind == "partial":
+            self._emit("voice.partial", {"text": text})
+        elif early_end:
+            self._emit("voice.earlyEnd", {"text": text})
+            self._emit("voice.final", {"text": text})
+        else:
+            self._emit("voice.final", {"text": text})
 
 
 class RpcServer:
@@ -297,6 +571,19 @@ class RpcServer:
         """A notification the pipeline sends to the Gate."""
         self._write({"jsonrpc": "2.0", "method": method, "params": params})
 
+    def announce_ready(self, device, load_ms):
+        """Say the pipeline is loaded and can hear.
+
+        Written once, before the loop reads a line: loading Whisper, Silero,
+        Kokoro and Smart Turn takes tens of seconds, and a Gate told "listening"
+        before that hears nothing at all — the operator's first sentence was
+        recognised 17.9 s after the stream opened (VOW-1).
+        """
+        self.emit(
+            "voice.ready",
+            {"sampleRate": dict(self.sample_rate), "device": device, "loadMs": int(load_ms)},
+        )
+
     def _respond(self, request_id, result):
         self._write({"jsonrpc": "2.0", "id": request_id, "result": result})
 
@@ -326,6 +613,15 @@ class RpcServer:
         try:
             result = handler(params)
         except Exception as error:  # noqa: BLE001 - a stage failure is reported, not fatal
+            if request_id is None:
+                # A notification carries no id to answer. An id-less error frame
+                # is discarded by the transport, so an exception in recognition
+                # vanished and the call went deaf with nothing to show for it.
+                self.emit(
+                    "voice.error",
+                    {"code": "handler_failed", "message": str(error), "fatal": False, "gen": None},
+                )
+                return
             self._write(_error(request_id, -32000, str(error)))
             return
         if request_id is not None:
@@ -381,8 +677,20 @@ def whisper_model_dir(models_dir):
     return None
 
 
+# The device the last `load_whisper` settled on. `voice.ready` names it: a
+# silent CUDA→CPU fallback reads on the Gate as a slow call, not as a fallback.
+_whisper_device = "cpu"
+
+
+def whisper_device():
+    """The device Whisper actually loaded on, "cpu" after a CUDA fallback."""
+    return _whisper_device
+
+
 def _log_whisper_device(device, error):
     """A silent CUDA→CPU fallback reads as slow voice, so name the device."""
+    global _whisper_device
+    _whisper_device = device
     if error is None:
         print(f"[versutus-voice] whisper loaded on {device}", file=sys.stderr)
     else:
@@ -587,7 +895,7 @@ def build_default_pipeline(emit, models_dir, cpu=False):
         from .turn import TurnJudge
 
         turn = TurnJudge(is_complete=lambda _window: 1.0)
-    return VoicePipeline(
+    pipeline = VoicePipeline(
         # 96 ms of "speech" opened an utterance on a click or a breath, and
         # Whisper turned each one into "Thank you." on a live call (2026-09-19).
         vad=VadSegmenter(is_speech=SileroScorer(), start_ms=SPEECH_START_MS),
@@ -597,11 +905,14 @@ def build_default_pipeline(emit, models_dir, cpu=False):
         emit=emit,
         min_utterance_ms=MIN_UTTERANCE_MS,
     )
+    pipeline.whisper_device = whisper_device()
+    return pipeline
 
 
 def main(argv=None):
     import argparse
 
+    started = time.monotonic()
     parser = argparse.ArgumentParser(description="Versutus local voice worker")
     parser.add_argument("--models-dir", required=True)
     parser.add_argument("--cpu", action="store_true")
@@ -614,6 +925,9 @@ def main(argv=None):
         cpu=args.cpu,
     )
     server = RpcServer(pipeline, out=sys.stdout, record=False)
+    # The first thing written, before a line of stdin is read: until this
+    # arrives the worker is loading models and cannot hear anything.
+    server.announce_ready(pipeline.whisper_device, (time.monotonic() - started) * 1000)
     server.serve(stdin=sys.stdin)
     return 0
 

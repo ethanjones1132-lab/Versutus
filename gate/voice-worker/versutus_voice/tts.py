@@ -37,6 +37,14 @@ class SpeechSynthesizer:
     def is_cancelled(self, gen):
         return gen in self._cancelled
 
+    def reset(self):
+        """Forget the last call's cancellations.
+
+        The Gate restarts generations at 0 for every call, so a cancellation
+        still remembered here would silence the whole next call.
+        """
+        self._cancelled.clear()
+
     def speak(self, text, gen):
         """Yield ``(gen, pcm)`` per sentence chunk, stopping on cancel."""
         for sentence in split_sentences(text):

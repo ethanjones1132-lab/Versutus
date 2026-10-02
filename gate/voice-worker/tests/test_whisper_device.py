@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from versutus_voice.server import WHISPER_LOCAL_FILES, load_whisper
+from versutus_voice.server import WHISPER_LOCAL_FILES, load_whisper, whisper_device
 
 
 def _models_dir(tmp_path):
@@ -55,3 +55,16 @@ def test_explicit_cpu_names_cpu(tmp_path, monkeypatch, capsys):
     load_whisper(_models_dir(tmp_path), cpu=True)
     assert [call["device"] for call in calls] == ["cpu"]
     assert "whisper loaded on cpu" in capsys.readouterr().err
+
+
+def test_the_loaded_device_is_reported_for_voice_ready(tmp_path, monkeypatch):
+    # `voice.ready` names the device: a silent CUDA→CPU fallback reads on the
+    # Gate as a slow call, and stderr is not a signal it can wait on.
+    models = _models_dir(tmp_path)
+    _install_fake_whisper(monkeypatch)
+    load_whisper(models)
+    assert whisper_device() == "cuda"
+
+    _install_fake_whisper(monkeypatch, fail_cuda=True)
+    load_whisper(models)
+    assert whisper_device() == "cpu"

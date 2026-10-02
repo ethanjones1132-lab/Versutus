@@ -85,6 +85,9 @@ class VadSegmenter:
         self._silence_ms = 0.0
         self.in_speech = False
         self._carry = bytearray()
+        # A warm worker is reused across calls, and the hardened echo gate is
+        # state: left on, the next call would refuse the operator's speech.
+        self._playback = False
         # The floor starts noise-suspicious, not quiet-trusting: with a low
         # seed, eight consecutive above-threshold noise windows (250 ms) open
         # an utterance before the floor can ever rise — the bootstrap problem.
