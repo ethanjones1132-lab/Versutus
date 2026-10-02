@@ -10,6 +10,8 @@
 //   node scripts/live-smoke.mjs                 read-only checks (no model turns)
 //   node scripts/live-smoke.mjs --turns         also run one tiny turn per environment
 //   node scripts/live-smoke.mjs --turns --only opencode-local,hermes-local
+//   node scripts/live-smoke.mjs --durable       the phone leaves mid-turn: the turn must still finish on the PC,
+//                                               be readable from /v1/turns, replay, and answer a retry as resumed
 //   node scripts/live-smoke.mjs --expect-bots 16
 //   node scripts/live-smoke.mjs --token-file C:\Projects\Versutus\gate\.tokens.json   (from another worktree)
 //
@@ -31,6 +33,7 @@ const option = (name, fallback) => {
 };
 
 const BASE = option('url', process.env.VERSUTUS_GATE_URL ?? 'http://127.0.0.1:8760').replace(/\/+$/, '');
+const RUN_DURABLE = flag('durable');
 const RUN_TURNS = flag('turns');
 const ONLY = option('only', '')
   .split(',')
@@ -147,6 +150,63 @@ async function streamedTurn(token, body) {
   return { status: response.status, deltas, reply, error, sessionId };
 }
 
+/**
+ * The phone leaving mid-turn, against the real Gate and the real backend.
+ *
+ * Starts a turn, reads until the first words arrive, then drops the connection
+ * the way a phone going out of range does. The Gate must keep the turn running,
+ * record it, finish it, replay it frame for frame, and answer a retry of the
+ * same send as the same turn rather than starting a second one.
+ */
+async function durableTurn(token, id, model) {
+  const turnId = `smoke-durable-${Date.now().toString(36)}`;
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'x-versutus-turn-id': turnId };
+  const body = JSON.stringify({
+    model: model.id,
+    backendId: id,
+    stream: true,
+    messages: [{ role: 'user', content: 'Count from one to twenty, one number per line, then stop.' }],
+  });
+  const controller = new AbortController();
+  const response = await fetch(`${BASE}/v1/chat/completions`, { method: 'POST', headers, body, signal: controller.signal });
+  const sessionId = response.headers.get('x-versutus-session-id');
+  if (!response.ok) return { ok: false, detail: `HTTP ${response.status}`, sessionId };
+  let sawWords = false;
+  const deadline = Date.now() + TURN_TIMEOUT_MS;
+  try {
+    for await (const chunk of response.body) {
+      if (Buffer.from(chunk).toString('utf8').includes('"content"')) sawWords = true;
+      if (sawWords || Date.now() > deadline) break;
+    }
+  } catch {
+    // the stream failing before words is reported below
+  }
+  controller.abort();
+  if (!sawWords) return { ok: false, detail: 'no words arrived before the phone left', sessionId };
+
+  // The phone is gone. The turn must finish on its own.
+  let meta = null;
+  while (Date.now() < deadline) {
+    const read = await call(token, `/v1/turns/${encodeURIComponent(turnId)}`).catch(() => null);
+    meta = read?.json ?? null;
+    if (meta && meta.status && meta.status !== 'running') break;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  if (meta?.status !== 'done') return { ok: false, detail: `turn ended ${meta?.status ?? 'unknown'}${meta?.reason ? ` (${meta.reason})` : ''}, not done`, sessionId };
+  if (!String(meta.text ?? '').trim()) return { ok: false, detail: 'turn is done but recorded no reply text', sessionId };
+
+  const replay = await call(token, `/v1/turns/${encodeURIComponent(turnId)}/events?after=0`).catch(() => null);
+  if (replay?.status !== 200 || !String(replay.text).includes('[DONE]')) {
+    return { ok: false, detail: `replay answered HTTP ${replay?.status ?? 'no answer'} without [DONE]`, sessionId };
+  }
+
+  const retry = await fetch(`${BASE}/v1/chat/completions`, { method: 'POST', headers, body, signal: AbortSignal.timeout(60_000) });
+  const resumed = retry.headers.get('x-versutus-turn-resumed') === '1';
+  await retry.text().catch(() => '');
+  if (!resumed) return { ok: false, detail: 'a retry of the same send did not come back as the same turn', sessionId };
+  return { ok: true, detail: `survived the phone leaving: ${String(meta.text).trim().split(/\r?\n/).length} lines recorded, replayed, retry resumed`, sessionId };
+}
+
 async function main() {
   const token = readToken();
 
@@ -198,11 +258,17 @@ async function main() {
       record(`${id}: session.restore with no scope still finds it`, Boolean(unscoped?.json?.result?.id), unscoped?.json?.error?.message ?? `${unscoped?.ms ?? '?'} ms`);
     }
 
-    if (!RUN_TURNS) continue;
+    if (!RUN_TURNS && !RUN_DURABLE) continue;
     const model = pickSmokeModel(rows, id);
     if (!model) {
       skip(`${id}: turn`, 'no free model offered (pin one with --model <env>=<model>)');
       continue;
+    }
+    if (RUN_DURABLE) {
+      const durable = await durableTurn(token, id, model).catch((error) => ({ ok: false, detail: String(error?.message ?? error) }));
+      if (durable.sessionId) created.push({ id, sessionId: durable.sessionId });
+      record(`${id}: a turn survives the phone leaving (${model.id})`, durable.ok, durable.detail);
+      if (!RUN_TURNS) continue;
     }
     const turn = await streamedTurn(token, {
       model: model.id,
