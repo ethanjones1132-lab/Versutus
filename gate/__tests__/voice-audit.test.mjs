@@ -6,6 +6,28 @@ import { join } from 'node:path';
 
 import { AUDIT_FIELDS, buildAuditLine, createVoiceAudit } from '../core/voice/audit.mjs';
 
+// The closed list, written out: what the call log may carry, and nothing else.
+// It is spelled here rather than read back from the module so that dropping a
+// field from the module fails here.
+const DOCUMENTED_FIELDS = [
+  'ts',
+  'deviceId',
+  'botId',
+  'engine',
+  'fellBackFrom',
+  'turns',
+  'finals',
+  'partials',
+  'utterances',
+  'queued',
+  'continued',
+  'secondsListening',
+  'secondsSpeaking',
+  'p50FirstAudioMs',
+  'p50FirstReplyMs',
+  'error',
+];
+
 test('the audit line has exactly the documented fields', () => {
   const line = buildAuditLine({
     ts: '2026-09-13T00:00:00.000Z',
@@ -14,14 +36,28 @@ test('the audit line has exactly the documented fields', () => {
     engine: 'local',
     fellBackFrom: 'codex',
     turns: 3,
+    finals: 9,
+    partials: 40,
+    utterances: 3,
+    queued: 2,
+    continued: 1,
     secondsListening: 12.5,
     secondsSpeaking: 7,
     p50FirstAudioMs: 900,
+    p50FirstReplyMs: 450,
     error: null,
   });
-  assert.deepEqual(Object.keys(line).sort(), [...AUDIT_FIELDS].sort());
+  assert.deepEqual(Object.keys(line).sort(), [...DOCUMENTED_FIELDS].sort());
+  assert.deepEqual([...AUDIT_FIELDS].sort(), [...DOCUMENTED_FIELDS].sort(), 'the module writes this list');
   assert.equal(line.botId, 'scout');
   assert.equal(line.engine, 'local');
+  // What the call heard and what it did with it, so a call that dropped speech
+  // cannot be read as a call that was simply quiet.
+  assert.equal(line.finals, 9);
+  assert.equal(line.utterances, 3);
+  assert.equal(line.queued, 2);
+  assert.equal(line.continued, 1);
+  assert.equal(line.p50FirstReplyMs, 450);
 });
 
 test('a summary cannot smuggle transcript text into the line', () => {

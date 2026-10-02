@@ -29,6 +29,16 @@ export const OUTPUT_SAMPLE_RATE = 24_000;
 export const OUTPUT_CHANNELS = 1;
 // How long a turn started on an early end survives before it is committed.
 export const SPECULATION_WINDOW_MS = 600;
+// How long consecutive transcript segments are gathered into one utterance
+// before it is sent. A recognizer's `final` is a sentence-sized segment, not the
+// end of what the person wants to say, so a turn started on the first segment
+// answers a half-heard question; 0 commits every segment at once, which is the
+// older one-final-one-turn behaviour.
+export const UTTERANCE_HOLD_MS = 1_400;
+// How long after a turn was committed a final heard while it is still thinking
+// counts as the same thought (so it merges into that turn) rather than a new one
+// (so it waits for its own turn).
+export const CONTINUATION_MS = 4_000;
 // How long one Bot turn may run before the call names it failed and reopens,
 // symmetric with the phone engine's reply watchdog: a backend that never
 // answers must not park the call in thinking forever. Three minutes, not two:
@@ -54,6 +64,14 @@ function rejectUpgrade(socket, status, message) {
   socket.destroy();
 }
 
+/** The median of a call's per-turn latencies, in ms; null when none happened. */
+function p50(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+}
+
 export function attachVoiceMediaSocket({
   server,
   deviceTokens,
@@ -69,6 +87,8 @@ export function attachVoiceMediaSocket({
   audioBufferMs = AUDIO_BUFFER_MS,
   turnTimeoutMs = TURN_TIMEOUT_MS,
   speculationWindowMs = SPECULATION_WINDOW_MS,
+  utteranceHoldMs = UTTERANCE_HOLD_MS,
+  continuationMs = CONTINUATION_MS,
 } = {}) {
   const wss = new WebSocketServer({ noServer: true });
   const calls = new Map();
@@ -144,12 +164,30 @@ export function attachVoiceMediaSocket({
       audioBytes: 0,
       partials: 0,
       finals: 0,
+      utterances: 0,
+      queued: 0,
+      continued: 0,
       speechChunks: 0,
       firstReplyAt: 0,
+      // One sample per turn: how long the commit was followed by that turn's
+      // first reply delta, and by its first speech chunk.
+      replyLatencies: [],
+      audioLatencies: [],
     };
     let turnAbort = null;
     let turnTimer = null;
+    let holdTimer = null;
+    let turnCommittedAt = 0;
+    let turnFirstReplyAt = 0;
+    let turnFirstAudioAt = 0;
     let speculative = null;
+    // The transcript the socket confirmed on the engine's behalf, and how long it
+    // may still be echoed by a `final` that was merely late: the worker emits
+    // both `earlyEnd` and `final` for one utterance, so folding the late copy in
+    // would send the same sentence twice. It is spent by any other transcript and
+    // by the window itself, so a person who really does repeat themselves is
+    // heard both times.
+    let confirmed = null;
     // A speculative replacement starts a new turn on the same call, so a call
     // session id alone cannot tell the old turn's stages from the new one's.
     // Each startTurn gets its own attempt id, and every stage names it.
@@ -179,6 +217,13 @@ export function attachVoiceMediaSocket({
       if (turnTimer) {
         clearTimeout(turnTimer);
         turnTimer = null;
+      }
+    };
+
+    const clearHoldTimer = () => {
+      if (holdTimer) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
       }
     };
 
@@ -238,6 +283,9 @@ export function attachVoiceMediaSocket({
     const runEffect = (effect) => {
       switch (effect.kind) {
         case 'send':
+          // Counted where the reducer decided to send it, so the line cannot
+          // count a transcript the call would never have shown the phone.
+          if (effect.frame.t === 'partial') trace.partials += 1;
           sendFrame(effect.frame);
           break;
         case 'sendAudio':
@@ -251,6 +299,18 @@ export function attachVoiceMediaSocket({
           break;
         case 'engine.setMuted':
           engine.setMuted?.(effect.muted);
+          break;
+        // The reducer names when the person has stopped talking; the socket owns
+        // the clock. One timer per call: re-arming replaces the running hold, so
+        // a long utterance cannot leave a timer behind that commits it early.
+        case 'hold.start':
+          clearHoldTimer();
+          if (!(effect.ms > 0)) break;
+          holdTimer = setTimeout(() => {
+            holdTimer = null;
+            dispatch({ type: 'holdElapsed' });
+          }, effect.ms);
+          holdTimer.unref?.();
           break;
         case 'turn.run':
           if (speculative) {
@@ -281,6 +341,27 @@ export function attachVoiceMediaSocket({
           turnAbort?.abort();
           turnAbort = null;
           break;
+        // What the reducer decided about the speech, counted and named here: the
+        // call log says what was sent, what waited and what merged, so a call
+        // cannot look complete while speech was quietly folded into a reply.
+        case 'utterance.commit':
+          trace.utterances += 1;
+          turnCommittedAt = now();
+          turnFirstReplyAt = 0;
+          turnFirstAudioAt = 0;
+          log(
+            `voice.utterance commit session=${session.voiceSessionId}`
+            + ` chars=${effect.chars} finals=${effect.finals}`,
+          );
+          break;
+        case 'utterance.merge':
+          trace.continued += 1;
+          log(`voice.final merged session=${session.voiceSessionId} chars=${effect.chars}`);
+          break;
+        case 'utterance.queue':
+          trace.queued += 1;
+          log(`voice.final queued session=${session.voiceSessionId} chars=${effect.chars}`);
+          break;
         case 'audit':
           // The reducer names the end; the line carries counts and names only.
           audit?.({
@@ -289,8 +370,15 @@ export function attachVoiceMediaSocket({
             engine: session.engine,
             fellBackFrom: session.fellBackFrom ?? null,
             turns,
+            utterances: trace.utterances,
+            finals: trace.finals,
+            partials: trace.partials,
+            queued: trace.queued,
+            continued: trace.continued,
             secondsListening: Math.round(listeningMs / 1000),
             secondsSpeaking: Math.round(speakingMs / 1000),
+            p50FirstAudioMs: p50(trace.audioLatencies),
+            p50FirstReplyMs: p50(trace.replyLatencies),
             error: effect.reason ?? null,
           });
           break;
@@ -309,21 +397,41 @@ export function attachVoiceMediaSocket({
       // One line per step a call takes, so "it never answered" can be placed:
       // no audio, no transcript, a transcript but no turn, or a turn with no
       // speech. Text is logged by length only; what was said stays off disk.
-      if (event.type === 'partial') trace.partials += 1;
-      else if (event.type === 'final') {
+      // `finals` is what the engine heard; what was done with each one is
+      // counted and logged by the reducer's decisions (below), so the two
+      // reconcile on the end line instead of quietly disagreeing.
+      if (event.type === 'final') {
         trace.finals += 1;
         log(`voice.final session=${session.voiceSessionId} chars=${String(event.text ?? '').length} afterMs=${now() - trace.startedAt}`);
-      } else if (event.type === 'replyDelta' && !trace.firstReplyAt) {
-        trace.firstReplyAt = now();
-        log(`voice.reply first session=${session.voiceSessionId} afterMs=${trace.firstReplyAt - trace.startedAt}`);
-      } else if (event.type === 'speechAudio') trace.speechChunks += 1;
-      else if (['bargein', 'skip', 'end', 'error', 'mute', 'unmute'].includes(event.type)) {
+      } else if (event.type === 'replyDelta') {
+        if (turnCommittedAt && !turnFirstReplyAt) {
+          turnFirstReplyAt = now();
+          trace.replyLatencies.push(turnFirstReplyAt - turnCommittedAt);
+        }
+        if (!trace.firstReplyAt) {
+          trace.firstReplyAt = now();
+          log(`voice.reply first session=${session.voiceSessionId} afterMs=${trace.firstReplyAt - trace.startedAt}`);
+        }
+      } else if (event.type === 'speechAudio') {
+        trace.speechChunks += 1;
+        if (turnCommittedAt && !turnFirstAudioAt) {
+          turnFirstAudioAt = now();
+          trace.audioLatencies.push(turnFirstAudioAt - turnCommittedAt);
+        }
+      } else if (['bargein', 'userSpeechStart', 'skip', 'end', 'error', 'mute', 'unmute'].includes(event.type)) {
         log(`voice.event session=${session.voiceSessionId} type=${event.type}${event.code ? ` code=${event.code}` : ''}${event.message ? ` message=${event.message}` : ''}`);
       } else if (event.type === 'socketClosed') {
-        log(`voice.end session=${session.voiceSessionId} reason=${event.reason} audioFrames=${trace.audioFrames} audioBytes=${trace.audioBytes} partials=${trace.partials} finals=${trace.finals} speechChunks=${trace.speechChunks} phase=${call.phase}`);
+        log(
+          `voice.end session=${session.voiceSessionId} reason=${event.reason}`
+          + ` audioFrames=${trace.audioFrames} audioBytes=${trace.audioBytes} partials=${trace.partials}`
+          + ` finals=${trace.finals} speechChunks=${trace.speechChunks} utterances=${trace.utterances}`
+          + ` queued=${trace.queued} continued=${trace.continued} turns=${turns} phase=${call.phase}`,
+        );
       }
-      const out = reduceVoiceSession(call, event);
+      // The reducer keeps its own clocks out, so the socket stamps the time it
+      // decided on and hands it over with the event.
       const at = now();
+      const out = reduceVoiceSession(call, { ...event, nowMs: at });
       if (out.state.phase !== call.phase) {
         const elapsed = at - phaseSince;
         if (call.phase === 'listening' || call.phase === 'muted') listeningMs += elapsed;
@@ -377,8 +485,11 @@ export function attachVoiceMediaSocket({
         entry.timer = setTimeout(() => {
           // The worker normally emits final immediately after earlyEnd. If
           // that frame is lost, its already-finalized transcript still needs
-          // to release the answer rather than strand the call in listening.
-          if (speculative === entry && !ended && call.phase === 'listening') {
+          // to release the answer rather than strand the call in listening —
+          // but only while nothing has been heard: the hold already gathering
+          // that transcript must not count it a second time.
+          if (speculative === entry && !ended && call.phase === 'listening' && !call.pendingText) {
+            confirmed = { text: entry.text, untilMs: now() + speculationWindowMs };
             dispatch({ type: 'final', text: entry.text, turnId: session.voiceSessionId });
           }
         }, speculationWindowMs);
@@ -483,7 +594,12 @@ export function attachVoiceMediaSocket({
 
       sendFrame({ t: 'ready', engine: session.engine });
       if (first) {
-        dispatch({ type: 'ready', turnId: session.voiceSessionId });
+        dispatch({
+          type: 'ready',
+          turnId: session.voiceSessionId,
+          utteranceHoldMs,
+          continuationMs,
+        });
       } else {
         sendFrame({ t: 'phase', phase: call.phase === 'opening' ? 'listening' : call.phase });
         flush();
@@ -511,6 +627,7 @@ export function attachVoiceMediaSocket({
       clearResumeTimer();
       clearAudioTimer();
       clearTurnTimer();
+      clearHoldTimer();
       if (speculative) {
         clearTimeout(speculative.timer);
         speculative = null;
@@ -531,9 +648,19 @@ export function attachVoiceMediaSocket({
       Promise.resolve(engine.close?.()).catch(() => undefined);
     }
 
-    engine.on?.('final', (event) =>
-      dispatch({ type: 'final', text: event.text, turnId: session.voiceSessionId }),
-    );
+    engine.on?.('final', (event) => {
+      const text = String(event.text ?? '').trim();
+      if (confirmed && text === confirmed.text && now() <= confirmed.untilMs) {
+        // The transcript the socket already confirmed for this utterance, as an
+        // echo of it: the words are in the turn, so sending them again would
+        // answer the same sentence twice.
+        confirmed = null;
+        log(`voice.final duplicate session=${session.voiceSessionId} chars=${text.length}`);
+        return;
+      }
+      confirmed = null;
+      dispatch({ type: 'final', text: event.text, turnId: session.voiceSessionId });
+    });
     engine.on?.('partial', (event) => dispatch({ type: 'partial', text: event.text }));
     engine.on?.('speechAudio', (event) => {
       // Outbound speech is traffic too: a call the phone is listening to has not
@@ -552,7 +679,7 @@ export function attachVoiceMediaSocket({
         speculative.controller.abort();
         speculative = null;
       }
-      dispatch({ type: 'bargein' });
+      dispatch({ type: 'userSpeechStart' });
     });
     engine.on?.('error', (event) =>
       dispatch({

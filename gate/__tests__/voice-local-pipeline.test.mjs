@@ -51,7 +51,7 @@ const SESSION = {
   thread: { kind: 'bot', sessionId: 'sess-1', botId: 'scout' },
 };
 
-async function startMedia({ runTurn, engine = new FakeEngine() } = {}) {
+async function startMedia({ runTurn, engine = new FakeEngine(), utteranceHoldMs = 0 } = {}) {
   const registry = new VoiceSessionRegistry();
   registry.create(SESSION);
   const deviceTokens = {
@@ -67,6 +67,10 @@ async function startMedia({ runTurn, engine = new FakeEngine() } = {}) {
     registry,
     createEngine: () => engine,
     runTurn,
+    // These tests pin the plain turn loop: every final is a turn, at once. A
+    // hold of 0 is exactly that configuration — the gathering of consecutive
+    // segments into one utterance has its own file (voice-utterance-socket).
+    utteranceHoldMs,
   });
   server.listen(0);
   await once(server, 'listening');

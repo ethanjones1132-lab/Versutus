@@ -14,9 +14,18 @@ export const AUDIT_FIELDS = Object.freeze([
   'engine',
   'fellBackFrom',
   'turns',
+  // What the call heard and what it did with it: finals, the utterances those
+  // were gathered into, and the ones that had to wait for the turn in flight.
+  // Without them a call that dropped speech counted the same as a clean one.
+  'finals',
+  'partials',
+  'utterances',
+  'queued',
+  'continued',
   'secondsListening',
   'secondsSpeaking',
   'p50FirstAudioMs',
+  'p50FirstReplyMs',
   'error',
 ]);
 

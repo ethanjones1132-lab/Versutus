@@ -51,7 +51,13 @@ const SESSION = {
   thread: { kind: 'bot', sessionId: 'sess-1', botId: 'scout' },
 };
 
-async function startMedia({ runTurn, engine = new FakeEngine(), resumeTimeoutMs, audit } = {}) {
+async function startMedia({
+  runTurn,
+  engine = new FakeEngine(),
+  resumeTimeoutMs,
+  audit,
+  utteranceHoldMs = 0,
+} = {}) {
   const registry = new VoiceSessionRegistry();
   registry.create(SESSION);
   const deviceTokens = {
@@ -69,6 +75,9 @@ async function startMedia({ runTurn, engine = new FakeEngine(), resumeTimeoutMs,
     runTurn,
     resumeTimeoutMs,
     audit,
+    // A resume test is about the socket, not turn-taking: one final is one turn,
+    // at once, which is a hold of 0 (see voice-utterance-socket.test.mjs).
+    utteranceHoldMs,
   });
   server.listen(0);
   await once(server, 'listening');

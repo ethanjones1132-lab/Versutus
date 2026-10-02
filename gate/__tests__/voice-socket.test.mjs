@@ -20,7 +20,7 @@ const BOOTSTRAP_SESSION = { voiceSessionId: 'vs-boot', deviceId: 'bootstrap:phon
 // The Gate's own token: a phone connected with it has no device grant.
 const BOOTSTRAP_TOKENS = { verify: async (authorization) => authorization === 'Bearer gate-own-token' };
 
-async function startMedia({ noAudioTimeoutMs = 30_000, tokenStore = null } = {}) {
+async function startMedia({ noAudioTimeoutMs = 30_000, tokenStore = null, utteranceHoldMs = 0 } = {}) {
   const registry = new VoiceSessionRegistry();
   registry.create(SESSION);
   registry.create(BOOTSTRAP_SESSION);
@@ -42,6 +42,8 @@ async function startMedia({ noAudioTimeoutMs = 30_000, tokenStore = null } = {})
     registry,
     createEngine: () => new ScriptedEngine({ text: 'from engine', framesBeforeFinal: 1 }),
     noAudioTimeoutMs,
+    // The scripted engine's one final is one turn, at once: a hold of 0.
+    utteranceHoldMs,
   });
   server.listen(0);
   await once(server, 'listening');
@@ -299,6 +301,7 @@ async function startControllableCall({
   resumeTimeoutMs = 20_000,
   turnTimeoutMs = 120_000,
   speculationWindowMs,
+  utteranceHoldMs = 0,
   audit,
   log,
 } = {}) {
@@ -320,6 +323,10 @@ async function startControllableCall({
     resumeTimeoutMs,
     turnTimeoutMs,
     speculationWindowMs,
+    // These tests pin the plain turn loop and speculation as they were: one
+    // final is one turn, at once, which is a hold of 0. The utterance hold and
+    // what it gathers are covered in voice-utterance-socket.test.mjs.
+    utteranceHoldMs,
     audit,
     ...(log ? { log } : {}),
   });
