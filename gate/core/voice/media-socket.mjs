@@ -33,12 +33,15 @@ export const SPECULATION_WINDOW_MS = 600;
 // before it is sent. A recognizer's `final` is a sentence-sized segment, not the
 // end of what the person wants to say, so a turn started on the first segment
 // answers a half-heard question; 0 commits every segment at once, which is the
-// older one-final-one-turn behaviour.
-export const UTTERANCE_HOLD_MS = 1_400;
+// older one-final-one-turn behaviour. 1.8 s because a person thinking between
+// sentences pauses 1-3 s (measured on a live call, 2026-10-02: finals 1.0-3.1 s
+// apart); the recognizer's own turn judge already sits in front of this, so the
+// hold only has to cover what it judged complete too early.
+export const UTTERANCE_HOLD_MS = 1_800;
 // How long after a turn was committed a final heard while it is still thinking
 // counts as the same thought (so it merges into that turn) rather than a new one
 // (so it waits for its own turn).
-export const CONTINUATION_MS = 4_000;
+export const CONTINUATION_MS = 5_000;
 // How long one Bot turn may run before the call names it failed and reopens,
 // symmetric with the phone engine's reply watchdog: a backend that never
 // answers must not park the call in thinking forever. Three minutes, not two:
