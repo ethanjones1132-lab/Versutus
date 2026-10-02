@@ -125,6 +125,7 @@ export async function withHostLookupRetry<T>(
   url: string,
   alternateIpv4: string[],
   attempt: (candidateUrl: string) => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   const hostname = hostnameOf(url);
   const ipv4Candidates: string[] = [];
@@ -141,11 +142,15 @@ export async function withHostLookupRetry<T>(
   const hostnameStillToCome = rememberFailure && ipv4Candidates.length > 0;
   let lastError: unknown;
   for (const candidate of candidates) {
+    // A caller that has superseded this read does not owe any remaining
+    // candidate a request.
+    if (signal?.aborted) throw new Error('Host lookup retry aborted');
     try {
       const result = await attempt(candidate);
       if (candidate === url) hostLookupFailures.delete(hostname);
       return result;
     } catch (error) {
+      if (signal?.aborted) throw new Error('Host lookup retry aborted');
       if (isHostLookupFailure(error)) {
         if (candidate === url) rememberHostLookupFailure(hostname);
         continue;

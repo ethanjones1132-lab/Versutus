@@ -268,10 +268,14 @@ export async function fetchGatewayManifestWithLookupRetry(
   baseUrl: string,
   alternateIpv4: string[],
   timeoutMs = 10_000,
+  signal?: AbortSignal,
 ): Promise<GatewayManifest | null> {
   try {
-    return await withHostLookupRetry(baseUrl, alternateIpv4, (candidateBase) =>
-      fetchGatewayManifestRaw(candidateBase, timeoutMs),
+    return await withHostLookupRetry(
+      baseUrl,
+      alternateIpv4,
+      (candidateBase) => fetchGatewayManifestRaw(candidateBase, timeoutMs, signal),
+      signal,
     );
   } catch {
     return null;
@@ -286,8 +290,17 @@ export async function fetchGatewayManifestWithLookupRetry(
 async function fetchGatewayManifestRaw(
   baseUrl: string,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<GatewayManifest | null> {
   const controller = new AbortController();
+  // A superseding refresh aborts `signal`; wire it into the per-attempt
+  // controller so an in-flight fetch stops instead of holding the link until
+  // its own timeout.
+  const onAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) throw new Error('Manifest read aborted');
+    signal.addEventListener('abort', onAbort, { once: true });
+  }
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const url = `${baseUrl.replace(/\/+$/, '')}${GATEWAY_MANIFEST_PATH}`;
@@ -305,5 +318,6 @@ async function fetchGatewayManifestRaw(
     }
   } finally {
     clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', onAbort);
   }
 }

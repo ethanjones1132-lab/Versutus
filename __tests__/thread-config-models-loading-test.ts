@@ -54,7 +54,9 @@ describe('thread config models loading', () => {
       /catch \(error\) \{[\s\S]*?setModelCatalogError\(message \|\| 'Model catalog could not be read\.'\);\n      setModelCatalogLoaded\(true\);/,
     );
     // No client means no read will ever be issued — it must not spin forever.
-    expect(picker).toMatch(/if \(!client\) \{\s*setModelCatalogLoaded\(true\);\s*return;\s*\}/);
+    // With a cache id the cache read settles the empty result; without one it
+    // settles synchronously here.
+    expect(picker).toMatch(/if \(!client\) \{[\s\S]*?readSettled = true;\s*setModelCatalogLoaded\(true\);\s*\}\s*return;/);
     // A superseded read must not settle state.
     expect(picker).toMatch(
       /if \(seq !== modelReadSeqRef\.current \|\| !isCurrent\(\)\) return;[\s\S]*?setModelCatalogLoaded\(true\);/,

@@ -152,9 +152,10 @@ export async function readCached<T>(
 }
 
 /**
- * Keep `value` as the last good copy. An oversized value is refused outright —
- * and the previous copy REMOVED, because a roster that grew past the cap is a
- * roster whose older copy is worse than no copy.
+ * Keep `value` as the last good copy. An oversized value is refused outright.
+ * The previous copy is kept: deleting it would make an oversized catalogue
+ * permanently unpaintable, and a byte-size cap is not a reason to throw away
+ * the copy already on the disk.
  */
 export async function writeCached<T>(
   namespace: string,
@@ -171,12 +172,7 @@ export async function writeCached<T>(
     return;
   }
   if (typeof raw !== 'string' || raw.length > SWR_MAX_BYTES) {
-    forget(storageKey);
-    try {
-      await keyValueStorage.removeItem(storageKey);
-    } catch {
-      // A refused write is still a write that cannot fail the caller.
-    }
+    // Too big to write. The copy already held — if any — stays where it is.
     return;
   }
   remember(storageKey, envelope);

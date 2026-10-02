@@ -225,6 +225,9 @@ function mockMakeClient(callbacks: PortalClientCallbacks): FakeClient {
     set sessionId(id: string | undefined) {
       sessionId = id;
     },
+    setSessionId: (id: string | undefined) => {
+      sessionId = id;
+    },
     healthCheck: async () => HEALTHY,
     rpcRequest: async () => ({}),
     streamChat: async () => 'pong',
@@ -744,6 +747,104 @@ describe('a thread paints its last known turns', () => {
     expect(stored?.map((message) => message.content)).toEqual(['ping', 'pong']);
     // Nothing was written under another thread's key.
     expect(await cachedValue('history', 'swr-history-write:some-other-session', 'last40')).toBeNull();
+  });
+});
+
+describe('an already-open sheet settles when the selector is reset', () => {
+  // SESS-1 / MODEL-1: `resetSessionSelector` used to write the unread empty
+  // list (`loaded:false, failed:false`) and an unloaded empty catalog. The
+  // sheet keys the eternal "The gateway is answering." spinner on exactly
+  // that, and nothing re-reads after a disconnect or attach. The sheet stays
+  // mounted (`setSessionSelector` is not part of the reset), so the list
+  // must settle as unreadable.
+
+  test('disconnecting with the session sheet open names the unreadable list instead of spinning', async () => {
+    stageActive({ id: 'swr-sess-reset', url: 'http://sessions-reset.test:8642' });
+    await mount();
+    await act(async () => {
+      await gatewayApi().openSessionSelector();
+    });
+    await settle();
+    expect(gatewayApi().sessionSelector.visible).toBe(true);
+    expect(gatewayApi().sessionList.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      gatewayApi().disconnectGateway();
+    });
+    await settle();
+
+    expect(gatewayApi().sessionSelector.visible).toBe(true);
+    expect(gatewayApi().sessionList).toEqual([]);
+    expect(gatewayApi().sessionListError).toBe('Sessions could not be read.');
+    // The sheet renders "Reading sessions…" only for empty + unloaded + no error.
+    expect(gatewayApi().sessionListLoaded).toBe(false);
+    expect(gatewayApi().sessionListError).toBeTruthy();
+  });
+
+  test('disconnecting with the model picker open drops the previous catalog and does not spin', async () => {
+    stageActive({ id: 'swr-model-reset', url: 'http://models-reset.test:8642' });
+    await mount();
+    await act(async () => {
+      await gatewayApi().openModelPicker('default');
+    });
+    await settle();
+    expect(gatewayApi().modelPicker.visible).toBe(true);
+    expect(gatewayApi().modelCatalog.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      gatewayApi().disconnectGateway();
+    });
+    await settle();
+
+    expect(gatewayApi().modelPicker.visible).toBe(true);
+    expect(gatewayApi().modelCatalog).toEqual([]);
+    expect(gatewayApi().modelCatalogError).toBe('Model catalog could not be read.');
+    // Empty + unloaded + no error is "Reading models… / The gateway is answering."
+    expect(Boolean(gatewayApi().modelCatalogError) || gatewayApi().modelCatalogLoaded).toBe(true);
+  });
+
+  test("gateway B with a refused catalog does not keep gateway A's rows", async () => {
+    const a = stageActive({ id: 'gw-a-catalog', url: 'http://a-catalog.test:8642' });
+    await mount();
+    await act(async () => {
+      await gatewayApi().openModelPicker('default');
+    });
+    await settle();
+    expect(gatewayApi().modelCatalog.some((row) => row.id === 'fresh-model')).toBe(true);
+
+    const b = profile({ id: 'gw-b-catalog', url: 'http://b-catalog.test:8642' });
+    mockState.gateways = [a, b];
+    mockState.modelsFails = true;
+    await act(async () => {
+      await gatewayApi().connectGateway(b);
+    });
+    await settle();
+    expect(gatewayApi().modelCatalog).toEqual([]);
+
+    await act(async () => {
+      await gatewayApi().openModelPicker('default');
+    });
+    await settle();
+    expect(gatewayApi().modelCatalog).toEqual([]);
+    expect(gatewayApi().modelCatalogError).toBeTruthy();
+  });
+
+  test('a refused history read rolls the thread identity back to the transcript still on screen', async () => {
+    stageActive({ id: 'swr-switch-rollback', url: 'http://switch.test:8642' });
+    await mount();
+    await settle();
+    const previousId = gatewayApi().currentSessionId;
+    expect(chatApi().messages.map((message) => message.text)).toEqual(['ping', 'pong']);
+
+    mockState.historyFails = true;
+    await act(async () => {
+      await gatewayApi().selectSession('other-thread');
+    });
+    await settle();
+
+    expect(gatewayApi().currentSessionId).toBe(previousId);
+    expect(chatApi().messages.map((message) => message.text)).toEqual(['ping', 'pong']);
+    expect(gatewayApi().lastError).toMatch(/history could not be read/i);
   });
 });
 

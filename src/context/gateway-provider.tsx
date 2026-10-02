@@ -34,7 +34,7 @@ import {
   stopStreamedTurns,
 } from '@/lib/gateway/message-reducer';
 import { interruptedTurnCopy } from '@/lib/gateway/interrupted-copy';
-import { createTurnId } from '@/lib/gateway/client';
+import { createTurnId, raceAbort } from '@/lib/gateway/client';
 import {
   decideTurnResume,
   turnResumeBackoffMs,
@@ -1297,12 +1297,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     ++modelReadSeqRef.current;
     loadingOlderSessionsRef.current = false;
     sessionListLimitRef.current = SESSION_LIST_PAGE_SIZE;
-    setSessionListState(emptySessionList<HermesSession>());
+    // An already-open sheet used to keep `{loaded:false, failed:false}` after
+    // this reset, which reads as "The gateway is answering" with nothing in
+    // flight. A refused first read is the copy the sheet already has, and the
+    // next open drops the failure (`beginSessionListRead`).
+    setSessionListState(applySessionListRead(emptySessionList<HermesSession>(), { ok: false }));
     setSessionListHasOlder(false);
     setLoadingOlderSessions(false);
     sessionIdRef.current = undefined;
     setCurrentSessionId(undefined);
     setTranscripts([]);
+    // The catalog is scoped to the same client and environment as the list: a
+    // picker opened against the next gateway must not show the previous one's
+    // rows, whether the next read answers, refuses, or never runs. Settling
+    // the error skips the same eternal spinner: empty + unloaded + no error
+    // is "Reading models… / The gateway is answering."
+    setModelCatalog([]);
+    setModelCatalogError('Model catalog could not be read.');
+    setModelCatalogLoaded(false);
   }, []);
   const [historyLoading, setHistoryLoading] = useState(false);
   /**
@@ -1484,6 +1496,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * schedule a competing retry, or overwrite state for the client that replaced it.
    */
   const clientGenerationRef = useRef(0);
+  /**
+   * Aborted whenever the client generation is superseded, so a refresh's reads
+   * stop against a client the provider has already left instead of walking the
+   * whole serial chain — health, catalog, then the manifest over every
+   * candidate IPv4 — out to each request's own timeout.
+   */
+  const clientGenerationAbortRef = useRef<AbortController>(new AbortController());
   const historyLoadedForRef = useRef<string | null>(null);
   const historyRequestRef = useRef(0);
   const activeRunIdRef = useRef<string | null>(null);
@@ -1705,9 +1724,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     setProbeMessage('Gateway rejected the API key. Update it from the gateway settings.');
   }, []);
 
-  const reloadHistoryFor = useCallback(async (gateway: GatewayProfile) => {
+  const reloadHistoryFor = useCallback(async (gateway: GatewayProfile): Promise<boolean> => {
     const client = clientRef.current;
-    if (!client) return;
+    // No client means no read and nothing to fail; a caller must not roll back
+    // a switch it never attempted.
+    if (!client) return true;
 
     const requestId = ++historyRequestRef.current;
     historyLoadedForRef.current = gateway.id;
@@ -1800,6 +1821,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       for (const turnId of turnControllersRef.current.keys()) {
         merged = preserveTurnBubbleAfterReload(merged, previous, turnId);
       }
+      // A live chat send's bubble is keyed by its run id and registered only in
+      // `liveControllersRef`, not `turnControllersRef`, so the loop above
+      // leaves it out — and the reload drops the reply still streaming into it,
+      // discarding every later delta. Carry it too.
+      const liveRunId = activeRunIdRef.current;
+      if (liveRunId) merged = preserveTurnBubbleAfterReload(merged, previous, liveRunId);
 
       setMessages(boundWindow(merged));
     };
@@ -1874,10 +1901,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           : Promise.resolve({ ok: true as const, value: [] }),
         loadTranscripts(gateway.id, sessionKey),
       ]);
-      if (requestId !== historyRequestRef.current) return;
+      // Superseded: a newer reload owns the thread and reports on it.
+      if (requestId !== historyRequestRef.current) return true;
       if (!historyRead.ok) {
         setLastError(`Session history could not be read: ${historyRead.error}`);
-        return;
+        // The caller may have pinned a new thread ahead of this read. Reporting
+        // the refusal is not enough: the caller must be able to put the
+        // identity back so the header never names a thread it could not load.
+        return false;
       }
       const gatewayHistory = historyRead.value;
       setHasMoreHistory(hasEarlierHistory(gatewayHistory.length, historyLimitRef.current));
@@ -1897,9 +1928,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         ).catch(() => undefined);
       }
       setLastError(null);
+      return true;
     } catch (error) {
-      if (requestId !== historyRequestRef.current) return;
+      if (requestId !== historyRequestRef.current) return true;
       setLastError(error instanceof Error ? error.message : String(error));
+      return false;
     } finally {
       if (requestId === historyRequestRef.current) {
         setHistoryLoading(false);
@@ -2119,6 +2152,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     (removedIds: readonly string[], remaining: readonly GatewayProfile[]) => {
       if (!retirementTookActiveGateway(removedIds, activeGatewayRef.current)) return;
       clientGenerationRef.current += 1;
+      clientGenerationAbortRef.current.abort();
+      clientGenerationAbortRef.current = new AbortController();
       resetSessionSelector();
       if (autoRetryTimerRef.current) {
         clearTimeout(autoRetryTimerRef.current);
@@ -2784,6 +2819,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // put this pin back so the first history load still resumes.
       const reconnectPin = sessionIdRef.current;
       clientGenerationRef.current += 1;
+      clientGenerationAbortRef.current.abort();
+      clientGenerationAbortRef.current = new AbortController();
       resetSessionSelector();
       sessionIdRef.current = reconnectPin;
       setActiveManifest(null);
@@ -4075,6 +4112,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       activeGateway?.id === id || activeGateway?.parentId === id;
     if (activeWasRemoved) {
       clientGenerationRef.current += 1;
+      clientGenerationAbortRef.current.abort();
+      clientGenerationAbortRef.current = new AbortController();
       resetSessionSelector();
       if (autoRetryTimerRef.current) {
         clearTimeout(autoRetryTimerRef.current);
@@ -4127,6 +4166,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // stale handler would otherwise queue an auto-retry the user did not ask for.
     const leaving = clientRef.current;
     clientGenerationRef.current += 1;
+    clientGenerationAbortRef.current.abort();
+    clientGenerationAbortRef.current = new AbortController();
     resetSessionSelector();
     if (autoRetryTimerRef.current) {
       clearTimeout(autoRetryTimerRef.current);
@@ -5358,13 +5399,29 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // late it arrives.
       void readCached<unknown[]>('models', cacheId, 'catalog')
         .then((cached) => {
-          if (!cached || readSettled || seq !== modelReadSeqRef.current || !isCurrent()) return;
+          if (readSettled || seq !== modelReadSeqRef.current || !isCurrent()) return;
+          if (!cached) {
+            // A cache miss with no client means no read is coming: settle the
+            // empty list so the sheet says "No models found" rather than
+            // reading as in-flight forever. A remembered catalog is left
+            // unmarked on purpose — the gateway never delivered it.
+            if (!client) {
+              readSettled = true;
+              setModelCatalogLoaded(true);
+            }
+            return;
+          }
           setModelCatalog(cached.value);
         })
         .catch(() => undefined);
     }
     if (!client) {
-      setModelCatalogLoaded(true);
+      // With a cache id the read above settles (either the remembered rows or
+      // the empty result). Without one there is nothing to wait for.
+      if (!cacheId) {
+        readSettled = true;
+        setModelCatalogLoaded(true);
+      }
       return;
     }
     try {
@@ -5425,6 +5482,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
      * list of threads whose freshness nothing claimed.
      */
     let readSettled = false;
+    // With no client and no remembered page nothing is reading this list, so it
+    // must not keep claiming "The gateway is answering": settle it as a refusal
+    // so the sheet names the truth and offers a retry.
+    const settleUnreadableList = () => {
+      setSessionListState((previous) =>
+        previous.loaded || previous.failed ? previous : { sessions: [], loaded: false, failed: true },
+      );
+    };
     const cacheId = scopeCacheId(activeGatewayRef.current, selectedBotIdRef.current, selectedBackendIdRef.current);
     // One read of the remembered page, shared by the cached paint and the
     // no-client settle below: two reads of the same page would each be gated on
@@ -5438,30 +5503,29 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // had. A read that has landed owns the list — and a failed one keeps
       // `loaded: false` on purpose (`applySessionListRead`), so `failed` has to
       // be refused the same way `loaded` is.
-      void cachedPage.then((cached) => {
-        if (!cached || readSettled || !isCurrent()) return;
-        setSessionListState((previous) =>
-          previous.loaded || previous.failed
-            ? previous
-            : { sessions: cached.value, loaded: true, failed: false },
-        );
-      });
+      void cachedPage
+        .then((cached) => {
+          if (readSettled || !isCurrent()) return;
+          if (!cached) {
+            // The remembered page missed. Only the no-client path has no read
+            // of its own to wait for, so only it settles here.
+            if (!client) settleUnreadableList();
+            return;
+          }
+          setSessionListState((previous) =>
+            previous.loaded || previous.failed
+              ? previous
+              : { sessions: cached.value, loaded: true, failed: false },
+          );
+        })
+        .catch(() => {
+          if (!client) settleUnreadableList();
+        });
     }
-    // Nothing to ask. No read was issued, so nothing can contradict what this
-    // device remembers: the remembered page wins and the sheet has something to
-    // show. With nothing remembered there is nothing to wait for either, so the
-    // read settles as a refusal — leaving `loaded: false, failed: false` made
-    // the sheet claim "Reading sessions… / The gateway is answering." until the
-    // operator closed it and reopened it after a reconnect.
     if (!client) {
-      const cached = await cachedPage;
-      if (!isCurrent()) return;
-      readSettled = true;
-      setSessionListState((previous) =>
-        cached
-          ? { sessions: cached.value, loaded: true, failed: false }
-          : applySessionListRead(previous, { ok: false }),
-      );
+      // A cache id defers this to the read above; without one there is nothing
+      // to wait for at all.
+      if (!cacheId) settleUnreadableList();
       return;
     }
     // The gateway's own verdict about this page, held beside the rows:
@@ -5520,7 +5584,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         },
       );
     } finally {
-      if (isCurrent()) {
+      // Release the busy state when no newer read owns it. `isCurrent()` also
+      // demands the client that started this read is still current, but a
+      // reconnect replaces the client without anyone else clearing the guard —
+      // the button then stayed "Loading older…" for the rest of the sheet's
+      // life. The sequence alone is the ownership test: a newer open or paging
+      // read has bumped it and will release the state itself.
+      if (seq === sessionReadSeqRef.current) {
         loadingOlderSessionsRef.current = false;
         setLoadingOlderSessions(false);
       }
@@ -5985,6 +6055,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // surface with the old one's catalog or commands.
     const generation = clientGenerationRef.current;
     const isCurrent = () => clientGenerationRef.current === generation;
+    // The controller the supersede seams abort on a client replacement. Its
+    // signal stops each stage from running its own request out to the timeout
+    // after the Gateway is gone.
+    const abort = clientGenerationAbortRef.current;
     let landed = true;
     try {
       const client = clientRef.current;
@@ -5992,14 +6066,16 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // Converting to statusRef or the connection reducer needs live-device
       // verification because it changes when this effect/callback re-runs.
       if (client && status === 'connected') {
-        await client.healthCheck();
+        // `raceAbort` stops this refresh waiting on a read the transport owns
+        // but cannot cancel, so a superseded refresh stands down here rather
+        // than running health and the catalog out to their timeouts.
+        await raceAbort(client.healthCheck(), abort.signal);
         if (!isCurrent()) return landed;
         // Awaited rather than left in flight: a refresh that reports on its own
         // reads cannot report on one it has not waited for, and a refused
         // catalog is exactly the case the answer exists for. The reads it
         // already landed keep their answers either way.
-        await client
-          .getCapabilities()
+        await raceAbort(client.getCapabilities(), abort.signal)
           .then((capabilities) => {
             if (isCurrent()) setLiveCapabilities(capabilities);
           })
@@ -6015,6 +6091,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const manifest = await fetchGatewayManifestWithLookupRetry(
         manifestUrlForGateway(activeGateway, parent?.url),
         manifestAlternateIpv4(activeGateway, activeManifest),
+        undefined,
+        abort.signal,
       ).catch(() => null);
       if (!isCurrent()) return landed;
       if (manifest) {
@@ -6077,8 +6155,20 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     (modelId: string, providerId?: string) => {
       closeModelPicker();
       if (activeGateway?.kind === 'openclaw') {
-        // OpenClaw: model is gateway config — run the config command.
-        void sendChatInput(`/model set ${modelId}`);
+        // OpenClaw: the model is gateway config, so the pick is applied with
+        // `/model set` — a command, sent only while the phone is connected.
+        // Routing it through `sendChatInput` while disconnected parked a
+        // `/model set …` user bubble in the transcript and left the Gate
+        // unchanged, so the pick was recorded on the profile here instead.
+        const recorded = selectedBotId
+          ? withSelectedModel(activeGateway, modelId, selectedBackendId, selectedBotId)
+          : withSelectedModel(activeGateway, modelId, selectedBackendId);
+        setActiveGateway(recorded);
+        activeGatewayRef.current = recorded;
+        persistGateway(recorded);
+        if (clientRef.current && statusRef.current === 'connected') {
+          void sendChatInput(`/model set ${modelId}`);
+        }
         return;
       }
       // Hermes: per-request model override (API server honors model per request).
@@ -6108,9 +6198,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (released) {
         sessionIdRef.current = undefined;
         setCurrentSessionId(undefined);
-        setMessages(
-          appendSystemNote([], modelSwitchAnnouncement({ previous: previousModel, next: modelId })),
-        );
+        setMessages((prev) => {
+          const note = appendSystemNote(
+            [],
+            modelSwitchAnnouncement({ previous: previousModel, next: modelId }),
+          );
+          // A reply still streaming belongs to the thread that is being
+          // released; carrying its bubble across the release keeps every later
+          // delta finding it instead of being silently discarded.
+          const liveRunId = activeRunIdRef.current;
+          return liveRunId ? preserveTurnBubbleAfterReload(note, prev, liveRunId) : note;
+        });
         const client = clientRef.current ?? { setSessionId: () => undefined };
         const pinned = pinLiveSession({
           client,
@@ -6177,6 +6275,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
       return;
     }
+    // The thread the operator is leaving, kept so a history read that cannot
+    // answer can put the identity back with the transcript already on screen.
+    const previousSessionId = sessionIdRef.current;
+    const previousGateway = activeGateway;
     // Pinning the client is not enough: connect copies stored onto live
     // before disconnect can rewrite it. Same persist as createNewSession.
     const pinned = client
@@ -6195,7 +6297,26 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     }
     const gateway = pinned ?? activeGateway;
     if (gateway) {
-      void reloadHistoryFor(gateway);
+      const read = await reloadHistoryFor(gateway);
+      if (!read) {
+        // The new thread's history could not be read: the transcript on screen
+        // is still the old thread's, so the identity must go back with it
+        // rather than the header naming a thread the operator has never seen.
+        sessionIdRef.current = previousSessionId;
+        setCurrentSessionId(previousSessionId);
+        if (client) {
+          const restored = pinLiveSession({
+            client,
+            sessionId: previousSessionId,
+            profile: previousGateway ?? undefined,
+          });
+          if (restored && restored !== activeGatewayRef.current) {
+            activeGatewayRef.current = restored;
+            setActiveGateway(restored);
+            persistGateway(restored);
+          }
+        }
+      }
     }
     // The thread that was just opened may have a turn running on the Gate that
     // this phone never saw start — the same read the foreground edge makes.
@@ -7136,7 +7257,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       });
       sessionIdRef.current = created.id;
       setCurrentSessionId(created.id);
-      setMessages([]);
+      setMessages((prev) => {
+        // A reply still streaming belongs to the thread being left; carrying
+        // its bubble keeps every later delta finding it instead of discarding
+        // them against an empty list.
+        const liveRunId = activeRunIdRef.current;
+        return liveRunId ? preserveTurnBubbleAfterReload([], prev, liveRunId) : [];
+      });
       setSessionListState((previous) => ({
         ...previous,
         sessions: [created, ...previous.sessions],
@@ -7170,7 +7297,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         if (sessionIdRef.current === sessionId) {
           sessionIdRef.current = undefined;
           setCurrentSessionId(undefined);
-          setMessages([]);
+          setMessages((prev) => {
+            // Mirror the new-session path: a live reply's bubble is carried
+            // across the clear so its remaining deltas are not discarded.
+            const liveRunId = activeRunIdRef.current;
+            return liveRunId ? preserveTurnBubbleAfterReload([], prev, liveRunId) : [];
+          });
           if (activeGateway) void reloadHistoryFor(activeGateway);
         }
       } catch (error) {

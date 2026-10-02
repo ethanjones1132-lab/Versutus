@@ -119,7 +119,7 @@ describe('a copy that cannot be trusted never becomes one', () => {
 });
 
 describe('the size cap', () => {
-  test('an oversized value is refused and the old copy is removed', async () => {
+  test('an oversized value is refused and the old copy is kept', async () => {
     await store.writeCached('roster', 'gw-1', 'bots', ['good']);
     expect(await store.readCached('roster', 'gw-1', 'bots')).toEqual({
       value: ['good'],
@@ -127,8 +127,15 @@ describe('the size cap', () => {
     });
 
     await store.writeCached('roster', 'gw-1', 'bots', ['x'.repeat(store.SWR_MAX_BYTES)]);
+    // The oversized write never lands, but the last good copy survives: it is
+    // what an oversized catalogue paints from.
+    expect(backing.has('versutus:swr:roster:gw-1:bots')).toBe(true);
+    expect((await store.readCached<string[]>('roster', 'gw-1', 'bots'))?.value).toEqual(['good']);
+  });
+
+  test('an oversized value with no previous copy caches nothing', async () => {
+    await store.writeCached('roster', 'gw-1', 'bots', ['x'.repeat(store.SWR_MAX_BYTES)]);
     expect(backing.has('versutus:swr:roster:gw-1:bots')).toBe(false);
-    // The in-memory front must not hand back the copy the disk just refused.
     await expect(store.readCached('roster', 'gw-1', 'bots')).resolves.toBeNull();
   });
 

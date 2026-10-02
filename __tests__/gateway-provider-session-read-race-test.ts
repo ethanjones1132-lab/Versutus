@@ -108,16 +108,27 @@ test('both provider reads guard the client and scope generation and queued list 
   const reads = source.slice(source.indexOf('const openSessionSelector = useCallback'), source.indexOf('const closeSessionSelector = useCallback'));
   expect(reads.match(/readSessionList\(/g)).toHaveLength(2);
   expect(reads.match(/clientRef\.current === client/g)).toHaveLength(2);
-  expect(reads.match(/seq === sessionReadSeqRef\.current/g)).toHaveLength(2);
+  // Three now: the two isCurrent() guards plus the finally's sequence-only
+  // release, which must not demand the client that started the read is still
+  // current — a reconnect replaces it and would wedge the "Loading older…"
+  // control for the rest of the sheet's life.
+  expect(reads.match(/seq === sessionReadSeqRef\.current/g)).toHaveLength(3);
   expect(reads.match(/isCurrent\(\) \? applySessionListRead/g)).toHaveLength(2);
   expect(reads).toContain('if (!client || loadingOlderSessionsRef.current) return;');
-  expect(reads).toMatch(/finally \{\s*if \(isCurrent\(\)\) \{/);
+  expect(reads).toContain('if (seq === sessionReadSeqRef.current) {');
+  expect(reads).not.toContain('} finally {\n      if (isCurrent()) {');
   expect(reads).not.toContain('setCurrentSessionId');
   expect(reads).not.toContain('setSessionId(');
 });
 
 test('every Gateway teardown and Bot or CLI environment scope change retires selector reads', () => {
-  expect(source.match(/clientGenerationRef\.current \+= 1;\s*resetSessionSelector\(\);/g)).toHaveLength(4);
+  // Each generation bump now also aborts the in-flight refresh chain before
+  // resetting the selector.
+  expect(
+    source.match(
+      /clientGenerationRef\.current \+= 1;\s*clientGenerationAbortRef\.current\.abort\(\);\s*clientGenerationAbortRef\.current = new AbortController\(\);\s*resetSessionSelector\(\);/g,
+    ),
+  ).toHaveLength(4);
   for (const marker of ['const selectBackend = useCallback', 'const clearBot = useCallback', 'const openBot = useCallback']) {
     const action = source.slice(source.indexOf(marker));
     const reset = action.indexOf('resetSessionSelector();');
@@ -126,8 +137,13 @@ test('every Gateway teardown and Bot or CLI environment scope change retires sel
   }
   expect(source).toMatch(/resetSessionSelector\(\);\s*client\?\.setBackendId\?\.\(resolved\)/);
   expect(source).toMatch(/if \(!botOpenFailureKeepsScope\(error\)\) \{\s*resetSessionSelector\(\);/);
-  const reset = source.slice(source.indexOf('const resetSessionSelector = useCallback'), source.indexOf('const resetSessionSelector = useCallback') + 600);
+  const reset = source.slice(
+    source.indexOf('const resetSessionSelector = useCallback'),
+    source.indexOf('const [currentSessionId', source.indexOf('const resetSessionSelector = useCallback')),
+  );
   expect(reset).toContain('++sessionReadSeqRef.current;');
-  expect(reset).toContain('setSessionListState(emptySessionList<HermesSession>());');
+  expect(reset).toContain(
+    'setSessionListState(applySessionListRead(emptySessionList<HermesSession>(), { ok: false }));',
+  );
   expect(reset).toContain('loadingOlderSessionsRef.current = false;');
 });

@@ -60,6 +60,34 @@ export function createTurnId(): string {
 }
 
 /**
+ * Resolve with `promise`, or reject the moment `signal` aborts.
+ *
+ * The transport owns its own timeout controller and exposes no external abort
+ * seam, so a refresh on a client the provider has already left cannot cancel
+ * the underlying request from here. This stops the CALLER waiting on it, which
+ * lets the refresh stand down instead of walking the rest of its serial chain
+ * out to each request's own timeout.
+ */
+export function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new Error('The operation was aborted.'));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new Error('The operation was aborted.'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
  * Connect and the connection-monitor probe share this budget.
  *
  * 3s was proposed so a stalled first /health fails fast. It is too short

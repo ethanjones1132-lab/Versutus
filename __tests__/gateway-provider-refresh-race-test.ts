@@ -42,7 +42,7 @@ describe('capability and manifest refresh is scoped to the Gateway that started 
     // RUNS-3 made the catalog read part of what the refresh ANSWERS for, so it is
     // awaited rather than left in flight: a refresh cannot report on a read it
     // has not waited for. The currency guard inside is unchanged.
-    expect(refresh).toContain('await client\n          .getCapabilities()\n          .then((capabilities) => {');
+    expect(refresh).toContain('await raceAbort(client.getCapabilities(), abort.signal)\n          .then((capabilities) => {');
     expect(refresh).toContain('if (isCurrent()) setLiveCapabilities(capabilities);');
     expect(refresh).not.toContain('then(setLiveCapabilities)');
   });
