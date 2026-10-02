@@ -39,6 +39,10 @@ export function createBackendManager({
   // Environments whose server failed to start, with the window before the next
   // attempt. Cleared by the first success.
   const unavailable = new Map();
+  // The start attempt in flight per environment, so concurrent callers share
+  // one and one failed start is one step of the ladder rather than one per
+  // caller.
+  const starting = new Map();
 
   return { get, list, describe, methodsOf, stopAll, isBackendCapable, subscribe };
 
@@ -175,15 +179,43 @@ export function createBackendManager({
       servers.set(environmentId, server);
     }
 
+    // A refusal remembered from a start that failed is not the last word: the
+    // operator may have brought the server up while the Gate was waiting it out
+    // (`opencode serve`'s first start after a reboot takes well over 30 s on
+    // this host, longer than the supervisor's own start bound), and re-throwing
+    // the first error until the window ends reported "did not become reachable"
+    // for minutes against a server that was running. So the window asks the
+    // supervisor what it can see without starting anything, and only a still
+    // empty answer keeps the refusal.
     const remembered = unavailable.get(environmentId);
-    if (remembered && now() < remembered.retryAt) throw remembered.error;
-    let handle;
-    try {
-      handle = await server.ensureRunning();
-    } catch (error) {
-      markUnavailable(environmentId, error);
-      throw error;
+    if (remembered && now() < remembered.retryAt) {
+      if (!(await server.reachable?.())) throw remembered.error;
+      unavailable.delete(environmentId);
     }
+    // One attempt per environment, however many callers ask for it. The
+    // supervisor already shares the spawn, so every concurrent caller used to
+    // await the *same* failed start and still advance the backoff on its own —
+    // four concurrent reads of a cold environment landed it in the five-minute
+    // step after a single failure.
+    let attempt = starting.get(environmentId);
+    if (!attempt) {
+      const pending = server.ensureRunning().then(
+        (handle) => handle,
+        (error) => {
+          markUnavailable(environmentId, error);
+          throw error;
+        },
+      );
+      let shared;
+      // Released on settle, and only while this attempt is still the current
+      // one: a stopAll() during the attempt has already replaced it.
+      shared = pending.finally(() => {
+        if (starting.get(environmentId) === shared) starting.delete(environmentId);
+      });
+      starting.set(environmentId, shared);
+      attempt = shared;
+    }
+    const handle = await attempt;
     unavailable.delete(environmentId);
     // A stdio backend is bound to one pipe, so a respawn must rebind rather than
     // hand back the backend wrapped around the dead child's rpc.
@@ -208,7 +240,8 @@ export function createBackendManager({
    * Remember a server that would not start, with the window before the next
    * attempt. The supervisor's own start timeout (30s for an HTTP server) is paid
    * once per window instead of once per request, and the refusal the caller sees
-   * is the real one, unchanged.
+   * is the real one, unchanged. Counted per failed *start*, which is why the
+   * marking lives on the shared attempt rather than on each awaiting caller.
    */
   function markUnavailable(environmentId, error) {
     const attempts = (unavailable.get(environmentId)?.attempts ?? 0) + 1;
@@ -236,6 +269,9 @@ export function createBackendManager({
     backends.clear();
     methodSets.clear();
     unavailable.clear();
+    // An attempt still in flight belongs to a server that no longer exists; a
+    // caller must not be handed its handle.
+    starting.clear();
   }
 }
 

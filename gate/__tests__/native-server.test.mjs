@@ -240,3 +240,80 @@ test('an adapter with no server descriptor cannot be a backend', async () => {
   });
   await assert.rejects(() => server.ensureRunning(), /does not expose a native server/i);
 });
+
+/**
+ * A server that accepts the connection and then says nothing at all: the wedged
+ * `opencode serve` the health probe has to tell from a refusal.
+ *
+ * Models a real fetch — it settles when its own signal aborts, and holds a ref'd
+ * handle until then, because `AbortSignal.timeout()` arms an unref'd timer and a
+ * fetch that never arrives would otherwise leave the loop with nothing to wait
+ * on.
+ */
+function silentFetch() {
+  return (_url, init) =>
+    new Promise((_resolve, reject) => {
+      const inFlight = setTimeout(() => {}, 5_000);
+      const fail = () => {
+        clearTimeout(inFlight);
+        reject(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }));
+      };
+      if (init?.signal?.aborted) fail();
+      else init?.signal?.addEventListener('abort', fail, { once: true });
+    });
+}
+
+// A probe with no signal of its own left every request waiting for undici's own
+// ~300 s headers timeout, and a refusal is indistinguishable from that wait: the
+// start timeout below never engaged because nothing threw, so the Gate held the
+// request open for minutes against a server that would never answer it.
+test('a server that never answers the health route is refused, not waited on', async () => {
+  const server = createNativeServer({
+    record,
+    adapter,
+    startTimeoutMs: 150,
+    spawnImpl: () => fakeChild({ announce: false }),
+    fetchImpl: silentFetch(),
+  });
+
+  const attempt = server.ensureRunning();
+  // Raced, so an unbounded probe settles the suite red in seconds instead of
+  // hanging it: the defect is a request that never settles at all.
+  const outcome = await Promise.race([
+    attempt.then(
+      () => ({ state: 'resolved' }),
+      (error) => ({ state: 'rejected', message: error.message }),
+    ),
+    new Promise((resolve) => {
+      const timer = setTimeout(() => resolve({ state: 'pending' }), 8_000);
+      timer.unref?.();
+    }),
+  ]);
+
+  assert.equal(outcome.state, 'rejected', 'a wedged server must be named, not waited out');
+  assert.match(outcome.message ?? '', /did not become reachable/i);
+});
+
+test('reachable() sees a server that came up, and never starts one', async () => {
+  // The manager re-probes with this inside a backoff window: a refusal remembered
+  // from a start that failed is stale the moment the server is up, and there must
+  // be a cheap way to find that out that costs no start attempt.
+  let up = false;
+  let spawned = 0;
+  const server = createNativeServer({
+    record,
+    adapter,
+    spawnImpl: () => { spawned += 1; return fakeChild(); },
+    fetchImpl: async (url) => {
+      if (up && String(url).startsWith('http://127.0.0.1:4096')) {
+        return { ok: true, status: 200, async json() { return []; } };
+      }
+      throw new Error('ECONNREFUSED');
+    },
+  });
+
+  assert.equal(await server.reachable(), false, 'nothing is listening yet');
+  up = true;
+  assert.equal(await server.reachable(), true, 'the operator\'s own server is now answering');
+  assert.equal(spawned, 0, 'a re-probe must never spawn a second instance');
+});

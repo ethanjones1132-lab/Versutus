@@ -203,7 +203,7 @@ export function createHermesBackend({
     if (!/already in use/i.test(error?.message ?? '')) return null;
     const named = /session\s+([A-Za-z0-9_.:-]+)/i.exec(error.message)?.[1];
     if (named) {
-      const found = await call(`/api/sessions/${encodeURIComponent(named)}`).catch(() => null);
+      const found = await readCall(`/api/sessions/${encodeURIComponent(named)}`, `read session ${named}`).catch(() => null);
       const session = found?.session ?? found;
       if (session?.id) return toGatewaySession(session);
     }
@@ -326,7 +326,7 @@ export function createHermesBackend({
      * (core/model-curation.mjs) reads those, not this file.
      */
     async listModels() {
-      const body = await call('/api/model/options');
+      const body = await readCall('/api/model/options', 'list models');
       const catalog = body?.providers;
       const providers = Array.isArray(catalog)
         ? catalog
@@ -368,15 +368,15 @@ export function createHermesBackend({
      * the advertisement.
      */
     async listToolsets() {
-      return call('/v1/toolsets');
+      return readCall('/v1/toolsets', 'list toolsets');
     },
 
     async listSkills() {
-      return call('/v1/skills');
+      return readCall('/v1/skills', 'list skills');
     },
 
     async healthDetailed() {
-      return call('/health/detailed');
+      return readCall('/health/detailed', 'read diagnostics');
     },
 
     /**

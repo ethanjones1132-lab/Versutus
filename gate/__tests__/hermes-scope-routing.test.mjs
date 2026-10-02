@@ -148,7 +148,7 @@ async function makeGate(overrides = {}) {
       isOwned: () => false,
     }),
   });
-  return { gate, calls };
+  return { gate, calls, gateHome };
 }
 
 const auth = (gate) => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` });
@@ -223,6 +223,44 @@ test('a real reply that merely mentions an HTTP status is delivered untouched', 
       body.choices[0].message.content,
       'The host answered HTTP 400 and I retried with a backoff.',
     );
+  } finally {
+    await gate.close();
+  }
+});
+
+// A custom endpoint that never answers comes back the same way but with the
+// status inside a sentence the gateway wrote around it, so the anchored prefix
+// match missed it: the Bot spoke the error, the route answered 200 with
+// `finish_reason: stop`, and model-health recorded a success for the one model
+// that cannot answer — so it stayed in the picker, which is the failure this
+// whole table exists to remove.
+test('an upstream refusal the gateway wrapped in a sentence is still a refusal', async () => {
+  const refusal = "Custom endpoint didn't answer after 5 attempts. Provider said: HTTP 404: not found";
+  const { gate } = await makeGate({ sendText: refusal });
+  const ask = () => fetch(`${base(gate)}/v1/chat/completions`, {
+    method: 'POST',
+    headers: auth(gate),
+    body: JSON.stringify({
+      bot: 'default',
+      model: 'opencode-go-session/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hi' }],
+    }),
+  });
+  try {
+    const response = await ask();
+
+    assert.equal(response.status, 502, 'a wrapped refusal must not be answered as the Bot speaking it');
+    const body = await response.json();
+    assert.equal(body.error.code, 'upstream_error');
+    assert.equal(body.error.message, refusal);
+
+    // Two of them, and the model that cannot answer stops being offered — which
+    // it never did while the refusal was scored as a healthy turn.
+    await ask();
+    const catalogue = await (await fetch(`${base(gate)}/v1/models?bot=default`, { headers: auth(gate) })).json();
+    const row = catalogue.data.find((model) => model.id === 'opencode-go-session/deepseek-v4-flash');
+    assert.equal(row.hidden, true, 'a model whose last two turns were refusals is not offered again');
+    assert.match(row.hiddenReason ?? '', /Provider said: HTTP 404/, 'and the picker says why');
   } finally {
     await gate.close();
   }

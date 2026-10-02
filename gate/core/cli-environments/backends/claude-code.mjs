@@ -26,6 +26,19 @@ export function transcriptDirFor(claudeHome, cwd) {
 // opening a file descriptor per transcript.
 const STAT_CONCURRENCY = 8;
 const READ_CONCURRENCY = 4;
+/**
+ * How long an id handed out by createSession is still a live conversation.
+ *
+ * Claude Code writes a transcript the moment a turn runs, so a reservation with
+ * none is either a chat the operator is about to type into or one they opened
+ * and walked away from. Nothing in the Gate can tell those two apart — but a
+ * reservation that is never retired sorts by its own creation time, so it sits
+ * at the top of every session page for the life of the process, and a few dozen
+ * of them push the conversations that do exist off the first page entirely. Any
+ * failed first turn leaves one behind, and the transcript is only written when a
+ * turn completes.
+ */
+const RESERVATION_TTL_MS = 5 * 60_000;
 
 /** Map a transcript entry onto the app's message shape. */
 export function toGatewayMessage(entry) {
@@ -119,6 +132,8 @@ export function createClaudeCodeBackend({
   spawnImpl = nodeSpawn,
   jobFactory = createWindowsJob,
   permissionMode = 'default',
+  // Injectable so a suite can walk a reservation past its lifetime.
+  now = Date.now,
 } = {}) {
   const dir = transcriptDirFor(claudeHome, cwd);
 
@@ -137,6 +152,24 @@ export function createClaudeCodeBackend({
    * losing them across a Gate restart costs nothing.
    */
   const reserved = new Map();
+
+  /**
+   * Whether a reserved id is still a live conversation, forgetting it when it is
+   * not.
+   *
+   * Two things retire one: the transcript landing — the id is a real session now,
+   * and keeping it would make every message read pay a full `readdir` of the
+   * transcripts directory for nothing — and the reservation outliving
+   * RESERVATION_TTL_MS with nothing on disk, which is a chat the operator opened
+   * and never used in.
+   */
+  function reservationLive(sessionId, transcriptOnDisk) {
+    const record = reserved.get(sessionId);
+    if (!record) return false;
+    if (!transcriptOnDisk && now() - record.last_active <= RESERVATION_TTL_MS) return true;
+    reserved.delete(sessionId);
+    return false;
+  }
 
   /**
    * The turn in flight, so `abort()` has something to stop.
@@ -231,12 +264,17 @@ export function createClaudeCodeBackend({
       });
       // Reserved-but-unbound ids belong in the list too: a session the caller
       // just created must be findable, or it cannot tell its own thread from
-      // one the Gate never issued.
+      // one the Gate never issued. A reservation that has been outlived by
+      // nothing — no transcript, older than its lifetime — is a conversation
+      // that does not exist, and is dropped rather than sorted above every real
+      // one; the page is then cut to the size the caller asked for, which the
+      // reservations must not be able to push it past.
       const onDisk = new Set(sessions.map((session) => session.id));
-      for (const [id, record] of reserved) {
-        if (!onDisk.has(id)) sessions.push(record);
+      for (const id of [...reserved.keys()]) {
+        if (reservationLive(id, onDisk.has(id))) sessions.push(reserved.get(id));
       }
-      return sessions.sort((a, b) => b.last_active - a.last_active);
+      sessions.sort((a, b) => b.last_active - a.last_active);
+      return sessions.slice(0, limit);
     },
 
     /**
@@ -245,13 +283,14 @@ export function createClaudeCodeBackend({
      */
     async createSession({ title } = {}) {
       const id = randomUUID();
+      const at = now();
       const record = {
         id,
         source: 'claude-code',
         user_id: null,
         model: null,
         title: title ?? null,
-        started_at: Date.now(),
+        started_at: at,
         ended_at: null,
         end_reason: null,
         message_count: 0,
@@ -265,7 +304,7 @@ export function createClaudeCodeBackend({
         actual_cost_usd: null,
         api_call_count: 0,
         parent_session_id: null,
-        last_active: Date.now(),
+        last_active: at,
         preview: null,
         has_system_prompt: false,
         has_model_config: false,
@@ -282,8 +321,10 @@ export function createClaudeCodeBackend({
 
     async listMessages(sessionId, limit) {
       // A reserved id with no transcript is an empty conversation, not a
-      // missing one — answering [] is what lets a brand-new chat open.
-      if (reserved.has(sessionId) && !(await transcripts()).includes(`${sessionId}.jsonl`)) return [];
+      // missing one — answering [] is what lets a brand-new chat open. Once the
+      // transcript is there the reservation is retired and the read is the
+      // transcript, as it is for any other session.
+      if (reservationLive(sessionId, (await transcripts()).includes(`${sessionId}.jsonl`))) return [];
       const entries = await readTranscript(sessionId);
       const mapped = entries
         .filter((entry) => entry.message && (entry.type === 'user' || entry.type === 'assistant'))
@@ -312,20 +353,25 @@ export function createClaudeCodeBackend({
       // spawned with it, and must never reach a pid an earlier turn registered.
       const job = jobFactory();
       job.add(child);
-      const turn = { cancelled: false };
+      const turn = { cancelled: false, stopped: null };
       inflight = turn;
       /**
        * Kill the tree, then reject — in that order. Stop is a promise to the
        * operator that the agent stops working in the workspace, so a rejection
        * that outran the kill would be a lie.
+       *
+       * The chain is returned so `abort()` can wait for the kill too: it awaits
+       * this, and `await undefined` would have resolved on the next microtask
+       * while the Job Object terminate was still in flight.
        */
       const cancel = (reject) => {
-        if (turn.cancelled) return;
+        if (turn.cancelled) return turn.stopped;
         turn.cancelled = true;
-        Promise.resolve()
+        turn.stopped = Promise.resolve()
           .then(() => job.terminate())
           .catch(() => undefined)
           .then(() => reject(stoppedError()));
+        return turn.stopped;
       };
 
       let buffer = '';
@@ -458,6 +504,10 @@ export function createClaudeCodeBackend({
     /**
      * Stop the turn in flight. A per-turn backend has nothing to drop but the
      * process, so this terminates it; between turns there is nothing to stop.
+     *
+     * It resolves only once that kill has completed: the caller of this method
+     * is told the agent has stopped, and the Job Object terminate is what makes
+     * that true.
      */
     async abort() {
       await inflight?.cancel?.();

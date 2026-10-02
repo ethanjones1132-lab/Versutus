@@ -370,6 +370,52 @@ test('a failed Expo delivery keeps the event eligible for a later retry', async 
   assert.deepEqual(sent[0], sent[1], 'the retry carries the identical message');
 });
 
+// The dedupe slot is claimed before the device roster is read, so a roster that
+// comes up short — a store that is missing or still half-written, a device
+// momentarily not enabled — used to retire the only notice that exists to reach a
+// phone which is not connected, with `ok: true` and nothing to show for it.
+test('a roster that comes up short does not retire the event\u2019s one notice', async () => {
+  let reads = 0;
+  const tokens = {
+    // What push-tokens.mjs really does with a store it cannot read: an empty
+    // roster, with no error anywhere.
+    listEnabled: async () => (reads += 1) === 1 ? [] : [row()],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+  const event = { trigger: 'final-response', sessionId: 'session-1', botId: 'bot-1', text: 'done' };
+
+  const first = await notifier.notify(event);
+  assert.deepEqual({ ok: first.ok, sent: first.sent }, { ok: true, sent: 0 }, 'nothing was delivered');
+
+  const second = await notifier.notify(event);
+  assert.equal(second.ok, true);
+  assert.equal(sent.length, 1, 'the same event reaches the device once the roster answers');
+  assert.equal(sent[0].data.sessionId, 'session-1');
+});
+
+test('a device silenced by quiet hours keeps the claim', async () => {
+  // The opposite case, and it must not change: the device is there and policy
+  // chose not to speak, so this is not a lost notice.
+  const tokens = {
+    listEnabled: async () => [row({ quietHours: { startMinutes: 600, endMinutes: 700 } })],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({
+    tokens,
+    send: async (messages) => { sent.push(...messages); return { ok: true }; },
+    now: () => new Date(Date.UTC(2026, 8, 14, 10, 1)), // minute 601, inside the window
+  });
+  const event = { trigger: 'final-response', sessionId: 'session-1', botId: 'bot-1', text: 'done' };
+
+  await notifier.notify(event);
+  await notifier.notify(event);
+
+  assert.deepEqual(sent, [], 'a quiet device is not notified, and a replay does not change that');
+});
+
 test('two scheduled executions of one job each notify, while a replay stays deduped', async () => {
   const tokens = {
     listEnabled: async () => [row()],

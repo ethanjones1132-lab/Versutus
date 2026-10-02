@@ -181,7 +181,48 @@ test('abort() stops the turn in flight and is a no-op between turns', async () =
   assert.equal(jobs.jobs[0].terminateCalls, 1, 'abort() is idempotent once the turn is over');
 });
 
-// ─── what the phone is told ───────────────────────────────────────────────
+test('abort() resolves only once the kill has completed', async () => {
+  // `cancel` used to start the terminate on a promise chain it did not return,
+  // so `abort()` was `await undefined`: it resolved on the next microtask and
+  // told the caller the agent had stopped while the Job Object terminate was
+  // still in flight and the process was still reading the workspace.
+  const { home, cwd } = await makeHome();
+  const child = workingChild();
+  let releaseKill;
+  const killed = new Promise((resolve) => { releaseKill = resolve; });
+  const jobs = { jobs: [] };
+  const backend = createClaudeCodeBackend({
+    claudeHome: home, cwd, executablePath: 'claude.exe',
+    spawnImpl: () => child,
+    jobFactory: () => {
+      const job = {
+        children: [],
+        terminateCalls: 0,
+        add(entry) { this.children.push(entry); },
+        async terminate() { this.terminateCalls += 1; await killed; },
+      };
+      jobs.jobs.push(job);
+      return job;
+    },
+  });
+
+  await backend.abort(); // nothing in flight
+  const turn = backend.sendMessage(SESSION_ID, { text: 'refactor everything' });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  let reported = false;
+  const aborting = backend.abort().then(() => { reported = true; });
+  await new Promise((resolve) => { setTimeout(resolve, 30); });
+  assert.equal(reported, false, 'the stop is not reported while the kill is still in flight');
+  assert.equal(jobs.jobs[0].terminateCalls, 1);
+
+  releaseKill();
+  await aborting;
+  assert.equal(reported, true, 'and the caller is released when the tree is down');
+  const error = await settled(turn);
+  assert.equal(error?.name, 'AbortError', 'the turn itself settles as a cancellation');
+});
+
 // The runner races the send against the caller's abort, so a Stop ends the turn
 // immediately. What the backend does about it afterwards must not turn into a
 // failure on a call the user already stopped.

@@ -797,9 +797,18 @@ export class CliEnvironmentService {
     run.done = true;
     this.untrackLive(run);
     run.log.emit({ type, payload });
-    this.environmentState.set(run.request.environmentId, {
-      state: this.activeRuns(run.request.environmentId).length ? 'busy' : 'ready',
-    });
+    // A run that ends does not get to undo a state the caller set while it was
+    // in flight. Stopping an environment cancels its runs, so the last of those
+    // cancellations used to overwrite the `stopped` the caller was just told
+    // with `ready` — and the manifest, /v1/backends and the app's Environments
+    // screen all read this Map, so the state the user set was the state they
+    // lost. `check`/`start` are what move an environment off `stopped`.
+    const environmentId = run.request.environmentId;
+    if (this.environmentState.get(environmentId)?.state !== 'stopped') {
+      this.environmentState.set(environmentId, {
+        state: this.activeRuns(environmentId).length ? 'busy' : 'ready',
+      });
+    }
     // A verdict the operator did not watch happen locally still deserves a
     // tray notice: completed, failed and cancelled all report here.
     const state = type === 'run.completed' ? 'completed'

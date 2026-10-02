@@ -209,6 +209,19 @@ export const OPENCODE_IDLE_MS = 180_000;
 const BUS_READY_TIMEOUT_MS = 3000;
 /** Reading the session's messages back must not hold a turn that is over. */
 const TURN_MESSAGES_TIMEOUT_MS = 5000;
+/**
+ * How long a route read may take before it is called a failure.
+ *
+ * A wedged `opencode serve` accepts the connection and then says nothing — its
+ * first start after a reboot alone takes well over 30 s (see
+ * cli-environments/native-server.mjs) — and undici's own ~300 s headers timeout
+ * is the only bound there was, so the operator read "could not reach … (Headers
+ * Timeout Error)" instead of a reason, on every session list, message read,
+ * model list, turn read-back and Stop. A metadata read is a read a screen waits
+ * on, and hanging is never the right answer for one: the same ceiling the Hermes
+ * backend states for exactly this reason.
+ */
+const READ_TIMEOUT_MS = 30_000;
 /** How far before the send a message may be created and still be this turn's. */
 const TURN_START_SLOP_MS = 2000;
 const ABORTED = Symbol('aborted');
@@ -415,14 +428,42 @@ export function createOpenCodeBackend({
   // waiting one out; production takes the exported defaults.
   firstOutputIdleMs = OPENCODE_FIRST_OUTPUT_IDLE_MS,
   idleMs = OPENCODE_IDLE_MS,
+  readTimeoutMs = READ_TIMEOUT_MS,
 } = {}) {
   const root = String(baseUrl).replace(/\/+$/, '');
 
-  async function call(path, init = {}) {
+  /**
+   * One route read, under a ceiling this backend owns.
+   *
+   * `timeoutMs` is the caller's own bound and defaults to the read ceiling; a
+   * caller that brought a signal of its own (a turn's abort, the bounded message
+   * read) keeps it, because those bounds are tighter and mean something specific
+   * to the turn. The turn-bearing blocking route is given `idleMs` instead: it
+   * answers only when the whole turn is done, so it is a turn, not a read.
+   */
+  async function call(path, init = {}, timeoutMs = readTimeoutMs) {
     const headers = { ...(init.headers ?? {}) };
     if (init.body) headers['Content-Type'] = 'application/json';
     if (password) headers.Authorization = `Bearer ${password}`;
-    const response = await fetchImpl(`${root}${path}`, { ...init, headers }).catch((err) => {
+    const bounded = !init.signal && Number.isFinite(timeoutMs) && timeoutMs > 0;
+    const response = await fetchImpl(`${root}${path}`, {
+      ...init,
+      headers,
+      signal: init.signal ?? (bounded ? AbortSignal.timeout(timeoutMs) : undefined),
+    }).catch((err) => {
+      // Named, and not phrased as silence: this is a transport that stopped
+      // answering, which is a fact about the server rather than about the model
+      // the turn was about — model-fault.mjs reads the difference that way.
+      if (bounded && (err?.name === 'TimeoutError' || err?.name === 'AbortError')) {
+        const seconds = Math.max(1, Math.round(timeoutMs / 1000));
+        throw Object.assign(
+          new Error(
+            `opencode: ${root}${path} sent no response within ${seconds}s — ` +
+            'the server is running but it is not answering',
+          ),
+          { code: 'backend_timeout' },
+        );
+      }
       const cause = err?.cause?.message ?? err?.message ?? String(err);
       throw new Error(`opencode: could not reach ${root}${path} (${cause})`);
     });
@@ -671,9 +712,11 @@ export function createOpenCodeBackend({
         // The bus is not this path's answer: the blocking route is.
         turn.close();
         // Only a missing route falls back: every other refusal may already have
-        // been accepted, and re-sending would run the turn twice.
+        // been accepted, and re-sending would run the turn twice. The blocking
+        // route holds the POST open for the whole turn, so it gets the turn's
+        // own silence bound rather than a metadata read's.
         if (error?.status !== 404) throw error;
-        return turnResult(await call(`/session/${session}/message`, { method: 'POST', body: payload }));
+        return turnResult(await call(`/session/${session}/message`, { method: 'POST', body: payload }, idleMs));
       }
       return turn.wait(sentAt);
     },

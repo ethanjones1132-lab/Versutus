@@ -1693,3 +1693,95 @@ test('an explicit password still wins over the credential binding', async () => 
   await backend.listSessions();
   assert.equal(seen[0].Authorization, 'Bearer explicit');
 });
+
+// ─── a server that is running but not answering ───────────────────────
+// `opencode serve` accepts the TCP connection and then stops answering — its
+// first start after a reboot alone takes well over 30 s (native-server.mjs). No
+// OpenCode read carried a signal of its own, so every one of them waited out
+// undici's own ~300 s headers timeout and the operator read
+// `could not reach … (Headers Timeout Error)` instead of a reason. The Hermes
+// backend in the same directory bounds exactly these reads (readCall, 30 s).
+
+/**
+ * A server that accepts the connection and never answers.
+ *
+ * Models a real fetch: it settles when its own signal aborts, and holds a ref'd
+ * handle until then, because `AbortSignal.timeout()` arms an unref'd timer and a
+ * fetch that never arrives would otherwise leave the loop with nothing to wait
+ * on.
+ */
+function silentFetch() {
+  return (_url, init = {}) =>
+    new Promise((_resolve, reject) => {
+      const inFlight = setTimeout(() => {}, 5_000);
+      const fail = () => {
+        clearTimeout(inFlight);
+        reject(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }));
+      };
+      if (init?.signal?.aborted) fail();
+      else init?.signal?.addEventListener('abort', fail, { once: true });
+    });
+}
+
+/** The read's verdict, or `pending` — so an unbounded read settles the suite red. */
+function readOutcome(read) {
+  return Promise.race([
+    read().then(() => ({ state: 'resolved' }), (error) => ({ state: 'rejected', error })),
+    new Promise((resolve) => {
+      const timer = setTimeout(() => resolve({ state: 'pending' }), 3_000);
+      timer.unref?.();
+    }),
+  ]);
+}
+
+test('a server that is running but not answering is named on every read', async () => {
+  const backend = createOpenCodeBackend({
+    baseUrl: 'http://127.0.0.1:4096',
+    fetchImpl: silentFetch(),
+    readTimeoutMs: 40,
+  });
+
+  for (const [what, read] of [
+    ['the session list', () => backend.listSessions()],
+    ['a message read', () => backend.listMessages('ses_abc')],
+    ['the model list', () => backend.listModels()],
+    ['a session delete', () => backend.deleteSession('ses_abc')],
+    ['stopping a turn', () => backend.abort('ses_abc')],
+  ]) {
+    const outcome = await readOutcome(read);
+    assert.equal(outcome.state, 'rejected', `${what} must be bounded, not waited out`);
+    assert.equal(outcome.error.code, 'backend_timeout', `${what} fails with the read ceiling's own code`);
+    assert.match(outcome.error.message, /sent no response within/i);
+    // Deliberately not "did not answer within Ns": that is the verdict about a
+    // MODEL that accepted a turn and went quiet, and a transport that stopped
+    // answering must not be held against the model (core/model-fault.mjs).
+    assert.doesNotMatch(outcome.error.message, /did not answer within/i);
+  }
+});
+
+test('the blocking route is a turn, not a read: it keeps the turn bound', async () => {
+  // A server that predates `prompt_async` answers the blocking POST only once
+  // the whole turn is done, so the read ceiling — 40 ms here — must not cut a
+  // real turn short. The turn's own silence bound is what applies to it.
+  const late = { ok: true, status: 200, async text() { return JSON.stringify(assistantMessage('slow but complete')); } };
+  const gone = { ok: false, status: 404, async text() { return 'not found'; } };
+  const fetchImpl = async (url, init = {}) => {
+    const path = String(url).replace(/^https?:\/\/[^/]+/, '');
+    if (path === '/session/ses_abc/message' && init.method === 'POST') {
+      await new Promise((resolve) => { setTimeout(resolve, 90); });
+      return late;
+    }
+    return gone;
+  };
+  const backend = createOpenCodeBackend({
+    baseUrl: 'http://127.0.0.1:4096',
+    fetchImpl,
+    readTimeoutMs: 40,
+    firstOutputIdleMs: 5_000,
+    idleMs: 5_000,
+  });
+
+  const result = await backend.sendMessage('ses_abc', { text: 'say hi', model: SILENT_MODEL });
+
+  assert.equal(result.text, 'slow but complete', 'a slow turn on an old server is still answered');
+});

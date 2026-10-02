@@ -5,6 +5,17 @@ import { createWindowsJob } from './windows-job.mjs';
 
 const DEFAULT_START_TIMEOUT_MS = 30_000;
 const POLL_INTERVAL_MS = 200;
+/**
+ * How long the health route gets to answer. A server that accepts the
+ * connection and then says nothing — a wedged `opencode serve`, which
+ * `isHealthy` could not tell from a refusal because it passed no signal — held
+ * every `ensureRunning()` for as long as undici allowed, and neither the
+ * backoff in backend-manager.mjs nor the start timeout below ever engaged,
+ * because nothing threw. A health route is not a turn: it answers or it is not
+ * there, and this ceiling is also what makes the re-probe inside a backoff
+ * window cheap.
+ */
+const HEALTH_TIMEOUT_MS = 2_000;
 
 /**
  * Supervise the native server an agent CLI exposes — the thing that owns that
@@ -33,7 +44,7 @@ export function createNativeServer({
   let owned = false;
   let child = null;
 
-  return { ensureRunning, stop, isOwned: () => owned, current: () => handle };
+  return { ensureRunning, stop, isOwned: () => owned, current: () => handle, reachable };
 
   async function ensureRunning() {
     const descriptor = adapter?.server;
@@ -96,11 +107,27 @@ export function createNativeServer({
     try {
       const response = await fetchImpl(`${baseUrl}${descriptor.healthPath ?? '/'}`, {
         headers: authHeaders(),
+        signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
       });
       return Boolean(response?.ok);
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Whether a server this environment could use is answering right now, without
+   * starting one.
+   *
+   * The manager asks this inside a backoff window: a refusal remembered from a
+   * start that failed goes stale the moment the server is up, and re-throwing
+   * the first error until the window ends reported "did not become reachable"
+   * against a server that was running and reachable. Nothing is spawned here, so
+   * a refusal still costs one bounded probe rather than another start timeout.
+   */
+  async function reachable() {
+    if (!adapter?.server) return false;
+    return Boolean(await findReachable(adapter.server));
   }
 
   async function spawnServer(descriptor) {

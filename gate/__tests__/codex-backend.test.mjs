@@ -144,8 +144,24 @@ test('sessions are listed and created scoped to the workspace', async () => {
 });
 
 test('sending a turn passes input and workspace, and records the turn for interrupt', async () => {
-  const { calls, rpc } = stubRpc({ 'turn/start': { turnId: 'tu_1' }, 'turn/interrupt': {} });
-  const backend = createCodexBackend({ rpc, cwd: 'C:\\ws' });
+  // This case used to build a backend with no `subscribe` at all and take the
+  // reply for granted. That is the defect itself: with no bus to watch, the
+  // Gate cannot know the turn finished, so there is nothing to publish but a
+  // silent turn. It is subscribed now, and completes.
+  const handlers = new Set();
+  const { calls, rpc } = stubRpc({
+    'turn/start': () => {
+      setTimeout(() => {
+        for (const handler of handlers) handler({ method: 'turn/completed', params: { threadId: 'th_1' } });
+      }, 1);
+      return { turnId: 'tu_1' };
+    },
+    'turn/interrupt': {},
+  });
+  const backend = createCodexBackend({
+    rpc, cwd: 'C:\\ws',
+    subscribe: (handler) => { handlers.add(handler); return () => handlers.delete(handler); },
+  });
   await backend.sendMessage('th_1', { text: 'do it', model: { modelId: 'gpt-5.6' } });
   assert.deepEqual(calls[0].params.input, [{ type: 'text', text: 'do it' }]);
   assert.equal(calls[0].params.model, 'gpt-5.6');
@@ -196,6 +212,86 @@ test('deltas for another thread are not folded into this turn', async () => {
     subscribe: (handler) => { emit = handler; return () => {}; },
   });
   assert.equal((await backend.sendMessage('th_1', { text: 'hi' })).text, 'mine');
+});
+
+// A turn the app-server accepted and then never finished is not an answer.
+// `awaitTurn` resolves `{completed: false}` when its bound runs out, and
+// `sendMessage` used to ignore that flag and build a reply from whatever text had
+// arrived — so a turn slower than three minutes was published to the phone as a
+// complete reply with `finish_reason: stop` while the app-server was still
+// running it, and the model-health table scored the silence as a success.
+test('a turn that never completes is not published as a finished answer', async () => {
+  let emit = () => {};
+  const { calls, rpc } = stubRpc({ 'turn/start': () => { setTimeout(() => {
+    emit({ method: 'item/agentMessage/delta', params: { threadId: 'th_1', delta: 'half an ans' } });
+  }, 5); return { turnId: 'tu_1' }; } });
+  const backend = createCodexBackend({
+    rpc, cwd: 'C:\\ws', turnTimeoutMs: 40,
+    subscribe: (handler) => { emit = handler; return () => { emit = () => {}; }; },
+  });
+
+  await assert.rejects(
+    () => backend.sendMessage('th_1', { text: 'refactor everything' }),
+    (error) => {
+      assert.match(error.message, /did not answer within/i, 'a cut-short turn is named, not answered');
+      assert.doesNotMatch(error.message, /half an ans/, 'and the fragment is not passed off as the answer');
+      return true;
+    },
+  );
+  const interrupt = calls.filter((call) => call.method === 'turn/interrupt');
+  assert.equal(interrupt.length, 1, 'the app-server keeps working unless the turn is stopped');
+  assert.equal(interrupt[0].params.turnId, 'tu_1', 'and the stop targets the live turn');
+});
+
+test('a failed turn still rejects, and the stop path leaves no subscription behind', async () => {
+  // Stop ends the phone's turn, so the backend has to release its subscription
+  // and interrupt the app-server's turn itself: nothing else in the Gate calls
+  // abort(), so a dropped signal used to leave the turn writing into a bus
+  // nobody was reading for the rest of its own bound.
+  const handlers = new Set();
+  const { calls, rpc } = stubRpc({
+    'turn/start': () => { setTimeout(() => {
+      for (const handler of handlers) {
+        handler({ method: 'item/agentMessage/delta', params: { threadId: 'th_1', delta: 'working' } });
+      }
+    }, 5); return { turnId: 'tu_1' }; },
+    'turn/interrupt': {},
+  });
+  const backend = createCodexBackend({
+    rpc, cwd: 'C:\\ws', turnTimeoutMs: 10_000,
+    subscribe: (handler) => { handlers.add(handler); return () => handlers.delete(handler); },
+  });
+  const caller = new AbortController();
+
+  const turn = backend.sendMessage('th_1', { text: 'hi', signal: caller.signal });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(handlers.size, 1, 'the turn is watching the bus before it starts');
+
+  caller.abort();
+  const error = await turn.then(() => null, (thrown) => thrown);
+
+  assert.equal(error?.name, 'AbortError', 'a stopped turn is a cancellation, not a failed run');
+  assert.equal(handlers.size, 0, 'and its subscription is released at once');
+  const interrupt = calls.filter((call) => call.method === 'turn/interrupt');
+  assert.equal(interrupt.length, 1, 'the app-server turn is stopped with it');
+  assert.equal(interrupt[0].params.turnId, 'tu_1');
+});
+
+test('a turn handed an already-aborted signal never runs', async () => {
+  const handlers = new Set();
+  const { calls, rpc } = stubRpc({ 'turn/start': { turnId: 'tu_1' }, 'turn/interrupt': {} });
+  const backend = createCodexBackend({
+    rpc, cwd: 'C:\\ws', turnTimeoutMs: 10_000,
+    subscribe: (handler) => { handlers.add(handler); return () => handlers.delete(handler); },
+  });
+
+  const error = await backend
+    .sendMessage('th_1', { text: 'hi', signal: AbortSignal.abort() })
+    .then(() => null, (thrown) => thrown);
+
+  assert.equal(error?.name, 'AbortError');
+  assert.equal(handlers.size, 0, 'no subscription is left on the bus');
+  assert.equal(calls.at(-1).method, 'turn/interrupt', 'and the turn that was accepted is stopped');
 });
 
 test('history is flattened out of turns', async () => {

@@ -138,29 +138,63 @@ export function isApprovalRequest(method) {
 }
 
 /**
+ * How long a turn the app-server has already accepted is given to finish.
+ *
+ * A turn this old that has neither failed nor completed is not going to: the
+ * text collected so far is a fragment, and reporting it as the answer tells the
+ * operator the model is done while it is still working. Injectable so a test
+ * proves the failure without waiting one out.
+ */
+const TURN_TIMEOUT_MS = 180_000;
+
+/**
  * Build a backend over a connected app-server.
  *
  * `cwd` is the environment's workspace root: Codex scopes a thread to a
  * directory, so this is what keeps a run inside the configured workspace.
  */
-export function createCodexBackend({ rpc, cwd, onApproval, subscribe } = {}) {
+export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeoutMs = TURN_TIMEOUT_MS } = {}) {
   const threadTurns = new Map();
+
+  /** What a stopped turn rejects with: a cancellation, not a failed run. */
+  function stoppedTurn() {
+    const error = new Error('codex: turn stopped');
+    error.name = 'AbortError';
+    error.code = 'aborted';
+    return error;
+  }
 
   /**
    * `turn/start` returns as soon as the turn is accepted; the reply text arrives
    * as notifications. Callers that want a complete answer (non-streaming chat)
    * need the turn awaited, so collect deltas until the terminal event.
+   *
+   * Three ways out, all of which release the subscription: the terminal event,
+   * the turn's own bound, and the caller's signal — without which a Stop ended
+   * the phone's turn and left the app-server working into a bus nobody was
+   * reading for the rest of these three minutes.
    */
-  function awaitTurn(threadId, { timeoutMs = 180_000 } = {}) {
+  function awaitTurn(threadId, { timeoutMs = TURN_TIMEOUT_MS, signal } = {}) {
     if (!subscribe) return Promise.resolve({ text: '', completed: false });
     return new Promise((resolve) => {
       let text = '';
-      const finish = (extra = {}) => {
+      const release = () => {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
         unsubscribe?.();
+      };
+      const finish = (extra = {}) => {
+        release();
         resolve({ text, completed: true, ...extra });
       };
-      const timer = setTimeout(() => { unsubscribe?.(); resolve({ text, completed: false }); }, timeoutMs);
+      const onAbort = () => {
+        release();
+        resolve({ text, completed: false, aborted: true });
+      };
+      const timer = setTimeout(() => {
+        unsubscribe?.();
+        resolve({ text, completed: false });
+      }, timeoutMs);
       timer.unref?.();
       const unsubscribe = subscribe((message) => {
         if (message?.params?.threadId && message.params.threadId !== threadId) return;
@@ -169,7 +203,14 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe } = {}) {
         else if (event?.type === 'run.completed') finish();
         else if (event?.type === 'run.failed') finish({ error: event.payload.error });
       });
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort', onAbort, { once: true });
     });
+  }
+
+  /** Stop the app-server's turn; nothing else in the Gate ever interrupts one. */
+  async function interruptTurn(threadId, turnId) {
+    await rpc.request('turn/interrupt', { threadId, turnId }).catch(() => undefined);
   }
 
   function scopedHandler(sessionId, onEvent) {
@@ -209,7 +250,7 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe } = {}) {
       return typeof limit === 'number' ? mapped.slice(-limit) : mapped;
     },
 
-    async sendMessage(sessionId, { text, model } = {}) {
+    async sendMessage(sessionId, { text, model, signal } = {}) {
       const params = {
         threadId: sessionId,
         cwd,
@@ -229,12 +270,31 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe } = {}) {
       }
       // Subscribe before starting: the first deltas can land before turn/start
       // has even returned.
-      const settled = awaitTurn(sessionId);
+      const settled = awaitTurn(sessionId, { timeoutMs: turnTimeoutMs, signal });
       const result = await rpc.request('turn/start', params);
       if (result?.turnId) threadTurns.set(sessionId, result.turnId);
       const outcome = await settled;
+      if (outcome.aborted) {
+        // Stop ends the phone's turn; the app-server's turn has to end with it,
+        // or it keeps working into a stream nobody is reading.
+        await interruptTurn(sessionId, result?.turnId ?? threadTurns.get(sessionId));
+        throw stoppedTurn();
+      }
       if (outcome.error) {
         throw new Error(typeof outcome.error === 'string' ? outcome.error : JSON.stringify(outcome.error));
+      }
+      if (!outcome.completed) {
+        // The turn never reached `turn/completed`, so the text so far is a
+        // fragment of a turn the app-server is still running. Publishing it
+        // with `finish_reason: stop` would tell the operator the model is done
+        // while it is still working — and the model-health table would score the
+        // silence as a success. Stop the turn and say what happened.
+        await interruptTurn(sessionId, result?.turnId ?? threadTurns.get(sessionId));
+        const seconds = Math.max(1, Math.round(turnTimeoutMs / 1000));
+        throw new Error(
+          `codex: the turn did not answer within ${seconds}s and was stopped — ` +
+          'ask again, or try a model that is not still working',
+        );
       }
       const reply = outcome.text || result?.text || '';
       return {
@@ -247,8 +307,7 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe } = {}) {
     },
 
     async abort(sessionId) {
-      const turnId = threadTurns.get(sessionId);
-      await rpc.request('turn/interrupt', { threadId: sessionId, turnId }).catch(() => undefined);
+      await interruptTurn(sessionId, threadTurns.get(sessionId));
     },
 
     async replyApproval(_sessionId, requestId, reply) {

@@ -354,16 +354,29 @@ export function createPushNotifier({ tokens, send, collectReceipts = null, snaps
 
     const rows = await tokens.listEnabled();
     const messages = [];
+    let addressed = false;
     for (const row of Array.isArray(rows) ? rows : []) {
       if (!isRecord(row) || row.enabled !== true || typeof row.expoPushToken !== 'string' || !row.expoPushToken) continue;
       if (!allowedForBot(row, event?.botId)) continue;
+      addressed = true;
       if (isQuiet(row, localMinutes(row.timezone, nowSource())) && !quietExemptsEvent(row, classified)) continue;
       messages.push(messageFor(classified, event, row));
       const companion = widgetCompanion(row, event, snapshot);
       if (companion) messages.push(companion);
     }
 
-    if (messages.length === 0) return { ok: true, sent: 0 };
+    if (messages.length === 0) {
+      // The event has not been spoken for, so the slot it holds must not stay
+      // held. A roster that comes up short — a store that is missing or still
+      // half-written (push-tokens.mjs reads an unreadable file as no devices),
+      // a row momentarily not enabled — would otherwise retire the one notice
+      // that exists to reach a phone which is not connected, silently and for the
+      // life of the process. Quiet hours are not that: the device is there and
+      // policy chose not to speak, so the claim stands and a replay is still a
+      // replay.
+      if (!addressed) seen.delete(key);
+      return { ok: true, sent: 0 };
+    }
     const result = await send(messages);
     if (result?.ok !== true) {
       // A transport failure delivered nothing: forget the slot so a later

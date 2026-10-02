@@ -112,6 +112,33 @@ async function startLiveRun(service, input = {}) {
   return handle;
 }
 
+test('stopping an environment with a live run keeps the state the caller set', async () => {
+  const { service, cleanup } = await makeService();
+  try {
+    await startLiveRun(service);
+    assert.equal(service.environmentState.get(ENVIRONMENT_ID).state, 'busy');
+
+    // Stop cancels the runs, and every cancellation lands in finish(), whose
+    // last act was to write `busy`/`ready` with no memory that the environment
+    // had just been stopped — so the last one overwrote the answer the caller
+    // was given, and every reader showed an environment that was ready again.
+    const stopped = await service.stop(ENVIRONMENT_ID);
+    assert.equal(stopped.state, 'stopped');
+    assert.equal(
+      service.environmentState.get(ENVIRONMENT_ID).state,
+      'stopped',
+      'the state the operator set survives the cancellation it caused',
+    );
+    assert.equal(service.liveRunCount(), 0, 'the run really is over');
+
+    // And the environment is not stuck: a probe is what moves it off `stopped`.
+    await service.check(ENVIRONMENT_ID);
+    assert.equal(service.environmentState.get(ENVIRONMENT_ID).state, 'ready');
+  } finally {
+    await cleanup();
+  }
+});
+
 test('a probe mid-run keeps the environment busy, and the run\u2019s own settle decides otherwise', async () => {
   const { service, spawned, cleanup } = await makeService();
   try {

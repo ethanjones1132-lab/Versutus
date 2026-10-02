@@ -109,6 +109,77 @@ test('a reserved session the caller just created is still findable', async () =>
   assert.ok(sessions.some((session) => session.id === created.id));
 });
 
+// A reservation is an id the Gate has handed out, not a conversation: Claude
+// Code writes the transcript only when a turn runs, so every chat the app opened
+// and the operator never typed into — and every first turn that failed — left one
+// behind with `last_active` set to its creation. Nothing ever retired them, so
+// they sorted above every real conversation forever and a few dozen of them
+// filled the first page.
+test('a reservation that no turn ever used stops being listed', async () => {
+  let clock = Date.now();
+  const { home, cwd, dir } = await makeHome(3);
+  const backend = createClaudeCodeBackend({
+    claudeHome: home, cwd, executablePath: 'claude.exe', now: () => clock,
+  });
+
+  const stale = await backend.createSession({ title: 'opened and walked away from' });
+  assert.ok(
+    (await backend.listSessions(50)).some((session) => session.id === stale.id),
+    'a chat the app has just opened is listed, or it cannot recognise its own thread',
+  );
+
+  // Minutes later the app reconnects and opens another chat. Nothing ever
+  // retired the first one, and its `last_active` is its creation — so it sorts
+  // above every conversation that really happened, for the life of the Gate.
+  await writeTranscript(dir, 500, new Date(clock + 6 * 60_000 - 1_000), 'the real question');
+  clock += 6 * 60_000;
+  const fresh = await backend.createSession({ title: 'typed into now' });
+
+  const sessions = await backend.listSessions(50);
+
+  assert.ok(!sessions.some((session) => session.id === stale.id), 'an outlived reservation is not a conversation');
+  assert.ok(sessions.some((session) => session.id === fresh.id), 'a reservation within its lifetime is listed');
+  assert.ok(sessions.some((session) => session.id === sessionId(500)), 'and the transcripts still are');
+  assert.equal(sessions[0].id, fresh.id, 'the page leads with what really happened most recently');
+});
+
+test('a page is never longer than the limit, however many reservations are live', async () => {
+  const { home, cwd } = await makeHome(2);
+  const backend = createClaudeCodeBackend({ claudeHome: home, cwd, executablePath: 'claude.exe' });
+
+  for (const title of ['one', 'two', 'three']) await backend.createSession({ title });
+
+  const sessions = await backend.listSessions(2);
+
+  assert.equal(sessions.length, 2, 'the caller asked for two rows and is owed two');
+});
+
+test('a reservation the transcripts have caught up with is retired on the next read', async () => {
+  const { home, cwd, dir } = await makeHome(0);
+  const backend = createClaudeCodeBackend({ claudeHome: home, cwd, executablePath: 'claude.exe' });
+
+  const created = await backend.createSession({ title: 'Bot Chat' });
+  assert.deepEqual(await backend.listMessages(created.id), [], 'a reserved id opens as an empty chat');
+
+  // The turn ran: Claude Code has written the transcript the id was reserved for.
+  const line = JSON.stringify({
+    type: 'user',
+    uuid: 'u1',
+    message: { role: 'user', content: [{ type: 'text', text: 'the question that was asked' }] },
+  });
+  await writeFile(join(dir, `${created.id}.jsonl`), `${line}\n`, 'utf8');
+  const messages = await backend.listMessages(created.id);
+
+  assert.equal(messages.length, 1, 'the reservation hands over to the transcript it was waiting for');
+  assert.equal(messages[0].content[0].text, 'the question that was asked');
+  const sessions = await backend.listSessions(50);
+  assert.equal(
+    sessions.filter((session) => session.id === created.id).length,
+    1,
+    'and it is listed once, from its transcript',
+  );
+});
+
 test('the row shape is unchanged', async () => {
   const { home, cwd } = await makeHome();
   const backend = createClaudeCodeBackend({ claudeHome: home, cwd, executablePath: 'claude.exe' });

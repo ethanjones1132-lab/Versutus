@@ -106,6 +106,83 @@ test('a hung transcript listing is bounded by the same read ceiling', async () =
   assert.ok(Date.now() - started < 5_000);
 });
 
+// The picker and diagnostics tiles go through the same host and the same
+// database, and these four were the reads that had no ceiling at all: the route
+// that serves them is a bare `await` (server.mjs frontedRequest), so a stalled
+// Hermes left the Tools, Skills, Diagnostics and model-picker tiles spinning
+// until the phone's own transport gave up.
+/** A read's verdict, or `pending` — so an unbounded read settles the suite red. */
+function readOutcome(read) {
+  return Promise.race([
+    read().then(() => ({ state: 'resolved' }), (error) => ({ state: 'rejected', error })),
+    new Promise((resolve) => {
+      const timer = setTimeout(() => resolve({ state: 'pending' }), 3_000);
+      timer.unref?.();
+    }),
+  ]);
+}
+
+for (const [what, read] of [
+  ['tool list', (backend) => backend.listToolsets()],
+  ['skill list', (backend) => backend.listSkills()],
+  ['diagnostics read', (backend) => backend.healthDetailed()],
+  ['model picker', (backend) => backend.listModels()],
+]) {
+  test(`a hung ${what} is bounded rather than waiting forever`, async () => {
+    const backend = createHermesBackend({
+      baseUrl: 'http://127.0.0.1:8642',
+      apiKey: 'test-key',
+      fetchImpl: hangingFetch(),
+      readTimeoutMs: 40,
+    });
+
+    const outcome = await readOutcome(() => read(backend));
+
+    assert.equal(outcome.state, 'rejected', 'a hung read is named, not left pending');
+    assert.equal(outcome.error.code, 'backend_timeout');
+    assert.match(outcome.error.message, /state database/);
+  });
+}
+
+test('a create refused for a taken title cannot hang on the session it names', async () => {
+  // The named-session read was a bare `call`, so its `.catch(() => null)` could
+  // never fire: the promise simply never settled, and the create was held with
+  // it. A bounded read makes that fallback reachable again.
+  const paths = [];
+  const backend = createHermesBackend({
+    baseUrl: 'http://127.0.0.1:8642',
+    apiKey: 'test-key',
+    readTimeoutMs: 40,
+    fetchImpl: async (url, init) => {
+      if (init?.method === 'POST') {
+        return { ok: false, status: 409, async text() { return 'title already in use by session ses_1'; } };
+      }
+      paths.push(`${String(url).replace(/^https?:\/\/[^/]+/, '')} ${init?.method ?? 'GET'}`);
+      return hangingFetch()(url, init);
+    },
+  });
+
+  // Raced, so an unbounded read settles the suite red instead of hanging it.
+  const outcome = await Promise.race([
+    backend.createSession({ title: 'Bot Chat' }).then(
+      () => ({ state: 'resolved' }),
+      (error) => ({ state: 'rejected', error }),
+    ),
+    new Promise((resolve) => {
+      const timer = setTimeout(() => resolve({ state: 'pending' }), 3_000);
+      timer.unref?.();
+    }),
+  ]);
+
+  assert.equal(outcome.state, 'rejected', 'the create is not held on a read that will not answer');
+  assert.match(outcome.error.message, /title already in use/);
+  assert.deepEqual(
+    paths,
+    ['/api/sessions/ses_1 GET', '/api/sessions?limit=200 GET'],
+    'both ways of finding the holder are tried, and both are bounded',
+  );
+});
+
 test('a healthy cron listing still returns its jobs', async () => {
   // Guard against the timeout wrapper breaking the normal path.
   const backend = createHermesBackend({

@@ -168,6 +168,78 @@ test('a backend that will not start is refused once per window, not once per req
   assert.equal(attempts, 9, 'a success cleared the remembered failure');
 });
 
+test('concurrent callers behind one failed start share its backoff step', async () => {
+  let clock = 0;
+  let attempts = 0;
+  const subject = manager({
+    adapter: { adapterId: 'a', server: { defaultPort: 1 }, createBackend: () => backendWith(['listBots']) },
+    now: () => clock,
+    createServer: () => ({
+      ensureRunning: async () => {
+        attempts += 1;
+        throw new Error('a server did not become reachable within 30000ms');
+      },
+      stop: async () => {},
+      isOwned: () => false,
+    }),
+  });
+
+  // Four reads of a cold environment. The supervisor hands every caller the same
+  // start promise, so this is ONE start that failed — not four failures to climb
+  // the ladder with, each of which the four callers used to count separately.
+  const refused = await Promise.all([0, 1, 2, 3].map(() =>
+    subject.get('a-local').then(() => null, (error) => error)));
+  assert.equal(attempts, 1, 'one start attempt served every caller');
+  for (const error of refused) assert.match(error.message, /did not become reachable/);
+
+  // 60s is the third window of the ladder, and one failure earns the first of
+  // them. Were the four callers each advancing the backoff, the environment
+  // would be sitting in the five-minute step and would still be refusing here.
+  clock = 60_000;
+  await assert.rejects(() => subject.get('a-local'), /did not become reachable/);
+  assert.equal(attempts, 2, 'and past the window it is retried, not left in the last step');
+});
+
+test('a remembered refusal does not outlive the server it was about', async () => {
+  let clock = 0;
+  let attempts = 0;
+  let probes = 0;
+  let up = false;
+  const subject = manager({
+    adapter: { adapterId: 'a', server: { defaultPort: 1 }, createBackend: () => backendWith(['listBots']) },
+    now: () => clock,
+    createServer: () => ({
+      ensureRunning: async () => {
+        attempts += 1;
+        if (!up) throw new Error('a server did not become reachable within 30000ms');
+        return { baseUrl: 'http://127.0.0.1:1' };
+      },
+      // What the supervisor can see without starting anything: the only cheap
+      // way to learn that a refusal has gone stale.
+      reachable: async () => { probes += 1; return up; },
+      stop: async () => {},
+      isOwned: () => false,
+    }),
+  });
+
+  await assert.rejects(() => subject.get('a-local'), /did not become reachable/);
+  assert.equal(attempts, 1);
+
+  // Still nothing there: the window holds, and costs a probe rather than a start.
+  clock = 2_000;
+  await assert.rejects(() => subject.get('a-local'), /did not become reachable/);
+  assert.equal(attempts, 1, 'a server that is still absent is not started again per request');
+  assert.equal(probes, 1, 'the refusal is confirmed, not assumed');
+
+  // The server came up two seconds later — well inside the window the Gate just
+  // opened. Every request in it used to carry the first error's text, so the
+  // Gate reported `did not become reachable` against a server that was running.
+  up = true;
+  const recovered = await subject.get('a-local');
+  assert.equal(typeof recovered.listBots, 'function', 'the phone gets a backend, not the first error');
+  assert.equal(attempts, 2, 'and the recovered request costs the start it was refused before');
+});
+
 // ─── a stdio app-server that dies comes back ──────────────────────────────
 
 let appServers = 0;
