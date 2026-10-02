@@ -102,6 +102,14 @@ const DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS = 120 * 1000;
 // does. `voice.install` can take minutes, so this is generous; a handler that
 // never settles is not.
 const DEFAULT_RPC_HANDLER_TIMEOUT_MS = 10 * 60 * 1000;
+// The same vendor one step further on. Once the headers are in the header
+// watchdog is cleared and `reader.read()` has no deadline of its own, so a
+// vendor that sends 200 and then goes silent holds the vendor socket, the
+// phone's socket, the in-flight turn and the journal record for the life of the
+// process -- while the 15 s keepalive keeps telling the phone the turn is alive.
+// Only silence is bounded: a stream that keeps producing is a thinking model, and
+// it is never cut off for being slow.
+const DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS = 120 * 1000;
 // Provider states the operator has to fix, not faults a turn ran into: a
 // disabled provider, a provider with no key and a stored key this machine
 // cannot decrypt are all answered 409, and none of them says anything about
@@ -856,6 +864,32 @@ async function proxyChat(root, provider, requestBody, res, { headersTimeoutMs, k
   return null;
 }
 
+/**
+ * One read from the vendor body, bounded by silence rather than by total length.
+ *
+ * The reader is deliberately left alone when the bound fires -- the relay's
+ * `finally` cancels it, and that is what returns the connection to undici. The
+ * error is thrown, so it lands on the same path as a torn body and the turn is
+ * recorded as the failure it is instead of completing as a success carrying half
+ * an answer.
+ */
+async function readWithin(reader, timeoutMs) {
+  let timer;
+  const idle = new Promise((resolve, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error('The provider stopped sending before the reply finished');
+      error.code = 'upstream_idle';
+      reject(error);
+    }, timeoutMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([reader.read(), idle]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function endProviderStreamWithError(res, error, emit) {
   const message = typeof error?.message === 'string' && error.message.trim()
     ? error.message : 'Provider stream interrupted before completion';
@@ -893,7 +927,12 @@ function endProviderStreamWithError(res, error, emit) {
  * that records the turn has nothing to learn from a stream whose outcome is
  * still open, and the legacy twin ignores the answer entirely.
  */
-async function relayNormalizedSse(upstreamResponse, flavorModule, res, { upstream, keepaliveIntervalMs, durable } = {}) {
+async function relayNormalizedSse(upstreamResponse, flavorModule, res, {
+  upstream,
+  keepaliveIntervalMs,
+  durable,
+  idleTimeoutMs = DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS,
+} = {}) {
   if (!res.headersSent && !res.destroyed) {
     res.writeHead(200, sseHeaders(durable?.sessionHeaders ?? {}));
   }
@@ -930,7 +969,7 @@ async function relayNormalizedSse(upstreamResponse, flavorModule, res, { upstrea
   };
   try {
     while (!turnGone()) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithin(reader, idleTimeoutMs);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       if (buffer.length > MAX_BUFFER_BYTES) {
@@ -948,6 +987,24 @@ async function relayNormalizedSse(upstreamResponse, flavorModule, res, { upstrea
         if (!line.startsWith('data:')) continue;
         const data = line.slice(5).trim();
         if (data === '[DONE]') continue;
+        // A vendor that announces a failure mid-reply (`overloaded_error`, a
+        // gateway's quota refusal) sends it as an ordinary `data:` frame, and
+        // `parseDelta` answers '' for it — the same answer as "no text here". So
+        // the failure was dropped, the body closed cleanly, and the turn was
+        // recorded as a success that promoted a broken provider to `ready`.
+        const announced = flavorModule.parseStreamError?.(data);
+        if (announced) {
+          await release();
+          const error = Object.assign(new Error(announced.message), {
+            code: announced.code ?? 'upstream_error',
+            // Only where the vendor documented one: `classifyProviderError`
+            // reads `status`, and a rate limit with no status is filed as an
+            // unknown transient fault instead of as a rate limit.
+            ...(Number.isInteger(announced.status) ? { status: announced.status } : {}),
+          });
+          endProviderStreamWithError(res, error, durable?.emit);
+          return { ok: false, error };
+        }
         const text = flavorModule.parseDelta(data);
         if (text) writeDelta(text);
       }
@@ -1003,6 +1060,17 @@ async function relayIteratorSse(events, res, { upstream, keepaliveIntervalMs, du
   try {
     for await (const event of events) {
       if (turnGone()) return { abandoned: true };
+      // The same blindness `relayNormalizedSse` had: an error event reaches this
+      // loop as one more item with no text in it, and the iterator then ends.
+      const announced = event?.error;
+      if (announced) {
+        const error = Object.assign(
+          new Error(typeof announced === 'string' ? announced : announced.message ?? 'the provider ended the stream with an error'),
+          { code: typeof announced === 'string' ? 'upstream_error' : announced.code ?? 'upstream_error' },
+        );
+        endProviderStreamWithError(res, error, durable?.emit);
+        return { ok: false, error };
+      }
       const text = typeof event === 'string' ? event : event?.choices?.[0]?.delta?.content;
       if (text) {
         const payload = JSON.stringify({ choices: [{ delta: { content: text } }] });
@@ -1325,7 +1393,7 @@ export async function createGate(config = {}) {
   const providerService = new ProviderService({
     store: providerStore,
     vault,
-    createAdapter: (registration) => createProviderAdapter(registration, { vault, store: providerStore }),
+    createAdapter: (registration) => createProviderAdapter(registration, { vault, store: providerStore, oauth }),
   });
   const providerRpc = createProviderRpc({
     service: providerService,
@@ -1828,6 +1896,24 @@ export async function createGate(config = {}) {
   // Bot means the first attached backend. Returns null instead of writing an
   // HTTP response, because a voice turn has none.
 
+  /**
+   * The provider roster, for the surfaces that can carry on without it.
+   *
+   * A roster whose directory could not be read is not an empty roster, and every
+   * one of these three reads it as one when it is handed `[]`: the manifest
+   * advertises no models, the model catalogue offers none, and routing finds no
+   * advertised provider. The store already named the failure; this names it again
+   * where the consequence shows. `/v1/providers` does not swallow it — a caller
+   * asking for the roster is answered 503, because "you have none" and "I could
+   * not read them" must not look the same.
+   */
+  async function listProvidersOrEmpty() {
+    return providerService.list().catch((error) => {
+      console.error(`gate: the provider roster is unavailable for this request (${error.message})`);
+      return [];
+    });
+  }
+
   async function computeState() {
     const { kinds, instances } = await loadCapabilities(root);
     const providers = instances
@@ -1839,7 +1925,7 @@ export async function createGate(config = {}) {
     // v2 providers live under Gate home and are owned by ProviderService, so
     // loadCapabilities(root) — which only reads the legacy registry — cannot
     // see them. A failure here must not take the manifest down.
-    const providerSnapshots = await providerService.list().catch(() => []);
+    const providerSnapshots = await listProvidersOrEmpty();
     // Built before the manifest so its keys can be advertised: a capability
     // instance that contributes methods must appear in `rpcMethods` on the
     // same reload that registers it, not on the next restart.
@@ -2042,8 +2128,12 @@ export async function createGate(config = {}) {
 
     // Profile adapters hand back the raw upstream Response; the local-interface
     // adapter hands back an async iterator of already-parsed SSE events.
+    // The registration's own budget bounds how long the vendor may be silent
+    // mid-reply -- the same number its first byte was bounded by, so one answer
+    // cannot sit in one place forever and the next in another.
+    const idleTimeoutMs = record.config?.requestPolicy?.timeoutMs ?? DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS;
     const outcome = typeof result?.body?.getReader === 'function'
-      ? await relayNormalizedSse(result, flavorModule, res, { upstream, keepaliveIntervalMs, durable })
+      ? await relayNormalizedSse(result, flavorModule, res, { upstream, keepaliveIntervalMs, durable, idleTimeoutMs })
       : await relayIteratorSse(result, res, { upstream, keepaliveIntervalMs, durable });
     if (durable) {
       const { reply, record } = concludeDurableProviderTurn(durable, outcome);
@@ -2327,7 +2417,19 @@ export async function createGate(config = {}) {
       // Authenticated endpoints
 
       if (pathname === '/v1/providers' && method === 'GET') {
-        const snapshots = await providerService.list();
+        let snapshots;
+        try {
+          snapshots = await providerService.list();
+        } catch (error) {
+          // Not 200 with an empty array: that is how a transient read failure
+          // made the whole roster vanish from the phone with nothing anywhere
+          // saying a read had failed.
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: { message: error.message, code: error.code ?? 'provider_roster_unreadable' },
+          }));
+          return;
+        }
         res.writeHead(200);
         res.end(JSON.stringify({ providers: snapshots.map(sanitizeSnapshot) }));
         return;
@@ -3799,7 +3901,7 @@ export async function createGate(config = {}) {
           return;
         }
 
-        const snapshots = await providerService.list();
+        const snapshots = await listProvidersOrEmpty();
         const allModels = [];
         for (const snapshot of snapshots) {
           // A disabled provider is asked nothing and answers nothing, so
@@ -4117,7 +4219,7 @@ export async function createGate(config = {}) {
           return;
         }
 
-        const snapshots = await providerService.list();
+        const snapshots = await listProvidersOrEmpty();
         const advertised = snapshots.flatMap((snapshot) => (
           snapshot.catalog?.models ?? []
         ).map((model) => ({ providerId: snapshot.id, modelId: model.id })));

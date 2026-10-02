@@ -243,12 +243,12 @@ test('a second catalogue read inside the window does not ask the environment aga
 });
 
 test('a stale copy is answered at once and refreshed once behind the request', async () => {
-  const { gate, calls } = await makeGate({ gateOptions: { catalogueTtlMs: 20, catalogueStaleMs: 5_000 } });
+  const { gate, calls } = await makeGate({ gateOptions: { catalogueTtlMs: 200, catalogueStaleMs: 5_000 } });
   try {
     await readCatalogue(gate);
     assert.equal(catalogueReads(calls), 1);
 
-    await sleep(60);
+    await sleep(300);
     const started = Date.now();
     const rows = await readCatalogue(gate);
     const answeredIn = Date.now() - started;
@@ -257,7 +257,9 @@ test('a stale copy is answered at once and refreshed once behind the request', a
     assert.equal(rows.size, 6);
     assert.ok(answeredIn < 500, `answered in ${answeredIn}ms`);
     // ...and exactly one refresh ran behind it, however many readers arrive.
-    await sleep(60);
+    // The wait is shorter than the TTL above so the freshly refreshed copy is
+    // still within its fresh window when the next read arrives.
+    await sleep(50);
     assert.equal(catalogueReads(calls), 2);
     await readCatalogue(gate);
     assert.equal(catalogueReads(calls), 2, 'the refreshed copy is fresh again');

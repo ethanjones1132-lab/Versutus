@@ -70,6 +70,12 @@ test('a served callback closes its listener too', async () => {
   assert.deepEqual(await attempt.callback, { code: 'c', state: attempt.state, error: null });
 
   assert.ok(await untilRefuses(port), 'the one callback has been served; the listener is done');
+  // One turn of the event loop: a delivered code is left on the attempt until
+  // `consumePkceAttempt` has read it, because the teardown above runs on
+  // `process.nextTick` and the consume resumes on the microtask queue after it.
+  // `OAuthManager.begin` is what consumes it; with nothing consuming, the entry
+  // still goes, which is what this asserts.
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(attempt.id), undefined);
 });
 

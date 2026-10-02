@@ -65,6 +65,32 @@ export function parseDelta(data) {
   }
 }
 
+/**
+ * The failure a vendor announced inside an SSE stream, if this chunk is one.
+ *
+ * An OpenAI-compatible endpoint is free to close a turn with `{"error":{...}}`
+ * (a proxy's own refusal, a gateway's quota message) after some deltas have
+ * already been relayed. `parseDelta` answers `''` for such a frame, and an empty
+ * delta is indistinguishable from "no text this frame" — so the relay read on to
+ * a clean close and reported success. Returns null for every frame that is not
+ * an error, so the relay only has to ask.
+ *
+ * @param {string} data - Raw SSE chunk data (JSON string)
+ * @returns {{message: string, code?: string}|null}
+ */
+export function parseStreamError(data) {
+  try {
+    const chunk = JSON.parse(data);
+    if (!chunk?.error) return null;
+    return {
+      message: typeof chunk.error === 'string' ? chunk.error : chunk.error.message ?? 'the provider ended the stream with an error',
+      code: typeof chunk.error === 'string' ? undefined : chunk.error.code,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Extract the assistant's text from a non-streaming chat completion. */
 export function parseResponseText(json) {
   return json?.choices?.[0]?.message?.content ?? '';

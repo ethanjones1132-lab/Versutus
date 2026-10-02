@@ -65,7 +65,8 @@ export function createProfileAdapter({
           signal: bounded.signal,
         });
         if (!response.ok) {
-          const error = new Error(`models request failed: ${response.status}`);
+          const detail = await vendorDetail(response);
+          const error = new Error(`models request failed: ${response.status}${detail}`);
           error.status = response.status;
           if (profile.keepBootstrapIfEmpty) error.code = 'catalog_timeout';
           throw error;
@@ -101,7 +102,8 @@ export function createProfileAdapter({
         signal,
       });
       if (!response.ok) {
-        const error = new Error(`chat failed: ${response.status}`);
+        const detail = await vendorDetail(response);
+        const error = new Error(`chat failed: ${response.status}${detail}`);
         error.status = response.status;
         throw error;
       }
@@ -126,6 +128,61 @@ function assertAllowedOrigin(baseUrl, origins) {
   if (!allowed) {
     throw new Error(`origin ${parsed.origin} is not allowed`);
   }
+}
+
+// How much of a vendor's own explanation reaches the card. Enough for the reason
+// a vendor gives, bounded because the body is not the Gate's to trust the size of.
+const MAX_VENDOR_DETAIL_BYTES = 512;
+
+/**
+ * What the vendor said about the refusal, and the body consumed either way.
+ *
+ * Both halves mattered. Undici cannot hand an unread body back to its pool, so
+ * every 401, 429 and 5xx used to hold its connection until the process did; and
+ * `classifyProviderError` reads `error.status` alone, so a 401 saying "your key
+ * is suspended" was indistinguishable from one saying "invalid key", and the
+ * retry-after a rate limit names was thrown away. The legacy path at
+ * `server.mjs`'s `proxyChat` already read the body for its message.
+ */
+async function vendorDetail(response) {
+  let text = '';
+  try {
+    text = await readVendorBody(response, MAX_VENDOR_DETAIL_BYTES);
+  } catch {
+    await response.body?.cancel?.().catch(() => {});
+  }
+  const trimmed = String(text ?? '').trim();
+  if (!trimmed) return '';
+  return trimmed.length > MAX_VENDOR_DETAIL_BYTES
+    ? ` — ${trimmed.slice(0, MAX_VENDOR_DETAIL_BYTES)}…`
+    : ` — ${trimmed}`;
+}
+
+/**
+ * Bound the read itself, the way `readLimited` does on the local path.
+ * `response.text()` then a slice still fully buffers a large vendor body.
+ */
+async function readVendorBody(response, maxBytes) {
+  if (typeof response.body?.getReader !== 'function') {
+    const text = await response.text();
+    return String(text ?? '').slice(0, maxBytes);
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value?.byteLength) continue;
+      const take = Math.min(value.byteLength, maxBytes - total);
+      chunks.push(Buffer.from(value.subarray(0, take)));
+      total += take;
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 /**

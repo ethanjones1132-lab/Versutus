@@ -71,7 +71,12 @@ export function createProviderRpc({ service, vault, oauth, onChanged }) {
     // so it forces: a tap that lands inside the TTL or inside a failure backoff
     // is exactly the tap that means "I do not believe you, ask again".
     'providers.catalog.refresh': async ({ id } = {}) => snapshotAndReload(() => service.refreshCatalog(id, { force: true })),
-    'providers.auth.setApiKey': async ({ id, value } = {}) => status(async () => {
+    // The key is what the card's verdict is about, so writing one has to move
+    // it — and the manifest advertises providers, so it is reloaded with it.
+    // Without both, a client other than the shipped app (which self-heals with
+    // an immediate `check`) reads "Not configured" / "Set key" for a provider
+    // that now has a working key, and keeps the old failure backoff on top.
+    'providers.auth.setApiKey': async ({ id, value } = {}) => statusAndReload(async () => {
       const snapshot = await service.get(id);
       if (snapshot.mode !== 'api_key') {
         throw new Error('provider is not in api_key mode');
@@ -81,10 +86,18 @@ export function createProviderRpc({ service, vault, oauth, onChanged }) {
       await vault.set(ref, value);
       // The adapter closed over the previous credential — rebuild it.
       service.forgetAdapter(id);
+      await service.noteCredentialSet(id);
     }),
     'providers.auth.begin': async ({ id } = {}) => {
       if (!oauth) throw new Error('oauth is not configured');
-      const attempt = await oauth.begin(id);
+      const record = await service.store.get(id);
+      if (!record) throw new Error(`unknown provider "${id}"`);
+      // The shipped profile lives under `registration.oauthProfileId`. Passing
+      // the instance id looked up a map that production keys by profile id, so
+      // a valid oauth registration could not start a sign-in.
+      const attempt = await oauth.begin(id, {
+        oauthProfileId: record.config.registration?.oauthProfileId,
+      });
       return {
         attemptId: attempt.id,
         redirectUri: attempt.redirectUri,
@@ -98,8 +111,12 @@ export function createProviderRpc({ service, vault, oauth, onChanged }) {
       return { id: attempt.id, providerId: attempt.providerId, expiresAt: attempt.expiresAt };
     },
     'providers.auth.disconnect': async ({ id } = {}) => status(async () => {
-      if (oauth) await oauth.disconnect(id);
       const record = await service.store.get(id);
+      if (oauth) {
+        await oauth.disconnect(id, {
+          oauthProfileId: record?.config.registration?.oauthProfileId,
+        });
+      }
       if (record?.config.registration.credentialRef) {
         await vault.delete(record.config.registration.credentialRef);
       }

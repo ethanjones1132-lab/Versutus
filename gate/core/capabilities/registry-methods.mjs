@@ -1,4 +1,4 @@
-import { mkdir, unlink } from 'node:fs/promises';
+import { access, mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { writeFileAtomic } from '../atomic-file.mjs';
@@ -73,6 +73,7 @@ export function createRegistryMethods({ root, getState, reload, gateHome }) {
       }
       assertProviderMethodsOwnProviders(kind, 'providers.create');
       assertValid(kindModule.validate(config ?? {}));
+      await assertInstanceIdFree(root, id);
       await writeInstanceFile(root, id, kind, label ?? id, config ?? {});
       const state = await reload();
       return state.instances.find((i) => i.id === id);
@@ -122,6 +123,29 @@ export function createRegistryMethods({ root, getState, reload, gateHome }) {
       return { ok: true, deprecated: true };
     },
   };
+}
+
+/**
+ * Whether `id` is still free, asked of the file rather than of the loaded state.
+ *
+ * The duplicate guard above reads `state.instances`, a cache, and `loadInstances`
+ * skips whatever it cannot read or validate -- a v2-shaped record, a
+ * `cli-environment`, a file that does not parse, a config the kind rejects --
+ * so an id can be taken on disk and absent from the cache. `writeFileAtomic`
+ * renames over whatever is there, so creating such an instance silently
+ * destroyed the one the operator had configured, and answered with the new
+ * record as if nothing had been lost.
+ */
+async function assertInstanceIdFree(root, id) {
+  try {
+    await access(join(root, 'registry', `${id}.json`));
+  } catch (error) {
+    // Only "not there" frees the id; a directory that cannot be read has not
+    // established anything, and refusing is the answer that loses nothing.
+    if (error?.code === 'ENOENT') return;
+    throw new Error(`instance "${id}" could not be checked: ${error.message}`);
+  }
+  throw new Error(`instance "${id}" already exists`);
 }
 
 /**

@@ -1,14 +1,15 @@
 import { ManifestClient } from './manifest-client.mjs';
-import { MAX_STREAM_BYTES, readJsonLimited } from './ssrf-policy.mjs';
+import { MAX_STREAM_BYTES, readDetailLimited, readJsonLimited } from './ssrf-policy.mjs';
 
 export async function createLocalProviderAdapter({
   manifestUrl,
   providerId,
   credential,
   onWarning,
+  timeoutMs,
   fetchImpl = fetch,
 } = {}) {
-  const client = new ManifestClient({ manifestUrl, fetchImpl });
+  const client = new ManifestClient({ manifestUrl, fetchImpl, timeoutMs });
   const manifest = await client.discover();
   const origin = new URL(manifestUrl);
   const schemes = manifest.auth?.schemes ?? ['bearer'];
@@ -36,7 +37,7 @@ export async function createLocalProviderAdapter({
     async health() {
       const response = await client.fetchLimited(resolve(manifest.endpoints.health), { headers: headers() });
       if (!response.ok) {
-        const error = new Error(`local provider health failed: ${response.status}`);
+        const error = new Error(`local provider health failed: ${response.status}${await readDetailLimited(response)}`);
         error.status = response.status;
         throw error;
       }
@@ -46,7 +47,7 @@ export async function createLocalProviderAdapter({
     async listModels() {
       const response = await client.fetchLimited(resolve(manifest.endpoints.models), { headers: headers() });
       if (!response.ok) {
-        const error = new Error(`local provider models failed: ${response.status}`);
+        const error = new Error(`local provider models failed: ${response.status}${await readDetailLimited(response)}`);
         error.status = response.status;
         throw error;
       }
@@ -75,7 +76,7 @@ export async function createLocalProviderAdapter({
         signal,
       });
       if (!response.ok) {
-        const error = new Error(`local provider chat failed: ${response.status}`);
+        const error = new Error(`local provider chat failed: ${response.status}${await readDetailLimited(response)}`);
         error.status = response.status;
         throw error;
       }

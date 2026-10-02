@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildChatRequest, parseDelta, parseResponseText } from '../flavors/openai.mjs';
+import { buildChatRequest, parseDelta, parseResponseText, parseStreamError } from '../flavors/openai.mjs';
 
 const config = {
   flavor: 'openai',
@@ -56,4 +56,20 @@ test('extracts the message text from a non-streaming response', () => {
 test('returns empty string when the response has no message content', () => {
   assert.equal(parseResponseText({ choices: [] }), '');
   assert.equal(parseResponseText({}), '');
+});
+
+test('reads the failure out of a mid-stream error frame', () => {
+  const chunk = JSON.stringify({ error: { message: 'quota exhausted', code: 'insufficient_quota' } });
+  assert.equal(parseDelta(chunk), '', 'the text codec must still see no text here');
+  assert.deepEqual(parseStreamError(chunk), {
+    message: 'quota exhausted',
+    code: 'insufficient_quota',
+  });
+  assert.equal(parseStreamError(JSON.stringify({ error: 'upstream refused' })).message, 'upstream refused');
+});
+
+test('an ordinary chunk is not an error frame', () => {
+  assert.equal(parseStreamError(JSON.stringify({ choices: [{ delta: { content: 'hi' } }] })), null);
+  assert.equal(parseStreamError(JSON.stringify({ choices: [] })), null);
+  assert.equal(parseStreamError('not json'), null);
 });

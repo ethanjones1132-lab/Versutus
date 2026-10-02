@@ -54,6 +54,15 @@ export class ProviderStore {
     this.configDir = join(gateHome, 'config', 'providers');
     this.stateDir = join(gateHome, 'state', 'providers');
     this.writeQueue = Promise.resolve();
+    // The last state each provider's file was read as. A state read that fails
+    // -- a Windows sharing violation, OneDrive holding the file -- used to be
+    // answered with a fabricated legacy bootstrap, which dropped every field the
+    // card is built from: `auth` became `missing` ("Set key" for a provider
+    // whose key only exists in the migrated `legacyApiKeyEnv` the same unread
+    // record carried) and the model list went empty. The facts are still on
+    // disk, unread this once, so the ones already read stand in until they can
+    // be read again.
+    this.lastKnownState = new Map();
   }
 
   serialize(fn) {
@@ -66,8 +75,20 @@ export class ProviderStore {
     let entries;
     try {
       entries = await readdir(this.configDir);
-    } catch {
-      return [];
+    } catch (error) {
+      // A gate home that has never had a provider is honestly empty, and ENOENT
+      // is the answer for it. Any other refusal is not: an empty roster published
+      // "you have no providers" with a 200, advertised no models, and said
+      // nothing anywhere. The per-file reads below are retried and named; the
+      // directory read is the one place a whole roster can disappear, so it is
+      // reported rather than answered.
+      if (error?.code === 'ENOENT') return [];
+      console.error(
+        `gate: provider directory ${this.configDir} could not be read (${error.code ?? error.message}); the roster is unknown, not empty`,
+      );
+      const failure = new Error(`provider roster could not be read: ${error.code ?? error.message}`);
+      failure.code = 'provider_roster_unreadable';
+      throw failure;
     }
 
     const records = [];
@@ -95,10 +116,17 @@ export class ProviderStore {
     // through the same reader, because a state file caught mid-replace would
     // otherwise read as a live provider that suddenly claims to be legacy.
     const state = await readRecord(join(this.stateDir, `${id}.json`));
-    if (state.state === 'ok') return { config, state: state.value };
+    if (state.state === 'ok') {
+      this.lastKnownState.set(id, state.value);
+      return { config, state: state.value };
+    }
+    // Absent, or unreadable after the retries above. Only the first is a real
+    // "never checked", and only it gets the bootstrap verdict; the second is
+    // answered from the last state this process did read for that id.
+    const last = state.state === 'missing' ? undefined : this.lastKnownState.get(id);
     // A fresh object per read, as before: the fallback is handed to callers
     // that annotate the catalog, and a shared one would collect their edits.
-    return { config, state: { catalog: { source: 'legacy_bootstrap', state: 'stale', generation: 0, models: [] } } };
+    return { config, state: last ? { ...last } : { catalog: { source: 'legacy_bootstrap', state: 'stale', generation: 0, models: [] } } };
   }
 
   async put(config, state) {
@@ -116,6 +144,9 @@ export class ProviderStore {
       // that answered `provider_not_found` for a provider that exists.
       await atomicWrite(join(this.configDir, `${config.id}.json`), config);
       await atomicWrite(join(this.stateDir, `${config.id}.json`), state ?? {});
+      // This is now the newest state on disk, so it is what a read that fails
+      // afterwards has to stand in for.
+      this.lastKnownState.set(config.id, state ?? {});
       return { config, state: state ?? {} };
     });
   }
@@ -124,6 +155,7 @@ export class ProviderStore {
     return this.serialize(async () => {
       await rm(join(this.configDir, `${id}.json`), { force: true });
       await rm(join(this.stateDir, `${id}.json`), { force: true });
+      this.lastKnownState.delete(id);
     });
   }
 }

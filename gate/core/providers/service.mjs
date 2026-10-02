@@ -96,6 +96,40 @@ export class ProviderService {
     });
   }
 
+  /**
+   * What writing a credential does to the facts the Gate already holds.
+   *
+   * `providers.auth.setApiKey` wrote the vault entry, rebuilt the adapter and
+   * returned, so the verdict kept everything the failures *before* it had
+   * concluded: `auth.state: 'missing'` left the card reading "Not configured" /
+   * "Set key" for a provider that now has a key, and the backoff those same
+   * failures earned kept it saying "retrying at ..." for up to fifteen minutes
+   * more. Presence is what this can answer without a vendor; whether the vendor
+   * accepts the key is a probe's answer, so readiness reads as unchecked — the
+   * same thing `stateAfterUpdate` does when a provider comes back on.
+   */
+  async noteCredentialSet(id) {
+    return this.commit(id, async () => {
+      const record = await this.store.get(id);
+      if (!record) return null;
+      const state = {
+        ...record.state,
+        auth: nextAuthState({
+          mode: record.config.registration?.mode,
+          present: true,
+          // A freshly written key is not the previous credential. Passing
+          // `needs_reauth` through as `previous` made `authStateForCode` keep
+          // "Sign in again" for an api_key provider that has no sign-in.
+        }),
+        readiness: { state: 'unavailable', checkedAt: new Date().toISOString() },
+      };
+      delete state.backoff;
+      delete state.lastError;
+      await this.store.put(record.config, state);
+      return toSnapshot(record.config, state);
+    });
+  }
+
   async delete(id, { resolve } = {}) {
     return this.commit(id, async () => {
       const record = await this.require(id);
@@ -141,6 +175,12 @@ export class ProviderService {
         readiness,
         lastError: error ? { code: readiness.code, message: error.message } : undefined,
       };
+      // The failures this backoff records are the ones this probe has just
+      // answered for. Only a successful catalog refresh used to clear it, so a
+      // passing check left `nextRetryAt` behind and the next refresh — a
+      // non-forced one — refused to ask the vendor for up to fifteen minutes
+      // after the problem was gone.
+      if (!error) delete nextState.backoff;
       await this.store.put(fresh.config, nextState);
       return toSnapshot(fresh.config, nextState, { auth, readiness });
     });
@@ -200,14 +240,18 @@ export class ProviderService {
   }
 
   async refreshCatalog(id, { force = false } = {}) {
-    const inFlight = this.refreshFlights.get(id);
+    // `force` is part of the key, not something read after the join: a forced
+    // "ask again" landing inside an ordinary refresh used to return that
+    // refresh's answer, TTL short-circuit and all, so the tap did nothing.
+    const flightKey = `${id}:${force}`;
+    const inFlight = this.refreshFlights.get(flightKey);
     if (inFlight) return inFlight;
     const flight = this.runRefreshCatalog(id, { force });
-    this.refreshFlights.set(id, flight);
+    this.refreshFlights.set(flightKey, flight);
     try {
       return await flight;
     } finally {
-      if (this.refreshFlights.get(id) === flight) this.refreshFlights.delete(id);
+      if (this.refreshFlights.get(flightKey) === flight) this.refreshFlights.delete(flightKey);
     }
   }
 
@@ -374,7 +418,7 @@ export class ProviderService {
    * this asks the vault, and skips the vendor entirely when the answer is no.
    */
   async unreadableCredential(config) {
-    const ref = config.registration.credentialRef || config.registration.oauthProfileId;
+    const ref = credentialRefFor(config);
     if (!ref || !this.vault || typeof this.vault.inspect !== 'function') return null;
     const probe = await this.vault.inspect(ref);
     if (!probe?.present || probe.readable !== false) return null;
@@ -395,7 +439,7 @@ export class ProviderService {
    */
   async credentialPresent(config, record) {
     if (config.registration.mode === 'local_interface') return true;
-    const ref = config.registration.credentialRef || config.registration.oauthProfileId;
+    const ref = credentialRefFor(config);
     if (ref && this.vault) {
       if (typeof this.vault.has === 'function') {
         if (await this.vault.has(ref)) return true;
@@ -509,4 +553,18 @@ function reachesElsewhere(before, next) {
     || previous.baseUrl !== upcoming.baseUrl
     || previous.resourceBaseUrl !== upcoming.resourceBaseUrl
     || previous.credentialRef !== upcoming.credentialRef;
+}
+
+/**
+ * The vault entry a provider's credential actually lives in.
+ *
+ * An `oauth` registration is forbidden a `credentialRef` and was asked the vault
+ * about `registration.oauthProfileId`, which is not a vault ref at all -- while
+ * `OAuthManager` writes and revokes `oauth/<providerId>`. The two halves could
+ * never see each other's token, so a signed-in provider read as having no
+ * credential and asked for a key it cannot use.
+ */
+function credentialRefFor(config) {
+  if (config.registration?.mode === 'oauth') return `oauth/${config.id}`;
+  return config.registration?.credentialRef;
 }

@@ -1,9 +1,15 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 
-export async function createPkceAttempt(store, { providerId, ttlMs = 10 * 60_000 } = {}) {
+export async function createPkceAttempt(
+  store,
+  { providerId, authorizationEndpoint, clientId, scope = 'openid', ttlMs = 10 * 60_000 } = {},
+) {
   const verifier = randomBytes(32).toString('base64url');
   const challenge = createHash('sha256').update(verifier).digest('base64url');
+  // Validated before the loopback listener exists, so a malformed endpoint
+  // cannot leave one listening with nothing that will ever close it.
+  const authorizationUrl = authorizationEndpoint ? new URL(authorizationEndpoint) : null;
   const attempt = {
     id: randomBytes(16).toString('hex'),
     providerId,
@@ -15,12 +21,14 @@ export async function createPkceAttempt(store, { providerId, ttlMs = 10 * 60_000
   };
 
   let settled = false;
+  let delivered = false;
   let resolveCallback;
   let rejectCallback;
   attempt.callback = new Promise((resolve, reject) => {
     resolveCallback = (value) => {
       if (settled) return;
       settled = true;
+      delivered = true;
       resolve(value);
     };
     rejectCallback = (error) => {
@@ -51,7 +59,17 @@ export async function createPkceAttempt(store, { providerId, ttlMs = 10 * 60_000
         resolve();
       }
     });
-    store.delete(attempt.id);
+    // Only while a code was actually delivered. A delivered code still has to
+    // be read off this attempt by `consumePkceAttempt`, and this teardown runs
+    // on the `res.end` callback -- which Node schedules on `process.nextTick`,
+    // ahead of the promise continuation that consumes it. Deleting the entry
+    // here anyway raced that consume and answered every authorization the
+    // browser completed with "unknown or one-use attempt", so nothing was ever
+    // exchanged. `setImmediate` closes the window and still removes an attempt
+    // nobody ever consumed. An expiry or a `close` delivered no code, so it
+    // leaves the store at once.
+    if (delivered) setImmediate(() => store.delete(attempt.id));
+    else store.delete(attempt.id);
     return released;
   };
 
@@ -91,6 +109,23 @@ export async function createPkceAttempt(store, { providerId, ttlMs = 10 * 60_000
   });
   const { port } = server.address();
   attempt.redirectUri = `http://127.0.0.1:${port}/oauth/callback`;
+  // The URL the browser is actually sent to, built here because only here do the
+  // challenge and the state exist. `providers.auth.begin` hands this straight to
+  // the phone, so an attempt that did not carry one answered `undefined` -- the
+  // sheet opened with nothing to follow and the sign-in could only die on this
+  // attempt's TTL.
+  if (authorizationUrl) {
+    authorizationUrl.search = new URLSearchParams({
+      response_type: 'code',
+      client_id: clientId ?? '',
+      redirect_uri: attempt.redirectUri,
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+      state: attempt.state,
+      scope,
+    });
+    attempt.authorizationUrl = authorizationUrl.toString();
+  }
   attempt.server = server;
   const timeout = setTimeout(() => {
     rejectCallback(new Error('attempt expired'));

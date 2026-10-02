@@ -472,7 +472,18 @@ test('the store ignores appends without a tee claim and bounds run count and siz
   assert.equal(store.begin('run_d'), true);
   for (let i = 0; i < 17; i += 1) store.append('run_d', Buffer.from('dddddd'));
   store.end('run_d');
-  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  // The prune walk (readdir -> stat -> rm) resolves asynchronously after the
+  // 16th append; a fixed sleep can elapse before it finishes under load and
+  // catch run_a still on disk. Poll until it is gone (or a deadline), the
+  // same bounded wait the tee-guard test below uses, so the bound is proven
+  // without racing the walk.
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    if ((await store.read('run_a')) === null) break;
+    if (Date.now() > deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 
   assert.equal(await store.read('run_a'), null, 'oldest run beyond maxRuns is pruned');
   assert.ok((await store.read('run_b')).length > 0);

@@ -76,6 +76,48 @@ export function parseDelta(data) {
   }
 }
 
+// The HTTP status Anthropic documents for each mid-stream error type. Carried
+// on the error so `classifyProviderError` -- which reads `error.status` -- files
+// a rate limit as a rate limit and an overloaded vendor as overloaded, instead of
+// reporting every one of them as an unknown transient fault.
+const STREAM_ERROR_STATUS = {
+  invalid_request_error: 400,
+  authentication_error: 401,
+  permission_error: 403,
+  not_found_error: 404,
+  request_too_large: 413,
+  rate_limit_error: 429,
+  api_error: 500,
+  overloaded_error: 529,
+};
+
+/**
+ * The failure a vendor announced inside an SSE stream, if this chunk is one.
+ *
+ * Anthropic sends `{"type":"error","error":{...}}` mid-reply when a turn dies
+ * after some text has already arrived. `parseDelta` answers `''` for it, and an
+ * empty delta is indistinguishable from "no text this frame" — so the relay read
+ * the rest of the stream, closed the body and reported success. Returns null
+ * for every frame that is not an error, so the relay only has to ask.
+ *
+ * @param {string} data - Raw SSE chunk data (JSON string)
+ * @returns {{message: string, code?: string, status?: number}|null}
+ */
+export function parseStreamError(data) {
+  try {
+    const parsed = JSON.parse(data);
+    if (parsed?.type !== 'error') return null;
+    const detail = parsed.error ?? {};
+    return {
+      message: detail.message ?? 'the provider ended the stream with an error',
+      code: detail.type ?? parsed.code,
+      status: STREAM_ERROR_STATUS[detail.type],
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Extract the assistant's text from a non-streaming Messages API response.
  *

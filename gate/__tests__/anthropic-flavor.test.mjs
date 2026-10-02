@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildChatRequest, parseDelta, parseResponseText } from '../flavors/anthropic.mjs';
+import { buildChatRequest, parseDelta, parseResponseText, parseStreamError } from '../flavors/anthropic.mjs';
 
 const config = {
   flavor: 'anthropic',
@@ -73,8 +73,30 @@ test('joins text blocks from a non-streaming response', () => {
   const json = { content: [{ type: 'text', text: 'hello ' }, { type: 'text', text: 'there' }] };
   assert.equal(parseResponseText(json), 'hello there');
 });
-
 test('parseResponseText returns empty string for a response with no text blocks', () => {
   assert.equal(parseResponseText({ content: [] }), '');
   assert.equal(parseResponseText({}), '');
+});
+
+test('reads the failure out of a mid-stream error frame, with its status', () => {
+  const chunk = JSON.stringify({
+    type: 'error',
+    error: { type: 'overloaded_error', message: 'Overloaded' },
+  });
+  assert.equal(parseDelta(chunk), '', 'the text codec must still see no text here');
+  assert.deepEqual(parseStreamError(chunk), {
+    message: 'Overloaded',
+    code: 'overloaded_error',
+    status: 529,
+  });
+  assert.equal(
+    parseStreamError(JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'slow down' } })).status,
+    429,
+  );
+});
+
+test('an ordinary event is not an error frame', () => {
+  assert.equal(parseStreamError(JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'hi' } })), null);
+  assert.equal(parseStreamError(JSON.stringify({ type: 'ping' })), null);
+  assert.equal(parseStreamError('not json'), null);
 });

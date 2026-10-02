@@ -18,13 +18,17 @@ export async function pollDeviceToken({ tokenEndpoint, clientId, deviceCode, fet
       client_id: clientId,
     }),
   });
-  const payload = await response.json();
+  // The status first, so a refusal that is not JSON is still a refusal: parsing
+  // first turned an HTML error page into `SyntaxError: Unexpected token '<'`,
+  // which is neither classifiable by `pollUntilAuthorized` nor nameable by the
+  // operator.
   if (!response.ok) {
-    const error = new Error(payload.error || 'device token failed');
+    const payload = await response.json().catch(() => ({}));
+    const error = new Error(payload.error || `device token failed: ${response.status}`);
     error.code = payload.error;
     throw error;
   }
-  return payload;
+  return response.json();
 }
 
 export async function pollUntilAuthorized({
