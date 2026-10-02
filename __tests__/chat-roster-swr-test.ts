@@ -311,10 +311,17 @@ describe('chat-screen wires the roster that way', () => {
     expect(success).toContain('setRosterError(undefined);');
     expect(success).toContain("writeCached('roster', gatewayId, 'bots', bots)");
     // The create/edit path reads the roster too; a cold start after a create
-    // must not come back without the Bot that was just made.
-    const created = chatScreen.match(/const bots = await listBots\(\);[\s\S]*?\}\)/)?.[0];
+    // must not come back without the Bot that was just made. The read there is
+    // guarded (a refused one names itself on the roster — BOT-3), so the shape
+    // this pins is `listBots()` under a handler, not a bare await.
+    const created = chatScreen.match(
+      /const bots = await listBots\(\)[\s\S]*?if \(!target && bot\.routable\)/,
+    )?.[0];
     expect(created).toBeDefined();
     expect(created).toContain("writeCached('roster', activeGateway.id, 'bots', bots)");
+    // And it folds through the gateway key like every other roster read, so a
+    // create's answer cannot paint under a gateway the operator has left (V-1).
+    expect(created).toContain('rosterRowsAfterRead(previous, rosterRowsGatewayRef.current, activeGateway.id, {');
   });
 
   test('a status flip inside 20s does not re-read; an explicit refresh always does', () => {

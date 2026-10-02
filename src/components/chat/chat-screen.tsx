@@ -74,12 +74,14 @@ import {
 } from '@/lib/gateway/bots';
 import {
   applyGroupRead,
+  applyGroupRoomKnown,
   describeRoomError,
   EMPTY_GROUPS,
   groupsListCopy,
   resolveOpenGroup,
   rosterInventoryVerified,
   type BotGroupRoom,
+  type GroupsState,
 } from '@/lib/gateway/groups';
 import {
   applyRoutineRead,
@@ -100,6 +102,7 @@ import {
   threadSpendFinishedRead,
   threadSpendNeedsWideRead,
   threadSpendRefreshKey,
+  threadSpendWideReadDue,
   THREAD_SPEND_GLANCE_LIMIT,
   type SessionSpendRead,
   type SessionSpendState,
@@ -658,7 +661,28 @@ export function ChatScreen() {
   // A finished turn bumps this tick instead, so the only re-read a chat turn
   // still buys the glance is the one at its end.
   const [spendFinishTick, setSpendFinishTick] = useState(0);
-  const [groupsState, setGroupsState] = useState(EMPTY_GROUPS);
+  // The room list is per-gateway inventory exactly like the rows: a gateway
+  // left behind in a room surface would keep drawing the previous gateway's
+  // room name and member ids, and `botGroups.send` posts that room id to the
+  // gateway the operator switched TO (GROUPS-4). KEYED rather than reset from
+  // the switch effect below, so a switch cannot leave the old list standing
+  // and nothing has to be written from that effect at all.
+  const [groupsInventory, setGroupsInventory] = useState<{
+    gatewayId: string | undefined;
+    state: GroupsState;
+  }>({ gatewayId: undefined, state: EMPTY_GROUPS });
+  const groupsState =
+    groupsInventory.gatewayId === activeGateway?.id ? groupsInventory.state : EMPTY_GROUPS;
+  const setGroupsState = useCallback(
+    (fold: (previous: GroupsState) => GroupsState) => {
+      const gatewayId = activeGateway?.id;
+      setGroupsInventory((previous) => ({
+        gatewayId,
+        state: fold(previous.gatewayId === gatewayId ? previous.state : EMPTY_GROUPS),
+      }));
+    },
+    [activeGateway?.id],
+  );
   const [newGroupVisible, setNewGroupVisible] = useState(false);
   const [newGroupBusy, setNewGroupBusy] = useState(false);
   const [newGroupError, setNewGroupError] = useState<string | undefined>();
@@ -976,6 +1000,28 @@ export function ChatScreen() {
     setBackendPickerVisible(false);
     setSurface(next);
   }, []);
+
+  // Open one Bot's Chat and stay there only if it opened. `openBot` answers a
+  // refusal instead of throwing, so a caller that waits only for a rejection
+  // cannot see the two `false` paths that matter here — a superseded open
+  // (`isCurrent()` false) and a client that cannot scope sessions — and is left
+  // on a Bot thread the provider never switched to, with an empty transcript, a
+  // working composer and nothing on screen saying so (OPEN-7). Both answers mean
+  // the same thing to this screen: nothing opened, so the operator goes back to
+  // the roster. This is the contract the deep-link router already reads.
+  const showBotSurface = useCallback(
+    (botId: string) => {
+      showSurface({ kind: 'bot', botId });
+      void openBot(botId)
+        .then((opened) => {
+          if (!opened) showSurface({ kind: 'roster' });
+        })
+        .catch(() => {
+          showSurface({ kind: 'roster' });
+        });
+    },
+    [openBot, showSurface],
+  );
 
   // A request to move the surface, from outside this screen — the quick-reply
   // path opens a Bot Chat in the provider, which reloads the transcript this
@@ -1614,6 +1660,10 @@ export function ChatScreen() {
   // answer that came back first — the cached effect and the read effect are
   // separate, so neither one's `cancelled` flag can see the other's ordering.
   const rosterAnsweredRef = useRef<string | undefined>(undefined);
+  // Which gateway the ROOMS on screen came from. It is stamped with the rows
+  // above when the active gateway changes, so an in-flight room read for a
+  // gateway the operator has left lands nowhere (see `refreshGroups`).
+  const groupsGatewayRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     const gatewayId = activeGateway?.id;
@@ -1629,6 +1679,10 @@ export function ChatScreen() {
     // refused the remembered copy, which is an empty roster.
     rosterReadAtRef.current = null;
     rosterAnsweredRef.current = undefined;
+    // The room list is keyed to the gateway it was read from above; only the
+    // in-flight reads need re-pointing, so an answer for a gateway the operator
+    // has left lands nowhere (see `refreshGroups`).
+    groupsGatewayRef.current = gatewayId;
     setRosterRows((previous) => rosterRowsForGateway(previous, previousGatewayId, gatewayId));
     // The error and the loading flag are about a read too: the old gateway's
     // refusal is not this gateway's, and the new one has not been read yet.
@@ -1642,11 +1696,15 @@ export function ChatScreen() {
   useEffect(() => {
     const gatewayId = activeGateway?.id;
     if (surface.kind !== 'roster' || !gatewayId) return;
-    const previousGatewayId = rosterRowsGatewayRef.current;
     let cancelled = false;
     void readCached<PublicBot[]>('roster', gatewayId, 'bots')
       .then((cached) => {
+        // `cancelled` is what keeps this copy to ONE gateway: the effect depends
+        // on `activeGateway?.id`, so React tears the read down in the same commit
+        // that moves the screen to the new gateway, and a copy read for a gateway
+        // the screen has left has no writer left by the time it answers.
         if (cancelled || !cached) return;
+        const previousGatewayId = rosterRowsGatewayRef.current;
         const liveAnswered = rosterAnsweredRef.current === gatewayId;
         setRosterRows((previous) =>
           rosterRowsFromCache(previous, previousGatewayId, gatewayId, cached.value, liveAnswered),
@@ -1664,12 +1722,21 @@ export function ChatScreen() {
     if (surface.kind !== 'roster' || status !== 'connected' || !gatewayId) return;
     const lastRead = rosterReadAtRef.current;
     if (lastRead && lastRead.gatewayId === gatewayId && Date.now() - lastRead.at < ROSTER_REVALIDATE_MS) return;
-    rosterReadAtRef.current = { gatewayId, at: Date.now() };
+    const stamp = { gatewayId, at: Date.now() };
+    rosterReadAtRef.current = stamp;
     const previousGatewayId = rosterRowsGatewayRef.current;
     let cancelled = false;
+    // Whether this read's answer actually reached the screen. Both handlers
+    // below return on `cancelled` before any state write, so a read cancelled
+    // mid-flight leaves nothing behind to clear `rosterLoading` — and the stamp
+    // it took keeps the reconnect inside ROSTER_REVALIDATE_MS from reading
+    // either, which is how the roster ended up a permanent skeleton: no rows,
+    // no error, no refresh control, no retry (ROSTER-1).
+    let answered = false;
     void listBots()
       .then((bots) => {
         if (cancelled) return;
+        answered = true;
         rosterAnsweredRef.current = gatewayId;
         setRosterRows(buildRoster(bots));
         setRosterError(undefined);
@@ -1678,6 +1745,7 @@ export function ChatScreen() {
       })
       .catch((error: unknown) => {
         if (cancelled) return;
+        answered = true;
         // The same rule pull-to-refresh already follows: a failed RE-read keeps
         // the rows the operator is looking at and names itself beside them.
         // Only a first read that produced no rows at all falls back to the
@@ -1688,6 +1756,11 @@ export function ChatScreen() {
       });
     return () => {
       cancelled = true;
+      // Refund only a stamp nobody answered, and only while this read still
+      // owns it: a read that reached the screen keeps the window it earned, and
+      // an explicit refresh that re-stamped it (or a later read that replaced
+      // it) is never clobbered by a cancelled older one.
+      if (!answered && rosterReadAtRef.current === stamp) rosterReadAtRef.current = null;
     };
   }, [surface.kind, status, listBots, activeGateway?.id]);
 
@@ -1720,6 +1793,10 @@ export function ChatScreen() {
   // the minimum gap is dropped rather than queued.
   const spendWasSendingRef = useRef(false);
   const spendLastReadRef = useRef<Record<string, number>>({});
+  // When this surface last spent the wide catalogue read behind the narrow one.
+  // Held per surface like the narrow stamp, and on its own clock: the narrow
+  // read's 10s floor is a floor, not a bound on the 200-row read's cost.
+  const spendWideAtRef = useRef<Record<string, number>>({});
   useEffect(() => {
     const finished = threadSpendFinishedRead({
       surfaceKey: spendSurfaceKey,
@@ -1793,8 +1870,13 @@ export function ChatScreen() {
       });
       // The create landed: schedule the phone-side local notice from the
       // record the gateway returned, fire-and-forget so a locked scheduler
-      // never reads as a refused create.
-      if (created?.id) void syncRoutineNotification({ ...created, schedule: input.schedule });
+      // never reads as a refused create. The handler is the same contract every
+      // other fire-and-forget here keeps: these helpers are best-effort today,
+      // but `serialiseSync` hands back whatever the work rejected with and
+      // `rearmRoutineNotifications` fans out with `Promise.all`, so an unguarded
+      // rejection would be an unhandled one on the device with nothing on screen
+      // to explain it (NOTIF-9).
+      if (created?.id) void syncRoutineNotification({ ...created, schedule: input.schedule }).catch(() => undefined);
       // Create already landed; a failed re-list must not look like
       // the Gate refused the job (that would keep the draft of a
       // routine that exists). Last-good stays; staleness is named.
@@ -1818,14 +1900,14 @@ export function ChatScreen() {
       // A pause retires the held notice up front (the sync below schedules
       // nothing for a paused job); a resume rebuilds it from the re-read.
       // Fire-and-forget: never read as a refused pause/resume.
-      if (paused) void cancelRoutineNotification(jobId);
+      if (paused) void cancelRoutineNotification(jobId).catch(() => undefined);
       await botJobs
         .list()
         .then((jobs) => {
           const list = routineJobsFromList(jobs);
           const job = list.find((candidate) => candidate.id === jobId);
           // Hand THIS re-read on: returning nothing made the fold read `undefined` as a successful read of zero jobs — "no routines" after every toggle.
-          if (!paused && job) void syncRoutineNotification(job);
+          if (!paused && job) void syncRoutineNotification(job).catch(() => undefined);
           return list;
         })
         .then((list) => foldRoutineRead(botSurfaceId ?? '', { ok: true, jobs: list }))
@@ -1851,8 +1933,10 @@ export function ChatScreen() {
         // gateway's CURRENT next fire for each: re-arm their one-shot notices
         // from it, so a cadence beyond the two repeating shapes that already
         // fired is rebuilt the moment the operator opens the Bot Chat. Same
-        // helper and same must-still as the provider's connected re-arm.
-        void rearmRoutineNotifications(read);
+        // helper and same must-still as the provider's connected re-arm, and
+        // the same guarded fire-and-forget: the fan-out rejects with the first
+        // job that does (NOTIF-9).
+        void rearmRoutineNotifications(read).catch(() => undefined);
       })
       .catch((caught) => {
         if (cancelled) return;
@@ -2012,9 +2096,20 @@ export function ChatScreen() {
           applyRead(read);
           return;
         }
-        // This thread is not in the newest 50. One wide read covers it; if that
-        // one fails the narrow read still stands, marked stale, rather than
-        // leaving the glance silent.
+        // This thread is not in the newest 50, so it owes the wide read — but only
+        // once per THREAD_SPEND_WIDE_MIN_READ_MS. Every finished turn re-runs this
+        // effect, and a thread that stays outside the newest 50 would otherwise
+        // spend 50 + 200 rows after each one, on a single-threaded Gate (SPEND-6).
+        // Inside the window the narrow read stands: it is a good read, and it says
+        // nothing about this thread, which is silence rather than a wrong total.
+        const now = Date.now();
+        if (!threadSpendWideReadDue({ lastWideAt: spendWideAtRef.current[spendSurfaceKey], now })) {
+          applyRead(read);
+          return;
+        }
+        spendWideAtRef.current[spendSurfaceKey] = now;
+        // One wide read covers it; if that one fails the narrow read still stands,
+        // marked stale, rather than leaving the glance silent.
         const wide = await gatewayRequest('sessions.list', { limit: SESSION_SPEND_LIST_LIMIT })
           .then((payload) => sessionSpendReadFromUnknown(payload))
           .catch(() => ({ ok: false as const }));
@@ -2030,22 +2125,36 @@ export function ChatScreen() {
   // Group rooms load alongside the roster. A gateway that does not advertise
   // them answers with an empty list — no error, just no section.
   const groupsOnRoster = surface.kind === 'roster';
+  // The order the room reads were asked in. The roster's own read re-runs on
+  // every `status` flip, and the rename / add-member / leave paths each fire one
+  // more, so two reads of different vintages are routinely in flight at once on
+  // a lossy link: without an order the older one can land last and put the
+  // pre-rename name or the pre-join membership back on screen with no error
+  // anywhere (GROUPS-5).
+  const groupsReadSeqRef = useRef(0);
   const refreshGroups = useCallback(() => {
+    // The gateway this read was asked of, and the order it was asked in: a
+    // switch re-keys the room list (see the switch effect above), so an answer
+    // for a gateway the operator has left must land nowhere.
+    const gatewayId = activeGateway?.id;
+    const seq = ++groupsReadSeqRef.current;
+    const folds = () => gatewayId === groupsGatewayRef.current && seq === groupsReadSeqRef.current;
     return botGroups
       .list()
       .then((rooms) => {
-        setGroupsState((previous) => applyGroupRead(previous, { ok: true, rooms }));
+        if (folds()) setGroupsState((previous) => applyGroupRead(previous, { ok: true, rooms }));
         return rooms;
       })
       .catch(() => {
-        setGroupsState((previous) => applyGroupRead(previous, { ok: false }));
+        if (folds()) setGroupsState((previous) => applyGroupRead(previous, { ok: false }));
         return [] as BotGroupRoom[];
       });
-  }, [botGroups]);
+  }, [botGroups, activeGateway?.id, setGroupsState]);
 
   useEffect(() => {
-    // refreshGroups stores the rooms itself; React ignores a store after
-    // unmount, so no cancellation plumbing is needed here.
+    // refreshGroups stores the rooms itself, and React ignores a store after
+    // unmount. Out-of-order arrival is the case a local `cancelled` flag cannot
+    // see, so the read's ORDER is what it carries (above).
     if (!groupsOnRoster || status !== 'connected') return;
     void refreshGroups();
   }, [groupsOnRoster, status, refreshGroups]);
@@ -2057,7 +2166,6 @@ export function ChatScreen() {
   // SUCCESSFUL read may clear or replace the list.
   const refreshRoster = useCallback(async () => {
     const gatewayId = activeGateway?.id;
-    const previousGatewayId = rosterRowsGatewayRef.current;
     const [read] = await Promise.all([
       listBots()
         .then((bots) => ({ ok: true as const, bots }))
@@ -2067,6 +2175,15 @@ export function ChatScreen() {
         })),
       refreshGroups(),
     ]);
+    // `listBots` asked whichever client was live when this was called, so a
+    // gateway switched mid-refresh answers for a gateway the operator is no
+    // longer on. Folding it with the ids captured BEFORE the await made
+    // `rosterRowsForGateway` a no-op — the switch effect had already re-keyed
+    // both sides to the same id — so the old gateway's Bots survived the switch
+    // the whole rule exists for, and the stamps below re-stamped the throttle
+    // and the answer for that same old gateway (V-1).
+    if (gatewayId !== rosterRowsGatewayRef.current) return;
+    const previousGatewayId = rosterRowsGatewayRef.current;
     setRosterRows((previous) => rosterRowsAfterRead(previous, previousGatewayId, gatewayId, read));
     if (read.ok) {
       setRosterError(undefined);
@@ -2297,18 +2414,32 @@ export function ChatScreen() {
             .then(async (bot) => {
               setNewAgentVisible(false);
               setEditingBot(null);
-              const bots = await listBots();
-              setRosterRows(buildRoster(bots));
-              // A good read is the last known good copy, whoever asked for it:
-              // a cold start right after a create must still find the new Bot.
-              if (activeGateway?.id) {
+              // The create/edit landed; the roster re-read that follows is a
+              // SECOND read, and it names itself on the roster rather than in
+              // the sheet this one just closed. Before, the single `.catch` here
+              // covered the whole chain and its only effect was state the closed
+              // sheet owns, so a refused `listBots` left the new Agent missing
+              // from the roster with nothing on screen saying why (BOT-3).
+              const bots = await listBots().catch((error: unknown) => {
+                setRosterError(error instanceof Error ? error.message : String(error));
+                return undefined;
+              });
+              if (!bots) return;
+              // A good read is the last known good copy, whoever asked for it: a
+              // cold start right after a create must still find the new Bot.
+              // Folded through the same gateway key as every other read, so an
+              // answer that landed after a switch cannot paint here either.
+              if (activeGateway?.id === rosterRowsGatewayRef.current) {
                 rosterAnsweredRef.current = activeGateway.id;
+                setRosterRows((previous) =>
+                  rosterRowsAfterRead(previous, rosterRowsGatewayRef.current, activeGateway.id, {
+                    ok: true,
+                    bots,
+                  }),
+                );
                 void writeCached('roster', activeGateway.id, 'bots', bots).catch(() => undefined);
               }
-              if (!target && bot.routable) {
-                await openBot(bot.id);
-                showSurface({ kind: 'bot', botId: bot.id });
-              }
+              if (!target && bot.routable) showBotSurface(bot.id);
             })
             .catch((error: unknown) => {
               // Desktop-parity: a refused create or edit speaks verdict +
@@ -2337,6 +2468,14 @@ export function ChatScreen() {
             .create({ name, memberIds })
             .then(async (room) => {
               setNewGroupVisible(false);
+              // The Gate's own answer is the fact this navigation rests on: fold
+              // the room in before the re-read. The re-list that follows rides
+              // the same lossy link the create just did, and `applyGroupRead`
+              // keeps the previous list when it fails — so without this fold a
+              // room the Gate created a moment ago is missing from a list that
+              // claims to be read, and the surface about to open it answers
+              // "This room is gone" (GATE-2).
+              setGroupsState((previous) => applyGroupRoomKnown(previous, room));
               await refreshGroups();
               showSurface({ kind: 'group', groupId: room.id });
             })
@@ -2363,14 +2502,12 @@ export function ChatScreen() {
           detailBot
             ? () => {
                 // Same path as tapping the roster row itself; the detail sheet
-                // closes first so the chat owns the stage, and a failed open
-                // falls back to the roster exactly like a row tap does.
+                // closes first so the chat owns the stage, and an open that
+                // lands neither way falls back to the roster exactly like a row
+                // tap does.
                 const id = detailBot.id;
-                showSurface({ kind: 'bot', botId: id });
                 setDetailBot(null);
-                void openBot(id).catch(() => {
-                  showSurface({ kind: 'roster' });
-                });
+                showBotSurface(id);
               }
             : undefined
         }
@@ -2593,10 +2730,7 @@ export function ChatScreen() {
             showSurface({ kind: 'configurable' });
           }}
           onSelectBot={(bot) => {
-            showSurface({ kind: 'bot', botId: bot.id });
-            void openBot(bot.id).catch(() => {
-              showSurface({ kind: 'roster' });
-            });
+            showBotSurface(bot.id);
           }}
           onBotDetail={setDetailBot}
           onSelectGroup={(group) => {

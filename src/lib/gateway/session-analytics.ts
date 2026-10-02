@@ -265,6 +265,35 @@ export function threadSpendNeedsWideRead(
 }
 
 /**
+ * Two wide catalogue reads on one surface are never closer together than this.
+ *
+ * `THREAD_SPEND_MIN_READ_MS` paces the glance's narrow read, which is a 50-row
+ * window; the wide read behind it is the whole 200-row catalogue and is the
+ * single most expensive read this screen makes. Without a floor of its own, a
+ * thread that is not among the newest 50 — a Bot Chat reused daily while other
+ * sessions are created — paid 50 + 200 rows after every turn that finished,
+ * seconds apart at worst, on a single-threaded Gate (SPEND-6). A minute keeps
+ * the glance answering a long conversation without putting a catalogue read
+ * under every turn.
+ */
+export const THREAD_SPEND_WIDE_MIN_READ_MS = 60_000;
+
+/**
+ * Whether a narrow read that missed this thread may now spend the wide one.
+ * A surface that has never widened reads at once; after that, one wide read per
+ * `THREAD_SPEND_WIDE_MIN_READ_MS`. The verdict the glance already draws from the
+ * narrow window stands meanwhile — a thread it cannot see says nothing, which is
+ * silence, not a wrong total.
+ */
+export function threadSpendWideReadDue(input: {
+  lastWideAt: number | undefined;
+  now: number;
+}): boolean {
+  if (input.lastWideAt === undefined) return true;
+  return input.now - input.lastWideAt >= THREAD_SPEND_WIDE_MIN_READ_MS;
+}
+
+/**
  * Whether this edge is a turn finishing, far enough from the last read of this
  * surface. Two turns that end within `THREAD_SPEND_MIN_READ_MS` of each other
  * are ONE re-read: the second one is dropped, not queued behind a timer, so a

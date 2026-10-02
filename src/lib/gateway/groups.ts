@@ -50,6 +50,23 @@ export function applyGroupRead(previous: GroupsState, read: GroupRead): GroupsSt
   return { rooms: [], loaded: false, failed: true };
 }
 
+/**
+ * Fold in one room the Gate itself just answered for (a create, a rename, a
+ * membership change). That answer is a fact about THAT room, and it has to
+ * survive the re-read that follows it: a re-read on the same lossy link can
+ * fail, and `applyGroupRead` then keeps the previous list — which, without
+ * this fold, has no entry for a room that exists, so the surface about to open
+ * it draws "This room is gone" (GATE-2). Only the named room is touched: the
+ * inventory's `loaded`/`failed` stay whatever the last READ left them, because
+ * one room is not a read of the rest.
+ */
+export function applyGroupRoomKnown(previous: GroupsState, room: BotGroupRoom): GroupsState {
+  const rooms = previous.rooms.some((candidate) => candidate.id === room.id)
+    ? previous.rooms.map((candidate) => (candidate.id === room.id ? room : candidate))
+    : [...previous.rooms, room];
+  return { ...previous, rooms };
+}
+
 export function groupsListCopy(state: GroupsState): string | undefined {
   if (!state.loaded && state.failed) return 'Rooms could not be read.';
   if (state.failed) return 'Could not re-read rooms — showing the last list.';
