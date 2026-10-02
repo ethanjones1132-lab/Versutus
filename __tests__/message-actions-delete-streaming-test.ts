@@ -17,7 +17,7 @@ test('delete-hidden-while-streaming: the Delete row is gated off a still-streami
   const src = sheetSrc();
   // A live turn can only be ended via the Cancel/Stop path — Delete must not
   // be offered while the stream is still running.
-  expect(src).toMatch(/message\.streaming/);
+  expect(src).toMatch(/shown\.streaming === true/);
   expect(src).toMatch(/\{canDelete \? \(/);
 });
 
@@ -25,14 +25,14 @@ test('delete-hidden-while-command-running: the Delete row is gated off a running
   const src = sheetSrc();
   // Slash-command turns carry status on message.command, not the streaming
   // flag — the gate must cover both, mirroring the bubble's Cancel row.
-  expect(src).toContain("message.command?.status === 'running'");
+  expect(src).toContain("shown.command?.status === 'running'");
   expect(src).toMatch(/const isLive = /);
 });
 
 test('delete-shown-when-settled: settled messages keep Delete exactly as today', () => {
   const src = sheetSrc();
   expect(src).toContain('Delete from view');
-  expect(src).toContain('onDelete(message.id)');
+  expect(src).toContain('onDelete(shown.id)');
 });
 
 test('cancel-path-untouched: chat-screen still wires Cancel and Delete side by side', () => {

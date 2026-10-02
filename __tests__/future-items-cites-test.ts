@@ -21,7 +21,7 @@ const d5Section = futureItems.split('### D5.')[1]?.split('\n## ')[0] ?? '';
 
 describe('FUTURE-ITEMS open cites describe the live tree', () => {
   test('P1 attach offer cites the live chat-screen lines, not the drifted ones', () => {
-    expect(p1Section).toContain('`src/components/chat/chat-screen.tsx:1229,2691`');
+    expect(p1Section).toContain('`src/components/chat/chat-screen.tsx:1357,2968`');
     expect(p1Section).not.toContain('1146,2446');
     expect(p1Section).not.toContain('1157,2492');
     expect(p1Section).not.toContain('1154,2473');
@@ -31,26 +31,23 @@ describe('FUTURE-ITEMS open cites describe the live tree', () => {
     expect(p1Section).not.toContain('1157,2495');
     expect(p1Section).not.toContain('1173,2594');
     expect(p1Section).not.toContain('1216,2656');
-    // R4S-chat1a moved both rows: the thread-keyed attachment reset, the one-walk
-    // transcript memo and the refused-clipboard notice all sit above `canAttach`,
-    // and the composer's send now hands the photos back when a turn did not
-    // travel, which is below it. FUTURE-ITEMS.md is outside this package's
-    // allowed files, so the cites there still read 1229,2691 and the pins below
-    // follow the tree.
-    expect(chatScreen[1310]).toContain('canAttach = supportsImageInput');
-    expect(chatScreen[2833]).toContain('onAttach={canAttach ? handleAttach : undefined}');
+    // R4X3 moved both rows again: the merged round-4 tree pulled more
+    // voice/session code above `canAttach`. FUTURE-ITEMS.md and the pins below
+    // now follow the same live lines.
+    expect(chatScreen[1356]).toContain('canAttach = supportsImageInput');
+    expect(chatScreen[2967]).toContain('onAttach={canAttach ? handleAttach : undefined}');
   });
 
   test('P1 keeps the live composer-draw and supportsImageInput cites', () => {
-    expect(p1Section).toContain('`src/components/chat/chat-composer.tsx:312-330`');
-    expect(p1Section).toContain('`src/lib/gateway/chat-parts.ts:92`');
-    // The attach row is one line higher than the doc cite: dropping the
-    // `expo-haptics` import from the composer (HAPTIC-1) shortened the file
-    // by one. The row itself is the one the cite names.
-    expect(chatComposer[310]).toContain('onAttach && !callActive && !isStreaming');
-    expect(chatComposer.slice(310, 329).join('\n')).toContain('accessibilityLabel="Attach an image"');
-    // Same drift, same cause: the picker fold now carries a per-turn byte budget
-    // beside the count cap, so `supportsImageInput` is further down.
+    expect(p1Section).toContain('`src/components/chat/chat-composer.tsx:333-350`');
+    expect(p1Section).toContain('`src/lib/gateway/chat-parts.ts:144`');
+    // The attach row moved further down as the merged round-4 composer grew
+    // (voice/call controls landed above it). The row itself is the one the
+    // cite names.
+    expect(chatComposer[332]).toContain('onAttach && !callActive && !isStreaming');
+    expect(chatComposer.slice(332, 350).join('\n')).toContain('accessibilityLabel="Attach an image"');
+    // Same drift: the picker fold now carries a per-turn byte budget beside the
+    // count cap, so `supportsImageInput` sits lower in the file.
     expect(chatParts[143]).toContain('export function supportsImageInput');
   });
 

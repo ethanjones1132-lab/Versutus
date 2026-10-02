@@ -274,6 +274,7 @@ function gatewayEnv(patch: Record<string, unknown> = {}): Record<string, unknown
     clearRequestedComposerFocus: jest.fn(),
     requestedComposeRequest: undefined,
     clearRequestedComposeRequest: jest.fn(),
+    commandTranscripts: [],
     ...patch,
   };
 }

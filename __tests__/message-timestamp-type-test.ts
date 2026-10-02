@@ -31,7 +31,7 @@ test('the transcript no longer prints a clock under every message', () => {
 
 test('the clock still reaches the reader through the long-press sheet', () => {
   const sheet = readSheetSource();
-  expect(sheet).toContain('formatClockTime(message.timestamp)');
+  expect(sheet).toContain('formatClockTime(shown.timestamp)');
   expect(sheet).toContain('timeLabel');
 });
 

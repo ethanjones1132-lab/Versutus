@@ -108,11 +108,11 @@ describe('routine sheet actions re-list the roster', () => {
     expect(pause).not.toContain('{ ok: true, jobs: routineJobsFromList(jobs) }');
     // A pause still retires the notice up front; only a resume re-arms it, and
     // only from a job the re-read still holds.
-    expect(pause).toContain('if (paused) void cancelRoutineNotification(jobId);');
+    expect(pause).toContain('if (paused) void cancelRoutineNotification(jobId).catch(() => undefined);');
     expect(pause).toContain(
       `const job = ${handedOn}.find((candidate) => candidate.id === jobId);`,
     );
-    expect(pause).toContain('if (!paused && job) void syncRoutineNotification(job);');
+    expect(pause).toContain('if (!paused && job) void syncRoutineNotification(job).catch(() => undefined);');
     expect(pause).toMatch(
       /\.catch\(\(caught\) =>\s*foldRoutineRead\(botSurfaceId \?\? '',\s*\{\s*ok:\s*false,\s*error: caught instanceof Error \? caught\.message : String\(caught\),\s*\}\)/,
     );

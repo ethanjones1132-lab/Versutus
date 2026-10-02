@@ -209,7 +209,7 @@ describe('the Bot Chat re-arms from the routine read only it can make', () => {
     // One read, not two: the same parsed list feeds the pane and the re-arm.
     expect(effect).toContain('const read = routineJobsFromList(jobs);');
     expect(effect).toContain('foldRoutineRead(botSurfaceId, { ok: true, jobs: read })');
-    expect(effect).toContain('void rearmRoutineNotifications(read);');
+    expect(effect).toContain('void rearmRoutineNotifications(read).catch(() => undefined);');
     expect((effect?.match(/botJobs\s*\n?\s*\.list\(\)/g) ?? []).length).toBe(1);
   });
 });

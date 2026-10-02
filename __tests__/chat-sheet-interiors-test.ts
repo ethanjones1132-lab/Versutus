@@ -95,6 +95,6 @@ describe('chat sheet interior behavior remains wired', () => {
     expect(overflow).toContain('<BaseSheet');
     expect(overflow).toContain('onStartRun');
     expect(message).toContain('<BaseSheet');
-    expect(message).toContain('onDelete(message.id)');
+    expect(message).toContain('onDelete(shown.id)');
   });
 });
