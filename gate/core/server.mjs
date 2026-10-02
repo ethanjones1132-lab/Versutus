@@ -550,8 +550,14 @@ async function streamBackendTurn(backend, sessionId, { text, model, images }, re
         ? error.code : 'backend_error';
       if (!clientDisconnected) {
         recordOutcome?.(healthKey, { reason: error?.message, error });
-        emit(JSON.stringify({ error: { message: error.message, code } }));
       }
+      // The frame is journalled however the request ended: a phone that was away
+      // when this turn failed must still be told so when it replays the turn, or
+      // the replay ends on a clean [DONE] over a half answer. `emit` guards the
+      // socket write with `clientDisconnected` itself, so this reaches the event
+      // log and the attached phone, and nothing else. Only the model-health
+      // verdict needs the caller to have been there to see the failure.
+      emit(JSON.stringify({ error: { message: error.message, code } }));
       endTurn('failed', { error: { message: error.message, code } });
     }
   } finally {

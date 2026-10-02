@@ -964,3 +964,91 @@ test('a phone leaving a replay does not touch the turn', async () => {
     await gate.close();
   }
 });
+
+/**
+ * A backend whose turn the test fails by hand, after the phone has left: the
+ * `sendMessage` promise keeps its reject, so the exact edge under test — the
+ * turn has detached, and THEN the upstream errors — can be built.
+ */
+function failingTurnRegistry(turns, { delta } = {}) {
+  const signals = [];
+  const adapter = {
+    adapterId: 'stubcli',
+    adapterRevision: '1',
+    supportedCliVersions: '1.x',
+    protocolVersions: { acp: '1' },
+    capabilities: ['sessions', 'tools', 'models'],
+    server: { defaultPort: 1, healthPath: '/', args: () => [], portFromOutput: () => null },
+    async probe() { return { state: 'ready', cliVersion: '1.0.0', protocol: 'acp' }; },
+    createBackend() {
+      return {
+        async listSessions() { return [SESSION]; },
+        async createSession(input) { return { ...SESSION, title: input?.title ?? null }; },
+        async deleteSession() {},
+        async listMessages() { return []; },
+        async sendMessage(id, input) {
+          return new Promise((_resolve, reject) => {
+            turns.push({ reject, signal: signals.shift(), text: input?.text });
+          });
+        },
+        async listModels() { return []; },
+        async abort() {},
+        async replyApproval() {},
+        async streamEvents(id, onEvent, signal) {
+          signals.push(signal);
+          if (delta) onEvent({ type: 'message.delta', payload: { text: delta } });
+          return new Promise((resolve) => {
+            if (signal?.aborted) return resolve();
+            signal?.addEventListener('abort', resolve, { once: true });
+          });
+        },
+      };
+    },
+  };
+  return {
+    get(id) { if (id !== 'stubcli') throw new Error(`unknown CLI adapter "${id}"`); return adapter; },
+    list() { return [adapter]; },
+  };
+}
+
+test('a detached turn that fails upstream journals the error, so its replay never reads as a clean finish', async () => {
+  const turns = [];
+  const gate = await makeGate({
+    registry: failingTurnRegistry(turns, { delta: 'half an answer' }),
+    gateOptions: { detachedTurnMaxMs: 30_000, detachedStallMs: 30_000 },
+  });
+  const controller = new AbortController();
+  try {
+    const pending = streamingTurn(gate.gate, { turnId: TURN_ID, controller });
+    pending.catch(() => undefined);
+    assert.ok(await until(() => turns.length === 1));
+
+    // The phone locks and walks away mid-reply: the turn stays the Gate's.
+    controller.abort();
+    await pending.catch(() => undefined);
+    assert.equal(turns[0].signal?.aborted, false, 'leaving is not a cancel');
+    // Let the Gate observe the close (`res.on('close')`) before the failure: the
+    // whole edge under test is that the turn has DETACHED and then fails.
+    await sleep(50);
+
+    // The backend then fails with nobody attached. The failure frame must reach
+    // the event log: a follower or a replay that only sees `[DONE]` finalizes
+    // the half answer as a finished reply.
+    turns[0].reject(new Error('upstream refused the turn'));
+
+    const { body } = await turnMeta(gate, TURN_ID);
+    assert.equal(body.status, 'failed');
+    assert.equal(body.error.message, 'upstream refused the turn');
+
+    const replay = await (await fetch(`${gate.base}/v1/turns/${TURN_ID}/events?after=0`, {
+      headers: auth(gate.gate),
+    })).text();
+    const frames = framesOf(replay);
+    const errorAt = frames.findIndex((frame) => frame.includes('upstream refused the turn'));
+    assert.ok(errorAt >= 0, `a replay of a failed turn must carry its failure: ${frames.join(' | ')}`);
+    assert.ok(errorAt < frames.indexOf('data: [DONE]'), 'the error frame comes before the end of the stream');
+    assert.match(replay, /"code":"backend_error"/);
+  } finally {
+    await gate.close();
+  }
+});

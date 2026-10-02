@@ -2257,7 +2257,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       isSendingRef.current = true;
       activeRunIdRef.current = turnId;
       turnIdRef.current = turnId;
-      setMessages((prev) => markTurnStreaming(prev, turnId));
+      // From the journal's start the replay carries every frame, so any text,
+      // reasoning or tool cards the bubble already streamed are replaced by it
+      // rather than appended to (the live stream records no seq, so a dropped
+      // send always re-attaches at 0).
+      setMessages((prev) => markTurnStreaming(prev, turnId, after === 0));
       const batcher = createStreamBatcher({ runId: turnId, setMessages });
       void (async () => {
         try {

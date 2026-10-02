@@ -1478,3 +1478,35 @@ describe('a flush that never got an acceptance keeps the row', () => {
     ]);
   });
 });
+
+describe('a live send that drops mid-reply re-attaches without showing its reply twice', () => {
+  beforeEach(() => {
+    stageActive({ id: 'alpha', url: 'http://alpha.test:8642' });
+  });
+
+  test('the replay from the journal start replaces what the live stream already showed', async () => {
+    // The socket dies after the first frame and the Gate keeps running the turn.
+    // The live stream recorded no journal seq, so the re-attach starts at 0 and
+    // the replay carries the turn from its first frame: the text already on the
+    // bubble is a prefix of it and must be replaced, not appended to.
+    let turnId = '';
+    streamScript = async (options, onDelta) => {
+      turnId = options.turnId ?? '';
+      options.onTurnId?.(turnId);
+      onDelta('partial ');
+      mockState.turns[turnId] = { turnId, status: 'running', sessionId: 'live-session' };
+      mockState.journal[turnId] = [
+        { seq: 1, text: 'partial ' },
+        { seq: 2, text: 'and the rest' },
+      ];
+      throw connectionError();
+    };
+    await mount();
+    await startSend('what is it?');
+    await settle(4, 20);
+
+    const bubble = bubbleByTurn(turnId);
+    expect(bubble?.text).toBe('partial and the rest');
+    expect(chatApi().messages.filter((message) => message.turnId === turnId)).toHaveLength(1);
+  });
+});

@@ -297,6 +297,9 @@ test('a final heard while the turn is still thinking is folded into that turn', 
   call.advance(2_000);
   engine.emit('final', { text: 'weather in glasgow' });
   await waitUntil(() => attempts.length === 2);
+  // The turn starts before its `final` frame has crossed the socket, so waiting
+  // on the attempt alone is a race: the assertion below wants the frame.
+  await waitUntil(() => ofType(call.frames, 'final').length === 2);
   call.advance(500);
 
   assert.ok(firstAborted, 'the unanswered turn was cancelled, not left running');
@@ -351,6 +354,8 @@ test('a second segment ends a speculative turn, and the hold starts the only liv
 
   engine.emit('final', { text: 'that was only half' });
   await waitUntil(() => attempts.length === 2);
+  // As above: the replacement turn starts before its frame reaches the phone.
+  await waitUntil(() => ofType(call.frames, 'final').length === 1);
   call.advance(400);
 
   assert.ok(draftAborted, 'the speculative upstream was ended as soon as the segment merged');

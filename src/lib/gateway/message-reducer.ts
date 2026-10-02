@@ -73,6 +73,29 @@ export function addStreamingPlaceholder(
   turnId?: string,
   runHandle?: string,
 ): ChatMessage[] {
+  // A resend of the same line — an outbox flush the socket killed mid-send —
+  // arrives under the turn id its first attempt already raised a bubble for,
+  // and the Gate answers it as a replay of the turn that is running. A second
+  // `run-${runId}` beside the first would leave two bubbles for one turn, only
+  // the first of which any delta reaches; reuse it instead. Its held text goes
+  // too, because the replay carries the turn from its first frame.
+  const existing = findTurnIndex(messages, turnId ?? runId);
+  if (existing >= 0) {
+    const copy = [...messages];
+    copy[existing] = {
+      ...copy[existing],
+      role: 'assistant',
+      text: '',
+      reasoning: undefined,
+      toolCalls: undefined,
+      streaming: true,
+      interrupted: false,
+      interruptedReason: undefined,
+      ...(turnId ? { turnId } : {}),
+      ...(runHandle ? { runHandle } : {}),
+    };
+    return copy;
+  }
   const placeholder: ChatMessage = {
     id: `run-${runId}`,
     role: 'assistant',
@@ -97,17 +120,31 @@ export function addStreamingPlaceholder(
 export function markTurnStreaming(
   messages: readonly ChatMessage[],
   turnId: string,
+  /**
+   * True when the caller is about to replay the turn from its FIRST frame (a
+   * re-attach at seq 0). The journal is about to re-send every delta this
+   * bubble already holds, so they are a prefix of the replay and must be
+   * replaced rather than appended to — appending is how the same reply appears
+   * twice after a mid-stream drop.
+   */
+  replayFromStart = false,
 ): ChatMessage[] {
   const idx = findTurnIndex(messages, turnId);
   if (idx < 0) return addStreamingPlaceholder([...messages], turnId, turnId);
   const copy = [...messages];
   const bubble = copy[idx];
+  // Stop settled this bubble on its own terms; a re-attach must not reopen it,
+  // and must not throw away the text the operator chose to keep.
+  const stopped = isStoppedTurn(bubble);
   copy[idx] = {
     ...bubble,
-    streaming: !isStoppedTurn(bubble),
+    streaming: !stopped,
     interrupted: false,
     interruptedReason: undefined,
     turnId,
+    ...(replayFromStart && !stopped
+      ? { text: '', reasoning: undefined, toolCalls: undefined }
+      : {}),
   };
   return copy;
 }
