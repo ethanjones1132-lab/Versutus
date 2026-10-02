@@ -46,7 +46,7 @@ import { createVoiceAudit } from './voice/audit.mjs';
 import { LocalEngine } from './voice/engines/local-engine.mjs';
 import { voicePaths, voiceStatus, installVoice, uvRunner } from './voice/runtime.mjs';
 import { runBackendTurn, modelReport } from './voice/turn-runner.mjs';
-import { resolveVoiceBackend } from './voice/voice-backend.mjs';
+import { resolveVoiceBackend, startVoiceBackendLease } from './voice/voice-backend.mjs';
 import { ScriptedEngine, scriptedEngineEnabled } from './voice/engines/scripted-engine.mjs';
 import { verifySignedAccessRequest, ReplayCache } from './signature.mjs';
 import { describeAuthFailure } from './auth-failure.mjs';
@@ -625,10 +625,14 @@ function raceVoiceAbort(promise, signal) {
  * Resolve which backend answers a spoken turn, naming each stage. Aborting the
  * signal settles the wait without the resolver's cooperation and reports
  * `aborted` so a late resolution never reaches a send.
+ *
+ * A call brings its own lease (`session.backendLease`): the resolve started when
+ * the phone asked for the session, not a new one per turn.
  */
 export async function resolveVoiceTurnBackend(backendManager, thread, {
   signal,
   attempt,
+  lease = null,
   onStage = () => {},
 } = {}) {
   const startedAt = Date.now();
@@ -644,7 +648,10 @@ export async function resolveVoiceTurnBackend(backendManager, thread, {
   stage('resolve.start');
   let backend;
   try {
-    backend = await raceVoiceAbort(resolveVoiceBackend(backendManager, thread), signal);
+    backend = await raceVoiceAbort(
+      lease ? lease.backend() : resolveVoiceBackend(backendManager, thread),
+      signal,
+    );
   } catch (error) {
     stage('resolve.failed', { cause: error?.code ?? error?.name ?? 'resolve_error' });
     throw error;
@@ -668,6 +675,9 @@ export async function runVoiceTurn(backendManager, session, text, handlers = {})
   const resolved = await resolveVoiceTurnBackend(backendManager, session?.thread, {
     signal: handlers?.signal,
     attempt: handlers?.attempt,
+    // A call resolves once, at `voice.session.start`; anything else resolves
+    // per turn as it always has.
+    lease: session?.backendLease ?? null,
     onStage: handlers?.onStage,
   });
   if (resolved.aborted) return VOICE_TURN_ABORTED;
@@ -1010,6 +1020,10 @@ export async function createGate(config = {}) {
         }),
       status: () => voiceStatus({ paths: voicePaths() }).engines.local,
     },
+    // One resolve per call: the backend that will answer is chosen when the
+    // phone asks for the session, not when it first speaks, and every turn of
+    // the call takes that one answer.
+    prepareCallBackend: ({ thread }) => startVoiceBackendLease(backendManager, thread),
   });
 
   // The Hermes-dialect methods the app's command registry actually sends.
@@ -3324,6 +3338,13 @@ export async function createGate(config = {}) {
         : new ScriptedEngine()
     ),
     runTurn: (session, text, handlers) => runVoiceTurn(backendManager, session, text, handlers),
+    // A turn whose phone went away runs to the end and its reply is pushed, the
+    // same notice a completed chat turn gets: the words are already in the
+    // thread, and this is how they reach a phone that is not on the call.
+    notifyPush: (event) => notifyPush({
+      ...event,
+      turnId: event.turnId ?? nextTurnId(event.sessionId),
+    }),
   });
 
   // Start listening immediately

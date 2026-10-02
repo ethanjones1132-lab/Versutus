@@ -302,6 +302,7 @@ export function createVoiceRpc({
   now = () => new Date().toISOString(),
   makeId = randomUUID,
   install = null,
+  prepareCallBackend = null,
   log = () => {},
 } = {}) {
   // The install the operator started from the phone, if any. It outlives the
@@ -386,13 +387,25 @@ export function createVoiceRpc({
         }
 
         const voiceSessionId = makeId();
-        registry.create({
+        const started = registry.create({
           voiceSessionId,
           deviceId,
           engine: choice.engine,
           thread: params.thread,
           startedAt: now(),
         });
+        // Which backend answers this call's turns is decided here, while the
+        // phone is still dialling, instead of inside its first reply — and it
+        // cannot change between two turns of one call. The resolve runs in the
+        // background: the start reply never waits for it, a failure is not
+        // remembered, and the first turn asks again if it has to.
+        const lease = prepareCallBackend?.({ voiceSessionId, thread: params.thread });
+        if (lease) {
+          started.backendLease = lease;
+          // Never awaited, never a failure of the start reply: a resolve that
+          // cannot finish is one the call asks for again when it needs it.
+          Promise.resolve(lease.backend?.()).catch(() => undefined);
+        }
 
         log(`voice.session.start ok device=${deviceId} engine=${choice.engine} session=${voiceSessionId}`);
         return {

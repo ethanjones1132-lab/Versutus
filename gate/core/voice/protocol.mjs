@@ -22,7 +22,10 @@ export const GATE_FRAME_TYPES = Object.freeze([
 ]);
 export const PHASES = Object.freeze(['listening', 'thinking', 'speaking', 'muted']);
 export const TURN_STATES = Object.freeze(['sent', 'replying', 'done', 'failed']);
-export const SPEECH_STATES = Object.freeze(['start', 'end', 'cancelled']);
+// `gap` says the audio that was in front of this is gone: the head of a reply
+// was dropped because the call's replay log overflowed while no phone was
+// attached, and the chunks that follow belong to what it did not drop.
+export const SPEECH_STATES = Object.freeze(['start', 'end', 'cancelled', 'gap']);
 
 export class VoiceProtocolError extends Error {
   constructor(message) {
@@ -98,8 +101,16 @@ export function parsePhoneFrame(value) {
 export function parseGateFrame(value) {
   return parseFrame(value, GATE_FRAME_TYPES, (frame) => {
     switch (frame.t) {
-      case 'ready':
-        return { t: 'ready', engine: requireString(frame, 'engine') };
+      case 'ready': {
+        const ready = { t: 'ready', engine: requireString(frame, 'engine') };
+        // How long the Gate will hold the call for without a phone, so the app
+        // can match its own re-connect attempts to it instead of giving up
+        // first. Optional: a Gate that does not send it is an older Gate.
+        if (frame.resumeWindowMs !== undefined) {
+          ready.resumeWindowMs = requireNumber(frame, 'resumeWindowMs');
+        }
+        return ready;
+      }
       case 'phase':
         return { t: 'phase', phase: requireEnum(frame, 'phase', PHASES) };
       case 'partial':

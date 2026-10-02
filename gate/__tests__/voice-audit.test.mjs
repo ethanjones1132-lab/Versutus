@@ -21,6 +21,7 @@ const DOCUMENTED_FIELDS = [
   'utterances',
   'queued',
   'continued',
+  'parkedTurns',
   'secondsListening',
   'secondsSpeaking',
   'p50FirstAudioMs',

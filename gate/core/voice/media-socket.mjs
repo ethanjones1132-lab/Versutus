@@ -11,9 +11,11 @@
 // and a typed turn share one implementation (M5 task 5.4).
 //
 // A call outlives its socket: a dropped phone detaches the call for
-// `resumeTimeoutMs` (20 s), buffering outbound speech (up to 5 s); a phone that
-// re-connects with the same `voiceSessionId` re-attaches to the live call, and
-// one that does not ends it with reason `network` (M7 task 7.1).
+// `resumeTimeoutMs` (90 s), and everything the Gate produced for the phone
+// meanwhile — control frames and audio, in order — is replayed to the phone that
+// re-connects with the same `voiceSessionId`. One that does not ends it with
+// reason `network` (M7 task 7.1), parking any turn still running rather than
+// throwing it away.
 
 import { WebSocketServer } from 'ws';
 
@@ -23,8 +25,21 @@ import { INITIAL_VOICE_SESSION, reduceVoiceSession } from './voice-session.mjs';
 export const VOICE_STREAM_PATH = '/v1/voice/stream';
 export const MAX_MEDIA_FRAME_BYTES = 64 * 1024;
 export const NO_AUDIO_TIMEOUT_MS = 30_000;
-export const RESUME_TIMEOUT_MS = 20_000;
-export const AUDIO_BUFFER_MS = 5_000;
+// How long a call is held for a phone that went away. 90 s because the ways a
+// phone's link drops on this host are slow to come back — a Tailscale tunnel
+// re-handshaking, a screen unlock, a cell handover — and 20 s ended calls that
+// were seconds from returning, cancelling the turn with them.
+export const RESUME_TIMEOUT_MS = 90_000;
+// How much speech the call holds for a phone that is not there: 45 s at the
+// output rate, and 1000 control frames. Both are bounds on a replay, not on a
+// call: what cannot fit is dropped oldest-first, and the frames are never the
+// thing dropped, because the phone's only trigger to reload the thread is one.
+export const MAX_BUFFERED_AUDIO_MS = 45_000;
+export const MAX_BUFFERED_FRAMES = 1_000;
+// How long a turn whose phone went away may still run before the Gate gives it
+// up. Long, because the work is real and the reply is still owed; bounded,
+// because a turn nobody will hear is not worth a Gate's memory for ever.
+export const PARKED_TURN_MAX_MS = 30 * 60_000;
 export const OUTPUT_SAMPLE_RATE = 24_000;
 export const OUTPUT_CHANNELS = 1;
 // How long a turn started on an early end survives before it is committed.
@@ -58,6 +73,15 @@ export const CONTINUATION_MS = 5_000;
 // aborting, which is what this timer does.
 export const TURN_TIMEOUT_MS = 180_000;
 
+/**
+ * The ends that mean the phone is not there, as opposed to a person or a process
+ * saying stop. A turn running into one of them is parked, not cancelled.
+ */
+// `abandoned` is the registry ending the old call because the same phone dialled
+// again, `expired` the registry's own liveness clock: both are the phone being gone,
+// and the answer it asked for still belongs in its thread.
+const PHONE_GONE_REASONS = new Set(['network', 'idle', 'abandoned', 'expired']);
+
 function rejectUpgrade(socket, status, message) {
   try {
     socket.write(`HTTP/1.1 ${status} ${message}\r\nConnection: close\r\n\r\n`);
@@ -83,11 +107,14 @@ export function attachVoiceMediaSocket({
   createEngine,
   runTurn,
   audit = null,
+  notifyPush = null,
   log = () => {},
   now = () => Date.now(),
   noAudioTimeoutMs = NO_AUDIO_TIMEOUT_MS,
   resumeTimeoutMs = RESUME_TIMEOUT_MS,
-  audioBufferMs = AUDIO_BUFFER_MS,
+  maxBufferedAudioMs = MAX_BUFFERED_AUDIO_MS,
+  maxBufferedFrames = MAX_BUFFERED_FRAMES,
+  parkedTurnMaxMs = PARKED_TURN_MAX_MS,
   turnTimeoutMs = TURN_TIMEOUT_MS,
   speculationWindowMs = SPECULATION_WINDOW_MS,
   utteranceHoldMs = UTTERANCE_HOLD_MS,
@@ -156,7 +183,11 @@ export function attachVoiceMediaSocket({
   function createCall(session, firstWs) {
     const engine = createEngine(session, firstWs);
     log(`voice.stream open session=${session.voiceSessionId} engine=${session.engine}`);
-    const maxBufferedAudioBytes = (audioBufferMs / 1000) * OUTPUT_SAMPLE_RATE * 2 * OUTPUT_CHANNELS;
+    const maxBufferedAudioBytes = (maxBufferedAudioMs / 1000) * OUTPUT_SAMPLE_RATE * 2 * OUTPUT_CHANNELS;
+    // The call's thread, held by value: the registry clears its own reference
+    // when it ends the session, and a parked turn still has to name the session
+    // and the Bot its reply belongs to.
+    const thread = session.thread;
     let ws = null;
     let ended = false;
     let endingNow = false;
@@ -172,6 +203,9 @@ export function attachVoiceMediaSocket({
       continued: 0,
       speechChunks: 0,
       firstReplyAt: 0,
+      // How many turns ran on after the phone went away, so a call that lost its
+      // link reads differently from a call that simply finished quietly.
+      parkedTurns: 0,
       // One sample per turn: how long the commit was followed by that turn's
       // first reply delta, and by its first speech chunk.
       replyLatencies: [],
@@ -197,13 +231,20 @@ export function attachVoiceMediaSocket({
     let turnAttempts = 0;
     let resumeTimer = null;
     let audioTimer = null;
+    let parkedTimer = null;
     let lastAudioAt = now();
     let turns = 0;
     let listeningMs = 0;
     let speakingMs = 0;
     let phaseSince = now();
-    const buffer = [];
+    // Whether the turn in flight is parked: it kept running after the phone went
+    // away, so the end it is being torn down by is not also its cancellation.
+    let parkingTurn = false;
+    // The call's outbound replay log: every control frame and every audio chunk
+    // produced while no socket was there, in the order they were produced.
+    const replay = [];
     let bufferedAudioBytes = 0;
+    let audioDropped = false;
 
     const api = { attach, end, get ended() { return ended; } };
 
@@ -256,31 +297,67 @@ export function attachVoiceMediaSocket({
       audioTimer.unref?.();
     };
 
+    /** Append to the replay log, keeping it inside both of its bounds. */
+    const append = (entry) => {
+      replay.push(entry);
+      if (entry.pcm) bufferedAudioBytes += entry.pcm.length;
+      while (replay.length > maxBufferedFrames || bufferedAudioBytes > maxBufferedAudioBytes) {
+        const oldest = replay.findIndex((item) => item.pcm);
+        // Audio is dropped from its head — the tail of a reply is more useful
+        // than its start — and a control frame is never dropped: the phone's
+        // only trigger to reload the thread arrives as one. So a log with no
+        // audio in it grows past the frame bound rather than lose a frame.
+        if (oldest === -1) break;
+        const [dropped] = replay.splice(oldest, 1);
+        bufferedAudioBytes -= dropped.pcm.length;
+        audioDropped = true;
+      }
+    };
+
     const flush = () => {
       if (!ws) return;
-      for (const entry of buffer) {
-        if (entry.binary) ws.send(entry.data, { binary: true });
-        else ws.send(entry.data);
+      for (const entry of replay) {
+        if (!entry.pcm) {
+          ws.send(entry.frame);
+          continue;
+        }
+        // Whatever audio was dropped left a hole in front of this: name it once,
+        // so the phone never joins two halves of a reply it did not hear.
+        if (audioDropped) {
+          audioDropped = false;
+          ws.send(serializeFrame({ t: 'speech', gen: entry.gen ?? call.gen, state: 'gap' }));
+        }
+        ws.send(entry.pcm, { binary: true });
       }
-      buffer.length = 0;
+      replay.length = 0;
       bufferedAudioBytes = 0;
+      // The hole went with the log: a later reply's audio has nothing in front
+      // of it to be missing.
+      audioDropped = false;
     };
 
     const sendFrame = (frame) => {
       if (ended) return;
       const data = serializeFrame(frame);
-      if (ws) ws.send(data);
+      if (ws) {
+        ws.send(data);
+        return;
+      }
+      append({ frame: data });
     };
 
-    const sendAudio = (pcm) => {
+    const sendAudio = (pcm, gen) => {
       if (ended) return;
+      // The reducer's generation is the truth about which reply a chunk belongs
+      // to. A barge-in or a skip has already moved it on, so a chunk left over
+      // from the cancelled reply would play straight over the operator who
+      // interrupted it.
+      if (typeof gen === 'number' && gen < call.gen) return;
       if (ws) {
         ws.send(pcm, { binary: true });
         return;
       }
-      if (bufferedAudioBytes + pcm.length > maxBufferedAudioBytes) return;
-      buffer.push({ binary: true, data: pcm });
-      bufferedAudioBytes += pcm.length;
+      append({ pcm, gen });
     };
 
     const runEffect = (effect) => {
@@ -292,7 +369,7 @@ export function attachVoiceMediaSocket({
           sendFrame(effect.frame);
           break;
         case 'sendAudio':
-          sendAudio(effect.pcm);
+          sendAudio(effect.pcm, effect.gen);
           break;
         case 'engine.speak':
           engine.speak?.(effect.text, { gen: effect.gen, final: effect.final });
@@ -337,6 +414,10 @@ export function attachVoiceMediaSocket({
           void startTurn(effect.text);
           break;
         case 'turn.cancel':
+          // The end of a call whose phone went away parks the turn that is
+          // still running instead of cancelling it; the reducer cannot tell the
+          // two apart, so the socket, which knows why the call ended, does.
+          if (parkingTurn) break;
           if (speculative) {
             clearTimeout(speculative.timer);
             speculative = null;
@@ -378,6 +459,7 @@ export function attachVoiceMediaSocket({
             partials: trace.partials,
             queued: trace.queued,
             continued: trace.continued,
+            parkedTurns: trace.parkedTurns,
             secondsListening: Math.round(listeningMs / 1000),
             secondsSpeaking: Math.round(speakingMs / 1000),
             p50FirstAudioMs: p50(trace.audioLatencies),
@@ -428,7 +510,8 @@ export function attachVoiceMediaSocket({
           `voice.end session=${session.voiceSessionId} reason=${event.reason}`
           + ` audioFrames=${trace.audioFrames} audioBytes=${trace.audioBytes} partials=${trace.partials}`
           + ` finals=${trace.finals} speechChunks=${trace.speechChunks} utterances=${trace.utterances}`
-          + ` queued=${trace.queued} continued=${trace.continued} turns=${turns} phase=${call.phase}`,
+          + ` queued=${trace.queued} continued=${trace.continued} turns=${turns}`
+          + ` parkedTurns=${trace.parkedTurns} phase=${call.phase}`,
         );
       }
       // The reducer keeps its own clocks out, so the socket stamps the time it
@@ -468,6 +551,9 @@ export function attachVoiceMediaSocket({
       // turn is failed and listening reopens, exactly as the phone engine's
       // reply watchdog does. Aborting also discharges a late resolution.
       let timedOut = false;
+      // What the turn has said so far. A parked turn has no socket to deliver
+      // the deltas to, so this is the only place its reply survives.
+      let said = '';
       const deliver = (event) => {
         if (entry && !entry.committed) {
           if (speculative === entry) entry.pending.push(event);
@@ -503,7 +589,10 @@ export function attachVoiceMediaSocket({
         const result = await runTurn(session, text, {
           signal: controller.signal,
           attempt,
-          onDelta: (delta) => deliver({ type: 'replyDelta', text: delta }),
+          onDelta: (delta) => {
+            said += delta;
+            deliver({ type: 'replyDelta', text: delta });
+          },
           onApproval: (approval) =>
             deliver({ type: 'approvalRequired', summary: approval?.summary ?? 'Approval needed' }),
           // How far the runner got, so a silent turn is placed in the log: which
@@ -527,6 +616,19 @@ export function attachVoiceMediaSocket({
         } else {
           deliver({ type: 'replyDone' });
         }
+        // The phone is gone and the turn ran to the end anyway. The reply is
+        // already in the thread — a voice turn runs through the same backend
+        // session as the thread's typed ones — so the push is how the words
+        // reach a phone that is not on the call, and it is sent once, for the
+        // one turn that completed.
+        if (parkingTurn && said.trim()) {
+          notifyPush?.({
+            trigger: 'final-response',
+            sessionId: thread?.sessionId ?? null,
+            ...(thread?.botId ? { botId: thread.botId } : {}),
+            text: said.trim(),
+          });
+        }
       } catch (error) {
         if (!controller.signal.aborted) {
           deliver({ type: 'replyFailed', message: error.message });
@@ -537,6 +639,11 @@ export function attachVoiceMediaSocket({
         clearTimeout(timer);
         if (turnTimer === timer) turnTimer = null;
         if (turnAbort === controller) turnAbort = null;
+        if (parkedTimer) {
+          clearTimeout(parkedTimer);
+          parkedTimer = null;
+        }
+        parkingTurn = false;
         if (entry && speculative === entry && controller.signal.aborted) {
           clearTimeout(entry.timer);
           speculative = null;
@@ -595,7 +702,7 @@ export function attachVoiceMediaSocket({
         if (ws === newWs) detach();
       });
 
-      sendFrame({ t: 'ready', engine: session.engine });
+      sendFrame({ t: 'ready', engine: session.engine, resumeWindowMs: resumeTimeoutMs });
       if (first) {
         dispatch({
           type: 'ready',
@@ -635,12 +742,30 @@ export function attachVoiceMediaSocket({
         clearTimeout(speculative.timer);
         speculative = null;
       }
+      // A phone that is no longer there is not a reason to throw away the turn
+      // its call was working on: the reply is owed to the thread whether or not
+      // anyone is listening, and a parked turn pushes it when it lands. A
+      // hang-up, a fatal engine error and a Gate restart are a person or a
+      // process saying stop, and those cancel the turn as they always have.
+      parkingTurn = PHONE_GONE_REASONS.has(reason) && turnAbort != null;
+      if (parkingTurn) {
+        trace.parkedTurns += 1;
+        log(`voice.turn parked session=${session.voiceSessionId} maxMs=${parkedTurnMaxMs}`);
+        parkedTimer = setTimeout(() => {
+          log(`voice.turn parked timeout session=${session.voiceSessionId} maxMs=${parkedTurnMaxMs}`);
+          turnAbort?.abort();
+          turnAbort = null;
+        }, parkedTurnMaxMs);
+        parkedTimer.unref?.();
+      }
       dispatch({ type: 'socketClosed', reason });
       ended = true;
       endingNow = false;
       registry.end(session.voiceSessionId, reason);
-      turnAbort?.abort();
-      turnAbort = null;
+      if (!parkingTurn) {
+        turnAbort?.abort();
+        turnAbort = null;
+      }
       try {
         ws?.close(1000, reason);
       } catch {

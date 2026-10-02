@@ -22,6 +22,9 @@ export const AUDIT_FIELDS = Object.freeze([
   'utterances',
   'queued',
   'continued',
+  // Turns that were still running when the phone went away and were parked to
+  // finish on the PC (a count; what was said stays off disk).
+  'parkedTurns',
   'secondsListening',
   'secondsSpeaking',
   'p50FirstAudioMs',
