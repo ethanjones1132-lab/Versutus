@@ -317,8 +317,8 @@ describe('executeRun terminal-state handling', () => {
   });
 });
 
-describe('an abort during the approval wait is not a decision (V-2)', () => {
-  it('stops the run without posting a fabricated denial', async () => {
+describe('an abort during the approval wait denies the parked run (INT-7)', () => {
+  it('tells the Gate the parked run was denied, then stops it', async () => {
     const controller = new AbortController();
     const resolveApproval = jest.fn(async () => undefined);
     const stopRun = jest.fn(async () => undefined);
@@ -345,9 +345,9 @@ describe('an abort during the approval wait is not a decision (V-2)', () => {
       sleep: noSleep,
     });
 
-    // The run was stopped, not denied — posting the abort as a denial would lie
-    // to the Gate about a decision nobody made.
-    expect(resolveApproval).not.toHaveBeenCalled();
+    // A run parked on an approval must not be left waiting on the Gate when its
+    // controller is aborted: the denial is posted, and the run is then stopped.
+    expect(resolveApproval).toHaveBeenCalledWith('run-1', false, undefined);
     expect(stopRun).toHaveBeenCalledWith('run-1');
     expect(outcome.cancelled).toBe(true);
   });

@@ -5159,6 +5159,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setIsCommandRunning(true);
       setRunningCommandLabel(commandLabel);
       setLastError(null);
+      // The client this command runs through, so a command cancelled by a
+      // gateway switch (or disconnect, or a deleted profile) does not write its
+      // "cancelled" transcript into the thread that replaced it.
+      const commandGeneration = clientGenerationRef.current;
 
       try {
         const client = clientRef.current;
@@ -5287,13 +5291,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // is cleared rather than patched to another value.
         if (isUserAbort(error)) {
           // Whatever the command streamed is the operator's to keep; only the
-          // untouched placeholder would still read as work in flight.
-          const placeholder = `Running ${commandLabel}...`;
-          const bubble = messagesRef.current.find((item) => item.id === commandMessageId);
-          updateLocalMessage(commandMessageId, {
-            ...(bubble?.text === placeholder ? { text: `Cancelled: ${commandLabel}` } : {}),
-            command: { input: trimmed, title: commandLabel, status: undefined, ephemeral: true },
-          });
+          // untouched placeholder would still read as work in flight. A command
+          // whose client was superseded — a gateway switch, a disconnect, a
+          // deleted profile — must not write its "cancelled" entry back into the
+          // thread that replaced it.
+          if (clientGenerationRef.current === commandGeneration) {
+            const placeholder = `Running ${commandLabel}...`;
+            const bubble = messagesRef.current.find((item) => item.id === commandMessageId);
+            updateLocalMessage(commandMessageId, {
+              ...(bubble?.text === placeholder ? { text: `Cancelled: ${commandLabel}` } : {}),
+              command: { input: trimmed, title: commandLabel, status: undefined, ephemeral: true },
+            });
+          }
           return 'cancelled';
         }
         setLastError(message);

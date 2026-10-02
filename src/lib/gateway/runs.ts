@@ -417,18 +417,19 @@ export async function executeRun(
     if (runNeedsApproval(status)) {
       const decision = await options.onApprovalRequired(runId, prompt, commandClass);
       approved = decision.approved;
-      // A decision that arrived because the caller aborted is not a decision:
-      // the prompt was dismissed, not answered. Posting it would tell the Gate
-      // the run was denied for a run the operator merely stopped.
+      // The decision is posted even when it arrived as an abort: the provider's
+      // abort listener resolves a parked approval as `approved: false`, and the
+      // Gate must be told that denial or it keeps the run waiting for a decision
+      // nobody can still give it. Deliberately non-fatal: the decision may well
+      // have registered even if the response did not come back, so polling
+      // continues rather than abandoning a run the user just approved. The
+      // status poll below decides. Unlike a failed stop, this does not report an
+      // outcome that never happened.
+      await client.resolveApproval(runId, decision.approved, decision.feedback).catch(() => undefined);
       if (options.signal?.aborted) {
         const stop = await requestStop(client, runId);
         return { runId, status: 'cancelled', cancelled: true, approved, ...stop };
       }
-      // Deliberately non-fatal: the decision may well have registered even if
-      // the response did not come back, so polling continues rather than
-      // abandoning a run the user just approved. The status poll below decides.
-      // Unlike a failed stop, this does not report an outcome that never happened.
-      await client.resolveApproval(runId, decision.approved, decision.feedback).catch(() => undefined);
       try {
         status = safeStatus(await readStatusWithRetry(client, runId, sleep));
       } catch (error) {
