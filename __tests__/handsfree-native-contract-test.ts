@@ -339,6 +339,32 @@ describe('hands-free native contract', () => {
     expect(service).toMatch(/if \(speaking && nextChunkIndex < queuedSpeech\.size\) playChunk/);
   });
 
+  it('echo-cancels the barge-in tap the same way the Gate media path does', () => {
+    // The phone engine armed barge-in on a VOICE_COMMUNICATION AudioRecord with
+    // no AcousticEchoCanceler and no NoiseSuppressor, then seeded the floor from
+    // a silent pre-speech sample. TTS on the loudspeaker crossed 0.03 RMS within
+    // ~300 ms and truncated every reply. The Gate media path already attaches
+    // both effects; this tap has to as well.
+    const barge = between(service, 'private fun startBargeIn()', 'private fun handleBargeIn()');
+    expect(barge).toContain('AcousticEchoCanceler');
+    expect(barge).toContain('NoiseSuppressor');
+    // Reseeding from 0 every reply made the first silent sample the floor.
+    expect(barge).not.toMatch(/noiseFloor\s*=\s*0\.0/);
+  });
+
+  it('startListening reports ready only after onReadyForSpeech, never on the post', () => {
+    // The function used to post startListeningInternal and return true. The
+    // provider's retry loop treated that as "the recognizer can hear", so the
+    // banner said Listening while a cold Samsung bind still had nothing
+    // consuming the microphone.
+    const start = between(service, 'fun startListening(): Boolean {', 'private fun ensureRecognizer()');
+    expect(start).not.toMatch(/mainHandler\.post \{ startListeningInternal\(\) \}\s*\n\s*return true/);
+    expect(start).toContain('readyForSpeech');
+    const ready = between(service, 'override fun onReadyForSpeech', 'override fun onBeginningOfSpeech');
+    expect(ready.replace(/\s+/g, ' ').trim()).not.toBe('(params: android.os.Bundle?) {}');
+    expect(ready).toContain('readyForSpeech');
+  });
+
   it('opens the Gate media socket with echo-cancelled 16 kHz capture and a jittered 24 kHz output', () => {
     expect(gateMedia).toContain('MediaRecorder.AudioSource.VOICE_COMMUNICATION');
     expect(gateMedia).toContain('CAPTURE_SAMPLE_RATE = 16000');

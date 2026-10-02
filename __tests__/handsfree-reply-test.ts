@@ -56,6 +56,19 @@ describe('handsfreeReplyForTurn', () => {
     });
     expect(handsfreeReplyForTurn([turn, reply], 'voice-call-1')?.id).toBe('run-2');
   });
+
+  test('a finished tool-only bubble with no text is still the reply', () => {
+    // The watchdog used to discharge on appearance and never re-arm, so this
+    // empty row parked the call in Waiting. The correlator accepting it is the
+    // input that path has to watch.
+    const reply = message({
+      id: 'run-2',
+      role: 'assistant',
+      text: '',
+      command: { status: 'complete' },
+    });
+    expect(handsfreeReplyForTurn([turn, reply], 'voice-call-1')).toEqual(reply);
+  });
 });
 
 describe('isFailedReply', () => {

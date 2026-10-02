@@ -120,7 +120,7 @@ export function reduceGateCall(
       // send it. It is held so a dropped call can offer it back in the composer.
       // A new turn also clears the last one's failure: the Gate heard something
       // else, so that sentence is no longer this call's news.
-      return stay({ ...state, partial: '', recovery: frame.text, turnError: null });
+      return stay({ ...state, partial: '', recovery: frame.text, turnError: null, approval: null });
 
     case 'turn': {
       const next = { ...state, turnState: frame.state, turnError: frame.error ?? null };

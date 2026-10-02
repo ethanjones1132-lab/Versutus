@@ -52,6 +52,8 @@ export type VoiceEngineChoice = {
 
 const FALLBACK_ORDER: RunningVoiceEngine[] = ['local', 'codex', 'phone'];
 const KILL_SWITCH_REASON = 'Gate voice is turned off.';
+/** iOS `startGateMedia` is a stub that resolves false. PC voice cannot run there. */
+const IOS_GATE_MEDIA_REASON = 'PC voice cannot run on this phone.';
 
 function statusOf(capabilities: VoiceEngineCapabilities, engine: 'local' | 'codex'): VoiceEngineStatus {
   const status = capabilities.engines?.[engine];
@@ -67,6 +69,7 @@ function isReady(capabilities: VoiceEngineCapabilities, engine: RunningVoiceEngi
 export function chooseVoiceEngine(
   preference: VoiceEnginePreference,
   capabilities: VoiceEngineCapabilities,
+  platform?: string,
 ): VoiceEngineChoice {
   if (preference === 'phone') return { engine: 'phone' };
 
@@ -78,6 +81,16 @@ export function chooseVoiceEngine(
       engine: 'phone',
       ...(requested ? { fellBackFrom: requested } : {}),
       reason: KILL_SWITCH_REASON,
+    };
+  }
+
+  // The Gate media terminal has no iOS implementation. A ready `local` would
+  // otherwise win on auto and every call would die at media-start-failed.
+  if (platform === 'ios') {
+    return {
+      engine: 'phone',
+      ...(requested ? { fellBackFrom: requested } : {}),
+      reason: IOS_GATE_MEDIA_REASON,
     };
   }
 

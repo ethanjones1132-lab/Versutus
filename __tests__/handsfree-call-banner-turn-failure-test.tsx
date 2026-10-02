@@ -29,7 +29,11 @@ jest.mock('@/components/voice/handsfree-call-indicator', () => ({
   HandsfreeCallIndicator: 'HandsfreeCallIndicator',
 }));
 
-function mockVoice(turnError: string | null, phase: 'sending' | 'listening' = 'sending') {
+function mockVoice(
+  turnError: string | null,
+  phase: 'sending' | 'listening' = 'sending',
+  approval: { turnId: string; summary: string } | null = null,
+) {
   jest.mocked(useHandsfreeVoice).mockReturnValue({
     active: true,
     phase,
@@ -41,6 +45,7 @@ function mockVoice(turnError: string | null, phase: 'sending' | 'listening' = 's
     muted: false,
     turnError,
     turnState: turnError ? 'failed' : null,
+    approval,
     mute: jest.fn(),
     unmute: jest.fn(),
     skipReply: jest.fn(),
@@ -110,6 +115,20 @@ describe('a failed Gate turn on the banner', () => {
       renderer.update(createElement(HandsfreeCallBanner));
     });
     expect(drawn(renderer).join(' ')).not.toMatch(/could not be completed/);
+    await act(async () => {
+      renderer.unmount();
+    });
+  });
+});
+
+describe('a Gate approval on the banner', () => {
+  test('the summary is drawn so the operator is told a tool is waiting', async () => {
+    mockVoice(null, 'sending', { turnId: 't1', summary: 'Run ls?' });
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(createElement(HandsfreeCallBanner));
+    });
+    expect(drawn(renderer).join(' ')).toMatch(/Run ls\?/);
     await act(async () => {
       renderer.unmount();
     });

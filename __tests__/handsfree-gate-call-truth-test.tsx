@@ -154,6 +154,8 @@ const speaking = '{"t":"phase","phase":"speaking"}';
 const mutedPhase = '{"t":"phase","phase":"muted"}';
 const socketFailed =
   '{"t":"error","code":"socket_failed","message":"Expected HTTP 101","fatal":true}';
+const socketClosed =
+  '{"t":"error","code":"socket_closed","message":"The PC closed the call audio link.","fatal":true}';
 
 // ─── The provider under test ────────────────────────────────────────────────
 
@@ -360,6 +362,24 @@ describe('a call that loses its link mid-way', () => {
     expect(latest().lastEndReason).toBe('link-lost');
   });
 
+  test('a clean socket close is retried the same way a failed socket is', async () => {
+    // The Gate holds a detached call for its resume window and closes without
+    // an ended frame from idle timeout and restart. socket_closed used to skip
+    // the reconnect path (only socket_failed was retryable) and end the call.
+    await startLiveCall();
+    await call(async () => {
+      gateFrame(socketClosed);
+      await jest.advanceTimersByTimeAsync(500);
+      expect(mockMediaStarts.length).toBe(2);
+      gateFrame(ready);
+      await jest.advanceTimersByTimeAsync(1_000);
+    });
+
+    expect(latest().active).toBe(true);
+    expect(latest().lastEndReason).toBeUndefined();
+    expect(mockMediaStarts.length).toBe(2);
+  });
+
   test('a link the Gate does rejoin keeps the call alive', async () => {
     await startLiveCall();
     await call(async () => {
@@ -563,6 +583,31 @@ describe('a mute the Gate never applied cannot stand on the label', () => {
     expect(latest().phase).toBe('muted');
   });
 
+  test('muting while a turn is in flight stops the slow-turn stamp, and a rollback restores it', async () => {
+    await startLiveCall();
+    await call(async () => {
+      gateFrame(thinking);
+    });
+    expect(latest().sendingSinceMs).not.toBeNull();
+
+    await call(async () => {
+      latest().mute();
+    });
+    // Muted is not "waiting on the PC". Leaving the stamp here is what kept
+    // "Still waiting on the PC… Ns" counting under Muted.
+    expect(latest().phase).toBe('muted');
+    expect(latest().sendingSinceMs).toBeNull();
+
+    await call(async () => {
+      await jest.advanceTimersByTimeAsync(6_000);
+    });
+    // The Gate never confirmed the mute, so thinking is put back — and the
+    // wait clock with it.
+    expect(latest().phase).toBe('sending');
+    expect(latest().muted).toBe(false);
+    expect(latest().sendingSinceMs).not.toBeNull();
+  });
+
   test('a phase frame is the whole account of the mute, label and flag together', async () => {
     await startLiveCall();
     await call(async () => {
@@ -579,6 +624,19 @@ describe('a mute the Gate never applied cannot stand on the label', () => {
     expect(latest().phase).toBe('muted');
   });
 });
+describe('a Gate approval is visible on the call, not dropped', () => {
+  test('an approval frame is published on the context so the banner can name it', async () => {
+    await startLiveCall();
+    await call(async () => {
+      gateFrame(thinking);
+      gateFrame('{"t":"approval","turnId":"t1","summary":"Run ls?"}');
+    });
+    expect(latest().approval).toEqual({ turnId: 't1', summary: 'Run ls?' });
+    expect(latest().phase).toBe('sending');
+    expect(latest().active).toBe(true);
+  });
+});
+
 describe('a reply that appears with no words in it does not park the call', () => {
   const phoneTarget: HandsfreeCallTarget = { ...target, transport: 'phone' };
 

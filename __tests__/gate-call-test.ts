@@ -69,6 +69,9 @@ describe('reduceGateCall folds every Gate frame into the banner', () => {
     expect(state.turnState).toBe('failed');
     expect(state.turnError).toBe('backend_error');
     expect(state.phase).not.toBe('ended');
+    // Sitting on thinking/sending after a failed turn is the stall: the Gate
+    // reopens listening, and the banner has to follow.
+    expect(state.phase).toBe('listening');
   });
 
   test('speech generations are tracked so playback can follow them', () => {
@@ -84,6 +87,17 @@ describe('reduceGateCall folds every Gate frame into the banner', () => {
       summary: 'Run ls?',
     });
     expect(state.approval).toEqual({ turnId: 't1', summary: 'Run ls?' });
+    const next = reduceGateCall(state, { t: 'final', turnId: 't2', text: 'never mind' });
+    expect(next.state.approval).toBeNull();
+  });
+
+  test('a phase frame folds muted from the same account, so the label and flag agree', () => {
+    const muted = reduceGateCall(INITIAL_GATE_CALL, { t: 'phase', phase: 'muted' }).state;
+    expect(muted.phase).toBe('muted');
+    expect(muted.muted).toBe(true);
+    const speaking = reduceGateCall(muted, { t: 'phase', phase: 'speaking' }).state;
+    expect(speaking.phase).toBe('speaking');
+    expect(speaking.muted).toBe(false);
   });
 });
 
@@ -117,6 +131,7 @@ describe('a Gate call ends exactly once and never sends for the operator', () =>
     });
     expect(soft.state.phase).toBe('opening');
     expect(soft.effects).toEqual([]);
+    expect(soft.state.turnError).toBe('blip');
   });
 
   test('an unknown or unparseable frame is inert, not fatal', () => {

@@ -1479,7 +1479,7 @@ export function ChatScreen() {
     });
   }, []);
   const callEngine = useMemo(
-    () => (callCapabilities ? chooseVoiceEngine(callPreference, callCapabilities) : null),
+    () => (callCapabilities ? chooseVoiceEngine(callPreference, callCapabilities, Platform.OS) : null),
     [callCapabilities, callPreference],
   );
   const callEngineLabel = useMemo(() => {

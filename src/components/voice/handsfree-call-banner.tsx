@@ -35,7 +35,7 @@ export function HandsfreeCallBanner() {
 }
 
 function ActiveHandsfreeCallBanner() {
-  const { phase, partial, label, level, engine, engineReason, muted, mute, unmute, skipReply, end, startedAtMs, sendingSinceMs, turnError } =
+  const { phase, partial, label, level, engine, engineReason, muted, mute, unmute, skipReply, end, startedAtMs, sendingSinceMs, turnError, approval } =
     useHandsfreeVoice();
   const tokens = useTokens();
   const insets = useSafeAreaInsets();
@@ -121,6 +121,13 @@ function ActiveHandsfreeCallBanner() {
               // watching a reply that is never coming.
               <Text variant="micro" color="accentWarm" numberOfLines={1}>
                 {turnFailureCopy}
+              </Text>
+            ) : null}
+            {approval?.summary ? (
+              // The Gate notified; it does not block the turn. Silence here is
+              // a tool waiting on a decision nobody was told about.
+              <Text variant="micro" color="accentWarm" numberOfLines={1}>
+                Waiting for your approval — {approval.summary}
               </Text>
             ) : null}
             {partial ? (

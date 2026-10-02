@@ -17,6 +17,8 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.NoiseSuppressor
 import android.media.SoundPool
 import android.os.Build
 import android.os.Handler
@@ -53,6 +55,8 @@ class HandsfreeCallService : Service() {
 
   private var recognizer: SpeechRecognizer? = null
   private var listening = false
+  /** True only after [RecognitionListener.onReadyForSpeech]. A posted start is not ready. */
+  @Volatile private var readyForSpeech = false
 
   /** When listening last started (elapsedRealtime), for [HandsfreeFocusPolicy]. */
   private var listenStartedAtMs = 0L
@@ -69,6 +73,8 @@ class HandsfreeCallService : Service() {
   private var queuedSpeech = mutableListOf<String>()
 
   private var audioRecord: AudioRecord? = null
+  private var echoCanceler: AcousticEchoCanceler? = null
+  private var noiseSuppressor: NoiseSuppressor? = null
   private var vadThread: Thread? = null
   @Volatile private var vadRunning = false
   private var noiseFloor = 0.0
@@ -352,8 +358,12 @@ class HandsfreeCallService : Service() {
 
   fun startListening(): Boolean {
     if (!state.isActive || state.muted) return false
-    mainHandler.post { startListeningInternal() }
-    return true
+    // The recognizer is ready only once onReadyForSpeech has fired. Returning
+    // true on the post made the banner say Listening while a cold bind still
+    // had nothing consuming the microphone.
+    if (listening && readyForSpeech) return true
+    if (!listening) mainHandler.post { startListeningInternal() }
+    return false
   }
 
   private fun ensureRecognizer(): SpeechRecognizer? {
@@ -382,6 +392,7 @@ class HandsfreeCallService : Service() {
 
   private fun startListeningInternal() {
     if (!state.isActive || state.muted || listening) return
+    readyForSpeech = false
     val engine = ensureRecognizer()
     if (engine == null) {
       emit("fatalError", mapOf("reason" to "recognition-failed", "message" to "recognition-unavailable"))
@@ -399,6 +410,7 @@ class HandsfreeCallService : Service() {
       scheduleTick()
     } catch (error: Exception) {
       listening = false
+      readyForSpeech = false
       emit("fatalError", mapOf("reason" to "recognition-failed", "message" to error.message))
       end("recognition-failed")
     }
@@ -431,6 +443,7 @@ class HandsfreeCallService : Service() {
     mainHandler.post {
       stopRequested = true
       listening = false
+      readyForSpeech = false
       cancelTick()
       postNotification()
       try {
@@ -441,7 +454,9 @@ class HandsfreeCallService : Service() {
   }
 
   private val recognitionListener = object : RecognitionListener {
-    override fun onReadyForSpeech(params: android.os.Bundle?) {}
+    override fun onReadyForSpeech(params: android.os.Bundle?) {
+      readyForSpeech = true
+    }
     override fun onBeginningOfSpeech() {
       endpoints.onVoice(SystemClock.elapsedRealtime())
     }
@@ -457,6 +472,7 @@ class HandsfreeCallService : Service() {
 
     override fun onError(error: Int) {
       listening = false
+      readyForSpeech = false
       cancelTick()
       if (stopRequested) {
         stopRequested = false
@@ -485,6 +501,7 @@ class HandsfreeCallService : Service() {
     override fun onResults(results: android.os.Bundle?) {
       consecutiveRecognizerFailures = 0
       listening = false
+      readyForSpeech = false
       cancelTick()
       if (stopRequested) {
         stopRequested = false
@@ -786,8 +803,17 @@ class HandsfreeCallService : Service() {
       return
     }
     audioRecord = record
+    // Same effects the Gate media path attaches: without them the loudspeaker
+    // TTS is heard as barge-in and every reply is truncated mid-word.
+    if (AcousticEchoCanceler.isAvailable()) {
+      echoCanceler = AcousticEchoCanceler.create(record.audioSessionId)?.also { it.enabled = true }
+    }
+    if (NoiseSuppressor.isAvailable()) {
+      noiseSuppressor = NoiseSuppressor.create(record.audioSessionId)?.also { it.enabled = true }
+    }
     vadRunning = true
-    noiseFloor = 0.0
+    // Keep an adapted floor across replies. Reseeding from 0 made the first
+    // pre-speech sample the floor, so TTS crossed the onset on every sentence.
     onsetMs = 0L
     lastLevelAt = 0L
     record.startRecording()
@@ -822,11 +848,8 @@ class HandsfreeCallService : Service() {
           val rms = sqrt(sum / read)
           val level = (rms / 32768.0).coerceIn(0.0, 1.0)
           val now = SystemClock.elapsedRealtime()
-          if (noiseFloor == 0.0) {
-            noiseFloor = level.coerceAtLeast(MIN_FLOOR)
-          } else {
-            noiseFloor = noiseFloor * (1 - FLOOR_ADAPT) + level * FLOOR_ADAPT
-          }
+          if (noiseFloor == 0.0) noiseFloor = MIN_FLOOR
+          noiseFloor = noiseFloor * (1 - FLOOR_ADAPT) + level * FLOOR_ADAPT
           val threshold = maxOf(noiseFloor * ONSET_FACTOR, MIN_FLOOR)
           if (level > threshold) {
             if (onsetMs == 0L) onsetMs = now
@@ -872,6 +895,10 @@ class HandsfreeCallService : Service() {
 
   private fun stopBargeIn() {
     vadRunning = false
+    echoCanceler?.release()
+    echoCanceler = null
+    noiseSuppressor?.release()
+    noiseSuppressor = null
     val record = audioRecord
     audioRecord = null
     try {
@@ -964,6 +991,7 @@ class HandsfreeCallService : Service() {
     if (destroyed) return
     destroyed = true
     listening = false
+    readyForSpeech = false
     stopRequested = false
     cancelTick()
     try {

@@ -84,8 +84,9 @@ export const HANDSFREE_GRACE_MS = 600;
 /** How long a sent turn may wait for its reply before the call fails. */
 export const HANDSFREE_REPLY_WATCHDOG_MS = 120_000;
 
-/** How many times a listen that did not start is asked again before the call ends. */
-const HANDSFREE_LISTEN_RETRY_LIMIT = 8;
+/** How many times a listen that did not start is asked again before the call ends.
+ * Cold Samsung binds take seconds; the boolean is now "ready", not "posted". */
+const HANDSFREE_LISTEN_RETRY_LIMIT = 40;
 const HANDSFREE_LISTEN_RETRY_MS = 150;
 
 /** A probe that finds no recognizer is asked again; Samsung binds its recognition service lazily. */
@@ -158,6 +159,12 @@ export type HandsfreeVoiceContextValue = {
   turnError: string | null;
   /** The last Gate turn state the Gate reported, or null before the first turn. */
   turnState: GateCallBanner['turnState'];
+  /**
+   * A tool waiting on a human decision, as the Gate reported it. Null while
+   * none is pending. The Gate does not block the turn on this frame, so the
+   * banner has to say so or the operator never hears the ask.
+   */
+  approval: { turnId: string; summary: string } | null;
   label: string | undefined;
   reason: HandsfreeTerminalReason | undefined;
   lastEndReason?: HandsfreeTerminalReason;
@@ -214,13 +221,14 @@ function cancelNativeSession(module: HandsfreeNativeModule, startId: string): vo
 
 /**
  * Only a dead media socket is worth re-opening: the Gate holds the call for
- * its resume window and re-attaches the same session. Every other fatal frame
+ * its resume window and re-attaches the same session. `socket_failed` and
+ * `socket_closed` are the same fact from the phone's side — OkHttp's failure
+ * and a clean close without an `ended` frame. Every other fatal frame
  * (engine open failed, ended) names a call that is actually over.
  */
 function isRetryableSocketFailure(frame: unknown): frame is string {
   if (typeof frame !== 'string') return false;
-  const parsed = gateFrame(frame);
-  return parsed?.t === 'error' && parsed.fatal && parsed.code === 'socket_failed';
+  return isGateSocketGone(frame);
 }
 
 /** The frame as the Gate sent it, or null when this build cannot read it. */
@@ -414,11 +422,12 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       };
       gateBannerRef.current = next;
       setGateBanner(next);
+      noteWaiting(appPhaseForGate(next.phase) === 'sending');
       console.warn(
         `[gate-mute] ${why} session=${gateSessionIdRef.current ?? 'unknown'} phase=${next.phase}`,
       );
     },
-    [clearGateMute],
+    [clearGateMute, noteWaiting],
   );
 
   /**
@@ -438,6 +447,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       };
       gateBannerRef.current = next;
       setGateBanner(next);
+      noteWaiting(appPhaseForGate(next.phase) === 'sending');
       clearGateMute();
       gateMuteRef.current = {
         requested: muted,
@@ -448,7 +458,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         serializeGateControl(gateControlFor(muted ? 'mute' : 'unmute')),
       );
     },
-    [clearGateMute, rollbackGateMute],
+    [clearGateMute, noteWaiting, rollbackGateMute],
   );
 
   const resetSpeech = useCallback(() => {
@@ -1421,6 +1431,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     // Gate call there is no turn to report, and the banner draws nothing.
     turnError: gateLive ? gateBanner.turnError : null,
     turnState: gateLive ? gateBanner.turnState : null,
+    approval: gateLive ? gateBanner.approval : null,
     label,
     reason: session.reason,
     lastEndReason: session.lastEndReason,

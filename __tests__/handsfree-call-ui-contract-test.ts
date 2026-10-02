@@ -303,6 +303,9 @@ describe('the sheet names the engine before consent', () => {
     expect(screen).toContain("gatewayRequest<VoiceEngineCapabilities>('voice.capabilities'");
     expect(screen).toContain('voiceEngineDisclosure(callEngine.engine)');
     expect(screen).toContain("const transport = callEngine && callEngine.engine !== 'phone' ? 'gate' : 'phone'");
+    // iOS has no Gate media terminal. The chooser has to see the platform or
+    // every auto/local call on iOS is transport:gate and dies at startGateMedia.
+    expect(screen).toMatch(/chooseVoiceEngine\(callPreference,\s*callCapabilities,\s*Platform\.OS\)/);
   });
 });
 

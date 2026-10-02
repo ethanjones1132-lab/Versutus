@@ -49,6 +49,7 @@ describe('the call provider sits outside navigation and inside the gateway', () 
       'unmute',
       'skipReply',
       'end',
+      'approval',
     ]) {
       expect(provider).toMatch(new RegExp(`\\b${key}[?]?:`));
     }
@@ -305,6 +306,9 @@ describe('a listen that could not start is retried, then named', () => {
     expect(listen).toContain('await module.startListening()');
     expect(listen).toContain('HANDSFREE_LISTEN_RETRY_LIMIT');
     expect(listen).toContain("dispatch({ type: 'fatalError', reason: 'recognition-failed' })");
+    // The boolean is now "ready", not "posted". A cold Samsung bind takes
+    // seconds, so eight 150 ms tries (1.2 s) still ends the call too early.
+    expect(provider).toMatch(/HANDSFREE_LISTEN_RETRY_LIMIT = 40/);
   });
 });
 
@@ -330,6 +334,20 @@ describe('the availability probe recovers on its own', () => {
 
   test('retries a probe that answered no recognition or threw', () => {
     expect(probe).toContain('HANDSFREE_PROBE_RETRIES');
+  });
+});
+
+describe('a dead media socket is retried, including a clean close', () => {
+  test('socket_closed is retryable the same way socket_failed is', () => {
+    const retry = between(
+      provider,
+      'function isRetryableSocketFailure',
+      'function gateFrame',
+    );
+    // The Gate's idle timeout and restart close without an ended frame, as
+    // socket_closed. Treating only socket_failed as retryable ended a call the
+    // Gate would still have accepted a re-attach on.
+    expect(retry).toMatch(/socket_closed|isGateSocketGone/);
   });
 });
 
@@ -619,6 +637,14 @@ describe('an optimistic Gate mute is confirmed or rolled back', () => {
     expect(rollback).toContain('muted: pending.previous.muted');
     expect(rollback).toContain('console.warn');
     expect(rollback).toContain('setGateBanner(next)');
+    // Direct setGateBanner used to skip noteWaiting, so a rollback off thinking
+    // left "Still waiting on the PC… Ns" counting under a phase that was not.
+    expect(rollback).toContain('noteWaiting(');
+  });
+
+  test('the optimistic mute fold also keeps the slow-turn stamp in step', () => {
+    const foldMute = between(provider, 'const foldGateMute = useCallback(', 'const resetSpeech = useCallback(');
+    expect(foldMute).toContain('noteWaiting(');
   });
 });
 
