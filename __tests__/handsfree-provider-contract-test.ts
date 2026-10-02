@@ -453,7 +453,7 @@ describe('a start that never answers is abandoned on both transports', () => {
       /startGateMedia\(\{[\s\S]*?voiceSessionId: parsed\.voiceSessionId,[\s\S]*?startId,\s*\}\)/,
     );
     expect(startAttempt).toMatch(
-      /if \(!started\) \{[\s\S]*?cancelNativeStart\(input\.cancelStartSession, startId\)/,
+      /if \(!started \|\| \(spoken !== null && spoken !== 'frame'\)\) \{[\s\S]*?cancelNativeStart\(input\.cancelStartSession, startId\)/,
     );
     expect(startAttempt).toMatch(
       /if \(nativeInvoked\) cancelNativeStart\(input\.cancelStartSession, startId\)/,
@@ -588,10 +588,18 @@ describe('an optimistic Gate mute is confirmed or rolled back', () => {
     }
   });
 
-  test('a phase frame confirms the fold, and the wait is cleared on end and unmount', () => {
-    expect(provider).toContain("function isGatePhaseFrame(frame: string)");
+  test('a phase frame confirms the fold only when it reflects the request, and the wait is cleared on end and unmount', () => {
+    // The phase frame that accompanies every turn transition arrives BEFORE the
+    // Gate has read the control frame, so treating any of them as a confirmation
+    // dropped the five-second rollback that was the only thing that could put an
+    // unapplied mute back. A phase that does not reflect the pending request
+    // leaves the wait running.
+    expect(provider).toContain('function phaseConfirmsMute(phase: VoicePhase, requested: boolean)');
     const fold = between(provider, 'const fold = (frame: string) => {', "module.addListener('gate'");
-    expect(fold).toMatch(/if \(isGatePhaseFrame\(frame\)\) clearGateMute\(\);/);
+    expect(fold).toMatch(
+      /pending\.t === 'phase'|parsed\.t === 'phase' && phaseConfirmsMute\(parsed\.phase, pending\.requested\)/,
+    );
+    expect(fold).not.toMatch(/isGatePhaseFrame/);
     // The fold and its five-second wait live together, and the wait is armed even
     // before the frame is sent: a socket that never answers is rolled back too.
     const gateMute = between(provider, 'const foldGateMute = useCallback(', 'const resetSpeech = useCallback(');
@@ -599,14 +607,15 @@ describe('an optimistic Gate mute is confirmed or rolled back', () => {
       /setTimeout\(\(\) => rollbackGateMute\('[^']+'\), GATE_MUTE_CONFIRM_MS\)/,
     );
     expect(gateMute).toContain('clearGateMute()');
+    expect(gateMute).toContain('requested: muted');
     expect(between(provider, 'const teardown = useCallback(', 'useEffect(() => {\n    teardownRef.current')).toContain('clearGateMute()');
     const unmount = between(provider, 'void teardownRef.current();', '}, [clearGateMute]);');
     expect(unmount).toContain('clearGateMute()');
   });
 
-  test('a rollback is logged, and it puts back the phase the Gate last reported', () => {
+  test('a rollback is logged, and it puts back the mute the Gate never took', () => {
     const rollback = between(provider, 'const rollbackGateMute = useCallback(', 'const foldGateMute = useCallback(');
-    expect(rollback).toContain('phase: pending.previous.phase');
+    expect(rollback).toContain('pending.previous.phase');
     expect(rollback).toContain('muted: pending.previous.muted');
     expect(rollback).toContain('console.warn');
     expect(rollback).toContain('setGateBanner(next)');

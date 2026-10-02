@@ -6,7 +6,12 @@
 // retry half of that contract: retry startGateMedia with the same grant, with
 // backoff, for no longer than the Gate will hold the call. Teardown at any
 // point wins — the caller's isAborted() is checked before every attempt.
+//
+// An attempt is only an attempt's success when the Gate is proved back on the
+// socket it opened (`proveLink`): the boolean says the socket was handed over,
+// and a call that accepted that ran the whole window on a link nobody was on.
 
+import { GATE_LINK_READY_MS, type GateLinkProof } from '@/lib/voice/gate-link';
 import { mediaSocketUrl } from '@/lib/voice/gate-media-url';
 import type { GateVoiceGrant } from '@/lib/voice/handsfree-start-reason';
 
@@ -60,6 +65,16 @@ export type ReconnectGateMediaInput = {
     token: string;
     voiceSessionId: string;
   }) => Promise<boolean>;
+  /**
+   * Proves an opened socket is really the Gate again, by waiting for its first
+   * frame. The boolean only says the socket was handed to the network stack, so
+   * an attempt that "succeeded" on it spent the whole window proving nothing and
+   * returned with a link no one was on. Omitted only where a caller cannot
+   * observe frames at all.
+   */
+  proveLink?: (budgetMs: number) => Promise<GateLinkProof>;
+  /** How long one re-opened link may take to speak before it counts as failed. */
+  linkReadyMs?: number;
   /** True the moment the call is ending by any other path; attempts stop. */
   isAborted: () => boolean;
   sleep?: (ms: number) => Promise<void>;
@@ -71,15 +86,17 @@ export type ReconnectGateMediaInput = {
 
 /**
  * Re-open the media socket for a live call's grant. Resolves true when the
- * Gate accepted the socket again; false when the window ran out or the call
- * ended first. Never throws: a failed call reports false so the caller can
- * fold the original fatal frame.
+ * Gate was proved to be back on it — its own first frame, not the boolean that
+ * opened the socket; false when the window ran out or the call ended first.
+ * Never throws: a failed call reports false so the caller can end the call with
+ * the reason it really was.
  */
 export async function reconnectGateMedia(input: ReconnectGateMediaInput): Promise<boolean> {
   const sleep = input.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const now = input.now ?? (() => Date.now());
   const toMediaUrl = input.mediaUrl ?? mediaSocketUrl;
   const log = input.log ?? (() => undefined);
+  const linkReadyMs = input.linkReadyMs ?? GATE_LINK_READY_MS;
   const deadline = now() + (input.windowMs ?? GATE_RECONNECT_WINDOW_MS);
   const delays = gateReconnectDelays(input.windowMs ?? GATE_RECONNECT_WINDOW_MS);
 
@@ -88,8 +105,13 @@ export async function reconnectGateMedia(input: ReconnectGateMediaInput): Promis
     // Teardown at any point wins. So does a window with no room left for a
     // round trip: an attempt that cannot finish before the Gate stops holding
     // the call is one more refusal, not a re-attach. An attempt that already
-    // started inside the window is always run to its answer.
-    if (input.isAborted() || now() + ATTEMPT_ROUND_TRIP_MS >= deadline) return false;
+    // started inside the window is always run to its answer. A proven link waits
+    // for the Gate's first frame, so its round trip includes that wait — and it
+    // is shortened to whatever the window has left rather than allowed to run
+    // past the point of no return.
+    const room = deadline - now() - ATTEMPT_ROUND_TRIP_MS;
+    if (input.isAborted() || room <= 0) return false;
+    const proofBudget = input.proveLink ? Math.min(linkReadyMs, room) : 0;
     try {
       const started = await input.startGateMedia({
         url: toMediaUrl(input.gatewayUrl, input.grant.streamPath),
@@ -97,10 +119,20 @@ export async function reconnectGateMedia(input: ReconnectGateMediaInput): Promis
         voiceSessionId: input.grant.voiceSessionId,
       });
       if (started) {
-        log(`gate media reconnected session=${input.grant.voiceSessionId}`);
-        return true;
+        const spoken = input.proveLink
+          ? await input.proveLink(proofBudget)
+          : ('frame' as GateLinkProof);
+        if (spoken === 'frame') {
+          log(`gate media reconnected session=${input.grant.voiceSessionId}`);
+          return true;
+        }
+        // An opened socket that never spoke is the failure this whole loop exists
+        // for: it would otherwise read as a re-attach and spend the rest of the
+        // window asleep.
+        log(`gate media reconnect unproven session=${input.grant.voiceSessionId} reason=${spoken}`);
+      } else {
+        log(`gate media reconnect refused session=${input.grant.voiceSessionId}`);
       }
-      log(`gate media reconnect refused session=${input.grant.voiceSessionId}`);
     } catch {
       log(`gate media reconnect attempt failed session=${input.grant.voiceSessionId}`);
     }

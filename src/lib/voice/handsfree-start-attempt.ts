@@ -12,6 +12,7 @@
 // prevent. So it is issued and raced with the same budget: best effort, and
 // never the thing that keeps the call from coming home to `idle`.
 
+import { GATE_LINK_READY_MS, type GateLinkProof } from '@/lib/voice/gate-link';
 import { mediaSocketUrl } from '@/lib/voice/gate-media-url';
 import { HANDSFREE_START_TIMEOUT_MS, isStartTimeout, startDeadline } from '@/lib/voice/start-deadline';
 import {
@@ -69,6 +70,16 @@ export type OpenGateVoiceSessionInput = {
     /** The attempt this media link belongs to; the native side keys on it. */
     startId: string;
   }) => Promise<boolean>;
+  /**
+   * Proves the audio link is really up, by waiting for the Gate's first frame on
+   * it. `startGateMedia` answers as soon as the socket was handed over and has
+   * no open event, so its boolean is not evidence: a dead link used to report
+   * `started` and leave the call listening to nothing for the life of the call.
+   * Anything other than `'frame'` is the same failure a `false` boolean is.
+   */
+  proveLink?: (budgetMs: number) => Promise<GateLinkProof>;
+  /** How long the link may take to speak before the start gives up on it. */
+  linkReadyMs?: number;
   mediaUrl?: (base: string, path: string) => string;
   log?: (event: HandsfreeStartLog) => void;
   now?: () => string;
@@ -285,7 +296,25 @@ export async function openGateVoiceSession(
       if (isStartTimeout(error)) throw error;
       started = false;
     }
-    if (!started) {
+    // The socket was handed to the network stack. Nothing has proved the Gate is
+    // on the other end of it yet, and every failure from here arrives later as a
+    // frame rather than as a rejection — so the link is waited on, and a link
+    // that never speaks is the same failed attempt a `false` boolean is. A
+    // socket that was refused outright is not waited on: there is nothing to
+    // wait for.
+    let spoken: GateLinkProof | null = null;
+    if (started && input.proveLink) {
+      try {
+        spoken = await deadline.guard(
+          'the audio link',
+          input.proveLink(input.linkReadyMs ?? GATE_LINK_READY_MS),
+        );
+      } catch (error) {
+        if (isStartTimeout(error)) throw error;
+        spoken = 'failed';
+      }
+    }
+    if (!started || (spoken !== null && spoken !== 'frame')) {
       // The native session opened but could not be joined. Cancel it by its own
       // id so the microphone does not stay live with no media path behind the
       // retry this failure invites, then release the grant so the retry is not
@@ -293,7 +322,17 @@ export async function openGateVoiceSession(
       cancelNativeStart(input.cancelStartSession, startId);
       await stopGrantedSession(input.gatewayRequest, parsed.voiceSessionId, deadline);
       return finish(
-        { result: 'media-start-failed' },
+        {
+          result: 'media-start-failed',
+          // The two failures are the same refusal with different evidence, and
+          // only one of them can be seen from here: the socket dying said so
+          // itself, and silence did not.
+          ...(spoken && spoken !== 'frame'
+            ? { detail: spoken === 'failed'
+              ? 'the audio link failed before the PC spoke on it'
+              : 'the PC never spoke on the audio link' }
+            : {}),
+        },
         log,
         { engine: parsed.engine },
       );

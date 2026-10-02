@@ -25,6 +25,7 @@ import {
   handsfreeElapsedCopy,
   handsfreePhaseLabel,
   handsfreeSlowTurnCopy,
+  handsfreeTurnFailureCopy,
 } from '@/lib/voice/handsfree-call-copy';
 
 export function HandsfreeCallBanner() {
@@ -34,7 +35,7 @@ export function HandsfreeCallBanner() {
 }
 
 function ActiveHandsfreeCallBanner() {
-  const { phase, partial, label, level, engine, engineReason, muted, mute, unmute, skipReply, end, startedAtMs, sendingSinceMs } =
+  const { phase, partial, label, level, engine, engineReason, muted, mute, unmute, skipReply, end, startedAtMs, sendingSinceMs, turnError } =
     useHandsfreeVoice();
   const tokens = useTokens();
   const insets = useSafeAreaInsets();
@@ -61,6 +62,10 @@ function ActiveHandsfreeCallBanner() {
   // the per-second clock above is what re-runs this fold, so the wait ticks.
   const slowTurnCopy =
     sendingSinceMs !== null ? handsfreeSlowTurnCopy(sendingSinceMs, nowMs) : null;
+  // A turn that died is named, in the same words the slow-turn line uses: the
+  // call carries on and the Gate reopens listening, so silence about it read as
+  // a call stuck on Sending.
+  const turnFailureCopy = handsfreeTurnFailureCopy(turnError);
 
   const phaseLabel = handsfreePhaseLabel(phase);
   const speaking = phase === 'speaking';
@@ -108,6 +113,14 @@ function ActiveHandsfreeCallBanner() {
               // wait so silence does not read as a dead call.
               <Text variant="micro" color="accentWarm" numberOfLines={1}>
                 {slowTurnCopy}
+              </Text>
+            ) : null}
+            {turnFailureCopy ? (
+              // The turn failed and the call did not: the Gate says why in its
+              // own line, and this says it once so the operator is not left
+              // watching a reply that is never coming.
+              <Text variant="micro" color="accentWarm" numberOfLines={1}>
+                {turnFailureCopy}
               </Text>
             ) : null}
             {partial ? (

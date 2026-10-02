@@ -31,6 +31,10 @@ export type GateCallBanner = {
   /** The reply text accumulated for the banner. */
   reply: string;
   turnState: 'sent' | 'replying' | 'done' | 'failed' | null;
+  /**
+   * Why the last turn died, in the Gate's own words, so the banner can say so
+   * once. Null while no turn or non-fatal error has been reported.
+   */
   turnError: string | null;
   speechGen: number;
   speechState: 'start' | 'end' | 'cancelled' | null;
@@ -102,7 +106,10 @@ export function reduceGateCall(
       return stay({ ...state, engine: frame.engine });
 
     case 'phase':
-      return stay({ ...state, phase: frame.phase });
+      // The Gate's phase frame is its whole account of the call, mute included.
+      // Folding `muted` from the same frame is what stops the banner's label and
+      // its mute flag from being two answers to one question.
+      return stay({ ...state, phase: frame.phase, muted: frame.phase === 'muted' });
 
     case 'partial':
       return stay({ ...state, partial: frame.text });
@@ -110,10 +117,19 @@ export function reduceGateCall(
     case 'final':
       // The Gate has already decided this turn is complete; the phone does not
       // send it. It is held so a dropped call can offer it back in the composer.
-      return stay({ ...state, partial: '', recovery: frame.text });
+      // A new turn also clears the last one's failure: the Gate heard something
+      // else, so that sentence is no longer this call's news.
+      return stay({ ...state, partial: '', recovery: frame.text, turnError: null });
 
     case 'turn': {
       const next = { ...state, turnState: frame.state, turnError: frame.error ?? null };
+      if (frame.state === 'failed') {
+        // The turn died, the call did not. The Gate speaks its own failure line
+        // and reopens listening, so the phone must not sit on `thinking`/`sending`
+        // — or keep counting a slow turn — waiting for a reply that is never
+        // coming. The reason is kept so the operator is told which turn died.
+        return stay({ ...next, phase: 'listening' });
+      }
       if (frame.state === 'done') {
         return stay({ ...next, reply: '', partial: '' }, [{ kind: 'reload-history' }]);
       }
@@ -143,7 +159,10 @@ export function reduceGateCall(
           effects: [{ kind: 'ended', reason: frame.code }],
         };
       }
-      return stay(state);
+      // A non-fatal error is the Gate's own news about this call and it is not
+      // the end of it: it is named once on the banner, in the same words as a
+      // failed turn, and folded away by the next turn that starts.
+      return stay({ ...state, turnError: frame.message || frame.code });
 
     default:
       return {

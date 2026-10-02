@@ -30,6 +30,7 @@ import {
   type GateCallEffect,
   type HandsfreeCallTransport,
 } from '@/lib/voice/gate-call';
+import { createGateLinkProbe, isGateSocketGone } from '@/lib/voice/gate-link';
 import { isDeviceIdentityError } from '@/lib/gateway/errors';
 import { recordFailure } from '@/lib/diagnostics/failure-log';
 import { pushDeviceParams } from '@/lib/notifications/push-registration';
@@ -48,7 +49,7 @@ import {
   type HandsfreeStartAttempt,
   type HandsfreeStartResult,
 } from '@/lib/voice/handsfree-start-reason';
-import { parseGateFrame } from '@/lib/voice/voice-stream-protocol';
+import { parseGateFrame, type GateVoiceFrame, type VoicePhase } from '@/lib/voice/voice-stream-protocol';
 import {
   handsfreeReplyForTurn,
   isFailedReply,
@@ -149,6 +150,14 @@ export type HandsfreeVoiceContextValue = {
   sendingSinceMs: number | null;
   /** The live transcript of the current turn, for the banner. */
   partial: string;
+  /**
+   * Why the last Gate turn died, in the Gate's own words, or null while no turn
+   * has failed. The banner names it once and the call keeps going: the Gate
+   * speaks its own failure line and reopens listening.
+   */
+  turnError: string | null;
+  /** The last Gate turn state the Gate reported, or null before the first turn. */
+  turnState: GateCallBanner['turnState'];
   label: string | undefined;
   reason: HandsfreeTerminalReason | undefined;
   lastEndReason?: HandsfreeTerminalReason;
@@ -210,21 +219,28 @@ function cancelNativeSession(module: HandsfreeNativeModule, startId: string): vo
  */
 function isRetryableSocketFailure(frame: unknown): frame is string {
   if (typeof frame !== 'string') return false;
+  const parsed = gateFrame(frame);
+  return parsed?.t === 'error' && parsed.fatal && parsed.code === 'socket_failed';
+}
+
+/** The frame as the Gate sent it, or null when this build cannot read it. */
+function gateFrame(frame: string): GateVoiceFrame | null {
   try {
-    const parsed = parseGateFrame(frame);
-    return parsed.t === 'error' && parsed.fatal && parsed.code === 'socket_failed';
+    return parseGateFrame(frame);
   } catch {
-    return false;
+    return null;
   }
 }
 
-/** Whether a frame is the Gate's own account of what phase the call is in. */
-function isGatePhaseFrame(frame: string): boolean {
-  try {
-    return parseGateFrame(frame).t === 'phase';
-  } catch {
-    return false;
-  }
+/**
+ * Whether a `phase` frame confirms the mute (or the unmute) this phone just
+ * asked for. A phase frame produced BEFORE the Gate processed the control says
+ * nothing about it, and one that does not reflect the request must leave the
+ * rollback waiting: any phase frame used to end the wait, so a mute the Gate
+ * never applied was never put back and the label disagreed with the Gate.
+ */
+function phaseConfirmsMute(phase: VoicePhase, requested: boolean): boolean {
+  return requested ? phase === 'muted' : phase !== 'muted';
 }
 
 export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode }) {
@@ -274,6 +290,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const fallbackRef = useRef(false);
   const turnIdRef = useRef<string | undefined>(undefined);
   const replyIdRef = useRef<string | undefined>(undefined);
+  // The reply text the watchdog was last armed for, so a stream that keeps
+  // producing words keeps the watch quiet and one that stops does not.
+  const watchdogTextRef = useRef('');
   const endingRef = useRef(false);
   const runEffectRef = useRef<(effect: HandsfreeEffect) => void>(() => undefined);
   const teardownRef = useRef<() => Promise<void>>(async () => undefined);
@@ -285,14 +304,21 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   // media socket with these exact ids inside the Gate's resume window.
   const gateGrantRef = useRef<GateVoiceGrant | null>(null);
   const gateReconnectingRef = useRef(false);
-  // An optimistic Gate mute, and the banner it replaced. The Gate's own `phase`
-  // frame is the authority; until one arrives (or refuses to) the fold is
+  // An optimistic Gate mute, the mute it asked for, and the banner it replaced.
+  // The Gate's own `phase` frame is the authority — but only one that REFLECTS
+  // the request: until such a frame arrives (or refuses to) the fold is
   // unconfirmed, and a control frame that never lands must not leave the banner
   // claiming a microphone the Gate still has open.
   const gateMuteRef = useRef<{
+    requested: boolean;
     previous: { phase: GateCallBanner['phase']; muted: boolean };
     timer: ReturnType<typeof setTimeout> | null;
   } | null>(null);
+  // The Gate's first frame on a media socket is the only proof the link is up:
+  // `startGateMedia` resolves as soon as the socket was handed over, and its
+  // boolean is not evidence. Held outside React — it is awaited by the start
+  // chain and settled from socket callbacks.
+  const gateLinkRef = useRef(createGateLinkProbe());
 
   // Everything a stable callback has to read at call time. Updated after every
   // render, so `start` and the reply watchers always see the current values
@@ -372,7 +398,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   /**
    * Put the banner back the way the Gate last described the call. Used when the
    * control frame is refused or never confirmed: a banner that says "Muted"
-   * while the Gate is still capturing is a lie the operator pays for.
+   * while the Gate is still capturing is a lie the operator pays for. Only the
+   * MUTE is put back — the Gate's latest phase is more current than the one
+   * from before the tap, and rewinding it would report a phase that has moved on.
    */
   const rollbackGateMute = useCallback(
     (why: string) => {
@@ -381,7 +409,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       clearGateMute();
       const next: GateCallBanner = {
         ...gateBannerRef.current,
-        phase: pending.previous.phase,
+        phase: gateBannerRef.current.phase === 'muted' ? pending.previous.phase : gateBannerRef.current.phase,
         muted: pending.previous.muted,
       };
       gateBannerRef.current = next;
@@ -396,8 +424,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   /**
    * Fold the banner the way the operator was promised it — the moment is
    * immediate — and remember what the Gate last said, so the fold can be undone
-   * when the Gate disagrees. A `phase` frame confirms it; a refusal or five
-   * seconds of silence does not.
+   * when the Gate disagrees. A `phase` frame CONFIRMS it, and only one that
+   * reflects this exact request; a refusal, or five seconds without such a
+   * frame, does not.
    */
   const foldGateMute = useCallback(
     (muted: boolean) => {
@@ -411,6 +440,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       setGateBanner(next);
       clearGateMute();
       gateMuteRef.current = {
+        requested: muted,
         previous: { phase: previous.phase, muted: previous.muted },
         timer: setTimeout(() => rollbackGateMute('the Gate never confirmed the mute'), GATE_MUTE_CONFIRM_MS),
       };
@@ -513,11 +543,35 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const subscribeGate = useCallback(
     (module: HandsfreeNativeModule) => {
       unsubscribe();
+      // The Gate's spoken turn, kept the way the phone engine keeps it: a `final`
+      // is persisted under this thread so a call that dies before the turn lands
+      // hands the words back in the composer, and the `turn` frame that says the
+      // turn started is what marks them delivered. A turn that FAILED is not a
+      // delivery — the words are still owed.
+      const noteGateTurn = (frame: GateVoiceFrame): void => {
+        const thread = threadRef.current;
+        if (!thread) return;
+        if (frame.t === 'final') {
+          void saveHandsfreeRecovery(thread, frame.text);
+          return;
+        }
+        if (frame.t === 'turn' && frame.state !== 'failed') {
+          void clearHandsfreeRecovery(thread);
+        }
+      };
       const fold = (frame: string) => {
-        // The Gate's own account of the phase is the authority on an optimistic
-        // mute: it always wins, and it stops the wait that would otherwise undo
-        // a fold the Gate has agreed with.
-        if (isGatePhaseFrame(frame)) clearGateMute();
+        const parsed = gateFrame(frame);
+        if (parsed) {
+          noteGateTurn(parsed);
+          // The Gate's own account of the phase settles an optimistic mute only
+          // when it REFLECTS the request: a phase frame produced before the Gate
+          // read the control proves nothing, and treating it as a confirmation
+          // is what let an unapplied mute stand for the rest of the call.
+          const pending = gateMuteRef.current;
+          if (pending && parsed.t === 'phase' && phaseConfirmsMute(parsed.phase, pending.requested)) {
+            clearGateMute();
+          }
+        }
         const next = reduceGateCall(gateBannerRef.current, frame);
         gateBannerRef.current = next.state;
         setGateBanner(next.state);
@@ -526,9 +580,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       };
       // A failed socket is the one failure the Gate plans for: it holds the
       // call open for its resume window and re-attaches a socket with the same
-      // voiceSessionId. Spend that window re-opening the media socket instead
-      // of ending an otherwise healthy call; only when the window runs out (or
-      // the call ended by another path) does the fatal frame fold normally.
+      // voiceSessionId. Spend that window re-opening the media socket — and count
+      // an attempt as re-attached only once the Gate is proved to be on it —
+      // instead of ending an otherwise healthy call.
       const attemptReconnect = async (frame: string) => {
         const grant = gateGrantRef.current;
         const gateway = latest.current.activeGateway;
@@ -538,15 +592,28 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
               gatewayUrl: gateway.url,
               gatewayToken: gateway.token ?? '',
               startGateMedia: (options) => moduleRef.current?.startGateMedia(options) ?? Promise.resolve(false),
+              proveLink: (budgetMs) => gateLinkRef.current.prove(budgetMs),
               isAborted: () =>
                 endingRef.current || !gateModeRef.current || gateGrantRef.current !== grant,
             })
           : false;
         gateReconnectingRef.current = false;
-        if (!rejoined) fold(frame);
+        if (rejoined) return;
+        // The window ran out with no Gate on the link. That is the end of the
+        // call, with its own reason: folding the socket frame would end it as
+        // `user` and report a dropped link as the operator's own walk-away.
+        if (isGateSocketGone(frame)) {
+          dispatch({ type: 'linkLost' });
+          return;
+        }
+        fold(frame);
       };
       subscriptionsRef.current = [
         module.addListener('gate', (event) => {
+          // Every frame settles the link proof on its way past, including the
+          // socket deaths: the Gate's first word on this link is what makes it
+          // real, and its refusal is what makes it dead.
+          gateLinkRef.current.observe(event.frame);
           if (isRetryableSocketFailure(event.frame)) {
             // A reconnect attempt that fails emits the same frame again; only
             // the first one starts a reconnect, the rest are swallowed.
@@ -563,7 +630,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         }),
       ];
     },
-    [clearGateMute, level, runGateEffect, unsubscribe],
+    [clearGateMute, dispatch, level, runGateEffect, unsubscribe],
   );
 
   const teardown = useCallback(async () => {
@@ -573,6 +640,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     clearGrace();
     clearWatchdog();
     clearGateMute();
+    // A proof the call never finished proving settles nothing now: the link it
+    // was waiting on is being closed underneath it.
+    gateLinkRef.current.release();
     unsubscribe();
     const wasGate = gateModeRef.current;
     const gateSessionId = gateSessionIdRef.current;
@@ -894,12 +964,27 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       return;
     }
     if (replyIdRef.current && reply.id !== replyIdRef.current) return;
+    // The reply-appeared edge above discharged the watchdog, and that is only
+    // honest while the reply is actually producing. A row that arrived with no
+    // words in it, or one that stopped streaming, still owes text: it is armed
+    // again for as long as it is silent, so an empty or stalled reply reopens
+    // the microphone instead of parking the call in Waiting with the mic shut.
+    // The streaming flag is part of the key: a reply that FINISHED streaming is a
+    // whole answer now, and the phone is only reading it aloud, which for a long
+    // answer outlasts the watchdog. Only a reply that is still streaming (and
+    // might have stalled) or has no words in it is watched.
+    const spokenFor = `${reply.id}:${reply.streaming ? 1 : 0}:${reply.text}`;
+    if (replyIdRef.current && watchdogTextRef.current !== spokenFor) {
+      watchdogTextRef.current = spokenFor;
+      if (reply.streaming || !reply.text.trim()) armWatchdog();
+      else clearWatchdog();
+    }
     if (phase === 'waiting') {
       if (reply.text.trim()) dispatch({ type: 'reply-content' });
       return;
     }
     streamReplyText(reply.text, Boolean(reply.streaming));
-  }, [messages, session.phase, dispatch, streamReplyText, clearWatchdog]);
+  }, [messages, session.phase, armWatchdog, dispatch, streamReplyText, clearWatchdog]);
 
   // Read the device's call capability while connected, so the Call control is
   // only offered where a tap can actually start a session.
@@ -975,6 +1060,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const abandonGateStart = useCallback(() => {
     unsubscribe();
     clearGateMute();
+    gateLinkRef.current.release();
     gateModeRef.current = false;
     setGateMode(false);
     setEngineInfo(null);
@@ -1084,6 +1170,11 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         // cannot strand the start or leak an unhandled rejection.
         cancelStartSession: (startId) => cancelNativeSession(module, startId),
         startGateMedia: (options) => module.startGateMedia(options),
+        // The native boolean only says the socket was handed to the network
+        // stack. This is what makes the start honest: it waits for the Gate's
+        // first frame on that socket, so a link that never comes up fails the
+        // start instead of reporting a call that can hear nothing.
+        proveLink: (budgetMs) => gateLinkRef.current.prove(budgetMs),
       }).finally(() => budget.dispose());
 
       if (attempt.result === 'start-timed-out') {
@@ -1326,6 +1417,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     startedAtMs: session.startedAtMs,
     sendingSinceMs,
     partial,
+    // The Gate's own account of the turn. Both are call-scoped: outside a live
+    // Gate call there is no turn to report, and the banner draws nothing.
+    turnError: gateLive ? gateBanner.turnError : null,
+    turnState: gateLive ? gateBanner.turnState : null,
     label,
     reason: session.reason,
     lastEndReason: session.lastEndReason,

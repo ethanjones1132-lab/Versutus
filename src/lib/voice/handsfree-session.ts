@@ -36,7 +36,14 @@ export type HandsfreeTerminalReason =
   | 'thread-changed'
   | 'recognition-failed'
   | 'send-failed'
-  | 'speech-failed';
+  | 'speech-failed'
+  /**
+   * The audio link to the Gate went away and could not be rejoined inside the
+   * Gate's resume window. Its own reason: the call was not ended by anyone, the
+   * link simply died, and folding the socket frame as the operator's own End
+   * would have reported a drop as a walk-away.
+   */
+  | 'link-lost';
 
 /**
  * What the provider must do natively for one transition. The reducer names the
@@ -77,6 +84,7 @@ export type HandsfreeEvent =
   | { type: 'bargeIn' }
   | { type: 'skipReply' }
   | { type: 'interruption' }
+  | { type: 'linkLost' }
   | { type: 'endRequested'; reason?: 'app-killed' }
   | { type: 'fatalError'; reason: 'recognition-failed' | 'speech-failed' }
   | { type: 'mute' }
@@ -243,6 +251,7 @@ export function reduceHandsfreeSession(
     return endCall(state, event.reason ?? 'user');
   }
   if (event.type === 'disconnect') return endCall(state, 'disconnect');
+  if (event.type === 'linkLost') return endCall(state, 'link-lost');
   if (event.type === 'thread-changed') return endCall(state, 'thread-changed');
   if (event.type === 'interruption') return endCall(state, 'system-interruption');
   if (event.type === 'fatalError') return endCall(state, event.reason);

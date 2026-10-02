@@ -125,11 +125,27 @@ export function handsfreeEndReasonCopy(reason: HandsfreeTerminalReason): string 
       return 'The call ended when Versutus was closed.';
     case 'recognition-failed':
       return 'The call ended because speech recognition stopped working on this phone.';
+    case 'link-lost':
+      // The audio link, not the operator: the Gate dropped the call audio and
+      // the phone could not get back onto it before the PC let the call go.
+      return 'The call ended because the audio link to the PC dropped.';
     case 'send-failed':
       return 'The call ended because a turn could not be sent or no reply arrived. What you said is back in the composer.';
     case 'speech-failed':
       return 'The call ended because this phone could not speak the reply.';
   }
+}
+
+/**
+ * The banner's one line for a turn that died. A Gate turn can fail while the
+ * call stays up — the Gate speaks its own failure line and reopens listening —
+ * and saying nothing left the operator watching "Sending" for a reply that was
+ * never coming. The Gate's short reason rides the same sentence; null while no
+ * turn has failed, so the line appears and is folded away exactly once.
+ */
+export function handsfreeTurnFailureCopy(reason: string | null | undefined): string | null {
+  if (!reason || !reason.trim()) return null;
+  return withDetail('That turn could not be completed', reason);
 }
 
 function withDetail(base: string, detail: string | undefined): string {
