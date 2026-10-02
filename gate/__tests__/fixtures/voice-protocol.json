@@ -7,7 +7,7 @@
     { "t": "end" }
   ],
   "gateToPhone": [
-    { "t": "ready", "engine": "local" },
+    { "t": "ready", "engine": "local", "resumeWindowMs": 90000 },
     { "t": "phase", "phase": "opening" },
     { "t": "phase", "phase": "listening" },
     { "t": "partial", "text": "hello" },
@@ -27,6 +27,7 @@
     { "t": "speech", "gen": "7", "state": "start" },
     { "t": "mute", "on": "yes" },
     { "t": "ready" },
+    { "t": "ready", "engine": "local", "resumeWindowMs": "soon" },
     { "t": "level", "v": "loud" },
     { "t": "turn", "turnId": "t1" },
     { "t": "ended" }

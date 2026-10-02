@@ -605,10 +605,21 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
               proveLink: (budgetMs) => gateLinkRef.current.prove(budgetMs),
               isAborted: () =>
                 endingRef.current || !gateModeRef.current || gateGrantRef.current !== grant,
+              // Spend the window the Gate itself advertised — it may hold the
+              // call much longer than the app's own fallback — so a link that
+              // comes back late still finds the call held.
+              windowMs: gateBannerRef.current.resumeWindowMs ?? undefined,
             })
           : false;
-        gateReconnectingRef.current = false;
+        // The call this loop served may have been ended by the operator — and a
+        // new call started — while it slept. The grant it set out with is no
+        // longer the live one, so its wake-up is about a call that is gone: it
+        // must not clear the flag a newer loop is using, and it must not
+        // dispatch `linkLost` into the call that replaced it.
+        const superseded = gateGrantRef.current !== grant;
+        if (!superseded) gateReconnectingRef.current = false;
         if (rejoined) return;
+        if (endingRef.current || superseded || !gateModeRef.current) return;
         // The window ran out with no Gate on the link. That is the end of the
         // call, with its own reason: folding the socket frame would end it as
         // `user` and report a dropped link as the operator's own walk-away.

@@ -9,7 +9,7 @@ const val MAX_FRAME_BYTES = 4096
 sealed class GateFrame {
   abstract val t: String
 
-  data class Ready(val engine: String) : GateFrame() {
+  data class Ready(val engine: String, val resumeWindowMs: Long?) : GateFrame() {
     override val t get() = "ready"
   }
 
@@ -114,7 +114,14 @@ object GateFrameCodec {
   }
 
   private fun fromGateRecord(frame: JSONObject): GateFrame = when (frame.getString("t")) {
-    "ready" -> GateFrame.Ready(requireString(frame, "engine"))
+    "ready" -> GateFrame.Ready(
+      requireString(frame, "engine"),
+      if (frame.has("resumeWindowMs") && frame.get("resumeWindowMs") != JSONObject.NULL) {
+        requireNumber(frame, "resumeWindowMs").toLong()
+      } else {
+        null
+      },
+    )
     "phase" -> GateFrame.Phase(requireEnum(frame, "phase", PHASES))
     "partial" -> GateFrame.Partial(requireString(frame, "text"))
     "final" -> GateFrame.Final(requireString(frame, "turnId"), requireString(frame, "text"))

@@ -184,3 +184,40 @@ test('a re-attach keeps the frames it always sent', async () => {
   await once(second, 'close');
   await media.close();
 });
+
+test('a re-attach while the engine is still opening is not told listening', async () => {
+  const engine = makeEngine();
+  const media = await startMedia({ engine, resumeTimeoutMs: 2_000 });
+  const first = media.openSocket();
+  await once(first, 'open');
+  await waitUntil(() => media.frames.length > 0);
+
+  // The engine has not opened: the call is still `opening`, and a phone that
+  // re-attaches now must hear that. Claiming `ready`/`listening` here is a call
+  // that says it can hear while every PCM frame is dropped on the floor.
+  first.close();
+  await once(first, 'close');
+  media.frames.length = 0;
+
+  const second = media.openSocket();
+  await once(second, 'open');
+  await waitUntil(() => media.frames.length > 0);
+  assert.deepEqual(
+    media.frames,
+    [{ t: 'phase', phase: 'opening' }],
+    'a re-attach before the engine can hear says opening, not listening',
+  );
+
+  // When the engine finally opens, the ready/listening pair arrives once, in
+  // that order, exactly as on a first attach.
+  engine.finishOpen();
+  await waitUntil(() => media.frames.some((frame) => frame.t === 'ready'));
+  assert.deepEqual(
+    media.frames.map((frame) => [frame.t, frame.phase]),
+    [['phase', 'opening'], ['phase', 'listening'], ['ready', undefined]],
+  );
+
+  second.close();
+  await once(second, 'close');
+  await media.close();
+});

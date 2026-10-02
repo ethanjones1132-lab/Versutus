@@ -27,6 +27,12 @@ export type GateCallBanner = {
   phase: GateCallPhase;
   /** The engine the Gate actually used, once `ready` arrives. */
   engine: string | null;
+  /**
+   * How long the Gate will hold the call open without a phone, from the last
+   * `ready`. The provider spends exactly this on re-attaching; null until a
+   * Gate that advertises it is heard from.
+   */
+  resumeWindowMs: number | null;
   /** The live operator transcript. */
   partial: string;
   /** The reply text accumulated for the banner. */
@@ -58,6 +64,7 @@ export type GateCallEffect =
 export const INITIAL_GATE_CALL: GateCallBanner = {
   phase: 'opening',
   engine: null,
+  resumeWindowMs: null,
   partial: '',
   reply: '',
   turnState: null,
@@ -104,7 +111,13 @@ export function reduceGateCall(
 
   switch (frame.t) {
     case 'ready':
-      return stay({ ...state, engine: frame.engine });
+      return stay({
+        ...state,
+        engine: frame.engine,
+        // A Gate that omits the window leaves the last one in place: an older
+        // frame must not erase what the Gate already promised.
+        resumeWindowMs: frame.resumeWindowMs ?? state.resumeWindowMs,
+      });
 
     case 'phase':
       // The Gate's phase frame is its whole account of the call, mute included.

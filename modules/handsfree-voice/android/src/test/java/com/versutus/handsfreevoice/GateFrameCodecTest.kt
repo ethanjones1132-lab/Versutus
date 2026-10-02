@@ -62,6 +62,17 @@ class GateFrameCodecTest {
     assertTrue(error is GateFrame.Error && error.fatal)
   }
 
+  @Test fun aReadyFrameCarriesTheResumeWindow() {
+    val ready = GateFrameCodec.parse("""{"t":"ready","engine":"local","resumeWindowMs":90000}""")
+    assertEquals(GateFrame.Ready("local", 90_000L), ready)
+    // A Gate that does not advertise one parses with no window, and a window
+    // that is not a number is refused rather than guessed.
+    assertEquals(GateFrame.Ready("local", null), GateFrameCodec.parse("""{"t":"ready","engine":"local"}"""))
+    assertThrows(GateProtocolError::class.java) {
+      GateFrameCodec.parse("""{"t":"ready","engine":"local","resumeWindowMs":"soon"}""")
+    }
+  }
+
   @Test fun aPhoneControlFrameEncodesAsTheGateExpects() {
     val mute = JSONObject(GateFrameCodec.encodePhone(GateFrame.Phone.Mute(true)))
     assertEquals("mute", mute.getString("t"))

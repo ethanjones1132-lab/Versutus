@@ -35,7 +35,7 @@ export type PhoneVoiceFrame =
   | { t: 'end' };
 
 export type GateVoiceFrame =
-  | { t: 'ready'; engine: VoiceEngineId | string }
+  | { t: 'ready'; engine: VoiceEngineId | string; resumeWindowMs?: number }
   | { t: 'phase'; phase: VoicePhase }
   | { t: 'partial'; text: string }
   | { t: 'final'; turnId: string; text: string }
@@ -133,8 +133,19 @@ export function parsePhoneFrame(value: unknown): PhoneVoiceFrame {
 export function parseGateFrame(value: unknown): GateVoiceFrame {
   const frame = toRecord(value, GATE_FRAME_TYPES);
   switch (frame.t) {
-    case 'ready':
-      return { t: 'ready', engine: requireString(frame, 'engine') };
+    case 'ready': {
+      const ready: Extract<GateVoiceFrame, { t: 'ready' }> = {
+        t: 'ready',
+        engine: requireString(frame, 'engine'),
+      };
+      // How long the Gate will hold the call for without a phone, so the app
+      // can match its own re-connect budget to it. Optional: a Gate that does
+      // not send it is an older Gate, and the app falls back to its own window.
+      if (frame.resumeWindowMs !== undefined) {
+        ready.resumeWindowMs = requireNumber(frame, 'resumeWindowMs');
+      }
+      return ready;
+    }
     case 'phase':
       return { t: 'phase', phase: requireEnum(frame, 'phase', PHASES) };
     case 'partial':

@@ -101,10 +101,16 @@ When a detached turn finishes, the push carries the journal's assembled text (no
 5. A queued line whose send returned a connection error stays owed (and keeps its turn id).
 
 ## 5. Voice calls (design, built in the voice packages)
-A call's turn is an ordinary durable turn (same journal, `turnId` = the call's turn id). A socket drop never aborts it: the call keeps its
-state for a resume window (90 s), control frames (`reply`, `final`, `turn`, `speech`) are buffered like audio is, the phone resumes with
-its `voiceSessionId`, and a call that is not resumed ends WITHOUT cancelling the turn: the reply lands in the chat thread (history +
-push). Details in the voice briefs.
+A socket drop never aborts a call's turn: the call keeps its state for a resume window (90 s), control frames (`reply`, `final`,
+`turn`, `speech`) are buffered like audio is, the phone resumes with its `voiceSessionId`, and a call that is not resumed ends WITHOUT
+cancelling the turn: the turn runs on the thread's backend session, so its reply lands in the chat thread (history + push). Details in
+the voice briefs.
+
+A spoken turn is NOT an ordinary durable turn yet: it has no journal entry (`gate/core/voice/media-socket.mjs` `startTurn` calls the
+backend without `turnJournal.begin`/`finish`, and mints no `turnId`). What that costs: a Gate restart mid-voice-turn
+(`endAll('gate-restart')`) ends the call with no `interrupted` record and no push — the partial reply is discarded silently — and the
+phone's durable-turn re-attach (`GET /v1/turns`) can never see the turn, because there is no row to see. Journaling voice turns is a
+follow-up (section 7), not part of this round's 90 s resume work.
 
 ## 6. Acceptance (what "done" looks like on the phone)
 1. Start an agent turn that takes minutes; lock the phone / airplane mode for 5+ minutes; the PC keeps working (check `GET /v1/turns/<id>`).
@@ -119,3 +125,7 @@ push). Details in the voice briefs.
   but marked `interrupted` if Hermes itself restarts). Moving chat turns onto it is the next step and needs its own design (approvals,
   history writes, model pinning).
 - Turns routed to the Gate's own providers (item 8 above) get the same journal in a follow-up package.
+- Voice-turn journaling (section 5): a spoken turn runs on the thread's backend session — so its reply reaches the thread and a
+  phone-gone turn is pushed — but it has no journal entry, so a Gate restart mid-turn leaves no `interrupted` record or push and no
+  row for the phone's durable-turn re-attach to find. Wiring `startTurn` through `turnJournal.begin`/`finish` (with the call's
+  `voiceSessionId` or a minted turn id) is a follow-up.

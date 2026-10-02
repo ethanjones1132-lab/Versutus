@@ -148,6 +148,7 @@ function repaint(): void {
 }
 
 const ready = '{"t":"ready","engine":"local"}';
+const readyWithWindow = '{"t":"ready","engine":"local","resumeWindowMs":90000}';
 const listening = '{"t":"phase","phase":"listening"}';
 const thinking = '{"t":"phase","phase":"thinking"}';
 const speaking = '{"t":"phase","phase":"speaking"}';
@@ -271,12 +272,12 @@ async function startUnprovedCall(): Promise<string> {
 }
 
 /** A call the Gate really is on: the socket opened and the Gate spoke on it. */
-async function startLiveCall(): Promise<void> {
+async function startLiveCall(readyFrame: string = ready): Promise<void> {
   let result = '';
   await call(async () => {
     const starting = latest().start(target);
     await settleChain();
-    gateFrame(ready);
+    gateFrame(readyFrame);
     gateFrame(listening);
     result = (await starting).result;
   });
@@ -342,6 +343,26 @@ describe('a call that loses its link mid-way', () => {
     expect(mockNative.stopGateMedia).toHaveBeenCalled();
   });
 
+  test('the resume window the Gate advertises bounds the re-attach, not a hard-coded 20 s', async () => {
+    await startLiveCall(readyWithWindow);
+    await call(async () => {
+      gateFrame(socketFailed);
+      // The Gate said it holds the call for 90 s. At 25 s — past the 20 s the
+      // phone used to keep — it must still be trying, not have ended the call.
+      await jest.advanceTimersByTimeAsync(25_000);
+    });
+    expect(latest().active).toBe(true);
+    expect(latest().lastEndReason).toBeUndefined();
+    expect(mockMediaStarts.length).toBeGreaterThan(1);
+
+    // At the end of the window it gives up, with the same reason as before.
+    await call(async () => {
+      await jest.advanceTimersByTimeAsync(120_000);
+    });
+    expect(latest().active).toBe(false);
+    expect(latest().lastEndReason).toBe('link-lost');
+  });
+
   test('a later socket failure cannot restart the loop the window already ended', async () => {
     await startLiveCall();
     await call(async () => {
@@ -395,6 +416,51 @@ describe('a call that loses its link mid-way', () => {
     expect(latest().phase).toBe('listening');
     expect(latest().lastEndReason).toBeUndefined();
     expect(mockMediaStarts.length).toBe(2);
+  });
+
+  test('a re-attach loop the operator replaced cannot end the call that replaced it', async () => {
+    await startLiveCall(readyWithWindow);
+    // The link blips and the re-attach loop starts spending the Gate's window.
+    await call(async () => {
+      gateFrame(socketFailed);
+      // Fail the short attempts, then park in the long sleep at the tail of the
+      // window — the stretch an End-then-redial happens inside.
+      await jest.advanceTimersByTimeAsync(70_000);
+    });
+    expect(latest().active).toBe(true);
+
+    // The operator ends the call and redials while the old loop is still asleep.
+    await call(async () => {
+      latest().end();
+      await jest.advanceTimersByTimeAsync(50);
+    });
+    expect(latest().phase).toBe('idle');
+    await startLiveCall(readyWithWindow);
+
+    // The new call blips too, so its own loop is alive and parked in the same
+    // tail — the flag the superseded loop must leave alone. This advance also
+    // carries the first call's loop past the end of its own tail, where it
+    // wakes to find a call it no longer owns.
+    await call(async () => {
+      gateFrame(socketFailed);
+      await jest.advanceTimersByTimeAsync(70_000);
+    });
+
+    // The superseded loop has woken. The call it served is gone; it must not
+    // report that call's dropped link against the live one.
+    expect(latest().active).toBe(true);
+    expect(latest().phase).toBe('listening');
+    expect(latest().lastEndReason).toBeUndefined();
+    const attemptsBefore = mockMediaStarts.length;
+
+    // Nor may it clear the live loop's flag: one more socket death on the live
+    // call is swallowed by the loop already running, not a second opener.
+    await call(async () => {
+      gateFrame(socketFailed);
+      await jest.advanceTimersByTimeAsync(1_000);
+    });
+    expect(latest().active).toBe(true);
+    expect(mockMediaStarts.length).toBe(attemptsBefore);
   });
 });
 

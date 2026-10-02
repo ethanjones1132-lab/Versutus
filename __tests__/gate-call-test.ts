@@ -28,6 +28,18 @@ describe('reduceGateCall folds every Gate frame into the banner', () => {
     expect(state.engine).toBe('local');
   });
 
+  test('ready records the resume window the Gate will hold the call for', () => {
+    const { state } = reduceGateCall(
+      INITIAL_GATE_CALL,
+      '{"t":"ready","engine":"local","resumeWindowMs":90000}',
+    );
+    expect(state.resumeWindowMs).toBe(90_000);
+    // A Gate that does not advertise one leaves the last value in place.
+    const kept = reduceGateCall(state, '{"t":"ready","engine":"codex"}').state;
+    expect(kept.resumeWindowMs).toBe(90_000);
+    expect(kept.engine).toBe('codex');
+  });
+
   test('phase tracks listening, thinking, speaking and muted', () => {
     for (const phase of ['listening', 'thinking', 'speaking', 'muted'] as const) {
       const { state } = reduceGateCall(INITIAL_GATE_CALL, { t: 'phase', phase });

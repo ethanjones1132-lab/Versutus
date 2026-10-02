@@ -16,9 +16,12 @@ import { mediaSocketUrl } from '@/lib/voice/gate-media-url';
 import type { GateVoiceGrant } from '@/lib/voice/handsfree-start-reason';
 
 /**
- * How long the Gate holds a call open after its socket detaches
- * (`RESUME_TIMEOUT_MS` in gate/core/voice/media-socket.mjs). The phone must
- * spend its whole retry budget inside this window or the re-attach 404s.
+ * The fallback re-attach budget, used only when the Gate has not advertised its
+ * own window in a `ready` frame. A current Gate sends `resumeWindowMs`
+ * (`RESUME_TIMEOUT_MS` in gate/core/voice/media-socket.mjs, 90 s) and the
+ * provider passes it as `windowMs`; the phone must spend its whole retry budget
+ * inside the Gate's window or the re-attach 404s. 20 s is what an older Gate
+ * that advertises nothing was understood to hold.
  */
 export const GATE_RECONNECT_WINDOW_MS = 20_000;
 

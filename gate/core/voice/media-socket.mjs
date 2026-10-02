@@ -739,8 +739,16 @@ export function attachVoiceMediaSocket({
       if (first) {
         sendFrame({ t: 'phase', phase: 'opening' });
       } else {
-        sendFrame({ t: 'ready', engine: session.engine, resumeWindowMs: resumeTimeoutMs });
-        sendFrame({ t: 'phase', phase: call.phase === 'opening' ? 'listening' : call.phase });
+        // A re-attach rejoins a call that may still be opening its engine. Send
+        // the reducer's own phase verbatim — `opening` is a real phase both
+        // phone parsers know — and claim `ready` only once `engineReady` is
+        // true, the same gate the engine-open path uses: a call must never say
+        // `ready`/`listening` while the engine cannot yet hear, or the operator
+        // speaks into a pipe nobody reads and no error is ever shown.
+        if (engineReady) {
+          sendFrame({ t: 'ready', engine: session.engine, resumeWindowMs: resumeTimeoutMs });
+        }
+        sendFrame({ t: 'phase', phase: call.phase });
         flush();
       }
     }
