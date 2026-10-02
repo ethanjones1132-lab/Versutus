@@ -427,7 +427,7 @@ test('a turn that completes with no assistant content is a failure too', async (
 });
 
 test('a backend that refuses the turn outright is a failure too', async () => {
-  const { gate } = await makeGate({ replies: { 'deepseek-v4.1-flash': new Error('hermes: session not found') } });
+  const { gate } = await makeGate({ replies: { 'deepseek-v4.1-flash': new Error('hermes: HTTP 429: rate limit reached for this model') } });
   try {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const response = await sendTurn(gate, 'opencode-go-session/deepseek-v4.1-flash');
@@ -435,7 +435,7 @@ test('a backend that refuses the turn outright is a failure too', async () => {
     }
     assert.match(
       (await readCatalogue(gate)).get('opencode-go-session/deepseek-v4.1-flash').hiddenReason,
-      /^Failed its last 2 turns \(hermes: session not found\)/,
+      /^Failed its last 2 turns \(hermes: HTTP 429: rate limit reached for this model\)/,
     );
   } finally {
     await gate.close();

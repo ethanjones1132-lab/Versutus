@@ -72,11 +72,12 @@ const MODEL_FAULTS = [
   /\bquota\b/i,
   /\bnot a valid model\b/i,
   /\bmodel_not_available\b/i,
-  // A session the upstream cannot serve, in either backend's spelling of it:
-  // opencode-go answers `400 MissingSessionID` for every one of its 42 models,
-  // and Hermes says `session not found`.
+  // opencode-go answers `400 MissingSessionID` for every one of its 42 models
+  // when the header is absent: that IS the provider refusing the model's route.
+  // A Hermes `session not found` is deliberately NOT here: it is a lookup of the
+  // Gate's own session (the thread-tap bug of 2026-10-02 was exactly that), so
+  // it says nothing about the model and must never hide one.
   /\bmissingsessionid\b/i,
-  /\bsession\b[^.\n]{0,24}\b(?:not found|no such|missing)\b/i,
   /\bno endpoints available\b/i,
   // OpenCode's own account of what the provider said while failing over.
   /\bprovider said\b/i,

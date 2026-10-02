@@ -92,3 +92,11 @@ test('a stored reason is recognised from its text alone', () => {
   assert.equal(isGateInternalReason('The backend completed the turn with no assistant content'), false);
   assert.equal(isGateInternalReason(undefined), false);
 });
+
+test('a missing Gate-side session is never evidence about a model', () => {
+  // 2026-10-02: the thread tap searched the wrong environment and the Gate answered
+  // `Session not found`. A lookup of the Gate's own session says nothing about
+  // whether the model can answer, so it must never count toward hiding one.
+  assert.equal(isModelFault(new Error('Session not found: api_1790918481_9a2e6f57')), false);
+  assert.equal(isModelFault(new Error('hermes: session not found')), false);
+});
