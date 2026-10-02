@@ -78,6 +78,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint && eslint gate scripts --max-warnings 0",
+    "smoke:gate": "node scripts/live-smoke.mjs",
     "verify": "npm run verify:config && tsc --noEmit && npm run lint && npm run test:coverage && npm run coverage:ratchet && npm run test:gate",
     "verify:config": "tsx ./scripts/verify-config.mts",
     "coverage:ratchet": "tsx ./scripts/coverage-ratchet.mts",
