@@ -1,7 +1,8 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, copyFile, writeFile, readFile, readdir } from 'node:fs/promises';
-import { utimesSync } from 'node:fs';
+import fs, { utimesSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -404,6 +405,29 @@ test('concurrent live relays each stream, but only one copy reaches the archive'
     assert.equal(archived, FRAMES.join(''), 'the tee must be single-writer: no duplicated frames');
   } finally {
     await gate.close();
+  }
+});
+
+test('mkdirSync runs once per store, not once per appended frame', () => {
+  const parent = join(tmpdir(), `gate-runstreams-mkdir-${Date.now()}`);
+  const dir = join(parent, 'streams');
+  roots.push(parent);
+  const original = fs.mkdirSync;
+  let mkdirs = 0;
+  fs.mkdirSync = (...args) => {
+    mkdirs += 1;
+    return original.apply(fs, args);
+  };
+  syncBuiltinESMExports();
+  try {
+    const store = createBackendRunStreams(dir, { maxRuns: 50 });
+    assert.equal(store.begin('run_1'), true);
+    for (let i = 0; i < 8; i += 1) store.append('run_1', Buffer.from(`frame-${i}\n`));
+    store.end('run_1');
+    assert.equal(mkdirs, 1, `mkdirSync ran ${mkdirs} times across 8 appends`);
+  } finally {
+    fs.mkdirSync = original;
+    syncBuiltinESMExports();
   }
 });
 

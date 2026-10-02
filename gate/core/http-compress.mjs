@@ -17,7 +17,13 @@
 // call so the routes that check it (`if (res.headersSent) res.end()`) keep
 // reading the same thing they read before.
 
-import { gzipSync } from 'node:zlib';
+import { promisify } from 'node:util';
+import { gzip as zlibGzip } from 'node:zlib';
+
+// Off the event loop: zlib's threadpool, so a catalogue-sized gzip does not
+// stall every other phone's SSE frame. Injectable as sync or async so a
+// failure (or a test) can still drive the path.
+const gzipAsync = promisify(zlibGzip);
 
 // A body this small costs more in framing than gzip saves, and answering it
 // compressed makes a cache entry harder to reuse.
@@ -121,11 +127,13 @@ function nativeHeadersSent(res) {
  *
  * @param {import('node:http').IncomingMessage} req
  * @param {import('node:http').ServerResponse} res
- * @param {{ minBytes?: number, gzip?: (body: Buffer) => Buffer }} [options]
+ * @param {{ minBytes?: number, gzip?: (body: Buffer) => Buffer | Promise<Buffer> }} [options]
  *   `gzip` is the compression step, injectable so a failure can be tested.
+ *   The default is async (libuv threadpool) so a large answer cannot stall
+ *   every other request on the Gate's single event loop.
  * @returns {import('node:http').ServerResponse} the same response
  */
-export function enableJsonCompression(req, res, { minBytes = DEFAULT_MIN_BYTES, gzip = gzipSync } = {}) {
+export function enableJsonCompression(req, res, { minBytes = DEFAULT_MIN_BYTES, gzip = gzipAsync } = {}) {
   if (req.method === 'HEAD') return res;
   if (!acceptsGzip(req)) return res;
   if (res.headersSent || res.writableEnded) return res;
@@ -243,39 +251,50 @@ export function enableJsonCompression(req, res, { minBytes = DEFAULT_MIN_BYTES, 
       && !BODYLESS_STATUSES.has(statusCode)
       && !isStreamResponse(pending, res, streamingType);
 
+    const sendOriginal = () => {
+      flushPending();
+      // Same reasoning for the answers left as they were: end() returns only once
+      // the response is finished, and nothing after it should be holding a status
+      // line hostage.
+      pending = null;
+      committed = true;
+      return call('end', arguments);
+    };
+
+    const sendCompressed = (compressed) => {
+      if (!Buffer.isBuffer(compressed)) return sendOriginal();
+      // The route's own headers are already in the store (writeHead put them
+      // there when it was held back); a stale Content-Length must go first.
+      res.removeHeader('Content-Length');
+      res.setHeader('Content-Encoding', 'gzip');
+      res.setHeader('Vary', appendVary(res.getHeader('Vary'), 'Accept-Encoding'));
+      res.setHeader('Content-Length', String(compressed.length));
+      flushPending({ withHeaders: false });
+      // A route that wrote no status line of its own still needs this marked:
+      // the real end() writes one from inside itself, through the wrapper
+      // above, and a status line left pending after the response is finished
+      // is state nothing should have to reason about later.
+      pending = null;
+      committed = true;
+      return callbackToKeep ? call('end', [compressed, callbackToKeep]) : call('end', [compressed]);
+    };
+
     if (compressible) {
-      let compressed = null;
+      let result;
       try {
-        compressed = gzip(body);
+        result = gzip(body);
       } catch {
         // A failed compression must never cost the answer: send it as it was.
-        compressed = null;
+        return sendOriginal();
       }
-      if (Buffer.isBuffer(compressed)) {
-        // The route's own headers are already in the store (writeHead put them
-        // there when it was held back); a stale Content-Length must go first.
-        res.removeHeader('Content-Length');
-        res.setHeader('Content-Encoding', 'gzip');
-        res.setHeader('Vary', appendVary(res.getHeader('Vary'), 'Accept-Encoding'));
-        res.setHeader('Content-Length', String(compressed.length));
-        flushPending({ withHeaders: false });
-        // A route that wrote no status line of its own still needs this marked:
-        // the real end() writes one from inside itself, through the wrapper
-        // above, and a status line left pending after the response is finished
-        // is state nothing should have to reason about later.
-        pending = null;
-        committed = true;
-        return callbackToKeep ? call('end', [compressed, callbackToKeep]) : call('end', [compressed]);
+      if (result && typeof result.then === 'function') {
+        result.then(sendCompressed, sendOriginal);
+        return res;
       }
+      return sendCompressed(result);
     }
 
-    flushPending();
-    // Same reasoning for the answers left as they were: end() returns only once
-    // the response is finished, and nothing after it should be holding a status
-    // line hostage.
-    pending = null;
-    committed = true;
-    return call('end', arguments);
+    return sendOriginal();
   };
 
   return res;

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import fsPromises, { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -126,4 +127,56 @@ test('revoke works across instances (separate process simulation)', async () => 
 
   assert.equal(await first.verify(`Bearer ${token}`), null);
   assert.equal(await second.verify(`Bearer ${token}`), null);
+});
+
+test('a brief lock on the device store does not 401 a paired token', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'gate-device-tokens-'));
+  const path = join(dir, 'devices.json');
+  const tokens = new DeviceTokenStore(path);
+  const token = await tokens.issue('device-1', { role: 'operator', scopes: [] });
+
+  const original = fsPromises.readFile;
+  let refusals = 0;
+  fsPromises.readFile = async (target, ...rest) => {
+    if (String(target) === path && refusals < 2) {
+      refusals += 1;
+      const error = new Error('EBUSY: resource busy or locked');
+      error.code = 'EBUSY';
+      throw error;
+    }
+    return original(target, ...rest);
+  };
+  syncBuiltinESMExports();
+  try {
+    const verified = await tokens.verify(`Bearer ${token}`);
+    assert.equal(verified?.deviceId, 'device-1');
+    assert.equal(refusals, 2);
+  } finally {
+    fsPromises.readFile = original;
+    syncBuiltinESMExports();
+  }
+});
+
+test('a lock that never clears is not reported as an empty device list', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'gate-device-tokens-'));
+  const path = join(dir, 'devices.json');
+  const tokens = new DeviceTokenStore(path);
+  await tokens.issue('device-1', { role: 'operator', scopes: [] });
+
+  const original = fsPromises.readFile;
+  fsPromises.readFile = async (target, ...rest) => {
+    if (String(target) === path) {
+      const error = new Error('EBUSY: resource busy or locked');
+      error.code = 'EBUSY';
+      throw error;
+    }
+    return original(target, ...rest);
+  };
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(() => tokens.verify('Bearer x'), (error) => error?.code === 'EBUSY');
+  } finally {
+    fsPromises.readFile = original;
+    syncBuiltinESMExports();
+  }
 });

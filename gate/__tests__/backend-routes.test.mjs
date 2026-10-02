@@ -1793,6 +1793,41 @@ test('the stream hands back a session id, then relays output the client can deco
   }
 });
 
+test('typing into a shell that has just exited is a 404, not a 500', async () => {
+  const terminal = fakeTerminal();
+  const { gate } = await makeGate({ terminalSessions: terminal });
+  const base = `http://127.0.0.1:${gate.port}`;
+  let stream;
+  try {
+    const response = await fetch(`${base}/v1/terminal/stream`, { headers: auth(gate) });
+    stream = sseReader(response);
+    await stream.next();
+    terminal.opened[0].write = () => {
+      throw new Error('terminal session has exited');
+    };
+
+    const originalError = console.error;
+    const errors = [];
+    console.error = (...args) => errors.push(args.join(' '));
+    let input;
+    try {
+      input = await fetch(`${base}/v1/terminal/input`, {
+        method: 'POST',
+        headers: auth(gate),
+        body: JSON.stringify({ sid: 'sid-1', data: 'ls\n' }),
+      });
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(input.status, 404);
+    assert.equal((await input.json()).error.code, 'unknown_session');
+    assert.equal(errors.length, 0, 'an exited shell must not log a request-handler stack');
+  } finally {
+    await stream?.cancel();
+    await gate.close();
+  }
+});
+
 test('input reaches the shell, and an unknown session is refused', async () => {
   const terminal = fakeTerminal();
   const { gate } = await makeGate({ terminalSessions: terminal });
@@ -3346,6 +3381,80 @@ test('closing the Gate ends the turns it is still holding', async () => {
   // Without this, close() waits on the detached turn's request handler.
   await gate.close();
   assert.equal(turns[0].signal?.aborted, true, 'a restart is a named end for every live turn');
+});
+
+test('deleting a session drops its turn-notification counter', async () => {
+  const { gate } = await makeGate();
+  const base = `http://127.0.0.1:${gate.port}`;
+  try {
+    const turn = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    assert.equal(turn.status, 200);
+    const deleted = await fetch(`${base}/v1/sessions/ses_1?backendId=stub-local`, {
+      method: 'DELETE', headers: auth(gate),
+    });
+    assert.equal(deleted.status, 200);
+    const again = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1',
+        messages: [{ role: 'user', content: 'hi again' }],
+      }),
+    });
+    assert.equal(again.status, 200);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('two sessionless turns opened in the same second get distinct sessions', async () => {
+  const created = [];
+  const plain = stubRegistry([]).get('stubcli');
+  const adapter = {
+    ...plain,
+    createBackend() {
+      return {
+        ...plain.createBackend(),
+        async createSession(input) {
+          const existing = created.find((session) => session.title === input?.title);
+          if (existing) return existing;
+          const session = { ...SESSION, id: `ses_${created.length + 1}`, title: input?.title ?? null };
+          created.push(session);
+          return session;
+        },
+      };
+    },
+  };
+  const registry = {
+    get(id) { if (id !== 'stubcli') throw new Error('unknown adapter'); return adapter; },
+    list() { return [adapter]; },
+  };
+  const { gate } = await makeGate({ registry });
+  try {
+    const body = JSON.stringify({
+      backendId: 'stub-local',
+      messages: [{ role: 'user', content: 'hello' }],
+      model: 'stub/one',
+    });
+    const first = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate), body,
+    });
+    const second = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate), body,
+    });
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.equal(created.length, 2, 'Hermes duplicate-title recovery must not alias the second thread');
+    assert.notEqual(created[0].id, created[1].id);
+    assert.notEqual(created[0].title, created[1].title);
+  } finally {
+    await gate.close();
+  }
 });
 
 test('a streamed turn tells the phone which session it belongs to', async () => {

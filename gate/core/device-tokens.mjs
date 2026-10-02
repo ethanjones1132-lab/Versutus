@@ -1,7 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { copyFile } from 'node:fs/promises';
 
-import { readJsonFile, writeFileAtomic } from './atomic-file.mjs';
+import { isTransientLockError, readJsonFile, writeFileAtomic } from './atomic-file.mjs';
 
 // A read that lands while another process is mid-write can catch a truncated
 // file; one short retry rides out that window before the file is called corrupt.
@@ -38,9 +38,16 @@ export class DeviceTokenStore {
     const first = await readJsonFile(this.path);
     if (first.state === 'missing') return { devices: [] };
     if (first.state === 'corrupt') {
+      // A lock is not damage: `readJsonFile` already waited it out, so what
+      // remains is still a live store we must not pretend is empty (that
+      // 401s every paired phone as if their token were stale).
+      if (isTransientLockError(first.error)) throw first.error;
       await new Promise((resolve) => setTimeout(resolve, CORRUPT_RETRY_MS));
       const second = await readJsonFile(this.path);
-      if (second.state === 'corrupt') return { devices: [], corrupt: second.error };
+      if (second.state === 'corrupt') {
+        if (isTransientLockError(second.error)) throw second.error;
+        return { devices: [], corrupt: second.error };
+      }
       return { devices: Array.isArray(second.value?.devices) ? second.value.devices : [] };
     }
     return { devices: Array.isArray(first.value?.devices) ? first.value.devices : [] };

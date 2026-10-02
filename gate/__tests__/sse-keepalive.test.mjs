@@ -29,17 +29,23 @@ class FakeRes extends EventEmitter {
     this.writes = [];
     this.writableEnded = false;
     this.destroyed = false;
+    this.writeOk = true;
   }
 
   write(chunk) {
     if (this.writableEnded || this.destroyed) throw new Error('write after end');
     this.writes.push(chunk);
-    return true;
+    return this.writeOk;
   }
 
   end() {
     this.writableEnded = true;
     this.emit('finish');
+  }
+
+  destroy() {
+    this.destroyed = true;
+    this.emit('close');
   }
 }
 
@@ -74,6 +80,14 @@ test('a silent response is written comment frames, and nothing once it ends', as
   stop();
   await wait(20);
   assert.equal(res.writes.length, written);
+});
+
+test('a write that never drains is a dead peer: the response is destroyed', async () => {
+  const res = new FakeRes();
+  res.writeOk = false;
+  startSseKeepalive(res, { intervalMs: 10, drainTimeoutMs: 30 });
+  await wait(80);
+  assert.equal(res.destroyed, true, 'a half-open socket must not keep the stream open');
 });
 
 test('a destroyed response stops the heartbeat instead of throwing into a timer', async () => {

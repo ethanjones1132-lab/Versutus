@@ -17,6 +17,12 @@
 /** The cadence the protocol advertises: one keepalive every 15 s. */
 export const KEEPALIVE_MS = 15000;
 
+// How long a heartbeat may sit in the kernel buffer with no `drain` before
+// the peer is treated as gone. `res.write` into a half-open socket returns
+// false and does not throw, so without this a locked phone that never FINs
+// keeps its shell (and the response) forever.
+const DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
+
 /**
  * The standard streaming headers, plus the heartbeat contract.
  *
@@ -77,15 +83,33 @@ export function createSseFrameTracker() {
  *
  * @returns {() => void} `stop()`, idempotent, for a route that ends early.
  */
-export function startSseKeepalive(res, { intervalMs = KEEPALIVE_MS, canWrite } = {}) {
+export function startSseKeepalive(res, { intervalMs = KEEPALIVE_MS, canWrite, drainTimeoutMs = DEFAULT_DRAIN_TIMEOUT_MS } = {}) {
   let timer = null;
+  let drainTimer = null;
   let stopped = false;
   const stop = () => {
     if (stopped) return;
     stopped = true;
     clearInterval(timer);
+    if (drainTimer) clearTimeout(drainTimer);
+    drainTimer = null;
     res.off('close', stop);
     res.off('finish', stop);
+  };
+  const waitForDrain = () => {
+    if (drainTimer || stopped) return;
+    drainTimer = setTimeout(() => {
+      drainTimer = null;
+      stop();
+      try { res.destroy(); } catch { /* already gone */ }
+    }, drainTimeoutMs);
+    drainTimer.unref?.();
+    res.once('drain', () => {
+      if (drainTimer) {
+        clearTimeout(drainTimer);
+        drainTimer = null;
+      }
+    });
   };
   timer = setInterval(() => {
     if (res.writableEnded || res.destroyed) {
@@ -93,8 +117,10 @@ export function startSseKeepalive(res, { intervalMs = KEEPALIVE_MS, canWrite } =
       return;
     }
     if (canWrite && !canWrite()) return;
+    if (drainTimer) return;
     try {
-      res.write(': keepalive\n\n');
+      const ok = res.write(': keepalive\n\n');
+      if (ok === false) waitForDrain();
     } catch {
       stop();
     }

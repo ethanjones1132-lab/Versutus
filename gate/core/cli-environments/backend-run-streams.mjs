@@ -66,6 +66,16 @@ export function createBackendRunStreams(
   /** Runs whose archive hit the byte cap: truncated prefix, never complete. */
   const capped = new Set();
   let appends = 0;
+  // The directory is created once: a recursive mkdirSync on every frame was
+  // a third of the relay's synchronous cost for work that is done after the
+  // first append.
+  let dirReady = false;
+
+  function ensureDir() {
+    if (dirReady) return;
+    mkdirSync(dir, { recursive: true });
+    dirReady = true;
+  }
 
   function fileFor(runId) {
     return join(dir, `${safeSegment(runId)}.sse`);
@@ -131,6 +141,7 @@ export function createBackendRunStreams(
       if (active.has(runId)) return false;
       active.add(runId);
       capped.delete(runId);
+      try { ensureDir(); } catch { dirReady = false; }
       if (!existsSync(markerFor(runId))) {
         try {
           truncateSync(fileFor(runId), 0);
@@ -173,7 +184,7 @@ export function createBackendRunStreams(
       const slice = bytes.length > allowed ? bytes.subarray(0, allowed) : bytes;
       if (bytes.length > allowed) capped.add(runId);
       try {
-        mkdirSync(dir, { recursive: true });
+        ensureDir();
         appendFileSync(fileFor(runId), slice);
         sizes.set(runId, size + slice.length);
         // Pruning is a syscall walk; do it occasionally, never per frame.
@@ -194,7 +205,7 @@ export function createBackendRunStreams(
     markComplete(runId) {
       if (capped.has(runId)) return;
       try {
-        mkdirSync(dir, { recursive: true });
+        ensureDir();
         writeFileSync(markerFor(runId), 'complete\n', 'utf8');
       } catch {
         // Archive failures never take the live relay down with them.

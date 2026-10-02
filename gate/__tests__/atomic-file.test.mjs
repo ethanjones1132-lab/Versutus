@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import fsPromises, { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { readJsonFile, writeFileAtomic } from '../core/atomic-file.mjs';
+import { isTransientLockError, readJsonFile, writeFileAtomic } from '../core/atomic-file.mjs';
 
 async function makeDir() {
   return mkdtemp(join(tmpdir(), 'gate-atomic-file-'));
@@ -95,4 +96,41 @@ test('readJsonFile tells missing, ok and corrupt apart', async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('a brief Windows read lock is waited out rather than called corrupt', async () => {
+  const dir = await makeDir();
+  const path = join(dir, 'data.json');
+  await writeFileAtomic(path, JSON.stringify({ value: 1 }), 'utf8');
+
+  const original = fsPromises.readFile;
+  let refusals = 0;
+  fsPromises.readFile = async (target, ...rest) => {
+    if (String(target) === path && refusals < 2) {
+      refusals += 1;
+      const error = new Error('EBUSY: resource busy or locked');
+      error.code = 'EBUSY';
+      throw error;
+    }
+    return original(target, ...rest);
+  };
+  syncBuiltinESMExports();
+  try {
+    const result = await readJsonFile(path);
+    assert.equal(result.state, 'ok');
+    assert.deepEqual(result.value, { value: 1 });
+    assert.equal(refusals, 2);
+  } finally {
+    fsPromises.readFile = original;
+    syncBuiltinESMExports();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('isTransientLockError names the Windows sharing-violation codes', () => {
+  assert.equal(isTransientLockError({ code: 'EBUSY' }), true);
+  assert.equal(isTransientLockError({ code: 'EPERM' }), true);
+  assert.equal(isTransientLockError({ code: 'EACCES' }), true);
+  assert.equal(isTransientLockError({ code: 'ENOENT' }), false);
+  assert.equal(isTransientLockError({ code: 'EISDIR' }), false);
 });

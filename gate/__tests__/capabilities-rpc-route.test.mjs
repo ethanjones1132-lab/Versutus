@@ -102,6 +102,53 @@ test('dispatches rpc remounted under a provider child prefix', async () => {
   }
 });
 
+test('an RPC handler that never settles is answered 504 inside the bound', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gate-rpc-hang-'));
+  await mkdir(join(root, 'core', 'capabilities', 'cron'), { recursive: true });
+  await writeFile(
+    join(root, 'core', 'capabilities', 'cron', 'kind.mjs'),
+    `
+export default {
+  kind: 'cron',
+  label: 'Cron',
+  family: 'cron',
+  configFields: [{ key: 'schedule', label: 'Schedule', type: 'string', required: true }],
+  validate(config) {
+    const errors = [];
+    if (!config?.schedule) errors.push({ field: 'schedule', message: 'is required' });
+    return { ok: errors.length === 0, errors };
+  },
+  toManifestEntry(instance) { return { id: instance.id, schedule: instance.config.schedule }; },
+  createHandlers() {
+    return { run: () => new Promise(() => {}) };
+  },
+};
+`,
+    'utf8',
+  );
+  await mkdir(join(root, 'registry'), { recursive: true });
+  await writeFile(
+    join(root, 'registry', 'standup.json'),
+    JSON.stringify({ kind: 'cron', label: 'Standup', config: { schedule: '0 9 * * 1-5' } }),
+    'utf8',
+  );
+  const gate = await createGate({ root, port: 0, rpcTimeoutMs: 50 });
+  try {
+    const started = Date.now();
+    const response = await fetch(`http://localhost:${gate.port}/v1/capabilities/rpc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` },
+      body: JSON.stringify({ method: 'standup.run' }),
+    });
+    const elapsed = Date.now() - started;
+    assert.equal(response.status, 504);
+    assert.equal((await response.json()).error.code, 'rpc_timeout');
+    assert.ok(elapsed < 1000, `handler bound took ${elapsed}ms`);
+  } finally {
+    await gate.close();
+  }
+});
+
 test('returns 404 for an unknown method', async () => {
   const gate = await gateWithCronKind();
   try {

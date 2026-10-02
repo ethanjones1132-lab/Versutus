@@ -105,12 +105,25 @@ export class PairingStore {
     });
   }
 
-  /** Record a pending request, replacing any earlier one from the same device. */
+  /**
+   * Record a pending request. A second post from the same device updates the
+   * fields in place and keeps the requestId the operator may already have
+   * copied from `pair list`.
+   */
   addPending({ deviceId, publicKeyB64Url, clientId, role, scopes }) {
     return this.#serialize(async () => {
       const state = await this.#readForMutation();
+      const existing = state.pending.find((entry) => entry.deviceId === deviceId);
+      if (existing) {
+        existing.publicKeyB64Url = publicKeyB64Url;
+        existing.clientId = clientId;
+        existing.role = role;
+        existing.scopes = scopes;
+        existing.requestedAtMs = Date.now();
+        await this.#write(state);
+        return existing.requestId;
+      }
       const requestId = randomUUID();
-      state.pending = state.pending.filter((entry) => entry.deviceId !== deviceId);
       state.pending.push({ requestId, deviceId, publicKeyB64Url, clientId, role, scopes, requestedAtMs: Date.now() });
       if (state.pending.length > MAX_PENDING) {
         state.pending.splice(0, state.pending.length - MAX_PENDING);

@@ -5,7 +5,7 @@ import { request as httpRequest, createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { gunzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 
 import { createGate } from '../core/server.mjs';
 import { enableJsonCompression } from '../core/http-compress.mjs';
@@ -80,7 +80,7 @@ const BIG_JSON = JSON.stringify({ object: 'list', data: Array.from({ length: 40 
 
 test('a one-shot answer above the threshold is gzipped and inflates to the same JSON', () => {
   const res = fakeResponse();
-  enableJsonCompression(fakeRequest(), res);
+  enableJsonCompression(fakeRequest(), res, { gzip: gzipSync });
   res.setHeader('Content-Type', 'application/json');
   res.writeHead(200);
   res.end(BIG_JSON);
@@ -95,7 +95,7 @@ test('a one-shot answer above the threshold is gzipped and inflates to the same 
 
 test('a stale Content-Length the route set is replaced by the compressed one', () => {
   const res = fakeResponse();
-  enableJsonCompression(fakeRequest(), res);
+  enableJsonCompression(fakeRequest(), res, { gzip: gzipSync });
   res.setHeader('Content-Length', String(Buffer.byteLength(BIG_JSON)));
   res.writeHead(200);
   res.end(BIG_JSON);
@@ -106,7 +106,7 @@ test('a stale Content-Length the route set is replaced by the compressed one', (
 
 test('a stale Content-Length passed to writeHead itself does not survive', () => {
   const res = fakeResponse();
-  enableJsonCompression(fakeRequest(), res);
+  enableJsonCompression(fakeRequest(), res, { gzip: gzipSync });
   res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': '5000' });
   res.end(BIG_JSON);
 
@@ -116,7 +116,7 @@ test('a stale Content-Length passed to writeHead itself does not survive', () =>
 
 test('an existing Vary (CORS) is extended, never replaced', () => {
   const res = fakeResponse();
-  enableJsonCompression(fakeRequest(), res);
+  enableJsonCompression(fakeRequest(), res, { gzip: gzipSync });
   res.setHeader('Vary', 'Origin');
   res.writeHead(200);
   res.end(BIG_JSON);
@@ -126,7 +126,7 @@ test('an existing Vary (CORS) is extended, never replaced', () => {
 
 test('an answer below the threshold is left exactly as it was', () => {
   const res = fakeResponse();
-  enableJsonCompression(fakeRequest(), res);
+  enableJsonCompression(fakeRequest(), res, { gzip: gzipSync });
   res.writeHead(200);
   const small = JSON.stringify({ status: 'ok', timestamp: '2026-10-01T00:00:00.000Z' });
   res.end(small);
@@ -168,7 +168,7 @@ test('HEAD is never compressed', () => {
 
 test('an error response keeps its status and every other header', () => {
   const res = fakeResponse();
-  enableJsonCompression(fakeRequest(), res);
+  enableJsonCompression(fakeRequest(), res, { gzip: gzipSync });
   res.writeHead(502, { 'Content-Type': 'application/json', 'X-Versutus-Session-Id': 'ses_1' });
   const error = JSON.stringify({ error: { message: 'x'.repeat(2000), code: 'backend_error' } });
   res.end(error);
@@ -180,7 +180,7 @@ test('an error response keeps its status and every other header', () => {
 
 test('headersSent is true right after writeHead, as a route expects', () => {
   const res = fakeResponse();
-  enableJsonCompression(fakeRequest(), res);
+  enableJsonCompression(fakeRequest(), res, { gzip: gzipSync });
   res.writeHead(200);
   assert.equal(res.headersSent, true);
   assert.equal(res.writableEnded, false);
@@ -191,7 +191,7 @@ test('headersSent is true right after writeHead, as a route expects', () => {
 
 test('a route may still setHeader after writeHead', () => {
   const res = fakeResponse();
-  enableJsonCompression(fakeRequest(), res);
+  enableJsonCompression(fakeRequest(), res, { gzip: gzipSync });
   res.writeHead(200);
   res.setHeader('X-Versutus-Turn-Id', 'turn_1');
   res.end(BIG_JSON);
@@ -213,7 +213,7 @@ test('a failing compression falls back to the original body', () => {
 
 test('an event stream is passed through frame by frame', () => {
   const res = fakeResponse();
-  enableJsonCompression(fakeRequest(), res);
+  enableJsonCompression(fakeRequest(), res, { gzip: gzipSync });
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Versutus-Keepalive-Ms': '15000' });
   res.write('data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n');
   res.write('data: {"choices":[{"delta":{"content":"lo"}}]}\n\n');
@@ -229,7 +229,7 @@ test('an event stream is passed through frame by frame', () => {
 
 test('the first write passes the response through, whatever the status', () => {
   const res = fakeResponse();
-  enableJsonCompression(fakeRequest(), res);
+  enableJsonCompression(fakeRequest(), res, { gzip: gzipSync });
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.write(BIG_JSON);
   res.end();
@@ -240,7 +240,7 @@ test('the first write passes the response through, whatever the status', () => {
 
 test('a response that already carries Content-Encoding is left alone', () => {
   const res = fakeResponse();
-  enableJsonCompression(fakeRequest(), res);
+  enableJsonCompression(fakeRequest(), res, { gzip: gzipSync });
   res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Encoding': 'br' });
   res.end(BIG_JSON);
 
@@ -250,7 +250,7 @@ test('a response that already carries Content-Encoding is left alone', () => {
 
 test('a 204 is sent unchanged', () => {
   const res = fakeResponse();
-  enableJsonCompression(fakeRequest(), res);
+  enableJsonCompression(fakeRequest(), res, { gzip: gzipSync });
   res.writeHead(204);
   res.end('x'.repeat(4096));
 
@@ -260,7 +260,7 @@ test('a 204 is sent unchanged', () => {
 
 test('an answer finished without a writeHead of its own is still gzipped', () => {
   const res = fakeResponse();
-  enableJsonCompression(fakeRequest(), res);
+  enableJsonCompression(fakeRequest(), res, { gzip: gzipSync });
   res.end(BIG_JSON);
 
   assert.equal(res.statusCode, 200);
@@ -271,7 +271,7 @@ test('an answer finished without a writeHead of its own is still gzipped', () =>
 
 test('an empty end with no writeHead leaves the response untouched', () => {
   const res = fakeResponse();
-  enableJsonCompression(fakeRequest(), res);
+  enableJsonCompression(fakeRequest(), res, { gzip: gzipSync });
   res.end();
 
   assert.equal(res.statusCode, 200);
@@ -281,7 +281,7 @@ test('an empty end with no writeHead leaves the response untouched', () => {
 
 test('the end callback still runs on the compressed answer', () => {
   const res = fakeResponse();
-  enableJsonCompression(fakeRequest(), res);
+  enableJsonCompression(fakeRequest(), res, { gzip: gzipSync });
   res.writeHead(200);
   let flushed = false;
   res.end(BIG_JSON, () => { flushed = true; });
@@ -438,6 +438,40 @@ test('a route that never calls writeHead still answers with a status line and a 
     assert.equal(response.headers['content-encoding'], 'gzip');
     assert.equal(Number(response.headers['content-length']), response.body.length);
     assert.deepEqual(JSON.parse(gunzipSync(response.body).toString()), JSON.parse(rows));
+  } finally {
+    server.close();
+  }
+});
+
+test('gzip that returns a Promise does not stall a sibling request', async () => {
+  // A sync gzip in end() holds the loop for the whole compress. An async one
+  // must still gzip the answer, and a concurrent /health must be answered
+  // while that compress is in flight.
+  const server = createServer((req, res) => {
+    enableJsonCompression(req, res, {
+      gzip: (body) => new Promise((resolve) => setTimeout(() => resolve(gzipSync(body)), 80)),
+    });
+    if (req.url === '/health') {
+      res.end(JSON.stringify({ status: 'ok' }));
+      return;
+    }
+    res.end(BIG_JSON);
+  });
+  await new Promise((resolve) => server.listen(0, resolve));
+  try {
+    const port = server.address().port;
+    const bigP = rawRequest(port, '/models', { headers: { 'Accept-Encoding': 'gzip' } });
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    const started = Date.now();
+    const health = await rawRequest(port, '/health', { headers: { 'Accept-Encoding': 'gzip' } });
+    const healthMs = Date.now() - started;
+    assert.equal(health.status, 200);
+    assert.equal(JSON.parse(health.body.toString()).status, 'ok');
+    assert.ok(healthMs < 40, `health took ${healthMs}ms during an 80ms gzip`);
+    const big = await bigP;
+    assert.equal(big.status, 200);
+    assert.equal(big.headers['content-encoding'], 'gzip');
+    assert.deepEqual(JSON.parse(gunzipSync(big.body).toString()), JSON.parse(BIG_JSON));
   } finally {
     server.close();
   }

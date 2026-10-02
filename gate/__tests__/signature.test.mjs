@@ -53,6 +53,7 @@ test('rejects a signature already used within the replay window', () => {
   assert.equal(first.ok, true);
   assert.equal(second.ok, false);
   assert.match(second.reason, /replay|already used/);
+  assert.equal(second.replay, true);
 });
 
 test('rejects a malformed public key rather than throwing', () => {
@@ -69,6 +70,7 @@ test('a ReplayCache rejects a duplicate signature within the window', () => {
   assert.equal(first.ok, true);
   assert.equal(second.ok, false);
   assert.match(second.reason, /replay|already used/);
+  assert.equal(second.replay, true);
 });
 
 test('a ReplayCache entry expires after the skew window', async () => {

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { webCors } from './cors.mjs';
 import { enableJsonCompression } from './http-compress.mjs';
-import { sseHeaders, startSseKeepalive, createSseFrameTracker } from './sse.mjs';
+import { sseHeaders, startSseKeepalive, createSseFrameTracker, KEEPALIVE_MS } from './sse.mjs';
 import { loadCapabilities, describeKinds, resolveManifestInstances } from './capabilities/registry.mjs';
 import { buildInstanceHandlers } from './capabilities/dispatch.mjs';
 import { createRegistryMethods } from './capabilities/registry-methods.mjs';
@@ -97,6 +97,11 @@ const DEFAULT_DETACHED_TURN_LIMIT = 256;
 // for undici's default forever. This bounds the wait for RESPONSE HEADERS
 // only: a slow stream keeps streaming for as long as it is making progress.
 const DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS = 120 * 1000;
+// How long one RPC method may run before the Gate answers 504. Streaming
+// routes are not this bound — they end when the client leaves or the stream
+// does. `voice.install` can take minutes, so this is generous; a handler that
+// never settles is not.
+const DEFAULT_RPC_HANDLER_TIMEOUT_MS = 10 * 60 * 1000;
 // Provider states the operator has to fix, not faults a turn ran into: a
 // disabled provider, a provider with no key and a stored key this machine
 // cannot decrypt are all answered 409, and none of them says anything about
@@ -607,8 +612,14 @@ function writeUnknownTurn(res) {
  * life to whatever model it was born with. Pinning the model at creation
  * cannot help if creation keeps resolving to a session that already exists.
  */
+let threadTitleSeq = 0;
 function newThreadTitle() {
-  return `Versutus ${new Date().toISOString().replace('T', ' ').slice(0, 19)}`;
+  // Milliseconds plus a monotonic discriminator: Hermes recovers a duplicate
+  // title by returning the EXISTING session, so two implicit opens in the same
+  // second must not collide.
+  threadTitleSeq += 1;
+  const stamp = new Date().toISOString().replace('T', ' ').replace('Z', '');
+  return `Versutus ${stamp} ${threadTitleSeq.toString(36)}`;
 }
 
 function parseQualifiedModel(model) {
@@ -1018,6 +1029,8 @@ export async function createGate(config = {}) {
     detachedTurnLimit = DEFAULT_DETACHED_TURN_LIMIT,
     keepaliveIntervalMs,
     upstreamHeadersTimeoutMs = DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS,
+    rpcTimeoutMs = DEFAULT_RPC_HANDLER_TIMEOUT_MS,
+    sseDrainTimeoutMs,
     outcomeReloadDelayMs = DEFAULT_OUTCOME_RELOAD_DELAY_MS,
     // The Gate's own copy of every backend's session list. Injected whole so a
     // test can drive its clock and its bounds; the three below are the bounds
@@ -1511,6 +1524,7 @@ export async function createGate(config = {}) {
         // written to, and the stale row would survive the miss that retired it.
         const environmentId = backendId ?? (botId ? (await environmentWithBots())?.id : undefined);
         await sessionListIndex.remove(sessionIndexKey(environmentId, botId), sessionId);
+        turnSeqs.delete(sessionId);
       },
       // One session out of the Gate's own copy of that scope's list. It answers
       // the exact-id lookup for an environment whose backend has no get-by-id
@@ -1770,8 +1784,18 @@ export async function createGate(config = {}) {
     // Set common headers
     res.setHeader('Content-Type', 'application/json');
 
-    // Parse URL and method
-    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    // Parse URL and method. A malformed Host (spaces, extra colons) makes
+    // `new URL` throw; sitting outside the try that used to mean an
+    // unhandled rejection, an unanswered socket, and — past 20 in a minute —
+    // the process-guard restart.
+    let url;
+    try {
+      url = new URL(req.url ?? '/', `http://${req.headers.host || 'localhost'}`);
+    } catch {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: { message: 'Invalid Host or request URL', code: 'invalid_host' } }));
+      return;
+    }
     const pathname = url.pathname;
     const method = req.method;
 
@@ -1852,6 +1876,24 @@ export async function createGate(config = {}) {
         );
 
         if (!verification.ok) {
+          // A lost answer on a lossy link is retried with the same signed
+          // body. That is a replay of a request we already accepted, so
+          // answer it the same way again rather than 403 "denied".
+          if (verification.replay) {
+            const existing = await deviceTokens.list();
+            const already = existing.find((entry) => entry.deviceId === device.id && !entry.revoked);
+            if (already) {
+              res.writeHead(200);
+              res.end(JSON.stringify({ status: 'granted', token: already.token, role: already.role, scopes: already.scopes }));
+              return;
+            }
+            const pending = (await pairing.listPending()).find((entry) => entry.deviceId === device.id);
+            if (pending) {
+              res.writeHead(202);
+              res.end(JSON.stringify({ status: 'pending', requestId: pending.requestId }));
+              return;
+            }
+          }
           res.writeHead(403);
           res.end(JSON.stringify({ status: 'denied', reason: verification.reason }));
           return;
@@ -1922,7 +1964,7 @@ export async function createGate(config = {}) {
         /^\/v1\/jobs\/[^/]+\/(run|pause|resume)$/.test(pathname) ||
         (method === 'DELETE' && /^\/v1\/jobs\/[^/]+$/.test(pathname)) ||
         (pathname === '/v1/sessions' && (method === 'GET' || method === 'POST')) ||
-        /^\/v1\/sessions\/[^/]+$/.test(pathname) ||
+        (method === 'DELETE' && /^\/v1\/sessions\/[^/]+$/.test(pathname)) ||
         /^\/v1\/sessions\/[^/]+\/messages$/.test(pathname) ||
         (pathname === '/v1/environments' && method === 'GET') ||
         /^\/v1\/environments\/[^/]+\/runs$/.test(pathname) ||
@@ -1930,8 +1972,8 @@ export async function createGate(config = {}) {
         /^\/v1\/environments\/[^/]+\/runs\/[^/]+\/cancel$/.test(pathname) ||
         /^\/v1\/environments\/[^/]+\/runs\/[^/]+\/approve$/.test(pathname) ||
         (pathname === '/v1/runs' && method === 'POST') ||
-        /^\/v1\/runs\/[^/]+$/.test(pathname) ||
-        /^\/v1\/runs\/[^/]+\/(events|stop|approval|steer)$/.test(pathname) ||
+        (method === 'GET' && /^\/v1\/runs\/[^/]+$/.test(pathname)) ||
+        /^\/v1\/runs\/[^/]+\/(events|stop|approval)$/.test(pathname) ||
         (pathname === '/v1/capabilities/rpc' && method === 'POST') ||
         /^\/p\/[^/]+\/v1\/capabilities\/rpc$/.test(pathname);
 
@@ -1949,7 +1991,22 @@ export async function createGate(config = {}) {
       const authHeader = req.headers.authorization;
       // The device grant is kept, not just counted: it is the only caller
       // identity the Gate has, and terminal sessions are bound to it.
-      const deviceGrant = await deviceTokens.verify(authHeader);
+      let deviceGrant;
+      try {
+        deviceGrant = await deviceTokens.verify(authHeader);
+      } catch (error) {
+        // A Windows read lock is not "no such token": answering 401 here
+        // tells the operator to re-pair every phone.
+        if (error?.code === 'EBUSY' || error?.code === 'EPERM' || error?.code === 'EACCES') {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: 'Service Unavailable',
+            message: 'Device token store is temporarily unreadable',
+          }));
+          return;
+        }
+        throw error;
+      }
       const isAuthenticated = (await tokenStore.verify(authHeader)) || Boolean(deviceGrant);
       const callerId = deviceGrant?.deviceId ?? 'bootstrap-token';
 
@@ -2650,7 +2707,7 @@ export async function createGate(config = {}) {
         res.writeHead(200, sseHeaders());
         // A shell at an idle prompt says nothing for as long as the user reads
         // it, and the socket is exactly the thing a locked phone loses.
-        startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
+        startSseKeepalive(res, { intervalMs: keepaliveIntervalMs, drainTimeoutMs: sseDrainTimeoutMs });
         const send = (event, data) => {
           if (event) res.write(`event: ${event}\n`);
           res.write(`data: ${data}\n\n`);
@@ -2672,6 +2729,11 @@ export async function createGate(config = {}) {
         }
         send('session', JSON.stringify({ sid: session.sid }));
         terminalStreams.add(res);
+        // TCP keepalive is what finds a half-open socket that never FINs
+        // (locked phone, dropped Tailscale) — Node's HTTP server has no idle
+        // timeout of its own, and our SSE keepalive writes are too small to
+        // fill the buffer on their own.
+        req.socket?.setKeepAlive?.(true, keepaliveIntervalMs ?? KEEPALIVE_MS);
         // The stream owns the session's lifetime: a phone that drops off wifi
         // must not leave a shell running on the host forever.
         res.on('close', () => {
@@ -2700,7 +2762,21 @@ export async function createGate(config = {}) {
           }));
           return;
         }
-        session.write(body.data ?? '');
+        try {
+          session.write(body.data ?? '');
+        } catch (error) {
+          // The shell can exit in the same tick the keystroke arrives: write()
+          // throws, and the sid is about to vanish. Same class of miss as the
+          // branch above, so the same 404.
+          if (error?.message === 'terminal session has exited') {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              error: { message: `unknown terminal session "${body.sid ?? ''}"`, code: 'unknown_session' },
+            }));
+            return;
+          }
+          throw error;
+        }
         res.writeHead(200);
         res.end(JSON.stringify({ ok: true }));
         return;
@@ -3226,6 +3302,7 @@ export async function createGate(config = {}) {
         if (indexesSessions(backend)) {
           await sessionListIndex.remove(sessionIndexKey(environmentId, botId), sessionId);
         }
+        turnSeqs.delete(sessionId);
         res.writeHead(200);
         res.end(JSON.stringify({ deleted: true }));
         return;
@@ -3894,10 +3971,29 @@ export async function createGate(config = {}) {
           // own paired identity rather than a client-supplied device id.
           // `bootstrap` marks a caller holding the Gate's own token and no grant;
           // push-rpc.mjs lets it register only in its own namespace.
-          const result = await handler(params, {
+          const work = Promise.resolve().then(() => handler(params, {
             deviceId: deviceGrant?.deviceId ?? null,
             bootstrap: !deviceGrant,
+          }));
+          // A hang after we have already answered must not become an
+          // unhandled rejection (that is the process-guard restart).
+          work.catch(() => {});
+          let timer;
+          const timeout = new Promise((_, reject) => {
+            timer = setTimeout(() => {
+              const error = new Error(`RPC method "${rpcMethod}" exceeded the Gate's time bound`);
+              error.code = 'rpc_timeout';
+              error.status = 504;
+              reject(error);
+            }, rpcTimeoutMs);
+            timer.unref?.();
           });
+          let result;
+          try {
+            result = await Promise.race([work, timeout]);
+          } finally {
+            clearTimeout(timer);
+          }
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ result }));
         } catch (error) {
@@ -3910,6 +4006,15 @@ export async function createGate(config = {}) {
         }
         return;
       }
+
+      // Known to the pre-auth table but claimed by no handler: answer rather
+      // than returning with the socket still open (the same unanswered shape
+      // a throw before the try used to leave).
+      res.writeHead(404);
+      res.end(JSON.stringify({
+        error: 'Not Found',
+        message: `${method} ${pathname} not found`,
+      }));
     } catch (err) {
       if (err === invalidJsonBody) {
         res.writeHead(400);

@@ -418,11 +418,16 @@ async function handleStart(args = []) {
     console.log(`Listening on port ${gate.port}`);
     console.log(`Manifest: http://127.0.0.1:${gate.port}/.well-known/gateway.json`);
 
-    // Handle graceful shutdown
-    process.on('SIGINT', async () => {
+    // Handle graceful shutdown. Capped like the supervised path: an SSE
+    // response that outlives close() used to make this await hang forever.
+    process.on('SIGINT', () => {
       console.log('\nShutting down...');
-      await gate.close();
-      process.exit(0);
+      const force = setTimeout(() => process.exit(0), 15000);
+      force.unref?.();
+      gate.close().then(
+        () => { clearTimeout(force); process.exit(0); },
+        () => { clearTimeout(force); process.exit(0); },
+      );
     });
   } catch (err) {
     // Outside 'exit' the async release completes; releaseSync in the exit

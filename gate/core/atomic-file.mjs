@@ -11,6 +11,14 @@ const RENAME_ATTEMPTS = 25;
 const RENAME_RETRY_MIN_MS = 10;
 const RENAME_RETRY_JITTER_MS = 30;
 
+// The same sharing-violation codes the rename retry waits out: a reader that
+// lands while another handle still has the file open (indexer, AV, a just-
+// finished write) gets EBUSY/EPERM/EACCES, which is not a damaged file.
+const TRANSIENT_LOCK_CODES = new Set(['EBUSY', 'EPERM', 'EACCES']);
+// Shorter than the rename loop: a reader that waits a full second on a
+// persistently unreadable file would stall every authenticated request.
+const READ_LOCK_ATTEMPTS = 8;
+
 async function renameWithRetry(tmpPath, targetPath) {
   let lastError;
   for (let attempt = 0; attempt < RENAME_ATTEMPTS; attempt += 1) {
@@ -45,19 +53,42 @@ export async function writeFileAtomic(path, data, { mode, encoding } = {}) {
 }
 
 /**
+ * True when a read failed because the file is briefly locked, not because
+ * its contents are damaged. Callers that treat `corrupt` as "empty list"
+ * must not do that for these codes.
+ */
+export function isTransientLockError(error) {
+  return TRANSIENT_LOCK_CODES.has(error?.code);
+}
+
+/**
  * Read and parse a JSON file, telling the three outcomes apart: the file is
  * absent (`missing`), it parsed (`ok`), or it exists but is unreadable or
  * unparseable (`corrupt`, with the reason). Callers must not treat a
  * corrupt file as an empty one — that would silently drop every record.
+ *
+ * A Windows sharing violation is waited out with the same patient policy as
+ * `renameWithRetry` before it is called corrupt: the file is fine, just
+ * briefly locked.
  */
 export async function readJsonFile(path) {
   let text;
-  try {
-    text = await readFile(path, 'utf8');
-  } catch (error) {
-    if (error?.code === 'ENOENT') return { state: 'missing' };
-    return { state: 'corrupt', error };
+  let lastError;
+  for (let attempt = 0; attempt < READ_LOCK_ATTEMPTS; attempt += 1) {
+    try {
+      text = await readFile(path, 'utf8');
+      lastError = null;
+      break;
+    } catch (error) {
+      if (error?.code === 'ENOENT') return { state: 'missing' };
+      lastError = error;
+      if (!isTransientLockError(error) || attempt === READ_LOCK_ATTEMPTS - 1) {
+        return { state: 'corrupt', error };
+      }
+      await new Promise((resolve) => setTimeout(resolve, RENAME_RETRY_MIN_MS + Math.random() * RENAME_RETRY_JITTER_MS));
+    }
   }
+  if (lastError) return { state: 'corrupt', error: lastError };
   try {
     return { state: 'ok', value: JSON.parse(text) };
   } catch (error) {
