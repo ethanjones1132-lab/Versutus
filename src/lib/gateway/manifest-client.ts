@@ -1,4 +1,3 @@
-import { createChatStreamAcc, interpretChatStreamChunk } from '@/lib/gateway/chat-stream-delta';
 import type { PublicBot } from '@/lib/gateway/bots';
 import type { ChatContentPart } from '@/lib/gateway/chat-parts';
 import type { CronJob, CronRun, CronTurn } from '@/lib/gateway/cron';
@@ -12,6 +11,15 @@ import { advertisedIpv4 } from '@/lib/gateway/host-lookup';
 import { HttpTransport, assertChatStreamComplete } from '@/lib/gateway/http-transport';
 import { GatewayRpcError, rpcParamsWithScope } from '@/lib/gateway/rpc-scope';
 import { ConnectionMonitor, hasRecentContact } from '@/lib/gateway/connection-monitor';
+import {
+  readChatFrames,
+  turnFromMeta,
+  turnsFromListEnvelope,
+  type TurnEventStreamOptions,
+  type TurnListFilter,
+  type TurnMeta,
+  type TurnStreamResult,
+} from '@/lib/gateway/turns';
 import { streamingFetch } from '@/lib/net/streaming-fetch';
 import type { GatewayIdentity } from '@/lib/portal/identify';
 import type { GatewayBackend } from '@/lib/portal/manifest';
@@ -68,6 +76,8 @@ export class ManifestClient implements PortalClient {
   private selectedBackendId: string | undefined;
   private selectedBotId: string | undefined;
   private lastHealthError: string | null = null;
+  /** Latched once a `/v1/turns` read is answered 404 by this gateway. */
+  private turnsMissing = false;
   private transport: HttpTransport;
   private rootTransport: HttpTransport;
   private monitor: ConnectionMonitor;
@@ -440,6 +450,14 @@ export class ManifestClient implements PortalClient {
       onModelReport?: (report: import('@/lib/gateway/run-failures').ModelReport) => void;
       /** The turn id sent with the request, so a cancel can name it. */
       onTurnId?: (turnId: string) => void;
+      /**
+       * The id to send under, when the caller minted this line's turn already.
+       * A queued line reuses its own, so a resend the Gate already took comes
+       * back as a replay of the same turn rather than a second one.
+       */
+      turnId?: string;
+      /** The Gate accepted the turn: its stream started, or it replayed it. */
+      onAccepted?: (turnId: string) => void;
       /** A session the Gate adopted for the turn, when it reports one. */
       onSession?: (sessionId: string) => void;
     },
@@ -475,8 +493,10 @@ export class ManifestClient implements PortalClient {
 
     // Named before the request so a caller can cancel the turn even if the
     // POST itself never lands. The Gate correlates the streamed chat with this
-    // id for the server-side cancel.
-    const turnId = createTurnId();
+    // id for the server-side cancel — and keys the turn's journal by it, which
+    // is why a caller that already minted one passes it in: every resend of a
+    // queued line has to be the same turn, not a second one.
+    const turnId = options?.turnId ?? createTurnId();
     options?.onTurnId?.(turnId);
 
     const controller = new AbortController();
@@ -499,56 +519,37 @@ export class ManifestClient implements PortalClient {
       throw new Error(messageFromHttpErrorBody(errorText, response.status));
     }
 
+    // The Gate has the turn now, whichever way it answered: HTTP 200 opened a
+    // new turn, and the same id again is a replay of the one already journaled.
+    // A turn that ends here belongs to the Gate, so the caller's outbox may
+    // release the line it was holding.
+    options?.onAccepted?.(turnId);
+
     // A turn the Gate opened for itself names its thread in the response, so
     // the app can keep writing to the same session instead of forking a new
     // one on every send.
     const adopted = response.headers?.get('x-versutus-session-id');
     if (adopted && adopted !== sentSessionId) options?.onSession?.(adopted);
 
-    let fullText = '';
-    // A failed turn arrives as an error frame inside an HTTP 200 stream, so
-    // response.ok above cannot catch it. Ignoring the frame renders an empty
-    // assistant bubble with nothing to explain it — the exact silent failure
-    // this stream was changed to stop producing. Captured here rather than
-    // thrown, because the handler's own catch would swallow a throw.
-    let streamError: string | null = null;
-    const acc = createChatStreamAcc();
-    const completed = await this.transport.streamSSE(
+    const frames = await readChatFrames({
       response,
-      (data) => {
-        try {
-          const interpreted = interpretChatStreamChunk(JSON.parse(data), acc);
-          if (interpreted.streamError) {
-            streamError = interpreted.streamError;
-            return;
-          }
-          if (interpreted.telemetryWarning) options?.onTelemetryWarning?.(interpreted.telemetryWarning);
-          if (interpreted.text) {
-            fullText += interpreted.text;
-            onDelta(interpreted.text);
-          }
-          if (interpreted.reasoning) options?.onReasoning?.(interpreted.reasoning);
-          if (options?.onToolCall) {
-            for (const tool of interpreted.toolCalls) options.onToolCall(tool);
-          }
-          // Which model actually served the turn. Reported once, after the
-          // text, so the caller can say so instead of echoing the pick back.
-          if (interpreted.ranModel && options?.onModelReport) {
-            options.onModelReport({
-              ran: interpreted.ranModel,
-              requested: interpreted.requestedModel ?? options?.model,
-              provider: interpreted.provider,
-            });
-          }
-        } catch {
-          // ignore malformed chunks — matches HermesGatewayClient's streamChat
-        }
-      },
+      transport: this.transport,
       signal,
-    );
+      callbacks: {
+        onDelta,
+        onToolCall: options?.onToolCall,
+        onReasoning: options?.onReasoning,
+        onTelemetryWarning: options?.onTelemetryWarning,
+        // The model asked for is what this send requested, so a report that
+        // names only what ran still says what it was instead of.
+        onModelReport: options?.onModelReport
+          ? (report) => options.onModelReport!({ ...report, requested: report.requested ?? options?.model })
+          : undefined,
+      },
+    });
 
-    assertChatStreamComplete(completed, streamError, signal);
-    return fullText;
+    assertChatStreamComplete(frames.completed, frames.error, signal, frames.errorCode);
+    return frames.text;
   }
 
   /** Native environments this gate can hold a conversation through. */
@@ -1209,6 +1210,130 @@ export class ManifestClient implements PortalClient {
     } catch {
       // best effort — the local abort already stopped the user's stream
     }
+  }
+
+  // ─── The turn journal (design spec §3) ───────────────────────────
+  //
+  // A Gate with a journal is what makes a detached turn survivable: the turn is
+  // the Gate's, not this request's, so a phone that comes back asks what is
+  // still running and follows it. A gateway with no such routes is answered
+  // once and then never asked again (`turnsUnsupported`), so an older Gate costs
+  // one 404 and then behaves exactly as it always did.
+
+  /**
+   * True once this Gate answered 404 for `/v1/turns`. Latched for the client's
+   * life: the journal does not appear mid-session, and re-reading a route that
+   * does not exist on every foreground return is noise the operator can see.
+   */
+  get turnsUnsupported(): boolean {
+    return this.turnsMissing;
+  }
+
+  /** The journal's collection route: the manifest's when it declares one. */
+  private turnsPath(): string {
+    return (this.endpoints.turns ?? '/v1/turns').replace(/\/+$/, '');
+  }
+
+  /** True when a refusal named a turn this device cannot read (retention, or a wrong id). */
+  private refusedUnknownTurn(error: unknown): boolean {
+    const code = error instanceof Error ? (error as Error & { code?: string }).code : undefined;
+    return code === 'unknown_turn';
+  }
+
+  /** The HTTP status a refusal carried, when it carried one. */
+  private refusalStatus(error: unknown): number | undefined {
+    const status = (error as { status?: unknown } | null)?.status;
+    return typeof status === 'number' ? status : undefined;
+  }
+
+  async listTurns(filter?: TurnListFilter): Promise<TurnMeta[]> {
+    if (this.turnsMissing) return [];
+    const query = new URLSearchParams();
+    if (filter?.sessionId) query.set('sessionId', filter.sessionId);
+    if (filter?.status && filter.status !== 'unknown') query.set('status', filter.status);
+    if (filter?.limit) query.set('limit', String(filter.limit));
+    const suffix = query.toString();
+    try {
+      const result = await this.rootTransport.request<unknown>(
+        'GET',
+        `${this.turnsPath()}${suffix ? `?${suffix}` : ''}`,
+      );
+      return turnsFromListEnvelope(result);
+    } catch (error) {
+      // A 404 here is a gateway with no journal at all, which is a fact about it
+      // rather than a read that failed: latch it, so nothing asks again. Anything
+      // else stays retryable, because a flaky host is not a gateway without turns.
+      if (this.refusalStatus(error) === 404) {
+        this.turnsMissing = true;
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  async getTurn(turnId: string): Promise<TurnMeta | null> {
+    if (this.turnsMissing) return null;
+    try {
+      const result = await this.rootTransport.request<unknown>(
+        'GET',
+        `${this.turnsPath()}/${encodeURIComponent(turnId)}`,
+      );
+      return turnFromMeta(result);
+    } catch (error) {
+      if (this.refusalStatus(error) === 404) {
+        // One turn this device can no longer read (retention) is not a gateway
+        // without a journal, so nothing is latched there — only the answer. A
+        // bare 404 with no code naming a turn is the route itself missing.
+        if (!this.refusedUnknownTurn(error)) this.turnsMissing = true;
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Replay a turn's journal and follow it live.
+   *
+   * The very transport the chat stream uses: React Native's global fetch has no
+   * readable response body, so a stream read any other way delivers zero events
+   * on device while every Node-side test stays green (see streaming-fetch.ts and
+   * the comment on `authorizedFetch`). The frames are the chat frames — the
+   * Gate journals the payloads it wrote — so this goes through the same reader,
+   * and reports each frame's `id:` seq so a drop resumes where it stopped.
+   */
+  async streamTurnEvents(
+    turnId: string,
+    options: TurnEventStreamOptions,
+  ): Promise<TurnStreamResult> {
+    const after = options.after ?? 0;
+    if (this.turnsMissing) {
+      return { completed: false, text: '', error: null, lastSeq: after };
+    }
+    const response = await this.authorizedFetch(
+      `${this.turnsPath()}/${encodeURIComponent(turnId)}/events?after=${after}`,
+      { signal: options.signal },
+    );
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      const message = messageFromHttpErrorBody(errorText, response.status);
+      if (response.status === 404) {
+        // A turn this device cannot read is this read's own failure; a bare 404
+        // is the route itself, which latches so nothing asks for it again.
+        if (errorCodeFromHttpBody(errorText) !== 'unknown_turn') {
+          this.turnsMissing = true;
+          throw new Error(message);
+        }
+        throw new Error(`unknown_turn: ${message}`);
+      }
+      throw new Error(message);
+    }
+    return readChatFrames({
+      response,
+      transport: this.rootTransport,
+      signal: options.signal,
+      after,
+      callbacks: options,
+    });
   }
 
   private setStatus(status: ConnectionStatus, detail = '', info?: { authRejected?: boolean }) {

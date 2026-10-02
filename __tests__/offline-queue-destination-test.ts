@@ -150,7 +150,15 @@ describe('the flush opens the Bot Chat a queued reply was for, before it sends',
   const BOT_TO_OPEN = 'const botToOpen = item.botId ?? (isRunQueuedRow(item) ? item.run?.bot : undefined);';
   const GUARD = 'if (botToOpen) {';
   const OPEN = 'await openBot(botToOpen);';
-  const SEND = 'await sendChatInput(item.text, { fromQueue: true, messageId: item.id });';
+  const SEND = 'await sendChatInput(item.text, {';
+
+  /**
+   * The chat send's own call: which row it sends, and the turn it sends it as.
+   * Pinned key by key, because the send has to name both — the row so the queued
+   * bubble is cleared instead of written twice, the turn so a retry is that turn
+   * on the Gate rather than a second one doing the same work.
+   */
+  const sendCall = (src: string) => between(src, SEND, '});');
 
   /** The flush's loop, from the queue split to the end of the batch. */
   const flush = () =>
@@ -242,7 +250,10 @@ describe('the flush opens the Bot Chat a queued reply was for, before it sends',
 
     expect(src).toContain('for (const item of forActive)');
     expect(src.split('sendChatInput(').length - 1).toBe(1);
-    expect(src).toContain('messageId: item.id');
+    const call = sendCall(src);
+    expect(call).toContain('fromQueue: true,');
+    expect(call).toContain('messageId: item.id,');
+    expect(call).toContain('turnId: item.turnId,');
     // No second pipeline of its own.
     expect(src).not.toContain('fetch(');
     expect(src).not.toContain('gatewayRequest');
@@ -259,16 +270,16 @@ describe('the flush opens the Bot Chat a queued reply was for, before it sends',
 
 describe('a flush that escapes mid-batch keeps the lines it has not sent', () => {
   const provider = () => readSource('src', 'context', 'gateway-provider.tsx');
-  const SEND = 'await sendChatInput(item.text, { fromQueue: true, messageId: item.id });';
+  const SEND = 'await sendChatInput(item.text, {';
   const CLEAR = 'unsent.delete(item);';
-  const RESCUE = '// Re-queue anything that did not clear so a kill mid-flush is not data loss.';
+  const RESCUE = 'const stranded = forActive.filter((item) => unsent.has(item));';
   const RELEASE = 'flushingOfflineRef.current = false;';
 
   /** The batch: from the queue split to the moment the flush is released. */
   const flush = () =>
     between(provider(), '// Only flush items destined for the active gateway.', RELEASE);
 
-  /** What takes over when the loop escapes — the rescue's comment to the release. */
+  /** What takes over when the loop escapes — the put-back to the release. */
   const rescue = () => between(provider(), RESCUE, RELEASE);
 
   test('the loop holds the rows it still owes, and a row is cleared only once its send returned', () => {
@@ -287,15 +298,38 @@ describe('a flush that escapes mid-batch keeps the lines it has not sent', () =>
     expect(src.split(CLEAR).length - 1).toBe(2);
   });
 
+  test('and the send only cleared it when the words actually left this phone', () => {
+    const tail = between(flush(), SEND, '} catch {');
+
+    // Every outcome that is NOT the Gate (or the sheet) holding the line ends the
+    // batch with the row still owed: `busy` is a live turn owning the thread, and
+    // deleting a line on that footing is how a queued reply used to vanish.
+    expect(tail).toContain('if (!queuedRowIsSent(outcome)) {');
+    const kept = tail.indexOf('if (!queuedRowIsSent(outcome)) {');
+    const cleared = tail.indexOf(CLEAR);
+    expect(kept).toBeGreaterThan(-1);
+    expect(cleared).toBeGreaterThan(kept);
+    expect(provider()).toContain('function queuedRowIsSent(outcome: SendChatInputOutcome): boolean {');
+    // `failed` is the outcome the outbox was already keeping, and it is one of
+    // these: a request that never reached the Gate is not an acceptance.
+    expect(provider()).toContain("outcome === 'sent' ||");
+    expect(provider()).not.toContain("outcome === 'busy' ||");
+  });
+
   test('an escape puts every row it did not send back on the queue and persists them', () => {
     const body = rescue();
 
-    expect(body).toContain('const stranded = forActive.filter((item) => unsent.has(item));');
-    expect(body).toContain('offlineQueueRef.current.push(...stranded);');
+    // AHEAD of whatever is on the queue now: these rows are the operator's
+    // earlier words, and the outbox is read in the order it was typed.
+    expect(body).toContain('offlineQueueRef.current = [...stranded, ...offlineQueueRef.current];');
     expect(body).toContain('persistOfflineQueue();');
     // The words are durable before the flush is released, so a connection that
     // returns later finds every line that never left — and nothing here sends.
     expect(body).not.toContain('sendChatInput(');
+    // And the put-back is the `finally`'s, not the catch's: a batch that simply
+    // ran out of rows to send — one the Gate never accepted — is the common case,
+    // and it must leave the queue whole as well.
+    expect(provider().indexOf(RESCUE)).toBeGreaterThan(provider().indexOf('} finally {'));
   });
 
   test('a row the Bot-open path already put back is settled once, never pushed twice', () => {
@@ -388,7 +422,7 @@ describe('a batch the flush is holding stays on disk until each row settles', ()
   const CLEAR = 'unsent.delete(item);';
   const PACK = 'persistOfflineQueue();';
   const RELEASE = 'flushingOfflineRef.current = false;';
-  const SEND = 'await sendChatInput(item.text, { fromQueue: true, messageId: item.id });';
+  const SEND = 'await sendChatInput(item.text, {';
 
   /** The batch: from the queue split to the moment the flush is released. */
   const flush = () =>

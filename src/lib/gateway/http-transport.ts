@@ -27,6 +27,15 @@ export type StreamSseOptions = {
    * turn must never be cut off.
    */
   idleTimeoutMs?: number;
+  /**
+   * The `id:` field of each event, verbatim.
+   *
+   * The chat stream ignores ids; a turn-event replay carries the journal seq on
+   * every frame, and the caller needs it to know where a dropped stream stopped
+   * so the next read asks for events after that seq instead of re-rendering the
+   * ones it already showed.
+   */
+  onId?: (id: string) => void;
 };
 
 /**
@@ -57,13 +66,25 @@ export function sanitizeHeaderValue(value: string | undefined): string {
   return value.replace(/[^\x20-\x7E]/g, '').trim();
 }
 
-/** A chat turn completes only after its stream reports a terminal marker. */
+/**
+ * A chat turn completes only after its stream reports a terminal marker.
+ *
+ * `streamErrorCode` is the code the terminal error frame named (`gate_restart`
+ * is the one that changes what the bubble says). It rides on the thrown error
+ * rather than in its message: the operator sees the Gate's own words exactly as
+ * before, while the caller can still tell a Gate restart from a model failure.
+ */
 export function assertChatStreamComplete(
   completed: boolean,
   streamError: string | null,
   signal?: AbortSignal,
+  streamErrorCode?: string,
 ): void {
-  if (streamError) throw new Error(streamError);
+  if (streamError) {
+    const error = new Error(streamError);
+    if (streamErrorCode) (error as Error & { code?: string }).code = streamErrorCode;
+    throw error;
+  }
   if (signal?.aborted) throw new Error('Chat stream stopped');
   if (!completed) throw new Error('Chat stream closed unexpectedly before completion.');
 }
@@ -240,6 +261,11 @@ export class HttpTransport {
 
     const acceptLine = (line: string): boolean => {
       const normalized = line.endsWith('\r') ? line.slice(0, -1) : line;
+      if (normalized.startsWith('id:')) {
+        const rawId = normalized.slice(3);
+        options?.onId?.(rawId.startsWith(' ') ? rawId.slice(1) : rawId);
+        return false;
+      }
       if (!normalized.startsWith('data:')) return false;
       const raw = normalized.slice(5);
       const data = raw.startsWith(' ') ? raw.slice(1) : raw;

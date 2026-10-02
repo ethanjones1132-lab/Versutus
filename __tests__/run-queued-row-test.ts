@@ -155,7 +155,14 @@ describe('isRunQueuedRow reads the shape back', () => {
 describe('the flush re-sends a run-shaped row through the run dispatch, not the chat one', () => {
   const provider = () => readSource('src', 'context', 'gateway-provider.tsx');
   const CHAT_SEND =
-    'await sendChatInput(item.text, { fromQueue: true, messageId: item.id });';
+    'await sendChatInput(item.text, {';
+
+  /**
+   * The chat send's own call: which row it sends, and the turn it sends it as.
+   * Pinned key by key — the row so the queued bubble is cleared rather than
+   * written twice, the turn so a retry is that turn on the Gate.
+   */
+  const sendCall = (src: string) => between(src, CHAT_SEND, '});');
 
   /** The flush's loop, from the queue split to the moment the flush is released. */
   const flush = () =>
@@ -200,8 +207,13 @@ describe('the flush re-sends a run-shaped row through the run dispatch, not the 
   test('the run branch carries the destination and no second pipeline exists', () => {
     const src = flush();
 
-    // One chat send in the loop, still the shape the destination tests pin.
+    // One chat send in the loop, still the shape the destination tests pin —
+    // including which row it sends and which turn it sends it as.
     expect(src.split(CHAT_SEND).length - 1).toBe(1);
+    const call = sendCall(src);
+    expect(call).toContain('fromQueue: true,');
+    expect(call).toContain('messageId: item.id,');
+    expect(call).toContain('turnId: item.turnId,');
     // The run row rides its own fold, with the shape handed through.
     expect(src).toContain('sendRunQueued(item.text, item.id, item.run)');
     // No second pipeline of its own: the run rides runTask inside the fold.

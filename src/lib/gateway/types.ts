@@ -227,6 +227,16 @@ export type ChatMessage = {
   interrupted?: boolean;
   /** Human-readable cause for an interruption, surfaced in the transcript bubble. */
   interruptedReason?: string;
+  /**
+   * The Gate turn this bubble is the reply to.
+   *
+   * A turn belongs to the Gate, so this is what lets a reopened app settle the
+   * bubble by IDENTITY — `GET /v1/turns/{id}` says what became of it — instead
+   * of matching its half-answer against reloaded history by text prefix. It is
+   * also the bubble's own key, so a re-attached turn writes into the bubble the
+   * live send was already filling rather than starting a second one.
+   */
+  turnId?: string;
   /** Tool calls attached to this message, when the stream exposes them. */
   toolCalls?: ChatToolCall[];
   /**

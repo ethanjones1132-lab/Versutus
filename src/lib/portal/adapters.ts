@@ -63,6 +63,20 @@ export interface PortalClient {
       onModelReport?: (report: import('@/lib/gateway/run-failures').ModelReport) => void;
       /** The turn id minted for this send, so a cancel can name it. */
       onTurnId?: (turnId: string) => void;
+      /**
+       * The turn id to send under, when the caller already minted one. A queued
+       * line keeps its id across every resend, so a retry the Gate already took
+       * comes back as a replay of the SAME turn instead of starting a second one
+       * (design spec §4.1). Omitted, the client mints one exactly as before.
+       */
+      turnId?: string;
+      /**
+       * The gateway accepted the turn: its stream started (HTTP 200), or it
+       * replayed the turn this id already named (`X-Versutus-Turn-Resumed`).
+       * This is the difference between "the call returned" and "the Gate has the
+       * work", and it is what the outbox needs before it drops a queued line.
+       */
+      onAccepted?: (turnId: string) => void;
       /** A session the gateway adopted for the turn, when it reports one. */
       onSession?: (sessionId: string) => void;
     },
@@ -72,6 +86,26 @@ export interface PortalClient {
    * (a direct Hermes) omits it and the caller falls back to aborting locally.
    */
   cancelTurn?(turnId: string): Promise<void>;
+  /**
+   * The Gate's turn journal, so a reopened app can find the turn that is still
+   * running and follow it (design spec §4.2). Optional: a gateway with no
+   * journal — a direct Hermes, an older Gate — omits the whole group, and every
+   * caller falls back to what it did before.
+   */
+  listTurns?(filter?: import('@/lib/gateway/turns').TurnListFilter): Promise<import('@/lib/gateway/turns').TurnMeta[]>;
+  /** One turn's record, or null when this device's journal no longer holds it. */
+  getTurn?(turnId: string): Promise<import('@/lib/gateway/turns').TurnMeta | null>;
+  /** Replay a turn's journal and follow it to `[DONE]`. */
+  streamTurnEvents?(
+    turnId: string,
+    options: import('@/lib/gateway/turns').TurnEventStreamOptions,
+  ): Promise<import('@/lib/gateway/turns').TurnStreamResult>;
+  /**
+   * True once this gateway has answered 404 for `/v1/turns` in this session.
+   * One refusal is a fact about the gateway, so the app stops asking instead of
+   * re-reading a route that does not exist.
+   */
+  readonly turnsUnsupported?: boolean;
   getModels(): Promise<ModelInfo[]>;
   getCapabilities(): Promise<GatewayCapabilities>;
   /** Whether the manifest explicitly offers session management. */

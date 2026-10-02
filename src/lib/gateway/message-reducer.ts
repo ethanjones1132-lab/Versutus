@@ -8,10 +8,31 @@
 
 import type { ChatAttachment } from '@/lib/gateway/chat-parts';
 import { appendBounded } from '@/lib/gateway/messages';
+import type { TurnSettlementVerdict } from '@/lib/gateway/turn-resume';
 import type { ChatMessage, ChatToolCall } from '@/lib/gateway/types';
 
 function findStreamingIndex(messages: readonly ChatMessage[], runId: string): number {
-  return messages.findIndex((m) => m.id === `run-${runId}`);
+  const byId = messages.findIndex((m) => m.id === `run-${runId}`);
+  if (byId >= 0) return byId;
+  // A re-attached turn writes into the bubble the live send was already filling,
+  // which is keyed by the turn id it was minted for.
+  return messages.findIndex((m) => m.turnId === runId);
+}
+
+/** The bubble that is the reply to `turnId`, by its own id or by its turn id. */
+function findTurnIndex(messages: readonly ChatMessage[], turnId: string): number {
+  const byId = messages.findIndex((m) => m.id === `run-${turnId}`);
+  if (byId >= 0) return byId;
+  return messages.findIndex((m) => m.turnId === turnId);
+}
+
+/** That bubble itself, when the list has one. */
+function findTurnBubble(
+  messages: readonly ChatMessage[],
+  turnId: string,
+): ChatMessage | undefined {
+  const index = findTurnIndex(messages, turnId);
+  return index >= 0 ? messages[index] : undefined;
 }
 
 /** Append a user turn to the window, with any image attachments (P1). */
@@ -31,16 +52,55 @@ export function addUserMessage(
   return appendBounded([...messages], message);
 }
 
-/** Append the assistant placeholder that streaming deltas will patch. */
-export function addStreamingPlaceholder(messages: readonly ChatMessage[], runId: string): ChatMessage[] {
+/**
+ * Append the assistant placeholder that streaming deltas will patch.
+ *
+ * `turnId` is the Gate turn this reply belongs to, and it is the bubble's key:
+ * a re-attached turn reads `run-${turnId}`, so a phone that comes back to a turn
+ * it was already streaming writes into THIS bubble instead of raising a second
+ * one beside it.
+ */
+export function addStreamingPlaceholder(
+  messages: readonly ChatMessage[],
+  runId: string,
+  turnId?: string,
+): ChatMessage[] {
   const placeholder: ChatMessage = {
     id: `run-${runId}`,
     role: 'assistant',
     text: '',
     streaming: true,
     timestamp: Date.now(),
+    ...(turnId ? { turnId } : {}),
   };
   return appendBounded([...messages], placeholder);
+}
+
+/**
+ * The streaming bubble for `turnId`, raised only when the thread has none.
+ *
+ * This is the re-attach path's whole move: a turn the Gate is still running is
+ * the same turn whatever happened to the phone's connection, so its bubble is
+ * re-used — interrupted or half-written — and streaming again. An interrupted
+ * bubble that is followed afresh stops being interrupted, because the turn is
+ * demonstrably not over.
+ */
+export function markTurnStreaming(
+  messages: readonly ChatMessage[],
+  turnId: string,
+): ChatMessage[] {
+  const idx = findTurnIndex(messages, turnId);
+  if (idx < 0) return addStreamingPlaceholder([...messages], turnId, turnId);
+  const copy = [...messages];
+  const bubble = copy[idx];
+  copy[idx] = {
+    ...bubble,
+    streaming: !isStoppedTurn(bubble),
+    interrupted: false,
+    interruptedReason: undefined,
+    turnId,
+  };
+  return copy;
 }
 
 /** Append a streamed text delta to the placeholder. */
@@ -104,9 +164,15 @@ export function finalizeStreamingMessage(messages: readonly ChatMessage[], runId
   // delta — the stream simply closes. Without this promotion the ToolCallCard
   // would remain at 'Running' forever; the only other update path is an
   // explicit status-bearing appendToolCallDelta which most backends never send.
-  const tools = copy[idx].toolCalls?.map((tool) =>
-    tool.status === 'running' ? { ...tool, status: 'complete' as const } : tool,
-  );
+  //
+  // An interrupted turn is not a finished one: its tools never reported back,
+  // and promoting them would be the app claiming work that did not happen.
+  const interrupted = copy[idx].interrupted === true;
+  const tools = interrupted
+    ? copy[idx].toolCalls
+    : copy[idx].toolCalls?.map((tool) =>
+        tool.status === 'running' ? { ...tool, status: 'complete' as const } : tool,
+      );
   copy[idx] = { ...copy[idx], streaming: false, toolCalls: tools };
   return copy;
 }
@@ -296,6 +362,38 @@ export function preserveInterruptedAfterReload(
 }
 
 /**
+ * After a history reload, bring back one turn's bubble when the reload dropped it.
+ *
+ * `preserveInterruptedAfterReload` restores bubbles the operator can see are
+ * unfinished. This is the re-attach's half: the bubble of a turn this process
+ * followed from the Gate's journal was never interrupted — it was streaming,
+ * and streaming is what a live turn owns — so that restore leaves it out, and
+ * the reload drops it along with the answer it had already written. It goes
+ * back unless the reloaded history already shows the same words, in which case
+ * the Gate's own record of the turn is what belongs on the thread.
+ */
+export function preserveTurnBubbleAfterReload(
+  history: readonly ChatMessage[],
+  previous: readonly ChatMessage[],
+  turnId: string,
+): ChatMessage[] {
+  const bubble = findTurnBubble(previous, turnId);
+  if (!bubble) return [...history];
+  if (history.some((message) => message.id === bubble.id)) return [...history];
+  const answer = bubble.text.trim().toLowerCase();
+  const shown = history.some(
+    (message) =>
+      message.role === 'assistant' &&
+      answer.length > 0 &&
+      message.text.trim().toLowerCase().startsWith(answer),
+  );
+  if (shown) return [...history];
+  const merged = [...history, bubble];
+  merged.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+  return merged;
+}
+
+/**
  * Run ids of assistant bubbles still sitting in the interrupted state.
  *
  * The in-flight bubble is keyed `run-${runId}`, so the id round-trips back out.
@@ -358,5 +456,116 @@ export function settleInterruptedFromRuns(
       text: text || message.text,
       ...(resolution.failed ? { command: { ...message.command, status: 'error' as const } } : {}),
     };
+  });
+}
+
+/**
+ * Turn ids of assistant bubbles still sitting in the interrupted state.
+ *
+ * This is the counterpart of `interruptedRunIds` for bubbles that carry the Gate
+ * turn they were the reply to: those can be settled by asking the journal what
+ * became of the turn, which no history read can answer.
+ */
+export function interruptedTurnIds(messages: readonly ChatMessage[]): string[] {
+  const ids: string[] = [];
+  for (const message of messages) {
+    if (!message.interrupted || message.role !== 'assistant') continue;
+    const turnId = message.turnId ?? (message.id.startsWith('run-') ? message.id.slice('run-'.length) : undefined);
+    if (turnId) ids.push(turnId);
+  }
+  return [...new Set(ids)];
+}
+
+/** One bubble's settlement, read off the Gate's journal. */
+export type TurnSettlementResolution = {
+  turnId: string;
+  settlement: TurnSettlementVerdict;
+};
+
+/**
+ * Settle bubbles by turn IDENTITY — what the Gate's journal says became of the
+ * turn, rather than whether reloaded history happens to contain a matching
+ * prefix.
+ *
+ * The rules, all of them about not claiming more than happened:
+ *  - `done` with text becomes the final text. A `done` with NO text (a journal
+ *    that dropped its delta events) is left alone: the partial text the operator
+ *    can already read beats blanking the bubble, and the history reload that
+ *    follows still has the finished turn.
+ *  - `failed` keeps what streamed and says why in the interruption reason. It is
+ *    not a red failure card: the turn's own error text is the truth here.
+ *  - `cancelled` is marked stopped, exactly as the operator's own Stop marks a
+ *    turn — the operator (or another device) decided this, and there is nothing
+ *    left to fetch.
+ *  - `interrupted` keeps the interrupted marker and names the reason. Its
+ *    running tool calls stay running: the Gate ended the turn, so nothing ever
+ *    reported those tools finished.
+ */
+export function settleInterruptedFromTurns(
+  messages: readonly ChatMessage[],
+  resolutions: readonly TurnSettlementResolution[],
+): ChatMessage[] {
+  if (resolutions.length === 0) return [...messages];
+  const byTurnId = new Map(resolutions.map((item) => [item.turnId, item.settlement]));
+
+  return messages.map((message) => {
+    if (message.role !== 'assistant') return message;
+    if (!message.interrupted && !message.streaming) return message;
+    const turnId = message.turnId ?? (message.id.startsWith('run-') ? message.id.slice('run-'.length) : undefined);
+    if (!turnId) return message;
+    const settlement = byTurnId.get(turnId);
+    if (!settlement) return message;
+    // A turn the operator stopped is the operator's decision, and the re-attach
+    // that stopped is still settling it.
+    if (isStoppedTurn(message)) return message;
+
+    switch (settlement.kind) {
+      case 'done': {
+        const text = settlement.text.trim();
+        if (!text) return message;
+        const tools = message.toolCalls?.map((tool) =>
+          tool.status === 'running' ? { ...tool, status: 'complete' as const } : tool,
+        );
+        return {
+          ...message,
+          interrupted: false,
+          interruptedReason: undefined,
+          streaming: false,
+          text,
+          ...(tools ? { toolCalls: tools } : {}),
+        };
+      }
+      case 'failed':
+        return {
+          ...message,
+          interrupted: true,
+          streaming: false,
+          interruptedReason: settlement.message,
+        };
+      case 'cancelled': {
+        const tools = message.toolCalls?.map((tool) =>
+          tool.status === 'running' ? { ...tool, status: 'complete' as const } : tool,
+        );
+        const settled: ChatMessage & StoppedTurnMarker = {
+          ...message,
+          streaming: false,
+          interrupted: false,
+          interruptedReason: undefined,
+          stopped: true,
+          stoppedReason: 'Stopped',
+          ...(tools ? { toolCalls: tools } : {}),
+        };
+        return settled;
+      }
+      case 'interrupted':
+        return {
+          ...message,
+          streaming: false,
+          interrupted: true,
+          interruptedReason: settlement.copy,
+        };
+      default:
+        return message;
+    }
   });
 }

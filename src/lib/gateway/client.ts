@@ -1,4 +1,4 @@
-import { createChatStreamAcc, interpretChatStreamChunk } from '@/lib/gateway/chat-stream-delta';
+import { readChatFrames } from '@/lib/gateway/turns';
 import { GatewayHttpError, isAuthRejection } from '@/lib/gateway/errors';
 import { withGetSessionsRetry } from '@/lib/gateway/get-sessions-retry';
 import { errorCodeFromHttpBody, messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
@@ -607,6 +607,10 @@ export class HermesGatewayClient {
       onModelReport?: (report: import('@/lib/gateway/run-failures').ModelReport) => void;
       /** The turn id minted for this send, so a cancel can name it. */
       onTurnId?: (turnId: string) => void;
+      /** The id to send under, when the caller minted this line's turn already. */
+      turnId?: string;
+      /** The gateway accepted the turn: its stream started. */
+      onAccepted?: (turnId: string) => void;
       /** A session the gateway adopted for the turn, when it reports one. */
       onSession?: (sessionId: string) => void;
     },
@@ -626,8 +630,10 @@ export class HermesGatewayClient {
     // A turn id is minted even though a stock Hermes ignores it, so callers get
     // one handle per send and a Gate that does read it can correlate the turn.
     // The header itself stays off this request: an unknown header on a direct
-    // Hermes is a wire change we have no reason to make.
-    const turnId = createTurnId();
+    // Hermes is a wire change we have no reason to make. A caller that already
+    // owns a turn id — a queued line's resend — passes it in, so every send of
+    // these words is the same turn rather than a fresh one.
+    const turnId = options?.turnId ?? createTurnId();
     options?.onTurnId?.(turnId);
 
     const controller = new AbortController();
@@ -650,57 +656,45 @@ export class HermesGatewayClient {
       throw new Error(messageFromHttpErrorBody(errorText, response.status));
     }
 
+    // The gateway has the turn: its stream started. A caller holding a queued
+    // line may release it now — not because the call returned, but because the
+    // work is the gateway's from here.
+    options?.onAccepted?.(turnId);
+
     const adopted = response.headers?.get('x-versutus-session-id');
     if (adopted && adopted !== sessionId) options?.onSession?.(adopted);
 
-    let fullText = '';
-    // A failed turn can arrive as an error frame inside an HTTP 200 stream,
-    // which response.ok above cannot catch. Captured rather than thrown,
-    // because the handler's own catch would swallow a throw.
-    let streamError: string | null = null;
-    const acc = createChatStreamAcc();
+    // One model report per distinct report: the same block rides every frame of
+    // a turn, and a note per frame was a note per token.
     let lastModelReport: import('@/lib/gateway/run-failures').ModelReport | null = null;
-    const completed = await this.transport.streamSSE(response, (data) => {
-      try {
-        const interpreted = interpretChatStreamChunk(JSON.parse(data), acc);
-        if (interpreted.streamError) {
-          streamError = interpreted.streamError;
-          return;
-        }
-        if (interpreted.telemetryWarning) options?.onTelemetryWarning?.(interpreted.telemetryWarning);
-        if (interpreted.text) {
-          fullText += interpreted.text;
-          onDelta(interpreted.text);
-        }
-        if (interpreted.reasoning) {
-          options?.onReasoning?.(interpreted.reasoning);
-        }
-        if (options?.onToolCall) {
-          for (const tool of interpreted.toolCalls) options.onToolCall(tool);
-        }
-        if (options?.onModelReport && (interpreted.ranModel || interpreted.requestedModel || interpreted.provider)) {
-          const report: import('@/lib/gateway/run-failures').ModelReport = {
-            requested: interpreted.requestedModel,
-            ran: interpreted.ranModel,
-            provider: interpreted.provider,
-          };
-          const isDuplicate =
-            lastModelReport !== null &&
-            lastModelReport.requested === report.requested &&
-            lastModelReport.ran === report.ran &&
-            lastModelReport.provider === report.provider;
-          if (!isDuplicate) {
+    const frames = await readChatFrames({
+      response,
+      transport: this.transport,
+      signal,
+      callbacks: {
+        onDelta,
+        onToolCall: options?.onToolCall,
+        onReasoning: options?.onReasoning,
+        onTelemetryWarning: options?.onTelemetryWarning,
+        onModelReport:
+          options?.onModelReport &&
+          ((report) => {
+            if (
+              lastModelReport !== null &&
+              lastModelReport.requested === report.requested &&
+              lastModelReport.ran === report.ran &&
+              lastModelReport.provider === report.provider
+            ) {
+              return;
+            }
             lastModelReport = report;
-            options.onModelReport(report);
-          }
-        }
-      } catch {
-        // ignore malformed chunks
-      }
-    }, signal);
+            options.onModelReport!(report);
+          }),
+      },
+    });
 
-    assertChatStreamComplete(completed, streamError, signal);
-    return fullText;
+    assertChatStreamComplete(frames.completed, frames.error, signal, frames.errorCode);
+    return frames.text;
   }
 
   /**

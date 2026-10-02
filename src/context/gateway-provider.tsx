@@ -23,12 +23,31 @@ import {
   convertStreamError,
   finalizeStreamingMessage,
   interruptedRunIds,
+  interruptedTurnIds,
   isStoppedTurn,
   markInterrupted,
+  markTurnStreaming,
   preserveInterruptedAfterReload,
+  preserveTurnBubbleAfterReload,
   settleInterruptedFromRuns,
+  settleInterruptedFromTurns,
   stopStreamedTurns,
 } from '@/lib/gateway/message-reducer';
+import { interruptedTurnCopy } from '@/lib/gateway/interrupted-copy';
+import { createTurnId } from '@/lib/gateway/client';
+import {
+  decideTurnResume,
+  turnResumeBackoffMs,
+  type TurnSettlementVerdict,
+} from '@/lib/gateway/turn-resume';
+import {
+  isGateRestartFailure,
+  streamFailure,
+  turnClientOf,
+  type TurnJournal,
+  type TurnMeta,
+  type TurnStreamResult,
+} from '@/lib/gateway/turns';
 import { createStreamBatcher } from '@/lib/gateway/stream-batching';
 import { readHistory } from '@/lib/gateway/history-read';
 import {
@@ -255,17 +274,51 @@ export type ConnectionPhase =
  * `complete` means the command finished — every other outcome left the
  * draft unsent, queued, or refused, and the caller should not clear it.
  * `cancelled` is the operator's own stop, not a refusal.
+ *
+ * For a CHAT line, `sent` is the Gate's having accepted the turn — its stream
+ * started, or it replayed the turn this line already named — not merely "the
+ * call returned". `failed` is the one outcome that means the words never left
+ * this phone, and it is what keeps a queued line owed, turn id and all.
  */
 export type SendChatInputOutcome =
   | 'empty'
   | 'queued'
   | 'sent'
+  | 'failed'
   | 'busy'
   | 'offline'
   | 'confirmation'
   | 'complete'
   | 'cancelled'
   | 'error';
+
+/**
+ * Whether a queued outbox row's send means the words have LEFT this phone, so
+ * the row may be released at last.
+ *
+ * The durable copy may only lose a row once the Gate — or the sheet that is
+ * about to run it — is holding the line. `sent` is the Gate having taken the
+ * turn (or replayed it); the slash-command outcomes are a line that was
+ * dispatched, refused BY the Gate, cancelled, or handed to a confirmation sheet,
+ * which is still not owed to anybody; `empty` is nothing to send at all.
+ *
+ * Everything else leaves the row owed, turn id and all: `failed` (the request
+ * never reached the Gate), `busy` (a live turn owns the thread, or the client
+ * went away between two rows) and `queued`/`offline` (nothing was sent). Only
+ * `failed` used to end the batch, so a `busy` row — the reply to another line
+ * starting between two rows — was deleted from the durable copy with the
+ * operator's words still on it.
+ */
+function queuedRowIsSent(outcome: SendChatInputOutcome): boolean {
+  return (
+    outcome === 'sent' ||
+    outcome === 'complete' ||
+    outcome === 'error' ||
+    outcome === 'cancelled' ||
+    outcome === 'confirmation' ||
+    outcome === 'empty'
+  );
+}
 
 type PcAddressSetupResult =
   | { kind: 'connected' }
@@ -483,6 +536,12 @@ type GatewayContextValue = {
       source?: ChatInputSource;
       /** Image attachments for this turn (P1); connected sends only. */
       attachments?: ChatAttachment[];
+      /**
+       * The turn this line is sent as, when the caller minted one. The offline
+       * outbox parks the id with the row and hands it back on every resend, so
+       * the Gate journals the line once however many times it is retried.
+       */
+      turnId?: string;
     },
   ) => Promise<SendChatInputOutcome>;
   stopStreaming: () => Promise<void>;
@@ -646,6 +705,13 @@ const DEREGISTER_TIMEOUT_MS = 3000;
  * ladder stops the moment the reply is home.
  */
 const INTERRUPTED_RECOVERY_DELAYS_MS = [2_000, 8_000, 20_000];
+
+/**
+ * How long a re-attach waits for the thread's own history load to land before
+ * looking again. A history read replaces the message list wholesale, so a
+ * bubble raised while one is in flight would be thrown away with it.
+ */
+const TURN_RESUME_AFTER_HISTORY_MS = 150;
 
 /**
  * When each connected-time read runs, counted from the `connected` the client
@@ -922,7 +988,25 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   // reads whatever was captured at the last render — which throws "Gateway not
   // connected" on a live client, or lets a request through on a dead one.
   const statusRef = useRef<ConnectionStatus>('disconnected');
+  /**
+   * Counts status changes, so the outbox can tell one connection from the next:
+   * a reconnect arrives as the same status again, and it is the one thing that
+   * releases rows a refused flush put back on the queue.
+   */
+  const connectionSequenceRef = useRef(0);
+  /**
+   * The gateway and connection a flush last gave up on, or null when no flush has
+   * been refused since the last one that went out.
+   *
+   * Rows the Gate never accepted go back on the queue (the flush's `finally`), so
+   * without this the very render that ended that flush would send them again —
+   * `isSending` drops in the same tick, and the outbox flush reads it.
+   */
+  const flushGaveUpOnRef = useRef<string | null>(null);
   const applyStatus = useCallback((next: ConnectionStatus) => {
+    // A status that is not a change is not a new connection, so the token above
+    // means what it meant when the flush set it.
+    if (next !== statusRef.current) connectionSequenceRef.current += 1;
     statusRef.current = next;
     setStatus(next);
   }, []);
@@ -1143,6 +1227,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, []);
   const [currentSessionId, setCurrentSessionId] = useState<string | undefined>(undefined);
   const [historyLoading, setHistoryLoading] = useState(false);
+  /**
+   * Mirrors `historyLoading` for callbacks that must read it without a
+   * re-render. A re-attach raises a bubble into the message list, and
+   * `reloadHistoryFor` replaces that list wholesale — so a bubble rebuilt while
+   * a history read is in flight is thrown away with it, and every delta that
+   * follows finds no bubble to write into.
+   */
+  const historyLoadingRef = useRef(false);
   const [loadingEarlierHistory, setLoadingEarlierHistory] = useState(false);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   // No offset/cursor on the history endpoint — "load earlier" re-fetches with
@@ -1342,6 +1434,78 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * unmount can cancel the ladder instead of reconciling a thread that is gone.
    */
   const interruptedRecoveryRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  /**
+   * The turn journal of the gateway on screen, followed by turn id.
+   *
+   * A turn belongs to the Gate, so it outlives this process's connection to it:
+   * `turnSeqRef` remembers how much of each turn's journal this process has
+   * already rendered — that is where a dropped stream re-attaches from, so a
+   * replay is never shown twice — and `turnControllersRef` holds the streams so
+   * Stop, a thread switch or a teardown reach the ones in flight. `turnTimersRef`
+   * is the re-attach backoff, one per turn, with no last window: the Gate may
+   * keep a detached turn running for hours.
+   */
+  const turnSeqRef = useRef(new Map<string, number>());
+  const turnControllersRef = useRef(new Map<string, AbortController>());
+  const turnTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  /**
+   * How many re-attach attempts each turn has already spent — the ladder's
+   * counter, kept here rather than in the timer entry because that entry is
+   * deleted the moment its timer fires: a counter read from it is always zero,
+   * and a ladder whose counter is always zero is a 1 Hz poll for the whole life
+   * of a turn, which is exactly as long as the Gate is allowed to run one.
+   *
+   * An attach that delivered a frame gives the ladder back to its first window:
+   * a stream that is making progress has not failed, and a turn whose frames
+   * keep arriving should not be waited on at 30-second spacing.
+   */
+  const turnAttemptsRef = useRef(new Map<string, number>());
+  /** True while this process is following a turn, so a history reconcile stands down. */
+  const turnFollowActiveRef = useRef(false);
+  /** Gate ids that answered 404 for `/v1/turns` in this session; never asked again. */
+  const turnsUnsupportedRef = useRef(new Set<string>());
+  /**
+   * The two hops of the re-attach ladder, reached through refs because the
+   * ladder is a cycle: a dropped stream schedules its re-attachment, which reads
+   * the journal, which attaches again. Declared here so the callbacks below can
+   * name each other without a forward reference.
+   */
+  const scheduleTurnReattachRef = useRef<(turnId: string) => void>(() => undefined);
+  const turnRetryRef = useRef<(turnId: string) => void>(() => undefined);
+  /**
+   * `resumeRunningTurns`, for the edges declared before it (connect, lifecycle).
+   * `owedTurnId` is the turn a send just lost, which the mirrored message list
+   * cannot name yet: `messagesRef` catches up on the next commit and the resume
+   * runs in the same tick, and that id is the only reason the bubble can be
+   * settled by identity at all.
+   *
+   * `edgeGateway` is the profile the edge already holds. It is not a
+   * convenience: on a cold connect the client's `connected` callback can arrive
+   * before the state that syncs `activeGatewayRef` has rendered, and the
+   * headline case — the app killed and reopened — asks the journal from exactly
+   * there.
+   */
+  const resumeRunningTurnsRef = useRef<
+    (reason: string, owedTurnId?: string, edgeGateway?: GatewayProfile) => void
+  >(() => undefined);
+  /**
+   * A re-attach edge that parked itself for the thread's history load: the load
+   * replaces the message list wholesale (so a bubble raised now would be thrown
+   * away with it) and names the session the journal read has to be scoped to.
+   * `reloadHistoryFor` re-arms the edge when that load settles; `null` when no
+   * edge is waiting.
+   *
+   * It is stamped with the client generation it belongs to, not with a gateway:
+   * the teardown that bumps the generation is what makes it meaningless, while
+   * the `activeGateway` effect that stands the ladder down runs on a connect
+   * that is exactly when an edge is parked.
+   */
+  const turnResumeAfterHistoryRef = useRef<{
+    generation: number;
+    gateway: GatewayProfile;
+    reason: string;
+    owedTurnId?: string;
+  } | null>(null);
   const offlineQueueRef = useRef<OfflineQueueItem[]>([]);
   const flushingOfflineRef = useRef(false);
   /**
@@ -1408,6 +1572,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     const requestId = ++historyRequestRef.current;
     historyLoadedForRef.current = gateway.id;
     setHistoryLoading(true);
+    historyLoadingRef.current = true;
     /**
      * Set synchronously by the fresh read below, the moment it claims the live
      * thread. `messagesRef` cannot stand in for it: it is only synced in an
@@ -1430,7 +1595,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
      * loaded yet, it is only no longer blank.
      */
     const paintThread = (gatewayHistory: SessionMessage[], localTrans: CommandTranscriptEntry[]) => {
-      const merged = [...historyToChatMessages(gatewayHistory)];
+      let merged = [...historyToChatMessages(gatewayHistory)];
       for (const cm of localTrans.map((t) => ({
         id: t.id,
         role: 'assistant' as const,
@@ -1473,6 +1638,27 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             queued: true,
           });
         }
+      }
+
+      /**
+       * The bubbles of the turns this process is FOLLOWING belong to this thread
+       * whatever the Gate's history says: the read replaces the list wholesale,
+       * so a bubble rebuilt while it was in flight is thrown away with it, and
+       * every delta after that finds no bubble to write into — leaving the
+       * thread busy with nothing streaming. Carried across the reload the way an
+       * interrupted bubble is, and dropped only once history shows the same words.
+       *
+       * The list to carry is read through the state queue rather than
+       * `messagesRef`: an attach that raised the bubble in this same flush has
+       * not reached the ref yet.
+       */
+      let previous: ChatMessage[] = [];
+      setMessages((current) => {
+        previous = current;
+        return current;
+      });
+      for (const turnId of turnControllersRef.current.keys()) {
+        merged = preserveTurnBubbleAfterReload(merged, previous, turnId);
       }
 
       setMessages(boundWindow(merged));
@@ -1575,7 +1761,22 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (requestId !== historyRequestRef.current) return;
       setLastError(error instanceof Error ? error.message : String(error));
     } finally {
-      if (requestId === historyRequestRef.current) setHistoryLoading(false);
+      if (requestId === historyRequestRef.current) {
+        setHistoryLoading(false);
+        historyLoadingRef.current = false;
+        // A re-attach edge that arrived before this load existed gets its turn
+        // now: the session id and the message list are both settled, which is
+        // what that edge was waiting for. A load that was already in flight when
+        // it parked re-armed itself on a timer and is not waiting here.
+        const parked = turnResumeAfterHistoryRef.current;
+        if (parked) {
+          turnResumeAfterHistoryRef.current = null;
+          // A load for a client that has since been replaced re-arms nothing.
+          if (parked.generation === clientGenerationRef.current) {
+            resumeRunningTurnsRef.current(parked.reason, parked.owedTurnId, parked.gateway);
+          }
+        }
+      }
     }
   }, []);
 
@@ -1666,52 +1867,6 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     },
     [reloadHistoryFor, patchActivityRuns],
   );
-
-  const clearInterruptedRecovery = useCallback(() => {
-    for (const timer of interruptedRecoveryRef.current) clearTimeout(timer);
-    interruptedRecoveryRef.current = [];
-  }, []);
-
-  /**
-   * Look for a reply the Gate finished after this phone's connection dropped.
-   *
-   * Nothing else re-reads history in that window: the reconnect health check
-   * only runs when the client itself reconnects, and a phone that was merely
-   * backgrounded (locked, radio switched) never loses `connected`. Three
-   * widening windows cover a Gate that is still coming back; each re-checks
-   * and the ladder stops as soon as no interrupted bubble is left. It stands
-   * down while a new send is in flight — that turn's own history reload is the
-   * one that matters.
-   */
-  const scheduleInterruptedRecovery = useCallback(
-    (gateway: GatewayProfile) => {
-      clearInterruptedRecovery();
-      for (const delayMs of INTERRUPTED_RECOVERY_DELAYS_MS) {
-        const timer = setTimeout(() => {
-          interruptedRecoveryRef.current = interruptedRecoveryRef.current.filter((id) => id !== timer);
-          const client = clientRef.current;
-          if (!client || client.connectionStatus !== 'connected') return;
-          if (isSendingRef.current || abortControllerRef.current) return;
-          if (!messagesRef.current.some((message) => message.interrupted)) return;
-          void reconcileInterrupted(gateway);
-        }, delayMs);
-        interruptedRecoveryRef.current.push(timer);
-      }
-    },
-    [clearInterruptedRecovery, reconcileInterrupted],
-  );
-
-  /** Whether any bubble is still waiting to be reconciled. */
-  const hasInterruptedMessage = useCallback(
-    () => messagesRef.current.some((message) => message.interrupted),
-    [],
-  );
-
-  useEffect(() => {
-    // A gateway the operator has left, or an unmounted provider, must not be
-    // reconciled by a ladder armed for the previous thread.
-    return () => clearInterruptedRecovery();
-  }, [activeGateway?.id, clearInterruptedRecovery]);
 
   const loadEarlierMessages = useCallback(async () => {
     const client = clientRef.current;
@@ -1872,6 +2027,513 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       Date.now() - last.at < CONNECTED_FAN_OUT_REPEAT_MS;
     connectedFanOutDueRef.current = silentRecovery ? null : { gatewayId, generation };
   }, []);
+
+
+  /**
+   * Stop following turns: drop the backoff timers and abort the streams.
+   *
+   * A stream aborted here unwinds through its own catch, which recognises the
+   * abort and arms nothing — so a turn the operator stopped, a thread that was
+   * switched away and a torn-down gateway all leave nothing re-attaching itself.
+   *
+   * What this process has already RENDERED is not dropped with the follow: a
+   * turn's journal seq is what the next attach has to resume from, and an edge
+   * that re-attaches a turn whose bubble is on screen would otherwise replay
+   * the whole of it into that bubble and show the operator their own answer
+   * twice. A seq with no bubble left belongs to nothing on screen, and
+   * `renderedSeqs` is where that is decided.
+   */
+  const stopTurnFollow = useCallback(() => {
+    for (const timer of turnTimersRef.current.values()) clearTimeout(timer);
+    turnTimersRef.current.clear();
+    // The ladder's counter belongs to the follow it was counting: standing that
+    // down forgets the windows already spent, so a turn picked up again starts
+    // at the first one.
+    turnAttemptsRef.current.clear();
+    for (const controller of turnControllersRef.current.values()) controller.abort();
+    turnControllersRef.current.clear();
+    turnFollowActiveRef.current = false;
+    // A parked edge belongs to the client that asked for it. A gateway that was
+    // torn down bumps the generation and that edge has nothing left to read.
+    const parked = turnResumeAfterHistoryRef.current;
+    if (parked && parked.generation !== clientGenerationRef.current) {
+      turnResumeAfterHistoryRef.current = null;
+    }
+  }, []);
+
+  /**
+   * The last journal seq this process rendered per turn, and only for the turns
+   * the thread still shows.
+   *
+   * A seq whose bubble a history read has replaced describes nothing the
+   * operator can see, so attaching from it would rebuild an EMPTY bubble — the
+   * whole replay is the better answer there.
+   */
+  const renderedSeqs = useCallback((): Record<string, number> => {
+    const held = new Set<string>();
+    for (const message of messagesRef.current) {
+      const turnId = message.turnId ?? (
+        message.id.startsWith('run-') ? message.id.slice('run-'.length) : undefined
+      );
+      if (turnId) held.add(turnId);
+    }
+    const seqs: Record<string, number> = {};
+    for (const [turnId, seq] of turnSeqRef.current) {
+      if (held.has(turnId)) seqs[turnId] = seq;
+    }
+    return seqs;
+  }, []);
+
+/**
+   * Stand every recovery path down: the history ladder's windows, and any turn
+   * this process is following.
+   *
+   * One entry point, because every caller means the same thing by it — a thread
+   * switch, a new Bot Chat, a fresh session, the operator's next send and a
+   * teardown all leave the recovery armed for a thread that is gone, and a
+   * re-attached turn belongs to that thread as much as an interrupted bubble
+   * does.
+   */
+  const clearInterruptedRecovery = useCallback(() => {
+    for (const timer of interruptedRecoveryRef.current) clearTimeout(timer);
+    interruptedRecoveryRef.current = [];
+    stopTurnFollow();
+  }, [stopTurnFollow]);
+
+  /**
+   * Look for a reply the Gate finished after this phone's connection dropped.
+   *
+   * Nothing else re-reads history in that window: the reconnect health check
+   * only runs when the client itself reconnects, and a phone that was merely
+   * backgrounded (locked, radio switched) never loses `connected`. Three
+   * widening windows cover a Gate that is still coming back; each re-checks
+   * and the ladder stops as soon as no interrupted bubble is left. It stands
+   * down while a new send is in flight — that turn's own history reload is the
+   * one that matters.
+   */
+  const scheduleInterruptedRecovery = useCallback(
+    (gateway: GatewayProfile) => {
+      clearInterruptedRecovery();
+      for (const delayMs of INTERRUPTED_RECOVERY_DELAYS_MS) {
+        const timer = setTimeout(() => {
+          interruptedRecoveryRef.current = interruptedRecoveryRef.current.filter((id) => id !== timer);
+          const client = clientRef.current;
+          if (!client || client.connectionStatus !== 'connected') return;
+          if (isSendingRef.current || abortControllerRef.current) return;
+          if (!messagesRef.current.some((message) => message.interrupted)) return;
+          void reconcileInterrupted(gateway);
+        }, delayMs);
+        interruptedRecoveryRef.current.push(timer);
+      }
+    },
+    [clearInterruptedRecovery, reconcileInterrupted],
+  );
+
+  /** Whether any bubble is still waiting to be reconciled. */
+  const hasInterruptedMessage = useCallback(
+    () => messagesRef.current.some((message) => message.interrupted),
+    [],
+  );
+
+  /**
+   * Turn ids this process minted and still holds: the turns it is following, the
+   * bubbles it left interrupted, and the outbox rows waiting to be sent.
+   *
+   * This is what a thread with no session id yet can be shown — nothing else can
+   * say whose turn the journal is talking about, and a journal read with no
+   * session filter answers for every thread the Gate is running.
+   */
+  const localTurnIds = useCallback((): string[] => {
+    const ids = new Set<string>(turnControllersRef.current.keys());
+    for (const turnId of interruptedTurnIds(messagesRef.current)) ids.add(turnId);
+    for (const row of offlineQueueRef.current) {
+      if (row.turnId) ids.add(row.turnId);
+    }
+    return [...ids];
+  }, []);
+
+  /**
+   * Settle one bubble from the journal's verdict.
+   *
+   * A finished turn also re-reads the thread, the way a recovered turn always
+   * has — but the reload replaces the message list wholesale, so the bubble the
+   * verdict fills is carried across it first (the interrupted bubbles by
+   * `preserveInterruptedAfterReload`, this turn's own bubble by
+   * `preserveTurnBubbleAfterReload` when the reload dropped a streaming one) and
+   * the verdict is applied after. Settling first would throw the bubble away.
+   *
+   * The list to carry is captured through the state queue, not from
+   * `messagesRef`: a send whose stream just died marked its bubble interrupted
+   * in this same tick, and the ref is only synced in an effect, so it does not
+   * have it yet. Queueing the read puts the snapshot in the same flush as the
+   * reload, in order.
+   */
+  const settleTurn = useCallback(
+    async (turnId: string, settlement: TurnSettlementVerdict) => {
+      const gateway = activeGatewayRef.current;
+      if (settlement.kind !== 'done' || !gateway) {
+        setMessages((prev) => settleInterruptedFromTurns(prev, [{ turnId, settlement }]));
+        return;
+      }
+      let previous: ChatMessage[] = [];
+      setMessages((current) => {
+        previous = current;
+        return current;
+      });
+      await reloadHistoryFor(gateway);
+      setMessages((history) =>
+        settleInterruptedFromTurns(
+          preserveTurnBubbleAfterReload(
+            preserveInterruptedAfterReload(history, previous),
+            previous,
+            turnId,
+          ),
+          [{ turnId, settlement }],
+        ),
+      );
+    },
+    [reloadHistoryFor],
+  );
+
+  /** Re-attach `turnId` one window further along the ladder than the last time. */
+  const scheduleTurnReattach = useCallback((turnId: string) => {
+    const pending = turnTimersRef.current.get(turnId);
+    if (pending) clearTimeout(pending);
+    const attempt = turnAttemptsRef.current.get(turnId) ?? 0;
+    turnAttemptsRef.current.set(turnId, attempt + 1);
+    const timer = setTimeout(() => {
+      turnTimersRef.current.delete(turnId);
+      turnRetryRef.current(turnId);
+    }, turnResumeBackoffMs(attempt));
+    turnTimersRef.current.set(turnId, timer);
+  }, []);
+
+  /**
+   * Follow a turn this process is not streaming: rebuild its bubble from the
+   * journal and keep reading it to `[DONE]`.
+   *
+   * `after` is where THIS PROCESS stopped, never the journal's own `lastSeq`:
+   * a process that has seen nothing of the turn needs the whole replay to fill
+   * an empty bubble, while a process that lost its stream mid-reply must not be
+   * sent the part it already showed.
+   */
+  const attachTurn = useCallback(
+    (turnId: string, after: number) => {
+      const client = turnClientOf(clientRef.current);
+      if (!client?.streamTurnEvents) return;
+      const generation = clientGenerationRef.current;
+      const controller = new AbortController();
+      turnControllersRef.current.set(turnId, controller);
+      turnSeqRef.current.set(turnId, after);
+      turnFollowActiveRef.current = true;
+      // Busy the way a live send is: the orb is back, the composer's stop button
+      // is live, and Stop has a turn id to name on the Gate.
+      setIsSending(true);
+      isSendingRef.current = true;
+      activeRunIdRef.current = turnId;
+      turnIdRef.current = turnId;
+      setMessages((prev) => markTurnStreaming(prev, turnId));
+      const batcher = createStreamBatcher({ runId: turnId, setMessages });
+      void (async () => {
+        try {
+          const result: TurnStreamResult = await client.streamTurnEvents!(turnId, {
+            after,
+            signal: controller.signal,
+            onDelta: (text) => batcher.queueDelta(text),
+            onToolCall: (tool) => batcher.queueTool(tool),
+            onReasoning: (text) => batcher.queueReasoning(text),
+            onSeq: (seq) => {
+              // A frame arrived, so this attach is making progress: the ladder
+              // starts again at its first window rather than counting a stream
+              // that is working towards 30-second spacing.
+              turnAttemptsRef.current.delete(turnId);
+              turnSeqRef.current.set(turnId, seq);
+            },
+          });
+          batcher.flush();
+          // A stream that ended on a frame — a Gate restart, a refusal — has not
+          // rendered content, it has read the turn's VERDICT, and the verdict has
+          // to be read again to act on it. Keeping the seq would make the next
+          // attach resume past the frame and read the turn as one that closed
+          // cleanly, which is exactly the cut-off-as-a-finished-reply this whole
+          // path exists to refuse.
+          if (result.error || !result.completed) turnSeqRef.current.set(turnId, after);
+          if (result.error) throw streamFailure(result.error, result.errorCode);
+          if (!result.completed) {
+            throw new Error('The turn stream closed before the turn ended.');
+          }
+          setMessages((prev) => {
+            const bubble = prev.find(
+              (message) => message.turnId === turnId || message.id === `run-${turnId}`,
+            );
+            // Stop settled this bubble on its own terms; a `[DONE]` that lands
+            // after it must not re-open the turn or promote its tools.
+            if (!bubble || isStoppedTurn(bubble)) return prev;
+            return finalizeStreamingMessage(prev, turnId);
+          });
+          turnSeqRef.current.delete(turnId);
+          turnAttemptsRef.current.delete(turnId);
+        } catch (error) {
+          batcher.flush();
+          if (!isUserAbort(error, controller.signal)) {
+            // A restart of the Gate under the turn is an interruption with a
+            // reason, not a failure — and never a finished half answer.
+            if (isGateRestartFailure(error)) {
+              setMessages((prev) => markInterrupted(prev, turnId, interruptedTurnCopy('gate_restart')));
+            }
+            // A dropped stream keeps the orb and its text: the turn may well be
+            // running, and the ladder below asks rather than assumes.
+            scheduleTurnReattachRef.current(turnId);
+          }
+        } finally {
+          turnControllersRef.current.delete(turnId);
+          if (turnControllersRef.current.size === 0) turnFollowActiveRef.current = false;
+          if (activeRunIdRef.current === turnId) {
+            activeRunIdRef.current = null;
+            if (turnIdRef.current === turnId) turnIdRef.current = null;
+            setIsSending(false);
+            isSendingRef.current = false;
+          }
+          if (clientGenerationRef.current !== generation) turnSeqRef.current.delete(turnId);
+        }
+      })();
+    },
+    [],
+  );
+
+  /**
+   * Read one turn and do what it now says: follow it again, or settle it.
+   *
+   * The re-attach ladder's one step. It asks the journal rather than guessing,
+   * which is what lets the app keep waiting indefinitely — a turn the Gate is
+   * still running is simply attached again, from the last seq this process
+   * rendered, and a turn that has ended is settled truthfully.
+   */
+  const reattachTurn = useCallback(
+    async (turnId: string) => {
+      const client = turnClientOf(clientRef.current);
+      if (!client?.getTurn) return;
+      const generation = clientGenerationRef.current;
+      const turn = await client.getTurn(turnId).catch(() => null);
+      if (!turn || clientGenerationRef.current !== generation) return;
+      const action = decideTurnResume({
+        turn,
+        streamingTurnIds: [...turnControllersRef.current.keys()],
+        lastSeqByTurnId: renderedSeqs(),
+        threadSessionId: sessionIdRef.current,
+        // This turn is one this process started, whatever the thread's session
+        // happens to be: the ladder only ever re-reads a turn it is following.
+        threadSessionPending: !sessionIdRef.current,
+        localTurnIds: [...localTurnIds(), turnId],
+      });
+      if (action.kind === 'attach') {
+        attachTurn(action.turnId, action.after);
+        return;
+      }
+      if (action.kind === 'settle') {
+        // Settled: there is nothing left to re-attach, so the ladder's counter
+        // for this turn goes with it.
+        turnSeqRef.current.delete(turnId);
+        turnAttemptsRef.current.delete(turnId);
+        void settleTurn(action.turnId, action.settlement);
+      }
+    },
+    [attachTurn, localTurnIds, renderedSeqs, settleTurn],
+  );
+  useEffect(() => {
+    scheduleTurnReattachRef.current = scheduleTurnReattach;
+    turnRetryRef.current = (turnId) => {
+      void reattachTurn(turnId);
+    };
+  }, [reattachTurn, scheduleTurnReattach]);
+
+  /**
+   * Ask the Gate's journal what this thread is still running, and settle what
+   * it has finished.
+   *
+   * A phone that was only locked, backgrounded or killed never runs the send
+   * path's own recovery arm, which is why a reply that landed five minutes
+   * later was never picked up: the thread said "Connection lost" until the
+   * operator reloaded by hand. This is the read that closes that gap.
+   */
+  const followRunningTurns = useCallback(
+    async (
+      gateway: GatewayProfile,
+      client: TurnJournal,
+      reason: string,
+      owedTurnId?: string,
+    ) => {
+      const generation = clientGenerationRef.current;
+      const sessionId = sessionIdRef.current;
+      let running: TurnMeta[] | null = null;
+      try {
+        running = await client.listTurns({ sessionId, status: 'running' });
+      } catch {
+        // The journal could not be read this once. Today's answer — the history
+        // ladder — needs nothing of it, so a flaky link costs nothing.
+        scheduleInterruptedRecovery(gateway);
+        return;
+      }
+      // A superseded client is a gateway the provider has already discarded.
+      if (clientGenerationRef.current !== generation) return;
+      if (client.turnsUnsupported) {
+        // One refusal is a fact about the gateway: remember it and never ask
+        // this Gate for a journal again.
+        turnsUnsupportedRef.current.add(gateway.id);
+        scheduleInterruptedRecovery(gateway);
+        return;
+      }
+      // The thread's history read can START while this journal read is in
+      // flight — the connect fan-out's own read is exactly that ordering, a full
+      // page behind a tiny one — and its paint replaces the message list
+      // wholesale. Raise nothing into a list that is about to be replaced: park
+      // the edge and let that load re-arm it when it settles, which is also what
+      // it does for an edge that arrived before the load even started.
+      if (historyLoadingRef.current) {
+        turnResumeAfterHistoryRef.current = { generation: clientGenerationRef.current, gateway, reason, owedTurnId };
+        return;
+      }
+
+      const candidates = new Map<string, TurnMeta>();
+      for (const turn of running ?? []) candidates.set(turn.turnId, turn);
+      // An interrupted bubble carries the turn it was the reply to, so the
+      // journal can say what became of it — which no history read can.
+      const owed = [
+        ...new Set([
+          ...interruptedTurnIds(messagesRef.current),
+          ...(owedTurnId ? [owedTurnId] : []),
+        ]),
+      ].filter((id) => !candidates.has(id));
+      if (owed.length > 0) {
+        const settlements = await Promise.all(
+          owed.map(async (turnId) => client.getTurn(turnId).catch(() => null)),
+        );
+        for (const turn of settlements) {
+          if (turn) candidates.set(turn.turnId, turn);
+        }
+      }
+      if (clientGenerationRef.current !== generation) return;
+
+      const mine = localTurnIds();
+      for (const turn of candidates.values()) {
+        const action = decideTurnResume({
+          turn,
+          streamingTurnIds: [...turnControllersRef.current.keys()],
+          lastSeqByTurnId: renderedSeqs(),
+          threadSessionId: sessionIdRef.current,
+          threadSessionPending: !sessionIdRef.current,
+          localTurnIds: mine,
+          stillCurrent: sessionIdRef.current === sessionId,
+        });
+        if (action.kind === 'attach') {
+          attachTurn(action.turnId, action.after);
+          continue;
+        }
+        if (action.kind === 'settle') {
+          turnSeqRef.current.delete(action.turnId);
+          turnAttemptsRef.current.delete(action.turnId);
+          void settleTurn(action.turnId, action.settlement);
+        }
+      }
+
+      // Whatever the journal could not name is still owed the look it has always
+      // had: reloaded history, matched by the text it already streamed.
+      if (hasInterruptedMessage() && !turnFollowActiveRef.current) {
+        void reconcileInterrupted(gateway);
+      }
+    },
+    [
+      attachTurn,
+      hasInterruptedMessage,
+      localTurnIds,
+      reconcileInterrupted,
+      renderedSeqs,
+      scheduleInterruptedRecovery,
+      settleTurn,
+    ],
+  );
+
+  /**
+   * Re-attach to the turns the PC is still running — `reason` only names the
+   * edge this was called from.
+   *
+   * The four edges that can mean "the phone is back": a client that just
+   * connected, the app coming to the foreground, a thread being opened or
+   * switched, and a send whose stream died. A gateway with no turn journal (a
+   * direct Hermes, an older Gate) takes today's path instead: the same history
+   * ladder, armed only when a bubble is actually waiting.
+   */
+  const resumeRunningTurns = useCallback(
+    (reason: string, owedTurnId?: string, edgeGateway?: GatewayProfile) => {
+      const client = clientRef.current;
+      // The profile the edge already holds, because `activeGatewayRef` is synced
+      // in an effect and a cold connect's `connected` callback lands before that
+      // render: without this the app-killed-and-reopened case asked the journal
+      // zero times. The ref is still the answer for every other edge.
+      const gateway = edgeGateway ?? activeGatewayRef.current;
+      if (!client || !gateway) return;
+      // A turn in flight owns the message list, except for the send whose own
+      // stream just died — and for a turn the Gate restarted under it, which is
+      // the same tick's send deciding what the turn became. Both still hold the
+      // slot until that send's `finally`, and both are exactly what has to be
+      // looked for. Every other edge (connected, foreground, thread) must leave a
+      // live turn alone.
+      const sendUnwinding = reason === 'stream-error' || reason === 'interrupted';
+      if (!sendUnwinding && (isSendingRef.current || abortControllerRef.current)) return;
+      const journal = turnClientOf(client);
+      if (!journal || turnsUnsupportedRef.current.has(gateway.id)) {
+        if (client.turnsUnsupported) turnsUnsupportedRef.current.add(gateway.id);
+        // A thread switch is not one of the reasons the ladder is for: every
+        // thread-opening path stands it down first, because its windows reload
+        // the thread that was just left.
+        if (reason !== 'thread') scheduleInterruptedRecovery(gateway);
+        return;
+      }
+      // The thread's own history load replaces the message list wholesale, so a
+      // bubble rebuilt now would be thrown away with it. A load in flight looks
+      // again on a short window; a load that has not started yet — the cold
+      // connect, whose `connected` lands before the fan-out's history read — is
+      // parked instead and re-armed by that read when it settles, which is also
+      // the session id this read has to be scoped to.
+      if (historyLoadingRef.current) {
+        scheduleConnectedRead(TURN_RESUME_AFTER_HISTORY_MS, () => {
+          resumeRunningTurnsRef.current(reason, owedTurnId);
+        });
+        return;
+      }
+      if (!historyLoadedForRef.current) {
+        turnResumeAfterHistoryRef.current = { generation: clientGenerationRef.current, gateway, reason, owedTurnId };
+        return;
+      }
+      stopTurnFollow();
+      void followRunningTurns(gateway, journal, reason, owedTurnId);
+    },
+    [followRunningTurns, scheduleConnectedRead, scheduleInterruptedRecovery, stopTurnFollow],
+  );
+
+  useEffect(() => {
+    resumeRunningTurnsRef.current = resumeRunningTurns;
+  }, [resumeRunningTurns]);
+
+  /**
+   * The gateway the recovery below was armed for, or `undefined` when it was
+   * armed for none. It is what tells the effect's own stand-down from the arrival
+   * of a gateway: the render that names a connected profile lands a tick AFTER
+   * the connect that produced it, so a stand-down that ran on that transition
+   * aborted the re-attach the connect's own `connected` edge had just started.
+   */
+  const recoveryArmedForRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    recoveryArmedForRef.current = activeGateway?.id;
+    return () => {
+      const armedFor = recoveryArmedForRef.current;
+      recoveryArmedForRef.current = undefined;
+      // A gateway that was only arriving was never armed for, so nothing of its
+      // needs standing down. One that was armed for is being left.
+      if (armedFor === undefined) return;
+      clearInterruptedRecovery();
+    };
+  }, [activeGateway?.id, clearInterruptedRecovery]);
   /**
    * Called by the last read of the set, as it runs. Stamping the announcement
    * instead let a connection that dropped inside the 1.8s window suppress the
@@ -2191,7 +2853,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             // fan-out: history is reloaded by onHealthCheck and the approvals
             // inbox still has to know, but every other read was served seconds
             // ago by this same client.
-            if (nextStatus === 'connected') noteConnectedFanOut(gateway.id, generation);
+            if (nextStatus === 'connected') {
+              noteConnectedFanOut(gateway.id, generation);
+              // A turn belongs to the Gate, not to the connection that reached
+              // it: a client that has just connected asks what this thread is
+              // still running and rebuilds that bubble. This is the first of the
+              // four edges that can mean "the phone is back", and it carries the
+              // profile it is already holding — on a cold connect its own
+              // `connected` arrives before `activeGatewayRef` has rendered, which
+              // is the app-killed-and-reopened case this whole path exists for.
+              resumeRunningTurnsRef.current('connected', undefined, gateway);
+            }
             // Solution A4: this device's Expo push token belongs to the Gate
             // once per connection — initial and every reconnect — and the
             // registration never blocks or breaks the connection itself.
@@ -3091,6 +3763,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // the flag is ABSENT rather than false so no reader can mistake it.
       if (isRunSlashLine(text)) {
         item.run = { bot: selectedBotIdRef.current ?? undefined };
+      } else {
+        // A chat line owns its turn id from the moment it is parked. The Gate
+        // keys a turn's journal by it, so a flush that was killed mid-send and
+        // re-flushes this row gets the SAME turn back — a replay of the work
+        // already running on the PC, not a second turn doing it again.
+        item.turnId = createTurnId();
       }
       offlineQueueRef.current.push(item);
       persistOfflineQueue();
@@ -3237,13 +3915,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       existingMessageId?: string,
       source?: ChatInputSource,
       attachments?: ChatAttachment[],
-    ) => {
+      options?: { turnId?: string },
+    ): Promise<SendChatInputOutcome> => {
       const trimmed = text.trim();
       const files = attachments ?? [];
       const gateway = activeGateway;
       const client = clientRef.current;
       // An image-only turn is valid: the guard must not require text.
-      if ((!trimmed && files.length === 0) || !gateway || !client || isSending) return;
+      if ((!trimmed && files.length === 0) || !gateway || !client || isSending) return 'busy';
 
       if (isHandsfreeCallSource(source)) {
         // A call turn is appended with the id the caller supplied: the ordinary
@@ -3269,15 +3948,25 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // recovery ladder would reload underneath it.
       clearInterruptedRecovery();
 
-      const runId = createMessageId('run');
+      // This line's turn id, minted ONCE. The Gate keys a turn's journal by it, so
+      // a resend of these words — an offline queue flush that was killed
+      // mid-send — has to name the same one, or the agent does the work twice.
+      // A queued line brings its own (`options.turnId`); a live send mints one.
+      const runId = options?.turnId ?? createTurnId();
       activeRunIdRef.current = runId;
       turnIdRef.current = null;
       // The turn id this send is the owner of, so its `finally` can leave a
       // later send's id alone.
-      let ownTurnId: string | null = null;
+      let ownTurnId: string | null = runId;
+      /**
+       * Whether the GATE has the turn: its stream started, or it replayed the
+       * turn this id already named. It is not the same fact as "the call
+       * returned", and the outbox may only release a queued line once it is true.
+       */
+      let accepted = false;
 
       // Add streaming placeholder
-      setMessages((prev) => addStreamingPlaceholder(prev, runId));
+      setMessages((prev) => addStreamingPlaceholder(prev, runId, runId));
 
       // Declared outside the try so the catch can ask the signal itself
       // whether this failure was the user cancelling.
@@ -3339,6 +4028,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             ...resolveSendModel(gateway, selectedBackendId, selectedBotId),
             providerId: selectedBotId ? undefined : gateway.providerId,
             signal: abortController.signal,
+            // The id minted above, so this line is the same turn on every resend.
+            turnId: runId,
+            // The Gate took the turn. A queued line may leave the outbox now —
+            // the work is the Gate's, whatever happens to this stream next.
+            onAccepted: () => {
+              accepted = true;
+            },
             onToolCall: (toolCall) => {
               batcher.queueTool(toolCall);
             },
@@ -3445,6 +4141,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             }
           }
         }
+        return 'sent';
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         // A turn whose whole answer is the upstream model-ID refusal makes the
@@ -3481,15 +4178,34 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               ? prev
               : convertStreamError(prev, runId, message, true),
           );
-        } else if (isConnectionError(error)) {
+          // The operator's own stop: the turn is over either way, so a queued
+          // line must not be offered back as owed.
+          return 'sent';
+        }
+        if (isGateRestartFailure(error)) {
+          // The Gate restarted under the turn (§3.5). That is an interruption
+          // with a reason — not the red failure card, and never a finished half
+          // answer — so the reason is the copy on the bubble and the journal
+          // decides what the turn actually became.
+          batcher.flush();
+          setMessages((prev) => markInterrupted(prev, runId, interruptedTurnCopy('gate_restart')));
+          setLastError(null);
+          resumeRunningTurnsRef.current('interrupted', runId);
+          return 'sent';
+        }
+        if (isConnectionError(error)) {
           batcher.flush();
           setMessages((prev) => markInterrupted(prev, runId, message));
           setLastError(message);
           // The Gate keeps a turn running once this phone stops listening, so
           // the answer may well land there without the phone ever seeing it
-          // stream. Look for it on the recovery ladder.
-          scheduleInterruptedRecovery(gateway);
-        } else {
+          // stream. Look for it — by turn id, for as long as it runs.
+          resumeRunningTurnsRef.current('stream-error', runId);
+          // Not accepted and not delivered either: the words are still owed,
+          // which is the one case the outbox must not treat as sent.
+          return accepted ? 'sent' : 'failed';
+        }
+        {
           // Desktop-parity failure state: when the Gate names the host state
           // (multiplex off, refused key, dead environment, spent budget), the
           // bubble shows verdict + fix instead of a raw exception dump. The
@@ -3498,6 +4214,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           const shown = formatRunFailure(message) ?? message;
           setMessages((prev) => convertStreamError(prev, runId, shown, false));
           setLastError(message);
+          // The Gate answered and refused, so this is a real refusal rather than
+          // a line that never left: re-sending it would fail the same way. That
+          // is only true when the Gate ANSWERED, though, and `accepted` is the
+          // only evidence of that: a 5xx from a proxy in front of the Gate, or a
+          // transport throw nothing can classify, leaves the words on this phone
+          // — so a queued row stays owed rather than being reported as sent.
+          return accepted ? 'sent' : 'failed';
         }
       } finally {
         setIsSending(false);
@@ -3522,7 +4245,6 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       clearInterruptedRecovery,
       isSending,
       persistGateway,
-      scheduleInterruptedRecovery,
       selectedBackendId,
       selectedBotId,
     ],
@@ -3943,6 +4665,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         sessionId?: string;
         source?: ChatInputSource;
         attachments?: ChatAttachment[];
+        /**
+         * The turn this line is sent as. A queued line brings the id it was
+         * minted when it was parked, so every resend of those words is the same
+         * turn on the Gate rather than a second one.
+         */
+        turnId?: string;
       },
     ) => {
       const trimmed = text.trim();
@@ -3969,9 +4697,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         if (decision === 'offline') return 'offline';
         if (decision === 'busy') return 'busy';
         // A call transcript is plain model text even if recognition produced a
-        // leading slash; auto-sent speech must never dispatch a command.
-        await sendMessage(trimmed, options?.messageId, source);
-        return 'sent';
+        // leading slash; auto-sent speech must never dispatch a command. A call
+        // is never a queued line, so it brings no turn id of its own — but what
+        // the send reports still says whether the turn ever left this phone.
+        return sendMessage(trimmed, options?.messageId, source);
       }
 
       // Pre-flight guard: a stale read only declines a retryable action.
@@ -3983,8 +4712,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (!isSlashCommandInput(trimmed) || shouldPassthroughSkillSlash(trimmed, options?.skills ?? [])) {
-        await sendMessage(trimmed, options?.messageId, undefined, options?.attachments);
-        return 'sent';
+        // What the send reports is what actually happened to the turn: the Gate
+        // either took it (a replay of the same id counts) or it never left.
+        // `sendChatInput` used to resolve 'sent' whatever happened, which is how
+        // the outbox dropped a line whose send had not reached the Gate at all.
+        return sendMessage(trimmed, options?.messageId, undefined, options?.attachments, {
+          turnId: options?.turnId,
+        });
       }
 
       const busySlash = decideBusySlash(trimmed, isCommandRunning, runningCommandLabel);
@@ -4404,6 +5138,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     const turnId = turnIdRef.current;
     if (turnId) void clientRef.current?.cancelTurn?.(turnId)?.catch?.(() => undefined);
 
+    // A re-attached turn reads its journal on its own controller, so Stop has to
+    // reach those as well — and the ladder must not re-attach what was just
+    // stopped, or the turn this operator ended would come straight back.
+    stopTurnFollow();
+
     // Abort the fetch controller — this stops the local stream; the adapter
     // (OpenClaw) additionally issues session.abort via the signal listener.
     abortAndClear(abortControllerRef);
@@ -4415,7 +5154,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // placeholder is settled, the way the old filter removed every streaming
     // message — naming one run left any other orb wedged forever.
     setMessages((prev) => stopStreamedTurns(prev));
-  }, []);
+  }, [stopTurnFollow]);
 
   const reloadHistory = useCallback(async () => {
     if (!activeGateway) return;
@@ -4720,20 +5459,28 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             healLiveClient();
             return;
           }
-          // The locked-phone return: a turn the Gate finished while the app was
-          // away left an interrupted bubble behind, and a client that never
-          // lost `connected` fires no health-check branch to settle it. One
-          // reconcile on the way back in is what surfaces the reply.
+          // The locked-phone return. A turn the Gate is still running (or one
+          // that finished while the app was away) belongs to the Gate, and a
+          // client that never lost `connected` fires no health-check branch to
+          // look for it — which is why a reply that landed after the first look
+          // was never picked up and the thread said "Connection lost" until the
+          // operator reloaded by hand. This is the edge that fixes that.
+          const journal = turnClientOf(clientRef.current);
           const gateway = activeGatewayRef.current;
-          if (gateway && hasInterruptedMessage()) {
-            // The ladder's guard, in the arm that needed it too: a turn streaming
-            // right now would lose its placeholder to the reload. An interrupted
-            // bubble outlives the session (a Gate that never persisted it is
-            // re-added on every reload), so without this every foreground
-            // return would repaint the thread under a live turn.
-            if (isSendingRef.current || abortControllerRef.current) return;
-            void reconcileInterrupted(gateway);
+          if (!journal && gateway && hasInterruptedMessage()) {
+            // A gateway with no journal settles a reply it finished itself the
+            // way it always has: one reconcile now, and the ladder below for a
+            // host still coming back. The ladder's guard, in the arm that needs
+            // it too: a turn streaming right now would lose its placeholder to
+            // the reload, and an interrupted bubble outlives the session (a Gate
+            // that never persisted it is re-added on every reload), so without
+            // this every foreground return would repaint the thread under a
+            // live turn.
+            if (!isSendingRef.current && !abortControllerRef.current) {
+              void reconcileInterrupted(gateway);
+            }
           }
+          resumeRunningTurnsRef.current('foreground');
         })
         .catch(() => healLiveClient());
     });
@@ -5029,6 +5776,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     if (gateway) {
       void reloadHistoryFor(gateway);
     }
+    // The thread that was just opened may have a turn running on the Gate that
+    // this phone never saw start — the same read the foreground edge makes.
+    resumeRunningTurnsRef.current('thread');
   }, [clearInterruptedRecovery, closeSessionSelector, activeGateway, persistGateway, reloadHistoryFor]);
 
   useEffect(() => {
@@ -5622,6 +6372,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         persistGateway(pinned);
       }
       if (activeGateway) void reloadHistoryFor(activeGateway);
+      // The Bot Chat just opened is a thread like any other: a turn of its own
+      // may still be running on the Gate.
+      resumeRunningTurnsRef.current('thread');
       // A Bot's pin is only checkable once the Bot is selected: its catalogue is
       // the Bot's Hermes catalogue, which lists every provider it has.
       void repairStalePinRef.current?.(
@@ -5803,6 +6556,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     const activeId = activeGatewayRef.current?.id;
     if (!activeId) return;
 
+    // A batch that ended with rows still owed is not started again by the render
+    // that ended it. `isSending` drops in that same tick and is a dep of this
+    // effect, so a re-queued row would go straight back out — and keep going out
+    // on a gateway that is refusing or gone. What releases them is a connection
+    // that is not the one that gave up.
+    if (flushGaveUpOnRef.current === `${activeId}|${connectionSequenceRef.current}`) return;
+
     // Only flush items destined for the active gateway.
     const forActive = offlineQueueRef.current.filter((item) => item.gatewayId === activeId || !item.gatewayId);
     const remainder = offlineQueueRef.current.filter((item) => item.gatewayId && item.gatewayId !== activeId);
@@ -5863,25 +6623,59 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           if (isRunQueuedRow(item)) {
             await sendRunQueued(item.text, item.id, item.run);
           } else {
-            await sendChatInput(item.text, { fromQueue: true, messageId: item.id });
+            const outcome = await sendChatInput(item.text, {
+              fromQueue: true,
+              messageId: item.id,
+              // The id this line was parked with: a send the Gate already took
+              // comes back as a replay of it, so a retry is exactly-once.
+              turnId: item.turnId,
+            });
+            if (!queuedRowIsSent(outcome)) {
+              // Not the Gate having this turn: the row stays owed — with its turn
+              // id — and it ends the batch. The request may never have arrived
+              // (`failed`), a live turn may own the thread (`busy`), or the words
+              // may not have left the phone at all (`queued`, `offline`). Sending
+              // the next row on that footing is how a queued line used to be
+              // dropped from the durable copy.
+              break;
+            }
           }
-          // This row has moved: it is off the queue and off the copy on disk,
-          // and the write is what says so before the next send begins.
+          // The words have left this phone: the row is off the queue and off
+          // the copy on disk, and the write is what says so before the next send
+          // begins.
           unsent.delete(item);
           persistOfflineQueue();
         }
       } catch {
-        // Re-queue anything that did not clear so a kill mid-flush is not data loss.
+        // Nothing is rescued here: the `finally` below owns every row this batch
+        // did not send, whichever way the loop escaped.
+      } finally {
+        // A row the Gate never accepted is still the operator's words, and it
+        // goes back on the queue ahead of anything typed since — so every LATER
+        // write carries it too. Leaving it only in the owed set put it in the
+        // last write of this flush and in no other: the next line typed while
+        // offline wrote a durable copy without it.
         const stranded = forActive.filter((item) => unsent.has(item));
         if (stranded.length > 0) {
-          offlineQueueRef.current.push(...stranded);
+          offlineQueueRef.current = [...stranded, ...offlineQueueRef.current];
+          const owed = new Set(stranded.map((item) => item.id));
+          // Its line is queued again, which is what the operator sees while the
+          // words are still waiting to leave this phone.
+          setMessages((prev) =>
+            prev.map((message) => (owed.has(message.id) ? { ...message, queued: true } : message)),
+          );
           persistOfflineQueue();
         }
-      } finally {
+        // Not by the render that ended this flush, though: `isSending` drops in
+        // that same tick and is one of the deps above, so a re-queued row would
+        // be sent again at once — and again, and again, on a gateway that is
+        // refusing everything or is not there at all. The next connection, or
+        // another gateway, is what releases them; a restart before that re-reads
+        // them from the durable copy.
+        flushGaveUpOnRef.current = stranded.length > 0 ? `${activeId}|${connectionSequenceRef.current}` : null;
         flushingOfflineRef.current = false;
         // The flush owes nothing now, so the queue is the whole truth again and
-        // every later write is the queue alone. The rescue above has already put
-        // back everything it did not send.
+        // every later write is the queue alone.
         flushingOwedRef.current = null;
       }
     })();
@@ -5925,6 +6719,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setLastError(error instanceof Error ? error.message : String(error));
     }
     closeSessionSelector();
+    // A thread that did open can already have a turn running on the Gate.
+    resumeRunningTurnsRef.current('thread');
   }, [activeGateway, clearInterruptedRecovery, closeSessionSelector, persistGateway, selectedBackendId, selectedBotId]);
   useEffect(() => {
     createNewSessionRef.current = createNewSession;

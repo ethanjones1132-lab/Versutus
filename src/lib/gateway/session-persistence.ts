@@ -44,6 +44,18 @@ export type OfflineQueueItem = {
    * Bot Chat rather than whichever session the payload happened to name.
    */
   sessionId?: string;
+  /**
+   * The Gate turn this line is sent as, minted once when the row was written.
+   *
+   * Without it every resend of the same words is a NEW turn: a process killed
+   * mid-flush came back to a row whose first send was still running on the PC
+   * and sent it again, so the agent did the work twice. Reusing the id makes the
+   * Gate answer a retry with the existing turn (`X-Versutus-Turn-Resumed`) —
+   * the resend is exactly-once. Absent on a run row (a run carries its own run
+   * id) and on every row written before this field existed; a resend without one
+   * still mints a fresh id, which is exactly what it used to do.
+   */
+  turnId?: string;
 };
 
 /**
@@ -106,6 +118,8 @@ function normalizeOfflineQueueItem(item: OfflineQueueItem): OfflineQueueItem {
   if (botId) next.botId = botId;
   const sessionId = destinationId(item.sessionId);
   if (sessionId) next.sessionId = sessionId;
+  const turnId = destinationId(item.turnId);
+  if (turnId) next.turnId = turnId;
   const run = isQueuedRunShape(item.run) ? item.run : undefined;
   if (run) {
     const bot = destinationId(run.bot);
