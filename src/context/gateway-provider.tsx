@@ -65,10 +65,12 @@ import {
   beginSessionListRead,
   emptySessionList,
   nextSessionListLimit,
+  readSessionPage,
   sessionListCopy,
   sessionListMayHaveOlder,
   SESSION_LIST_PAGE_SIZE,
   type SessionListState,
+  type SessionPage,
 } from '@/lib/gateway/session-list';
 import { readSessionList } from '@/lib/gateway/session-list-read';
 import { clearCachedForGateway, readCached, writeCached } from '@/lib/cache/swr-store';
@@ -1383,6 +1385,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const historyLoadedForRef = useRef<string | null>(null);
   const historyRequestRef = useRef(0);
   const activeRunIdRef = useRef<string | null>(null);
+  /**
+   * The chat turn that owns `isSending`, by run id.
+   *
+   * Its own slot, because `activeRunIdRef` is shared with an agent command: a
+   * command that displaces a turn would otherwise keep that turn's `finally` from
+   * clearing the composer lock, and the composer would stay locked for as long
+   * as the command ran. Identity-guarded for the other direction — a turn that
+   * unwinds late must not unlock the composer under the turn that replaced it,
+   * which is what an unconditional clear did.
+   */
+  const sendingRunIdRef = useRef<string | null>(null);
   const lastSubstitutionRef = useRef<import('@/lib/gateway/run-failures').ModelReport | null>(null);
   const sessionIdRef = useRef<string | undefined>(undefined);
   const bootstrapStartedRef = useRef(false);
@@ -1814,6 +1827,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // history: a run that finished *after* the disconnect is often
       // absent from the history page just reloaded, which left the
       // bubble stuck as interrupted until a manual reload.
+      //
+      // Only bubbles that carry a gateway run handle reach the Gate. A chat
+      // turn's bubble is keyed by a client-local id, which no run backend can
+      // resolve — asking anyway cost a backend resolve and a round trip per
+      // bubble per window, and could only ever return an error this path
+      // discards.
       const streamClient = clientRef.current;
       if (streamClient?.getRunStatus) {
         const pending = interruptedRunIds(messagesRef.current);
@@ -2546,6 +2565,26 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     connectedFanOutRef.current = { ...due, at: Date.now() };
   }, []);
 
+  /**
+   * Stop the turn that is streaming because the client reading it is going away.
+   *
+   * The signal belongs to this provider, not to the client, so nothing on the
+   * client-teardown path can stop it: a gateway switch, or a reconnect ladder
+   * that discards and rebuilds a client, used to leave the old turn reading —
+   * frames for a thread this phone has left, and a socket held open on the Gate
+   * for the rest of the turn. The run id and the turn id go with it, so a later
+   * reconcile does not try to freeze a bubble whose turn is gone, and Stop never
+   * names a turn the new client knows nothing about.
+   */
+  const abandonLiveTurn = useCallback(() => {
+    abortAndClear(abortControllerRef);
+    setIsSending(false);
+    isSendingRef.current = false;
+    activeRunIdRef.current = null;
+    sendingRunIdRef.current = null;
+    turnIdRef.current = null;
+  }, []);
+
   const attachClient = useCallback(
     async (gatewayInput: GatewayProfile, options: { upgrade?: boolean } = {}) => {
       let gateway = gatewayInput;
@@ -2596,6 +2635,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         });
       }
       if (!isCurrent()) return;
+      // The outgoing client's turn is this provider's to stop: see abandonLiveTurn.
+      abandonLiveTurn();
       clientRef.current?.disconnect();
       // The old client is gone and the new one is not built until its manifest
       // answers. Say so for that whole window: leaving `status` on the previous
@@ -3053,7 +3094,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // patchActivityRuns is a useCallback with [] deps, so its identity is stable
     // for the provider's lifetime; listing it satisfies exhaustive-deps without
     // changing when this callback is rebuilt.
-    [reloadHistoryFor, applyStatus, applyConnectionPhase, patchActivityRuns, persistGateway, reconcileInterrupted, teardownRetiredActiveGateway, resetSessionSelector, updateTlsFingerprintChange, cancelConnectedReads, scheduleConnectedRead, noteConnectedFanOut, applyClientScope],
+    [reloadHistoryFor, abandonLiveTurn, applyStatus, applyConnectionPhase, patchActivityRuns, persistGateway, reconcileInterrupted, teardownRetiredActiveGateway, resetSessionSelector, updateTlsFingerprintChange, cancelConnectedReads, scheduleConnectedRead, noteConnectedFanOut, applyClientScope],
   );
 
   useEffect(() => {
@@ -3893,6 +3934,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     if (leaving && activeGatewayRef.current?.kind === 'custom') {
       void deregisterWithGate(leaving).catch(() => undefined);
     }
+    // A turn still streaming is reading through the client this call is throwing
+    // away; the signal is the provider's, so it is stopped here.
+    abandonLiveTurn();
     clientRef.current?.disconnect();
     clientRef.current = null;
     historyLoadedForRef.current = null;
@@ -3907,7 +3951,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     setIsSending(false);
     applyConnectionPhase('idle');
     void saveActiveGatewayId(null);
-  }, [applyStatus, applyConnectionPhase, resetSessionSelector]);
+  }, [abandonLiveTurn, applyStatus, applyConnectionPhase, resetSessionSelector]);
 
   const sendMessage = useCallback(
     async (
@@ -3954,6 +3998,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // A queued line brings its own (`options.turnId`); a live send mints one.
       const runId = options?.turnId ?? createTurnId();
       activeRunIdRef.current = runId;
+      sendingRunIdRef.current = runId;
       turnIdRef.current = null;
       // The turn id this send is the owner of, so its `finally` can leave a
       // later send's id alone.
@@ -4223,9 +4268,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           return accepted ? 'sent' : 'failed';
         }
       } finally {
-        setIsSending(false);
-        isSendingRef.current = false;
-        activeRunIdRef.current = null;
+        // Only this send's own composer lock, and only while it still owns it: a
+        // gateway switch or a rebuilt client can leave a turn unwinding while the
+        // next one is already in flight, and clearing `isSending` over the top of
+        // that turn unlocked the composer under a live reply. The run id is
+        // dropped on the same terms.
+        if (sendingRunIdRef.current === runId) {
+          sendingRunIdRef.current = null;
+          setIsSending(false);
+          isSendingRef.current = false;
+        }
+        if (activeRunIdRef.current === runId) activeRunIdRef.current = null;
         // Only this send's own controller: an agent command parks its controller
         // in the same slot, and clearing it here would leave that command's
         // Cancel doing nothing. Dropping out of the live set is what lets that
@@ -5074,14 +5127,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         .catch(() => undefined);
     }
     if (!client) return;
+    // The gateway's own verdict about this page, held beside the rows:
+    // `readSessionList` reports rows and success, and a page the Gate marked
+    // `partial` is short on purpose — judging completeness by the row count alone
+    // is what dropped the "Load older" control on the slowest reads.
+    let page: SessionPage | undefined;
     await readSessionList(
-      () => client.getSessions(SESSION_LIST_PAGE_SIZE),
+      () => readSessionPage(client, SESSION_LIST_PAGE_SIZE).then((read) => {
+        page = read;
+        return read.sessions;
+      }),
       isCurrent,
       (result) => {
         readSettled = true;
         setSessionListState((previous) => isCurrent() ? applySessionListRead(previous, result) : previous);
         if (result.ok) {
-          setSessionListHasOlder(sessionListMayHaveOlder(result.sessions.length, SESSION_LIST_PAGE_SIZE));
+          setSessionListHasOlder(
+            sessionListMayHaveOlder(result.sessions.length, SESSION_LIST_PAGE_SIZE, page?.partial),
+          );
           if (cacheId) void writeCached('sessions', cacheId, 'page1', result.sessions).catch(() => undefined);
         }
       },
@@ -5100,15 +5163,22 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     const isCurrent = () => seq === sessionReadSeqRef.current && clientRef.current === client;
     loadingOlderSessionsRef.current = true;
     setLoadingOlderSessions(true);
+    // As in the first page: the rows and the gateway's verdict travel together.
+    let page: SessionPage | undefined;
     try {
       await readSessionList(
-        () => client.getSessions(nextLimit),
+        () => readSessionPage(client, nextLimit).then((read) => {
+          page = read;
+          return read.sessions;
+        }),
         isCurrent,
         (result) => {
           setSessionListState((previous) => isCurrent() ? applySessionListRead(previous, result) : previous);
           if (result.ok) {
             sessionListLimitRef.current = nextLimit;
-            setSessionListHasOlder(sessionListMayHaveOlder(result.sessions.length, nextLimit));
+            setSessionListHasOlder(
+              sessionListMayHaveOlder(result.sessions.length, nextLimit, page?.partial),
+            );
           }
         },
       );

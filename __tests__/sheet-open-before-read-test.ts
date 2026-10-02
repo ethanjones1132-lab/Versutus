@@ -66,7 +66,11 @@ describe('sheet openers show the sheet before reading', () => {
     // identity. The identity clause is skipped only when there is no client at
     // all, because then nothing is in flight that could supersede the paint.
     expect(fn).toContain('seq === sessionReadSeqRef.current && (client === null || clientRef.current === client)');
-    expect(fn).toMatch(/await readSessionList\(\s*\(\) => client\.getSessions\(SESSION_LIST_PAGE_SIZE\),\s*isCurrent,/);
+    // The read is the one the sheet makes, and `isCurrent` is what it is judged
+    // by — the read itself is a page read (rows plus the gateway's own verdict).
+    const read = fn!.slice(fn!.indexOf('await readSessionList'));
+    expect(read).toContain('readSessionPage(client, SESSION_LIST_PAGE_SIZE)');
+    expect(read).toMatch(/readSessionPage\([\s\S]*?\n\s*isCurrent,/);
     const reader = readSource('src', 'lib', 'gateway', 'session-list-read.ts');
     expect(reader).toContain('if (isCurrent()) apply(result);');
   });

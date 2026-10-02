@@ -32,6 +32,7 @@
 export type ThreadSwitchRequest = (
   method: string,
   params: Record<string, unknown>,
+  options?: { timeoutMs?: number },
 ) => Promise<unknown>;
 
 /**
@@ -131,8 +132,13 @@ export async function validateThreadSwitch(
   });
   try {
     // A request that throws before it returns a promise is a failed read like any
-    // other, not an exception out of the tap.
-    const read = Promise.resolve().then(() => request('session.restore', restoreParams(sessionId, scope)));
+    // other, not an exception out of the tap. The bound travels WITH the read, so
+    // the read stops at the same moment the tap does: a request that kept running
+    // on the Gate for the transport's own 30 s after the switch had already
+    // proceeded is a catalogue read with nobody waiting for the answer.
+    const read = Promise.resolve().then(() =>
+      request('session.restore', restoreParams(sessionId, scope), { timeoutMs: boundMs }),
+    );
     const outcome = await Promise.race([
       read.then(() => null, (error: unknown) => error),
       bound,

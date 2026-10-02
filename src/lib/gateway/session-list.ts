@@ -52,11 +52,47 @@ export function nextSessionListLimit(current: number): number {
 /**
  * A full window may hide older threads behind the limit; a short one is the
  * whole catalogue. At the cap there is nothing older left to ask for.
+ *
+ * `partial` is the gateway's own word for "this window is narrower than what
+ * you asked for" (`ManifestClient.getSessionPage` carries it off
+ * `readIndexedSessions`). It outranks the count: a deliberately short page is
+ * built to fail a count comparison, so reading completeness from the rows alone
+ * is what dropped the "Load older" control exactly when the network was worst.
  */
-export function sessionListMayHaveOlder(loaded: number, requested: number): boolean {
+export function sessionListMayHaveOlder(loaded: number, requested: number, partial?: boolean): boolean {
   if (!Number.isFinite(loaded) || !Number.isFinite(requested)) return false;
+  // The cap outranks the flag: at the catalogue ceiling there is no wider read
+  // left to ask for, so "there may be older" would only offer a dead control.
   if (requested >= SESSION_LIST_MAX) return false;
+  if (partial) return true;
   return loaded >= requested;
+}
+
+/** One page of sessions and the gateway's verdict on how much it really read. */
+export type SessionPage<T extends SessionListEntry = SessionListEntry> = {
+  sessions: T[];
+  partial?: boolean;
+};
+
+/** A client that can report whether its page is the whole window. */
+type SessionPageClient<T extends SessionListEntry> = {
+  getSessions: (limit?: number) => Promise<T[]>;
+  getSessionPage?: (limit?: number) => Promise<SessionPage<T>>;
+};
+
+/**
+ * Read one page, keeping the gateway's verdict when it offers one.
+ *
+ * A client that cannot report a short page (a direct Hermes, an older Gate) is
+ * read exactly as before and leaves `partial` undefined, so the count-based
+ * judgement still decides.
+ */
+export async function readSessionPage<T extends SessionListEntry>(
+  client: SessionPageClient<T>,
+  limit: number,
+): Promise<SessionPage<T>> {
+  if (typeof client.getSessionPage === 'function') return client.getSessionPage(limit);
+  return { sessions: await client.getSessions(limit) };
 }
 
 /**

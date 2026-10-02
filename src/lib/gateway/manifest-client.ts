@@ -75,6 +75,15 @@ export class ManifestClient implements PortalClient {
   private currentSessionId: string | undefined;
   private selectedBackendId: string | undefined;
   private selectedBotId: string | undefined;
+  /**
+   * Turns streaming right now, by the turn id the request was sent under.
+   *
+   * `disconnect()` is the only teardown this client offers, so it is the only
+   * place a discarded client can stop the stream it is still reading. Without
+   * this the phone kept taking frames for a thread it had left, and the socket
+   * stayed open on the Gate for the rest of the turn.
+   */
+  private readonly pendingRuns = new Map<string, { runId: string; abortController: AbortController }>();
   private lastHealthError: string | null = null;
   /** Latched once a `/v1/turns` read is answered 404 by this gateway. */
   private turnsMissing = false;
@@ -284,6 +293,10 @@ export class ManifestClient implements PortalClient {
     this.connectEpoch += 1;
     this.closed = true;
     this.monitor.stop();
+    // A turn still streaming belongs to the client being discarded: stop it here
+    // rather than leaving frames arriving for a thread this phone has left.
+    for (const [, run] of this.pendingRuns) run.abortController.abort();
+    this.pendingRuns.clear();
     this.monitor.resume();
     if (this.currentSessionId) this.profile.sessionId = this.currentSessionId;
     this.setStatus('disconnected');
@@ -500,56 +513,75 @@ export class ManifestClient implements PortalClient {
     options?.onTurnId?.(turnId);
 
     const controller = new AbortController();
-    const signal = options?.signal || controller.signal;
-
-    const response = await streamingFetch(`${this.transport.baseUrl}${path}`, {
-      method: 'POST',
-      headers: { ...this.transport.headers, 'X-Versutus-Turn-Id': turnId },
-      body: JSON.stringify(body),
-      signal,
-    });
-
-    if (!response.ok) {
-      // The body is a JSON envelope. Throwing it verbatim is what put
-      // `{"error":{"message":"hermes: 500 …","code":"backend_error"}}` inside an
-      // assistant bubble on 2026-08-26 — wire text presented as if the model had
-      // said it, in the banner as well. Every other call site in this file
-      // already unwraps through the same helper.
-      const errorText = await response.text().catch(() => '');
-      throw new Error(messageFromHttpErrorBody(errorText, response.status));
+    // A caller-owned signal is wired INTO this controller rather than used
+    // instead of it, so the one signal the request runs under is always one the
+    // in-flight registry holds — otherwise `disconnect()` could not stop a turn
+    // whose signal belonged to the provider, which is every turn the app sends.
+    const callerSignal = options?.signal;
+    if (callerSignal) {
+      if (callerSignal.aborted) controller.abort();
+      else callerSignal.addEventListener('abort', () => controller.abort(), { once: true });
     }
+    const signal = controller.signal;
+    // Registered for the whole life of the turn, so a client that is discarded
+    // mid-stream stops the stream instead of leaving it reading for a thread the
+    // phone has left.
+    this.pendingRuns.set(turnId, { runId: turnId, abortController: controller });
 
-    // The Gate has the turn now, whichever way it answered: HTTP 200 opened a
-    // new turn, and the same id again is a replay of the one already journaled.
-    // A turn that ends here belongs to the Gate, so the caller's outbox may
-    // release the line it was holding.
-    options?.onAccepted?.(turnId);
+    try {
+      const response = await streamingFetch(`${this.transport.baseUrl}${path}`, {
+        method: 'POST',
+        headers: { ...this.transport.headers, 'X-Versutus-Turn-Id': turnId },
+        body: JSON.stringify(body),
+        signal,
+      });
 
-    // A turn the Gate opened for itself names its thread in the response, so
-    // the app can keep writing to the same session instead of forking a new
-    // one on every send.
-    const adopted = response.headers?.get('x-versutus-session-id');
-    if (adopted && adopted !== sentSessionId) options?.onSession?.(adopted);
+      if (!response.ok) {
+        // The body is a JSON envelope. Throwing it verbatim is what put
+        // `{"error":{"message":"hermes: 500 …","code":"backend_error"}}` inside an
+        // assistant bubble on 2026-08-26 — wire text presented as if the model had
+        // said it, in the banner as well. Every other call site in this file
+        // already unwraps through the same helper.
+        const errorText = await response.text().catch(() => '');
+        throw new Error(messageFromHttpErrorBody(errorText, response.status));
+      }
 
-    const frames = await readChatFrames({
-      response,
-      transport: this.transport,
-      signal,
-      callbacks: {
-        onDelta,
-        onToolCall: options?.onToolCall,
-        onReasoning: options?.onReasoning,
-        onTelemetryWarning: options?.onTelemetryWarning,
-        // The model asked for is what this send requested, so a report that
-        // names only what ran still says what it was instead of.
-        onModelReport: options?.onModelReport
-          ? (report) => options.onModelReport!({ ...report, requested: report.requested ?? options?.model })
-          : undefined,
-      },
-    });
+      // The Gate has the turn now, whichever way it answered: HTTP 200 opened a
+      // new turn, and the same id again is a replay of the one already journaled.
+      // A turn that ends here belongs to the Gate, so the caller's outbox may
+      // release the line it was holding.
+      options?.onAccepted?.(turnId);
 
-    assertChatStreamComplete(frames.completed, frames.error, signal, frames.errorCode);
-    return frames.text;
+      // A turn the Gate opened for itself names its thread in the response, so
+      // the app can keep writing to the same session instead of forking a new
+      // one on every send.
+      const adopted = response.headers?.get('x-versutus-session-id');
+      if (adopted && adopted !== sentSessionId) options?.onSession?.(adopted);
+
+      const frames = await readChatFrames({
+        response,
+        transport: this.transport,
+        signal,
+        callbacks: {
+          onDelta,
+          onToolCall: options?.onToolCall,
+          onReasoning: options?.onReasoning,
+          onTelemetryWarning: options?.onTelemetryWarning,
+          // The model asked for is what this send requested, so a report that
+          // names only what ran still says what it was instead of.
+          onModelReport: options?.onModelReport
+            ? (report) => options.onModelReport!({ ...report, requested: report.requested ?? options?.model })
+            : undefined,
+        },
+      });
+
+      assertChatStreamComplete(frames.completed, frames.error, signal, frames.errorCode);
+      return frames.text;
+    } finally {
+      // The turn is over however it ended, so the registry must not keep a
+      // controller no request is listening to any more.
+      this.pendingRuns.delete(turnId);
+    }
   }
 
   /** Native environments this gate can hold a conversation through. */
@@ -872,8 +904,25 @@ export class ManifestClient implements PortalClient {
    * HermesGatewayClient uses. A missing path throws immediately — that is a
    * capability signal, not a blip, so it is not retried. `limit` also decides
    * the per-attempt budget: a bulk read is a different read.
+   *
+   * Delegates to `getSessionPage`, which is the read that keeps the gateway's
+   * own verdict about the page; this keeps the row list and drops the verdict.
    */
   async getSessions(limit = 20): Promise<HermesSession[]> {
+    return (await this.getSessionPage(limit)).sessions;
+  }
+
+  /**
+   * One page of sessions, and whether the gateway says it is the whole window.
+   *
+   * The Gate marks a page `partial` when it could not finish the window it was
+   * asked for and answered with what its own copy held. Dropping that flag is
+   * what made a slow read read as "that is the whole catalogue": the app
+   * compares rows against the limit it sent, and 20 rows for a 200 ask is
+   * exactly the page that hides older threads. The flag is carried here so
+   * completeness can be judged on the gateway's word rather than on the count.
+   */
+  async getSessionPage(limit = 20): Promise<{ sessions: HermesSession[]; partial?: boolean }> {
     const path = this.endpoints.sessions;
     if (!path) {
       throw new Error(
@@ -891,7 +940,8 @@ export class ManifestClient implements PortalClient {
         ),
       { limit },
     );
-    return Array.isArray(result) ? result : result.data ?? [];
+    if (Array.isArray(result)) return { sessions: result };
+    return { sessions: result.data ?? [], partial: result.partial };
   }
 
   /**
@@ -1023,8 +1073,18 @@ export class ManifestClient implements PortalClient {
    * Hermes session the operator could see in the sheet read as `Session not
    * found`. Gate-global methods (device.*, voice.*, registry.*, …) are left
    * exactly as the caller wrote them.
+   *
+   * `options.timeoutMs` is the caller's own budget for a read it may walk away
+   * from — the thread-tap validation, which stops waiting at its own bound and
+   * lets the switch proceed. Without it the request inherits the transport's
+   * 30 s, which is the same number the Gate's own session read uses, so a tap
+   * that has moved on leaves a read running on the Gate for the rest of it.
    */
-  async rpcRequest<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  async rpcRequest<T = unknown>(
+    method: string,
+    params: Record<string, unknown> = {},
+    options: { timeoutMs?: number } = {},
+  ): Promise<T> {
     const path = this.endpoints.capabilitiesRpc;
     if (!path) {
       throw new Error(
@@ -1038,7 +1098,7 @@ export class ManifestClient implements PortalClient {
     }>('POST', path, {
       method,
       params: rpcParamsWithScope(method, params, { backendId: this.backendId, botId: this.botId }),
-    });
+    }, options.timeoutMs);
 
     if (body?.error) {
       // The gate's own code travels on the thrown Error: `unknown_session` is

@@ -60,14 +60,27 @@ describe('markInterrupted with cause', () => {
   });
 
   test('settle clears the interruption reason once the run resolves', () => {
-    let messages = addStreamingPlaceholder([], 'a');
+    // A handle, not a bubble key: the turn is one the gateway tracks as a run.
+    let messages = addStreamingPlaceholder([], 'a', undefined, 'handle-a');
     messages = markInterrupted(messages, 'a', 'connection closed unexpectedly');
     expect(messages[0].interruptedReason).toBe('connection closed unexpectedly');
 
-    const settled = settleInterruptedFromRuns(messages, [{ runId: 'a', text: 'the full answer' }]);
+    const settled = settleInterruptedFromRuns(messages, [{ runId: 'handle-a', text: 'the full answer' }]);
     expect(settled[0].interrupted).toBe(false);
     expect(settled[0].interruptedReason).toBeUndefined();
     expect(settled[0].text).toBe('the full answer');
+  });
+
+  test('a bubble with no gateway handle is never settled from a run', () => {
+    // The bubble key is a client-local id, so there is nothing the gateway could
+    // have answered: settling it from a resolution keyed by that id would be
+    // settling it from a run that does not exist.
+    let messages = addStreamingPlaceholder([], 'a');
+    messages = markInterrupted(messages, 'a', 'connection closed unexpectedly');
+
+    const settled = settleInterruptedFromRuns(messages, [{ runId: 'a', text: 'the full answer' }]);
+    expect(settled[0].interrupted).toBe(true);
+    expect(settled[0].text).toBe('');
   });
 
   test('is a no-op when the run id is not present, even with a reason', () => {

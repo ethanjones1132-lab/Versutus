@@ -59,11 +59,19 @@ export function addUserMessage(
  * a re-attached turn reads `run-${turnId}`, so a phone that comes back to a turn
  * it was already streaming writes into THIS bubble instead of raising a second
  * one beside it.
+ *
+ * `runHandle` is the GATE's own run id for this turn, and only that: the bubble's
+ * own `run-${runId}` key is a client-local id, which no gateway can resolve. A
+ * caller with a real handle passes it so an interrupted bubble can be settled
+ * from the run; a caller without one (every chat turn) passes nothing and the
+ * bubble settles from history alone, as it did before the recovery ladder
+ * learned to ask.
  */
 export function addStreamingPlaceholder(
   messages: readonly ChatMessage[],
   runId: string,
   turnId?: string,
+  runHandle?: string,
 ): ChatMessage[] {
   const placeholder: ChatMessage = {
     id: `run-${runId}`,
@@ -72,6 +80,7 @@ export function addStreamingPlaceholder(
     streaming: true,
     timestamp: Date.now(),
     ...(turnId ? { turnId } : {}),
+    ...(runHandle ? { runHandle } : {}),
   };
   return appendBounded([...messages], placeholder);
 }
@@ -394,19 +403,21 @@ export function preserveTurnBubbleAfterReload(
 }
 
 /**
- * Run ids of assistant bubbles still sitting in the interrupted state.
+ * Run handles of assistant bubbles still sitting in the interrupted state.
  *
- * The in-flight bubble is keyed `run-${runId}`, so the id round-trips back out.
- * Only bubbles that carry a run id can be settled from a run result; a bubble
- * interrupted before its run id was known is left for history reconciliation.
+ * Only bubbles that CARRY a handle: a chat turn is keyed by a client-local id
+ * (`run-${createMessageId('run')}`), which is not a run the gateway ever issued.
+ * Handing that string to `GET /v1/runs/{id}` made the Gate resolve a run-capable
+ * backend and ask it for a run that does not exist, on every recovery window, for
+ * every interrupted bubble — an error the caller discards, so the bubble stayed
+ * interrupted either way. A bubble interrupted before any handle was known is
+ * likewise left for history reconciliation.
  */
 export function interruptedRunIds(messages: readonly ChatMessage[]): string[] {
   const ids: string[] = [];
   for (const message of messages) {
     if (!message.interrupted || message.role !== 'assistant') continue;
-    if (!message.id.startsWith('run-')) continue;
-    const runId = message.id.slice('run-'.length);
-    if (runId) ids.push(runId);
+    if (typeof message.runHandle === 'string' && message.runHandle) ids.push(message.runHandle);
   }
   return [...new Set(ids)];
 }
@@ -440,9 +451,9 @@ export function settleInterruptedFromRuns(
 
   return messages.map((message) => {
     if (!message.interrupted || message.role !== 'assistant') return message;
-    if (!message.id.startsWith('run-')) return message;
+    if (typeof message.runHandle !== 'string' || !message.runHandle) return message;
 
-    const resolution = byRunId.get(message.id.slice('run-'.length));
+    const resolution = byRunId.get(message.runHandle);
     if (!resolution) return message;
 
     const text = resolution.text?.trim();

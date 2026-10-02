@@ -103,36 +103,41 @@ describe('markInterrupted', () => {
 });
 
 describe('interruptedRunIds', () => {
-  test('extracts run ids from interrupted assistant bubbles', () => {
+  test('returns the gateway handle of an interrupted assistant bubble', () => {
     const messages = [
-      { ...message({ id: 'run-a' }), interrupted: true } as ChatMessage,
-      { ...message({ id: 'run-b' }), interrupted: true } as ChatMessage,
-      message({ id: 'run-c' }),
+      { ...message({ id: 'run-a', runHandle: 'handle-a' }), interrupted: true } as ChatMessage,
+      { ...message({ id: 'run-b', runHandle: 'handle-b' }), interrupted: true } as ChatMessage,
+      message({ id: 'run-c', runHandle: 'handle-c' }),
     ];
-    expect(interruptedRunIds(messages)).toEqual(['a', 'b']);
+    expect(interruptedRunIds(messages)).toEqual(['handle-a', 'handle-b']);
   });
 
-  test('ignores bubbles with no run id and non-assistant rows', () => {
+  test('a bubble with no handle is not a run the gateway ever issued', () => {
+    // A chat turn's bubble is keyed by a client-local id. Asking the gateway to
+    // resolve that string as a run costs a backend resolve and a round trip per
+    // interrupted bubble per recovery window, and can only ever come back an
+    // error — so it is never asked about.
     const messages = [
+      { ...message({ id: 'run-1762-a1b2c3' }), interrupted: true } as ChatMessage,
       { ...message({ id: 'local-1' }), interrupted: true } as ChatMessage,
-      { ...message({ id: 'run-u', role: 'user' }), interrupted: true } as ChatMessage,
+      { ...message({ id: 'run-u', role: 'user', runHandle: 'handle-u' }), interrupted: true } as ChatMessage,
     ];
     expect(interruptedRunIds(messages)).toEqual([]);
   });
 
   test('de-duplicates', () => {
     const messages = [
-      { ...message({ id: 'run-a' }), interrupted: true } as ChatMessage,
-      { ...message({ id: 'run-a' }), interrupted: true } as ChatMessage,
+      { ...message({ id: 'run-a', runHandle: 'handle-a' }), interrupted: true } as ChatMessage,
+      { ...message({ id: 'run-a2', runHandle: 'handle-a' }), interrupted: true } as ChatMessage,
     ];
-    expect(interruptedRunIds(messages)).toEqual(['a']);
+    expect(interruptedRunIds(messages)).toEqual(['handle-a']);
   });
 });
 
 describe('settleInterruptedFromRuns', () => {
   test('replaces an interrupted bubble with the run result', () => {
-    const messages = [{ ...message({ id: 'run-a', text: 'partial' }), interrupted: true } as ChatMessage];
-    const result = settleInterruptedFromRuns(messages, [{ runId: 'a', text: 'the full answer' }]);
+    const messages = [{ ...message({ id: 'run-a', runHandle: 'handle-a', text: 'partial' }), interrupted: true } as ChatMessage];
+    const result = settleInterruptedFromRuns(messages, [{ runId: 'handle-a', text: 'the full answer' }]);
 
     expect(result[0].text).toBe('the full answer');
     expect(result[0].interrupted).toBe(false);
@@ -140,16 +145,16 @@ describe('settleInterruptedFromRuns', () => {
   });
 
   test('keeps the partial text when the run reports no text', () => {
-    const messages = [{ ...message({ id: 'run-a', text: 'partial' }), interrupted: true } as ChatMessage];
-    const result = settleInterruptedFromRuns(messages, [{ runId: 'a' }]);
+    const messages = [{ ...message({ id: 'run-a', runHandle: 'handle-a', text: 'partial' }), interrupted: true } as ChatMessage];
+    const result = settleInterruptedFromRuns(messages, [{ runId: 'handle-a' }]);
 
     expect(result[0].text).toBe('partial');
     expect(result[0].interrupted).toBe(true);
   });
 
   test('marks a failed run as errored while keeping what was streamed', () => {
-    const messages = [{ ...message({ id: 'run-a', text: 'partial' }), interrupted: true } as ChatMessage];
-    const result = settleInterruptedFromRuns(messages, [{ runId: 'a', failed: true }]);
+    const messages = [{ ...message({ id: 'run-a', runHandle: 'handle-a', text: 'partial' }), interrupted: true } as ChatMessage];
+    const result = settleInterruptedFromRuns(messages, [{ runId: 'handle-a', failed: true }]);
 
     expect(result[0].interrupted).toBe(false);
     expect(result[0].text).toBe('partial');
@@ -157,21 +162,21 @@ describe('settleInterruptedFromRuns', () => {
   });
 
   test('leaves bubbles with no matching resolution alone', () => {
-    const messages = [{ ...message({ id: 'run-a' }), interrupted: true } as ChatMessage];
+    const messages = [{ ...message({ id: 'run-a', runHandle: 'handle-a' }), interrupted: true } as ChatMessage];
     const result = settleInterruptedFromRuns(messages, [{ runId: 'other', text: 'nope' }]);
 
     expect(result[0].interrupted).toBe(true);
   });
 
   test('never touches a bubble that is not interrupted', () => {
-    const messages = [message({ id: 'run-a', text: 'settled already' })];
-    const result = settleInterruptedFromRuns(messages, [{ runId: 'a', text: 'overwrite me' }]);
+    const messages = [message({ id: 'run-a', runHandle: 'handle-a', text: 'settled already' })];
+    const result = settleInterruptedFromRuns(messages, [{ runId: 'handle-a', text: 'overwrite me' }]);
 
     expect(result[0].text).toBe('settled already');
   });
 
   test('an empty resolution list returns an equivalent fresh array', () => {
-    const messages = [message({ id: 'run-a' })];
+    const messages = [message({ id: 'run-a', runHandle: 'handle-a' })];
     const result = settleInterruptedFromRuns(messages, []);
 
     expect(result).not.toBe(messages);

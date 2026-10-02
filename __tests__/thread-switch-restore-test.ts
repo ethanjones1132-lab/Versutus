@@ -26,14 +26,14 @@ describe('tap validates the thread through session.restore before pinning', () =
   test('a resolving read lets the switch proceed', async () => {
     const request = jest.fn().mockResolvedValue({ sessionId: 's-42' });
     await expect(validateThreadSwitch(request, 's-42')).resolves.toEqual({ ok: true });
-    expect(request).toHaveBeenCalledWith('session.restore', { sessionId: 's-42' });
+    expect(request).toHaveBeenCalledWith('session.restore', { sessionId: 's-42' }, { timeoutMs: THREAD_SWITCH_BOUND_MS });
   });
 
   test('a scoped read asking for a session the gate cannot find blocks the switch', async () => {
     const request = jest.fn().mockRejectedValue(refusal('Session not found: s-999', 'unknown_session'));
     const validation = await validateThreadSwitch(request, 's-999', { backendId: 'hermes-local' });
     expect(validation).toEqual({ ok: false, error: 'Session not found: s-999', refreshList: true });
-    expect(request).toHaveBeenCalledWith('session.restore', { sessionId: 's-999', backendId: 'hermes-local' });
+    expect(request).toHaveBeenCalledWith('session.restore', { sessionId: 's-999', backendId: 'hermes-local' }, { timeoutMs: THREAD_SWITCH_BOUND_MS });
   });
 
   test('a rejected read with a non-Error carries its string form', async () => {
@@ -132,7 +132,7 @@ describe('only a definite miss may refuse the tap', () => {
     // A Bot names its own environment, so it travels alone.
     const request = jest.fn().mockResolvedValue({});
     await validateThreadSwitch(request, 'api_1', { backendId: 'claude-local', botId: 'default' });
-    expect(request).toHaveBeenCalledWith('session.restore', { sessionId: 'api_1', bot: 'default' });
+    expect(request).toHaveBeenCalledWith('session.restore', { sessionId: 'api_1', bot: 'default' }, { timeoutMs: THREAD_SWITCH_BOUND_MS });
   });
 });
 

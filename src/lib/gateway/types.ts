@@ -174,6 +174,13 @@ export type HermesSession = {
 export type SessionsResponse = {
   object: string;
   data: HermesSession[];
+  /**
+   * True when the gateway could not finish the window that was asked for and
+   * answered with a shorter one (`gate/core/server.mjs` `readIndexedSessions`).
+   * It is the gateway being honest about a truncated page, and the only signal
+   * that says "there may be older rows" when the count alone cannot.
+   */
+  partial?: boolean;
 };
 
 export type SessionMessage = {
@@ -225,6 +232,18 @@ export type ChatMessage = {
   queued?: boolean;
   /** Set when the connection drops mid-stream; the bubble may be reconciled later. */
   interrupted?: boolean;
+  /**
+   * The GATE's own id for the run this bubble is streaming, when the turn is one
+   * the gateway tracks as a run.
+   *
+   * Never the bubble id. A chat turn's bubble is keyed by a client-local id
+   * (`createMessageId('run')`), and asking the gateway to resolve that string as
+   * a run handle costs a backend resolve and a round trip per interrupted bubble
+   * per recovery window, for a run the gateway never issued — the answer is an
+   * error, which the caller throws away. This field is the only thing that can be
+   * looked up, so its absence means "there is nothing to ask about".
+   */
+  runHandle?: string;
   /** Human-readable cause for an interruption, surfaced in the transcript bubble. */
   interruptedReason?: string;
   /**

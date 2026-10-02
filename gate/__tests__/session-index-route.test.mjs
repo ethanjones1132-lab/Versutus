@@ -52,7 +52,7 @@ const ROW = (id, extra = {}) => ({
  * A backend whose session listing is entirely test-controlled: every call is
  * recorded, and `hold()` keeps the reads open — the 38 s cold read this exists for.
  */
-function controllableBackend({ kind = 'hermes', bots = ['atlas'] } = {}) {
+function controllableBackend({ kind = 'hermes', bots = ['atlas'], listDelayMs = 0 } = {}) {
   const calls = [];
   const rows = [];
   let held = null;
@@ -62,6 +62,9 @@ function controllableBackend({ kind = 'hermes', bots = ['atlas'] } = {}) {
     async listSessions(limit, options = {}) {
       calls.push({ listSessions: limit ?? null, timeoutMs: options.timeoutMs });
       if (held) await held.promise;
+      // A catalogue read that takes real time, which is the shape the exact-id
+      // lookup is not allowed to pay for.
+      if (listDelayMs) await new Promise((resolve) => { setTimeout(resolve, listDelayMs); });
       return typeof limit === 'number' ? rows.slice(0, limit) : rows.slice();
     },
     async createSession({ title } = {}) {
@@ -121,6 +124,8 @@ async function makeGate({
   // is the only way a test can see what the copy knows when NOTHING has been
   // loaded into this process yet.
   reuse,
+  // ...and `listDelayMs`, so a test can make the catalogue read cost real time.
+  listDelayMs = 0,
   ...gateOptions
 } = {}) {
   const root = reuse?.root ?? await mkdtemp(join(tmpdir(), 'gate-index-route-'));
@@ -141,7 +146,7 @@ async function makeGate({
     }), 'utf8');
   }
 
-  const hermes = controllableBackend({ kind });
+  const hermes = controllableBackend({ kind, listDelayMs });
   const adapter = {
     adapterId,
     adapterRevision: '1',
@@ -201,6 +206,15 @@ async function sendTurn(gate, body) {
   });
   await response.text();
   return response.status;
+}
+
+async function rpc(gate, method, params = {}) {
+  const response = await fetch(url(gate, '/v1/capabilities/rpc'), {
+    method: 'POST',
+    headers: auth(gate),
+    body: JSON.stringify({ method, params }),
+  });
+  return { status: response.status, body: await response.json() };
 }
 
 async function waitFor(predicate, what) {
@@ -645,6 +659,163 @@ test('an unknown Bot is refused once, on every conversation route', async () => 
     assert.equal(hermes.calls.filter((call) => 'listSessions' in call).length, 0, 'a refused Bot costs no read');
   } finally {
     console.error = realError;
+    await gate.close();
+  }
+});
+
+// CONN-1. The thread sheet's tap validates a row through `session.restore`
+// before switching, and that read asked the environment to LIST its catalogue
+// to find one id: 3-38 s against a 6.2 GB `state.db` (2026-10-01), paid on every
+// tap, on the same Gate that answers the sheet itself from its own copy in
+// microseconds. An environment with a get-by-id read of its own (Hermes) is
+// asked directly and is fast; one without it — every CLI environment — has no
+// such call, so the copy is the only cheap answer there is.
+
+test('the tap validation is answered from the Gate\'s own copy, not a fresh catalogue read', async () => {
+  const { gate, hermes, environmentId } = await makeGate({ listDelayMs: 150 });
+  hermes.setRows([ROW('ses_1', { source: 'api_server' })]);
+  try {
+    // The sheet read that warmed the copy is the only read this Gate makes.
+    assert.equal((await listSessions(gate, '&limit=20')).status, 200);
+    assert.equal(hermes.reads().length, 1);
+
+    const started = Date.now();
+    const restored = await rpc(gate, 'session.restore', { sessionId: 'ses_1', backendId: environmentId });
+    assert.equal(restored.status, 200, JSON.stringify(restored.body));
+    assert.equal(restored.body.result.id, 'ses_1');
+    assert.equal(restored.body.result.source, 'api_server');
+    assert.equal(
+      hermes.reads().length,
+      1,
+      `the tap must not read the catalogue again, got ${JSON.stringify(hermes.reads())}`,
+    );
+    assert.ok(Date.now() - started < 100, `the copy answers in microseconds, took ${Date.now() - started}ms`);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a Bot\'s own copy answers the tap validation for that Bot', async () => {
+  const { gate, hermes } = await makeGate({ listDelayMs: 150 });
+  hermes.setRows([ROW('ses_bot', { source: 'api_server' })]);
+  try {
+    // The list the sheet reads is Bot-scoped, so the copy is keyed by the Bot.
+    const listed = await fetch(url(gate, '/v1/sessions?bot=atlas&limit=20'), { headers: auth(gate) });
+    assert.equal(listed.status, 200);
+    const readsAfterList = hermes.reads().length;
+
+    const restored = await rpc(gate, 'session.restore', { sessionId: 'ses_bot', bot: 'atlas' });
+    assert.equal(restored.status, 200, JSON.stringify(restored.body));
+    assert.equal(restored.body.result.id, 'ses_bot');
+    assert.equal(hermes.reads().length, readsAfterList, 'the Bot\'s own copy answered it');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a row the copy has outlived is still read live, so a deleted session reads as gone', async () => {
+  // The copy answers a positive. A MISS may only ever be proved by the host: the
+  // copy is refreshed in the background and can be a refill old, so answering a
+  // miss from here would retire rows the host still holds — and refuse taps on
+  // healthy threads.
+  const { gate, hermes, environmentId } = await makeGate();
+  hermes.setRows([ROW('ses_1', { source: 'api_server' }), ROW('ses_2', { source: 'api_server' })]);
+  try {
+    await listSessions(gate, '&limit=20');
+    const readsAfterList = hermes.reads().length;
+
+    const missing = await rpc(gate, 'session.restore', { sessionId: 'ses_3', backendId: environmentId });
+    assert.equal(missing.body.error.code, 'unknown_session');
+    assert.ok(
+      hermes.reads().length > readsAfterList,
+      'a miss must reach the backend that can prove it',
+    );
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a copy in a different window never answers this one', async () => {
+  const { gate, hermes } = await makeGate();
+  hermes.setRows([ROW('ses_1', { source: 'api_server' })]);
+  try {
+    await listSessions(gate, '&limit=20');
+    const readsAfterList = hermes.reads().length;
+
+    // `ses_1` is in the copy under `hermes-local|` — the plain environment's
+    // window. The same id under a Bot is a DIFFERENT window, and answering from
+    // the environment's copy would be the wrong-scope read this path exists to
+    // avoid: the row the operator's sheet shows is not the row that answers.
+    const other = await rpc(gate, 'session.restore', { sessionId: 'ses_1', bot: 'atlas' });
+    assert.equal(other.status, 200, JSON.stringify(other.body));
+    assert.ok(hermes.reads().length > readsAfterList, 'a window that does not hold the id must reach the host');
+  } finally {
+    await gate.close();
+  }
+});
+
+// CONN-2. A chat turn writes its session through to the Gate's own copy, so the
+// thread shows up at the top of the next list without waiting on the query the
+// copy exists to avoid. The row for a session the copy has never read is built
+// from a template, and the template claimed the host's own default source —
+// `hermes`. The app recognises the threads it owns by `source: 'api_server'`,
+// so the planted row read as somebody else's session: a cold start concluded it
+// owned no session and resumed the newest OTHER app session it could see, which
+// is an unrelated conversation.
+
+test('a row written through by a chat turn is the app\'s own session, not the host\'s', async () => {
+  const { gate, hermes, index, environmentId } = await makeGate();
+  hermes.setRows([ROW('ses_1', { source: 'api_server' })]);
+  try {
+    // The list the operator is looking at has warmed a real window, so the
+    // window the turn writes into is one the sheet will actually serve.
+    await listSessions(gate, '&limit=20');
+    const read = ROW('ses_desktop', { source: 'cli', title: 'Started on the desktop' });
+    hermes.setRows([ROW('ses_1', { source: 'api_server' }), read]);
+    // The copy has no row for it — an id the window never held, which is what
+    // eviction, a scope-key mismatch or a failed first read leaves behind.
+    await index.get('hermes-local|');
+
+    assert.equal(await sendTurn(gate, {
+      backendId: environmentId,
+      sessionId: 'ses_desktop',
+      messages: [{ role: 'user', content: 'hello' }],
+    }), 200);
+
+    const heldRow = (await index.get('hermes-local|')).sessions[0];
+    assert.equal(heldRow.id, 'ses_desktop', 'the turn put its session at the top');
+    assert.equal(
+      heldRow.source,
+      'api_server',
+      `the app recognises its own threads by source; a row claiming '${heldRow.source}' reads as another surface's session`,
+    );
+    // Still the row it was: the turn knew the id and the time, nothing else.
+    assert.equal(typeof heldRow.last_active, 'number');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a row a live read measured keeps the source that read reported', async () => {
+  // The write-through merges field by field, so a session the copy already
+  // holds keeps the source Hermes reported for it — this is about a row the
+  // copy has never seen, not about overriding what a read proved.
+  const { gate, hermes, environmentId } = await makeGate();
+  hermes.setRows([ROW('ses_1', { source: 'api_server' })]);
+  try {
+    await listSessions(gate, '&limit=20');
+    assert.equal(await sendTurn(gate, {
+      backendId: environmentId,
+      sessionId: 'ses_1',
+      messages: [{ role: 'user', content: 'hi' }],
+    }), 200);
+
+    const held = hermes.hold();
+    const after = await listSessions(gate, '&limit=20');
+    assert.equal(after.body.data[0].id, 'ses_1');
+    assert.equal(after.body.data[0].source, 'api_server', 'the read measured it, so the read still owns it');
+    held.release();
+  } finally {
     await gate.close();
   }
 });

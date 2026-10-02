@@ -689,7 +689,10 @@ describe('BG-1: Stop cancels the turn the Gate is still running', () => {
     });
     await settleStream();
     expect(mockClients[0].streams).toHaveLength(2);
-    expect(chatApi().isSending).toBe(false);
+    // The first turn has landed, the second is still streaming: the composer stays
+    // locked. Its `finally` used to clear `isSending` unconditionally, which
+    // unlocked the composer under the turn still on screen.
+    expect(chatApi().isSending).toBe(true);
 
     await act(async () => {
       await gatewayApi().stopStreaming();

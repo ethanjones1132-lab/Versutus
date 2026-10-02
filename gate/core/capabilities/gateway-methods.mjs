@@ -94,12 +94,22 @@ function unknownSession(sessionId) {
 
 /**
  * One exact-id read on one backend: `getSession` where the backend has it,
- * otherwise the wide list scan every backend can serve. Returns the record or
- * null for a definite miss; anything the backend throws is the backend's own
- * failure and travels untouched.
+ * otherwise the Gate's own copy of that scope's list, and only then the wide
+ * list scan. Returns the record or null for a definite miss; anything the
+ * backend throws is the backend's own failure and travels untouched.
+ *
+ * The copy is a POSITIVE answer only. A backend that can read one id on its own
+ * is asked directly — that read is authoritative and cheap, and a cached row can
+ * be up to a refill old. An environment with no such read is the case the copy
+ * exists for: listing 200 rows to find one id measured 3-38 s against a 6.2 GB
+ * `state.db`, so the row the Gate already holds answers in microseconds, and a
+ * miss still goes to the backend — the copy may be stale, and a session the
+ * host has deleted must be reported gone.
  */
-function readOneSession(backend, sessionId) {
+async function readOneSession(deps, scope, backend, sessionId) {
   if (typeof backend.getSession === 'function') return Promise.resolve(backend.getSession(sessionId));
+  const cached = await deps.cachedSession(scope?.backendId, scope?.botId, sessionId);
+  if (cached) return cached;
   if (typeof backend.listSessions !== 'function') {
     return Promise.reject(new Error("This gateway's backend cannot read sessions"));
   }
@@ -120,7 +130,7 @@ function readOneSession(backend, sessionId) {
 async function readSessionInScope(deps, scope, sessionId) {
   const backend = await deps.getBackend(scope?.backendId, scope?.botId, 'listSessions');
   try {
-    return (await readOneSession(backend, sessionId)) ?? null;
+    return (await readOneSession(deps, scope, backend, sessionId)) ?? null;
   } catch (error) {
     if (error?.code === 'unknown_session') return null;
     throw error;
@@ -230,6 +240,10 @@ function usageOf(session) {
  *   RPC dispatcher owns the reply.
  * @param {(sessionId: string) => Promise<Array<{ backendId?: string, botId?: string }>>} deps.sessionScopes
  *   The scopes whose Gate-held session lists contain this id, most recent first.
+ * @param {(backendId?: string, botId?: string, sessionId: string) => Promise<object|null>} [deps.cachedSession]
+ *   One session out of the Gate's own copy of that scope's list, or null. The
+ *   copy answers an environment with no get-by-id read, which is the one whose
+ *   wide catalogue read costs seconds.
  * @param {() => Promise<Array<{ backendId?: string }>>} deps.allBackendScopes
  *   Every attached environment, for the sweep a scope-less request falls back to.
  * @param {(backendId?: string, botId?: string, sessionId: string) => Promise<void>} deps.forgetSession
@@ -247,6 +261,7 @@ export function createGatewayMethods({
   sessionScopes,
   allBackendScopes,
   forgetSession: forget,
+  cachedSession,
   sessionSearchBoundMs = DEFAULT_SESSION_SEARCH_BOUND_MS,
   listDevices,
   revokeDevice,
@@ -256,6 +271,7 @@ export function createGatewayMethods({
     forgetSession: forget,
     sessionScopes: typeof sessionScopes === 'function' ? sessionScopes : async () => [],
     allBackendScopes: typeof allBackendScopes === 'function' ? allBackendScopes : async () => [],
+    cachedSession: typeof cachedSession === 'function' ? cachedSession : async () => null,
     sessionSearchBoundMs,
   };
 

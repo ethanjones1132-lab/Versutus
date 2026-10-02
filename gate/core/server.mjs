@@ -119,6 +119,12 @@ const DEFAULT_OUTCOME_RELOAD_DELAY_MS = 1000;
 const DEFAULT_SESSION_READ_BOUND_MS = 30_000;
 const DEFAULT_SESSION_REFRESH_TIMEOUT_MS = 180_000;
 const DEFAULT_SESSION_INDEX_STALE_MS = 30_000;
+/**
+ * The `source` the app recognises a thread of its own by
+ * (`APP_SESSION_SOURCE`, src/lib/gateway/messages.ts). Named here because the
+ * copy states it on rows nothing has measured — see `createGateSessionIndex`.
+ */
+const APP_SESSION_SOURCE = 'api_server';
 // How long one attached environment gets in the scope-less session-id sweep
 // before it counts as "not here". Generous next to the ~0.1 s a warm
 // `GET /api/sessions/{id}` takes and next to the 3-38 s a whole Hermes
@@ -931,13 +937,29 @@ export async function runVoiceTurn(backendManager, session, text, handlers = {})
  * heard about from its own action is stored as: the keys a live Hermes row has,
  * with honest empties for the values nobody has measured. The app reads those
  * keys, and a missing one is not a zero, it is a hole in the list.
+ *
+ * `source` is the one value the template states rather than empties. Every row
+ * built here is a session a chat turn just streamed through this Gate's own API,
+ * which is exactly the `api_server` the app recognises a thread of its own by
+ * (`APP_SESSION_SOURCE`, src/lib/gateway/messages.ts). Left at Hermes's default
+ * it read as another surface's session: `pickAppSession` skipped the phone's own
+ * thread, and a cold start resumed the newest OTHER app session in the page —
+ * an unrelated conversation, with the operator's real thread orphaned. A read
+ * that measures the row still overwrites this (`mergeRow`), so only a session
+ * the copy has never seen carries it.
  */
 export function createGateSessionIndex({ gateHome, now, writeDelayMs } = {}) {
   return createSessionIndex({
     dir: join(gateHome, 'state', 'session-index'),
     ...(now ? { now } : {}),
     ...(writeDelayMs ? { writeDelayMs } : {}),
-    rowTemplate: (id) => toGatewaySession({ id, started_at: Date.now(), last_active: Date.now(), preview: '' }),
+    rowTemplate: (id) => toGatewaySession({
+      id,
+      source: APP_SESSION_SOURCE,
+      started_at: Date.now(),
+      last_active: Date.now(),
+      preview: '',
+    }),
   });
 }
 
@@ -1460,6 +1482,18 @@ export async function createGate(config = {}) {
         // written to, and the stale row would survive the miss that retired it.
         const environmentId = backendId ?? (botId ? (await environmentWithBots())?.id : undefined);
         await sessionListIndex.remove(sessionIndexKey(environmentId, botId), sessionId);
+      },
+      // One session out of the Gate's own copy of that scope's list. It answers
+      // the exact-id lookup for an environment whose backend has no get-by-id
+      // read of its own, where the only alternative is listing the whole
+      // catalogue: 3-38 s against a 6.2 GB `state.db`, paid on every tap of the
+      // thread sheet. A miss still goes to the backend, so a row the copy has
+      // outlived is reported gone rather than answered from here.
+      cachedSession: async (backendId, botId, sessionId) => {
+        const environmentId = backendId ?? (botId ? (await environmentWithBots())?.id : undefined);
+        if (!environmentId) return null;
+        const held = await sessionListIndex.get(sessionIndexKey(environmentId, botId));
+        return held?.sessions.find((row) => row?.id === sessionId) ?? null;
       },
       sessionSearchBoundMs: sessionLookupBoundMs,
       async getBackend(backendId, botId, method) {

@@ -637,64 +637,83 @@ export class HermesGatewayClient {
     options?.onTurnId?.(turnId);
 
     const controller = new AbortController();
-    const signal = options?.signal || controller.signal;
-
-    const response = await streamingFetch(`${this.transport.baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { ...this.transport.headers, ...extraHeaders },
-      body: JSON.stringify(body),
-      signal,
-    });
-
-    if (!response.ok) {
-      // The body is a JSON envelope. Throwing it verbatim is what put
-      // `{"error":{"message":"hermes: 500 …","code":"backend_error"}}` inside an
-      // assistant bubble on 2026-08-26 — wire text presented as if the model had
-      // said it. The run-events path below already unwraps; this one must too,
-      // so the banner and the bubble both read the human cause.
-      const errorText = await response.text().catch(() => '');
-      throw new Error(messageFromHttpErrorBody(errorText, response.status));
+    // A caller-owned signal is wired INTO this controller rather than used
+    // instead of it, so the one signal the request runs under is always one
+    // `pendingRuns` holds — otherwise `disconnect()` could not stop a turn whose
+    // signal belonged to the provider, which is every turn the app sends.
+    const callerSignal = options?.signal;
+    if (callerSignal) {
+      if (callerSignal.aborted) controller.abort();
+      else callerSignal.addEventListener('abort', () => controller.abort(), { once: true });
     }
+    const signal = controller.signal;
+    // Registered for the whole life of the turn, so a client that is discarded
+    // mid-stream stops the stream instead of leaving it reading for a thread the
+    // phone has left. The map was declared for exactly this and never filled.
+    this.pendingRuns.set(turnId, { runId: turnId, abortController: controller });
 
-    // The gateway has the turn: its stream started. A caller holding a queued
-    // line may release it now — not because the call returned, but because the
-    // work is the gateway's from here.
-    options?.onAccepted?.(turnId);
+    try {
+      const response = await streamingFetch(`${this.transport.baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { ...this.transport.headers, ...extraHeaders },
+        body: JSON.stringify(body),
+        signal,
+      });
 
-    const adopted = response.headers?.get('x-versutus-session-id');
-    if (adopted && adopted !== sessionId) options?.onSession?.(adopted);
+      if (!response.ok) {
+        // The body is a JSON envelope. Throwing it verbatim is what put
+        // `{"error":{"message":"hermes: 500 …","code":"backend_error"}}` inside an
+        // assistant bubble on 2026-08-26 — wire text presented as if the model had
+        // said it. The run-events path below already unwraps; this one must too,
+        // so the banner and the bubble both read the human cause.
+        const errorText = await response.text().catch(() => '');
+        throw new Error(messageFromHttpErrorBody(errorText, response.status));
+      }
 
-    // One model report per distinct report: the same block rides every frame of
-    // a turn, and a note per frame was a note per token.
-    let lastModelReport: import('@/lib/gateway/run-failures').ModelReport | null = null;
-    const frames = await readChatFrames({
-      response,
-      transport: this.transport,
-      signal,
-      callbacks: {
-        onDelta,
-        onToolCall: options?.onToolCall,
-        onReasoning: options?.onReasoning,
-        onTelemetryWarning: options?.onTelemetryWarning,
-        onModelReport:
-          options?.onModelReport &&
-          ((report) => {
-            if (
-              lastModelReport !== null &&
-              lastModelReport.requested === report.requested &&
-              lastModelReport.ran === report.ran &&
-              lastModelReport.provider === report.provider
-            ) {
-              return;
-            }
-            lastModelReport = report;
-            options.onModelReport!(report);
-          }),
-      },
-    });
+      // The gateway has the turn: its stream started. A caller holding a queued
+      // line may release it now — not because the call returned, but because the
+      // work is the gateway's from here.
+      options?.onAccepted?.(turnId);
 
-    assertChatStreamComplete(frames.completed, frames.error, signal, frames.errorCode);
-    return frames.text;
+      const adopted = response.headers?.get('x-versutus-session-id');
+      if (adopted && adopted !== sessionId) options?.onSession?.(adopted);
+
+      // One model report per distinct report: the same block rides every frame of
+      // a turn, and a note per frame was a note per token.
+      let lastModelReport: import('@/lib/gateway/run-failures').ModelReport | null = null;
+      const frames = await readChatFrames({
+        response,
+        transport: this.transport,
+        signal,
+        callbacks: {
+          onDelta,
+          onToolCall: options?.onToolCall,
+          onReasoning: options?.onReasoning,
+          onTelemetryWarning: options?.onTelemetryWarning,
+          onModelReport:
+            options?.onModelReport &&
+            ((report) => {
+              if (
+                lastModelReport !== null &&
+                lastModelReport.requested === report.requested &&
+                lastModelReport.ran === report.ran &&
+                lastModelReport.provider === report.provider
+              ) {
+                return;
+              }
+              lastModelReport = report;
+              options.onModelReport!(report);
+            }),
+        },
+      });
+
+      assertChatStreamComplete(frames.completed, frames.error, signal, frames.errorCode);
+      return frames.text;
+    } finally {
+      // The turn is over however it ended, so the registry must not keep a
+      // controller no request is listening to any more.
+      this.pendingRuns.delete(turnId);
+    }
   }
 
   /**
@@ -799,8 +818,17 @@ export class HermesGatewayClient {
   /**
    * Legacy request method — maps RPC-style method names to Hermes API endpoints.
    * This allows existing slash commands to work without full rewrites.
+   *
+   * `options.timeoutMs` is the caller's own budget for a read it may walk away
+   * from; without it the request inherits the transport's 30 s, which is also
+   * the host's own read bound — a tap that has stopped waiting would otherwise
+   * leave the read running behind it.
    */
-  async rpcRequest<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  async rpcRequest<T = unknown>(
+    method: string,
+    params: Record<string, unknown> = {},
+    options: { timeoutMs?: number } = {},
+  ): Promise<T> {
     const resolved = resolveRoute(method, params);
     if (!resolved) {
       const supported = Object.keys(METHOD_TO_ROUTE).length;
@@ -812,7 +840,12 @@ export class HermesGatewayClient {
       );
     }
     const { route, path, body } = resolved;
-    return this.transport.request<T>(route.method, path, route.method === 'GET' ? undefined : body);
+    return this.transport.request<T>(
+      route.method,
+      path,
+      route.method === 'GET' ? undefined : body,
+      options.timeoutMs,
+    );
   }
 
   // ─── Run management ───────────────────────────────────────────
