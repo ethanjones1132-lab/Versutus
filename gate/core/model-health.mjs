@@ -3,6 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { writeFileAtomic } from './atomic-file.mjs';
+import { isGateInternalReason } from './model-fault.mjs';
 
 // ─── Which models actually answer here ───
 //
@@ -146,17 +147,29 @@ export function createModelHealth({
     const models = parsed && typeof parsed === 'object' ? parsed.models : null;
     if (!models || typeof models !== 'object') return;
     const at = now();
+    // A verdict whose reason is one of the Gate's own fault signatures was never
+    // evidence about a model — 2026-10-02 hid the operator's OpenCode models for
+    // six hours on `Unexpected end of JSON input` — so it is dropped here rather
+    // than waited out, and the file is rewritten without it: nothing has to be
+    // edited by hand for the table to heal itself.
+    let dropped = false;
     for (const [key, value] of Object.entries(models)) {
       if (!value || typeof value !== 'object') continue;
       const since = Number(value.since);
       if (!Number.isFinite(since) || at - since >= ttlMs) continue;
+      const reason = typeof value.reason === 'string' ? value.reason : '';
+      if (reason && isGateInternalReason(reason)) {
+        dropped = true;
+        continue;
+      }
       const failures = Number(value.failures);
       entries.set(key, {
         failures: Number.isFinite(failures) && failures > 0 ? failures : 0,
-        reason: typeof value.reason === 'string' ? value.reason : '',
+        reason,
         since,
       });
     }
+    if (dropped) schedulePersist();
   }
 
   function schedulePersist() {

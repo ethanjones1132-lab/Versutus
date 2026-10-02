@@ -442,6 +442,26 @@ test('a backend that refuses the turn outright is a failure too', async () => {
   }
 });
 
+test('a Gate-side fault that fails two turns hides nothing', async () => {
+  // The 2026-10-02 incident: `call()` read OpenCode's empty 204 with
+  // `response.json()`, every turn answered `Unexpected end of JSON input`, and
+  // the model-health table hid the operator's models for six hours on the
+  // strength of a defect in the Gate's own code. A throw the Gate caused is not
+  // evidence about a model, so it records nothing at all — not a failure, and not
+  // a success either (which would have cleared a verdict the model really earned).
+  const { gate } = await makeGate({ replies: { 'deepseek-v4.1-flash': new SyntaxError('Unexpected end of JSON input') } });
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await sendTurn(gate, 'opencode-go-session/deepseek-v4.1-flash');
+      assert.equal(response.status, 502);
+      assert.equal((await response.json()).error.message, 'Unexpected end of JSON input');
+    }
+    assert.equal((await readCatalogue(gate)).get('opencode-go-session/deepseek-v4.1-flash').hidden, undefined);
+  } finally {
+    await gate.close();
+  }
+});
+
 test('a STREAMED turn that throws is a failure too, and an answer clears it', async () => {
   // The app always streams (`manifest-client` sends `stream: true`), so this is
   // the path that actually runs. A thrown backend turn — Hermes non-2xx, 429,
@@ -469,6 +489,41 @@ test('a STREAMED turn that throws is a failure too, and an answer clears it', as
     replies['deepseek-v4.1-flash'] = 'answered at last';
     assert.match(await streamTurn(), /answered at last/);
     assert.equal((await readCatalogue(gate)).get('opencode-go-session/deepseek-v4.1-flash').hidden, undefined);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a STREAMED turn that fails on the Gate\'s own fault records nothing at all', async () => {
+  // The same rule on the path the app always takes, and with something to get
+  // wrong in both directions: a verdict the model really earned must survive the
+  // Gate's own defects (recording a success here would clear it, and a Gate-side
+  // failure must never be counted against the model either).
+  const refusal = new Error('HTTP 400: MissingSessionID');
+  const replies = { 'deepseek-v4.1-flash': refusal };
+  const { gate } = await makeGate({ replies });
+  const streamTurn = () => chat(gate, {
+    model: 'opencode-go-session/deepseek-v4.1-flash',
+    messages: [{ role: 'user', content: 'hi' }],
+    stream: true,
+  }).then((response) => response.text());
+
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) await streamTurn();
+    assert.match(
+      (await readCatalogue(gate)).get('opencode-go-session/deepseek-v4.1-flash').hiddenReason,
+      /^Failed its last 2 turns \(HTTP 400: MissingSessionID\)/,
+    );
+
+    // Two turns that failed on a bug in the Gate: the model's own record is
+    // untouched — neither a third failure nor a clear.
+    replies['deepseek-v4.1-flash'] = new SyntaxError('Unexpected end of JSON input');
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      assert.match(await streamTurn(), /Unexpected end of JSON input/);
+    }
+    const rows = await readCatalogue(gate);
+    assert.equal(rows.get('opencode-go-session/deepseek-v4.1-flash').hidden, true);
+    assert.match(rows.get('opencode-go-session/deepseek-v4.1-flash').hiddenReason, /last 2 turns \(HTTP 400/);
   } finally {
     await gate.close();
   }

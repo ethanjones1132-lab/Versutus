@@ -59,6 +59,7 @@ import {
   qualifiedModelId,
 } from './backend-model-route.mjs';
 import { createModelHealth, healthScopeId, modelHealthKey } from './model-health.mjs';
+import { isModelFault } from './model-fault.mjs';
 import { curateModels } from './model-curation.mjs';
 import { backendUpstreamRefusal } from './upstream-refusal.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
@@ -292,7 +293,7 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res, {
       // A throw is where the app's turns actually end: it always streams, so a
       // backend that refuses a turn outright (non-2xx, 429, 5xx, a stall) never
       // reaches the outcome recorded above and would otherwise never be scored.
-      recordOutcome?.(healthKey, { reason: error?.message });
+      recordOutcome?.(healthKey, { reason: error?.message, error });
       const code = typeof error?.code === 'string' && /^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/.test(error.code)
         ? error.code : 'backend_error';
       res.write(`data: ${JSON.stringify({ error: { message: error.message, code } })}\n\n`);
@@ -895,13 +896,26 @@ export async function createGate(config = {}) {
   /**
    * One turn's verdict, as the catalogue reads it: an upstream refusal or a
    * turn that completed with nothing to show is a failure, an answer clears
-   * the model, and a turn the caller stopped says nothing at all about it.
+   * the model, and a turn the caller stopped — or that failed on a bug in this
+   * Gate — says nothing at all about it (see core/model-fault.mjs).
    */
-  function recordTurnOutcome(key, { text = '', hasContent = false, reason = '' } = {}) {
+  function recordTurnOutcome(key, { text = '', hasContent = false, reason = '', error = null } = {}) {
     if (!key) return;
     const refusal = backendUpstreamRefusal(text);
-    if (refusal) modelHealth.recordFailure(key, refusal);
-    else if (hasContent) modelHealth.recordSuccess(key);
+    if (refusal) {
+      modelHealth.recordFailure(key, refusal);
+      return;
+    }
+    if (error !== undefined && error !== null) {
+      // A throw is evidence about the model only when the model or its provider
+      // produced it. Scored as a failure, a defect in the Gate hides the
+      // operator's models for six hours and nothing in the picker says why
+      // (2026-10-02); scored as a success it would clear a verdict the model
+      // really earned. So it records nothing.
+      if (isModelFault(error)) modelHealth.recordFailure(key, reason || String(error));
+      return;
+    }
+    if (hasContent) modelHealth.recordSuccess(key);
     else modelHealth.recordFailure(key, reason || 'the backend completed the turn with no assistant content');
   }
 
@@ -3113,7 +3127,7 @@ export async function createGate(config = {}) {
             // Thrown after the answer went out (the push notice, say): the turn
             // answered, so it is neither a failure nor a second response.
             if (res.headersSent) return;
-            if (!res.destroyed) recordTurnOutcome(healthKey, { reason: error?.message });
+            if (!res.destroyed) recordTurnOutcome(healthKey, { reason: error?.message, error });
             res.writeHead(502, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: { message: error.message, code: 'backend_error' } }));
           }

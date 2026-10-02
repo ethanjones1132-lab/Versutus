@@ -439,7 +439,17 @@ export function createOpenCodeBackend({
       // has no such route", which is how the async prompt falls back.
       throw Object.assign(new Error(`opencode: ${message}`), { status: response.status });
     }
-    return response.json();
+    // A real opencode 1.18.18 accepts a turn with 204 and NO body (verified live
+    // 2026-10-02: status 204, no content-length, zero bytes) and then runs it on
+    // the bus. `response.json()` on that throws `Unexpected end of JSON input`
+    // before the bus wait begins, so the turn is reported failed while the server
+    // is running it — and the model-health table reads that as the model's fault.
+    // So an ok answer with nothing in it is a success that carries no value, and
+    // a 204/205 says so outright; only a body that is really there is parsed.
+    if (response.status === 204 || response.status === 205) return null;
+    const text = await response.text();
+    if (!text.trim()) return null;
+    return JSON.parse(text);
   }
 
   /** Best-effort stop of a turn the server is still running, and bounded. */

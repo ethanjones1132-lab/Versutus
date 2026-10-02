@@ -160,6 +160,40 @@ test('no key, no verdict, no file', async () => {
   await assert.rejects(() => readFile(file, 'utf8'));
 });
 
+test('a verdict written against the Gate\'s own fault heals itself on the next load', async () => {
+  // What the 2026-10-02 defect left behind: `call()` read OpenCode's empty 204
+  // with `response.json()`, so two turns failed with `Unexpected end of JSON
+  // input` and the operator's models were hidden for six hours — a verdict about
+  // the Gate's code, held against the model. Nobody should have to edit the file
+  // to undo it: a stored reason that is one of the Gate's own signatures is not
+  // evidence about a model, so it is dropped on load and written back out.
+  const file = await stateFile();
+  const clock = fakeClock();
+  const at = clock.now();
+  await writeFile(file, JSON.stringify({
+    models: {
+      'opencode-local|opencode/fledge-alpha-free': {
+        failures: 2, reason: 'Unexpected end of JSON input', since: at,
+      },
+      'hermes-local|opencode-go/longcat-2.5-preview-free': {
+        failures: 2, reason: 'HTTP 404: No endpoints available for openrouter/free', since: at,
+      },
+    },
+  }), 'utf8');
+
+  const health = createModelHealth({ file, now: clock.now, writeDelayMs: 1 });
+  assert.equal(health.verdict('opencode-local|opencode/fledge-alpha-free'), null);
+  assert.equal(health.size(), 1);
+  const kept = health.verdict('hermes-local|opencode-go/longcat-2.5-preview-free');
+  assert.equal(kept.failing, true, 'a real provider failure is still held against its model');
+  assert.match(kept.reason, /No endpoints available/);
+
+  // ...and the wrong verdict is gone from disk, not only from memory.
+  await waitFor(async () => !(await readFile(file, 'utf8')).includes('Unexpected end of JSON input'));
+  const written = JSON.parse(await readFile(file, 'utf8'));
+  assert.deepEqual(Object.keys(written.models), ['hermes-local|opencode-go/longcat-2.5-preview-free']);
+});
+
 test('the reason the picker shows is one line and short', () => {
   assert.equal(shortReason('HTTP 400: MissingSessionID'), 'HTTP 400: MissingSessionID');
   assert.equal(shortReason('  HTTP 400:\n  two lines  '), 'HTTP 400: two lines');
