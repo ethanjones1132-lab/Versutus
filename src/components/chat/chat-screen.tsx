@@ -37,6 +37,7 @@ import { Button, Card, EmptyState, ErrorCard, Icon, PressableScale, Screen, Skel
 import { Motion, Radius, Spacing } from '@/constants/tokens';
 import { entering } from '@/lib/motion/presets';
 import { useChatSurface, useGateway } from '@/context/gateway-provider';
+import type { SendChatInputOutcome } from '@/context/gateway-provider';
 import { useHandsfreeVoice } from '@/context/handsfree-voice-provider';
 import { describeGatewayError, errorBannerButton, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import { modelLockFor, type ModelTurnLock } from '@/lib/gateway/run-failures';
@@ -133,6 +134,7 @@ import { composeRequestApplies, composeRequestHoldCopy } from '@/lib/gateway/com
 import { effectiveModel, resolveSendModel, scopeModelsToBackend, visibleModelRows } from '@/lib/gateway/model-selection';
 import {
   chatAttachmentsFromPicker,
+  attachmentChars,
   supportsImageInput,
   type ChatAttachment,
 } from '@/lib/gateway/chat-parts';
@@ -176,10 +178,10 @@ import {
   loadVoicePreferences,
   readBotVoice,
   readSpeakerOn,
-  saveVoicePreferences,
   shouldShowSilentModeHint,
   SILENT_MODE_HINT_COPY,
   speakerPreferenceKey,
+  updateVoicePreferences,
   type BotVoice,
 } from '@/lib/voice/voice-preferences';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
@@ -199,6 +201,42 @@ const JUMP_PILL_THRESHOLD_PX = 260;
 // gesture pages back instead of reloading the same window (bounce rounding
 // and the header button keep tiny offsets live).
 const AT_TOP_PX = 8;
+
+/**
+ * Whether a send put this turn on the wire with everything it was handed.
+ * `sent` is the Gate's having accepted the turn — its stream started, or it
+ * replayed the turn this line already named — and it is the only outcome that
+ * says the photos in it travelled. Every other one left them on this phone.
+ */
+function turnCarriedPhotos(outcome: SendChatInputOutcome): boolean {
+  return outcome === 'sent';
+}
+
+/**
+ * Whether the words are somewhere the operator can still get them: taken by the
+ * Gate (`sent`), parked in the durable outbox (`queued`), or already on screen
+ * as this turn's own bubble (`failed`, and every command outcome, append one
+ * first). `offline` and `busy` are the two answers that leave the composer
+ * holding the only copy, so a refused send has to hand them back.
+ */
+function turnCarriedWords(outcome: SendChatInputOutcome): boolean {
+  return outcome !== 'offline' && outcome !== 'busy';
+}
+
+/** Said beside the composer when a send with photos never left the phone. */
+const ATTACHMENTS_NOT_SENT_COPY =
+  'Those photos did not send. They are back on the composer — send again when the gateway is connected.';
+
+/** Said beside the composer for the pictures a pick was too big to stage. */
+function attachmentRefusedCopy(refused: number): string {
+  return refused === 1
+    ? 'That photo was too large to add to this message. Send it on its own, or pick a smaller one.'
+    : `${refused} photos were too large to add to this message. Send these first, then attach the rest.`;
+}
+
+/** Said under the error banner when the clipboard would not take the details. */
+const CLIPBOARD_REFUSED_COPY =
+  'The details could not be copied to the clipboard. The failure log in Diagnostics has them.';
 
 /**
  * How long the roster mount read counts for. The effect below re-runs whenever
@@ -306,11 +344,13 @@ function LastErrorBanner({
   onSetup,
   onReconnect,
   onDismiss,
+  onCopyResult,
 }: {
   error: unknown;
   onSetup: () => void;
   onReconnect: () => void;
   onDismiss: () => void;
+  onCopyResult: (copied: boolean) => void;
 }) {
   const humanized = humanizeGatewayError(error);
   const button = errorBannerButton(humanized.action);
@@ -324,7 +364,17 @@ function LastErrorBanner({
       break;
     case 'copy':
       onRetry = () => {
-        void Clipboard.setStringAsync(describeGatewayError(error)).then(() => haptics.success());
+        // The clipboard write can be refused (a busy Android process, the screen
+        // torn down mid-tap). A discarded promise reported nothing at all: the tap
+        // looked like it worked, the details were gone, and the only record was a
+        // rejection line on Diagnostics. So the refusal is said here, and only a
+        // clipboard that really holds the text earns the haptic.
+        void Clipboard.setStringAsync(describeGatewayError(error))
+          .then(() => {
+            onCopyResult(true);
+            haptics.success();
+          })
+          .catch(() => onCopyResult(false));
       };
       break;
     case 'dismiss':
@@ -479,6 +529,9 @@ export function ChatScreen() {
   // A denied photo-library permission is a line beside the composer, not a
   // silent return — the paperclip must say why nothing opened.
   const [attachNotice, setAttachNotice] = useState<string | undefined>();
+  // A refused clipboard write under the error banner is a line there for the
+  // same reason: the tap looked like it worked and the details were gone.
+  const [copyNotice, setCopyNotice] = useState<string | undefined>();
   const [dismissedPairingKey, setDismissedPairingKey] = useState<string | null>(null);
   const [overflowVisible, setOverflowVisible] = useState(false);
   // The Bot's own panel (voice, skills, tools, routines), opened from its name.
@@ -664,6 +717,22 @@ export function ChatScreen() {
       cancelled = true;
     };
   }, [draftThread, handsfreeActive]);
+  // Staged photos belong to ONE thread, exactly as the text above does: the
+  // drafts are keyed by gateway + surface + session, and photos were not — so
+  // two photos composed in one Bot's Chat rode the next turn typed into another
+  // Bot's, or were POSTed to another gateway entirely, with nothing but a
+  // removal chip to say whose they had been. Leaving the thread drops them,
+  // which also lets this phone give the base64 back.
+  //
+  // Deferred a tick like every other producer in this repo: writing state
+  // straight from an effect body trips react-hooks/set-state-in-effect.
+  const attachmentsThread = draftThread ? composerDraftKey(draftThread) : undefined;
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setAttachments((current) => (current.length === 0 ? current : []));
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [attachmentsThread]);
 
   // The name the header prints for this thread is the operator's own when they
   // gave one — the same rule the selector row prints (the store's fold, so the
@@ -736,11 +805,13 @@ export function ChatScreen() {
       setSilentHintShown(true);
       setSilentHintOwed(false);
     }
-    // The blob is read back and folded before it is written, so this one
-    // conversation's flag moves without dropping a Bot's voice beside it.
-    void loadVoicePreferences().then((stored) => {
+    // The blob is folded and written through the store's own queue, so this
+    // one conversation's flag moves without dropping a Bot's voice beside it —
+    // and without a tap on a voice chip landing inside this write and being
+    // erased by it.
+    void updateVoicePreferences((stored) => {
       const written = applySpeakerOn(stored, key, next);
-      return saveVoicePreferences(showHint ? acknowledgeSilentModeHint(written) : written);
+      return showHint ? acknowledgeSilentModeHint(written) : written;
     });
   }, [speakerKey, speakerOn, silentHintOwed]);
 
@@ -813,14 +884,12 @@ export function ChatScreen() {
       // refinements ride along: the store merges the patch onto what it holds,
       // so a voice change leaves this Bot's rate and pitch standing.
       setBotVoice((current) => (identifier ? { ...current, voiceIdentifier: identifier } : undefined));
-      // The blob is read back and folded before it is written, so one Bot's
+      // The blob is folded and written through the store's own queue, so one Bot's
       // voice moves without dropping this conversation's speaker flag.
-      void loadVoicePreferences().then((stored) =>
-        saveVoicePreferences(
-          identifier
-            ? applyBotVoice(stored, key, { voiceIdentifier: identifier })
-            : clearVoicePreference(stored, key),
-        ),
+      void updateVoicePreferences((stored) =>
+        identifier
+          ? applyBotVoice(stored, key, { voiceIdentifier: identifier })
+          : clearVoicePreference(stored, key),
       );
     },
     [botVoiceKey],
@@ -833,14 +902,14 @@ export function ChatScreen() {
       // neighbour, so nothing is written and nothing is shown to have moved.
       const patch = botVoiceRefinementPatch(field, value);
       if (!patch) return;
-      // The blob is read back and folded before it is written, so one Bot's
+      // The blob is folded and written through the store's own queue, so one Bot's
       // rate moves without dropping its voice, its pitch or this
       // conversation's speaker flag — and what the control shows is the store's
       // own read of what was actually written, not the step that was tapped.
-      void loadVoicePreferences().then((stored) => {
+      void updateVoicePreferences((stored) => {
         const written = applyBotVoice(stored, key, patch);
         setBotVoice(readBotVoice(written, key));
-        return saveVoicePreferences(written);
+        return written;
       });
     },
     [botVoiceKey],
@@ -1041,13 +1110,26 @@ export function ChatScreen() {
   }, [router]);
 
   const pairingKey = `${deviceId ?? ''}:${pairingDetails?.requestId ?? ''}`;
-  const isStreaming = isSending || messages.some((message) => message.streaming);
+  // What the transcript itself says, in ONE walk. This screen re-renders on
+  // every coalesced delta batch, so two `some`/`filter` scans of the message
+  // window were paid per streamed frame — and `filter` allocated an array each
+  // time for a number. One memoised pass answers both.
+  const transcriptAnswers = useMemo(() => {
+    let streaming = false;
+    let queued = 0;
+    for (const message of messages) {
+      if (message.streaming) streaming = true;
+      if (message.queued) queued += 1;
+    }
+    return { streaming, queued };
+  }, [messages]);
+  const isStreaming = isSending || transcriptAnswers.streaming;
   // While a Bot is replying the room is a little brighter; it settles after.
   useEffect(() => {
     signalSpeaking(isStreaming);
   }, [isStreaming]);
   useEffect(() => () => signalSpeaking(false), []);
-  const queuedCount = messages.filter((message) => message.queued).length;
+  const queuedCount = transcriptAnswers.queued;
   const showPairingSheet = status === 'pairing' && !!deviceId && dismissedPairingKey !== pairingKey;
   // Dismiss hides the sheet without ending pairing — this banner is the way
   // back to the same approve code while status stays pairing.
@@ -1245,13 +1327,22 @@ export function ChatScreen() {
     setAttachNotice(undefined);
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      quality: 1,
+      // Not `1`: that is the picker's "compress for maximum quality", so the
+      // bytes are the camera's — megabytes per photo, base64-inflated by a third
+      // and held in JS for as long as the operator is typing. A model is asked to
+      // look at the picture, not at its original entropy, and the turn's size
+      // budget below is what bounds the rest (a PNG the picker cannot re-encode
+      // keeps its full size whatever this says).
+      quality: 0.5,
       base64: true,
       allowsMultipleSelection: true,
     });
     if (result.canceled) return;
-    setAttachments((current) => [...current, ...chatAttachmentsFromPicker(result.assets, current.length)]);
-  }, [canAttach]);
+    const picked = chatAttachmentsFromPicker(result.assets, attachments.length, attachmentChars(attachments));
+    // A picture this turn cannot carry is named here, not discovered at send.
+    if (picked.refused > 0) setAttachNotice(attachmentRefusedCopy(picked.refused));
+    setAttachments((current) => [...current, ...picked.attachments]);
+  }, [attachments, canAttach]);
   const handleRemoveAttachment = useCallback((uri: string) => {
     setAttachments((current) => current.filter((attachment) => attachment.uri !== uri));
   }, []);
@@ -1264,7 +1355,20 @@ export function ChatScreen() {
     setAttachments([]);
     pinnedRef.current = true;
     signalSent();
-    await sendChatInput(text, { skills: skillsState.skills, attachments: files });
+    const outcome = await sendChatInput(text, { skills: skillsState.skills, attachments: files });
+    // Photos are not words, so they cannot be parked: an outbox row carries the
+    // sentence only. A send that did not put this turn on the wire took the
+    // pictures with it, and the composer had already let go of them — so they go
+    // back on it and the operator is told, rather than the turn reporting success
+    // with the images silently missing on the other side.
+    if (files.length > 0 && !turnCarriedPhotos(outcome)) {
+      setAttachments((current) => [...current, ...files]);
+      setAttachNotice(ATTACHMENTS_NOT_SENT_COPY);
+    }
+    // And with them the sentence, where nothing kept it: the two answers above
+    // put this turn nowhere, so a send this screen refused must not also eat the
+    // words the operator typed.
+    if (!turnCarriedWords(outcome)) setDraft(text);
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
   }, [attachments, draft, sendChatInput, setDraft, skillsState.skills]);
 
@@ -1285,7 +1389,17 @@ export function ChatScreen() {
     return sessionLabel ?? 'Versutus chat';
   }, [rosterRows, selectedBotId, sessionLabel, surface]);
 
+  // Which open of the sheet a `voice.capabilities` answer belongs to. Opening the
+  // sheet twice inside one request's latency left both reads live: the slower
+  // first one then cleared the loading flag and installed ITS capabilities while
+  // the second read was still in flight — Start enabled, `callEngine` null, and
+  // the "your chosen engine is not ready" block unable to fire, so a call from a
+  // `codex`/`local` preference was handed to the phone recogniser with nothing
+  // saying so. The same sequence guard the provider's own session and model
+  // reads use (`sessionReadSeqRef` / `modelReadSeqRef`) answers it.
+  const callCapsReadSeqRef = useRef(0);
   const openCallSheet = useCallback(() => {
+    const seq = ++callCapsReadSeqRef.current;
     setCallError(
       draftThread?.sessionId ? undefined : handsfreeStartResultCopy('no-session'),
     );
@@ -1295,13 +1409,19 @@ export function ChatScreen() {
     // readiness, so the sheet can name where the audio will go before consent.
     void (async () => {
       const stored = await loadAppSettings();
+      if (seq !== callCapsReadSeqRef.current) return;
       setCallPreference(stored.voiceEngine);
       try {
-        setCallCapabilities(await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', await pushDeviceParams()));
+        const capabilities =
+          await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', await pushDeviceParams());
+        if (seq !== callCapsReadSeqRef.current) return;
+        setCallCapabilities(capabilities);
       } catch {
         // A Gate that predates voice leaves the phone engine as the only choice.
+        if (seq !== callCapsReadSeqRef.current) return;
         setCallCapabilities(null);
       } finally {
+        if (seq !== callCapsReadSeqRef.current) return;
         setCallCapsLoading(false);
       }
     })();
@@ -1326,6 +1446,9 @@ export function ChatScreen() {
   const callStartBlocked =
     callCapsLoading || !draftThread?.sessionId || preferredEngineUnready;
   const handleCancelCall = useCallback(() => {
+    // Dismissing the sheet ends the open that asked: a read still in flight has
+    // nobody to answer for and must not clear the next sheet's loading flag.
+    callCapsReadSeqRef.current += 1;
     setCallSheetVisible(false);
     setCallError(undefined);
   }, []);
@@ -1424,6 +1547,14 @@ export function ChatScreen() {
     [sendChatInput, skillsState.skills],
   );
 
+  // "Send again" / "Retry" IS a send, and a send that arrives while a turn is
+  // live is dropped by the provider's own `isSending` guard — the chip rendered,
+  // the tap did nothing at all, and the operator was left with a button that
+  // looked broken. While the thread is busy the chip is simply not offered, and
+  // it comes back with the turn that ends the busyness: the same rule the skills
+  // pane follows by prefilling instead of dispatching.
+  const canResumeTurn = !isSending && !isCommandRunning;
+
   // A skills-pane tap starts the same `/<skill-name>` turn typing it sends:
   // the text goes through `sendChatInput` with the fetched skill list, so the
   // skill passthrough judges it identically. While a turn streams, a command
@@ -1457,9 +1588,14 @@ export function ChatScreen() {
 
   const handleContentSizeChange = useCallback(() => {
     if (pinnedRef.current) {
-      listRef.current?.scrollToEnd({ animated: true });
+      // While a reply streams, this fires once per delta batch that adds a line,
+      // so an animated scroll is started and restarted dozens of times a second
+      // and the pinned transcript visibly twitches. A growing content size wants
+      // the same jump the list has already made: no animation. A jump pill tap is
+      // the operator's own gesture and keeps its glide.
+      listRef.current?.scrollToEnd({ animated: !isStreaming });
     }
-  }, []);
+  }, [isStreaming]);
 
   const scrollToLatest = useCallback(() => {
     pinnedRef.current = true;
@@ -2066,13 +2202,13 @@ export function ChatScreen() {
             message={item.message}
             onRetry={retryCommand}
             onCancel={cancelCommand}
-            onResume={handleResumeMessage}
+            onResume={canResumeTurn ? handleResumeMessage : undefined}
             onLongPress={setActionMessage}
           />
         </>
       );
     },
-    [cancelCommand, handleResumeMessage, retryCommand],
+    [cancelCommand, canResumeTurn, handleResumeMessage, retryCommand],
   );
 
   if (!activeGateway) {
@@ -2349,7 +2485,14 @@ export function ChatScreen() {
           onSetup={() => router.push('/gateway/setup' as Href)}
           onReconnect={() => void retryAutoConnect()}
           onDismiss={clearLastError}
+          onCopyResult={(copied) => setCopyNotice(copied ? undefined : CLIPBOARD_REFUSED_COPY)}
         />
+      ) : null}
+
+      {copyNotice ? (
+        <Text variant="micro" color="secondary" style={styles.copyNotice}>
+          {copyNotice}
+        </Text>
       ) : null}
 
       {/* Only the failed first read keeps a glance row — it needs room for
@@ -2899,6 +3042,10 @@ const styles = StyleSheet.create({
   },
   // The one-time silent-mode hint sits under the header card, aligned with it.
   silentHint: {
+    paddingHorizontal: Spacing.three,
+    paddingBottom: Spacing.two,
+  },
+  copyNotice: {
     paddingHorizontal: Spacing.three,
     paddingBottom: Spacing.two,
   },

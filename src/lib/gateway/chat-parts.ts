@@ -20,6 +20,20 @@ export type ChatContentPart =
 /** One turn's cap, so a paste cannot balloon the request body. */
 export const MAX_CHAT_ATTACHMENTS = 4;
 
+/**
+ * The one turn's image budget, counted in the characters of the `data:` URLs
+ * the attachments are kept as.
+ *
+ * A base64 string is about a third larger than the JPEG it carries, and the
+ * bytes are alive in three places at once — the composer's staged list, the user
+ * message the send copies them into, and the single request body that carries
+ * them all or none of them. A camera-roll photo straight off a modern phone is
+ * megabytes, so four of them is tens of megabytes of Hermes strings on the
+ * operator's low-memory device; past this budget an image is REFUSED rather
+ * than held, and the caller is told so rather than finding out at send time.
+ */
+export const MAX_CHAT_ATTACHMENT_CHARS = 8 * 1024 * 1024;
+
 const IMAGE_MIME = /^image\//i;
 
 function text(value: unknown): string | undefined {
@@ -42,18 +56,43 @@ export function chatAttachmentFromUnknown(value: unknown): ChatAttachment | null
   };
 }
 
+/** What one pick cost: the attachments to stage, and how many were refused. */
+export type ChatAttachmentPick = {
+  attachments: ChatAttachment[];
+  /**
+   * Images dropped because the turn's budget was already spent. A refusal is
+   * never silent — the caller says which pictures did not make it.
+   */
+  refused: number;
+};
+
+/** The characters one staged attachment is holding in this process. */
+export function attachmentChars(attachments: ChatAttachment[]): number {
+  return attachments.reduce((total, attachment) => total + attachment.uri.length, 0);
+}
+
 /**
- * Map picker assets to attachments, capping the count and dropping junk. A
- * picker asset that carries `base64` becomes a data URL, because a provider
- * cannot fetch a `file://`/`blob:` URI the phone holds.
+ * Map picker assets to attachments, capping the count AND the bytes, dropping
+ * junk. A picker asset that carries `base64` becomes a data URL, because a
+ * provider cannot fetch a `file://`/`blob:` URI the phone holds.
+ *
+ * `existing` is what is already staged and `spent` what those attachments hold,
+ * so one turn's budget is enforced across every pick rather than per pick: a
+ * second pick that would push the turn past `MAX_CHAT_ATTACHMENT_CHARS` refuses
+ * the rest instead of doubling what this phone is holding.
  */
-export function chatAttachmentsFromPicker(assets: unknown, existing: number = 0): ChatAttachment[] {
-  if (!Array.isArray(assets)) return [];
+export function chatAttachmentsFromPicker(
+  assets: unknown,
+  existing: number = 0,
+  spent: number = 0,
+): ChatAttachmentPick {
+  const picked: ChatAttachmentPick = { attachments: [], refused: 0 };
+  if (!Array.isArray(assets)) return picked;
   const room = Math.max(0, MAX_CHAT_ATTACHMENTS - existing);
   const seen = new Set<string>();
-  const out: ChatAttachment[] = [];
+  let held = spent;
   for (const asset of assets) {
-    if (out.length >= room) break;
+    if (picked.attachments.length >= room) break;
     const record = asset && typeof asset === 'object' ? (asset as Record<string, unknown>) : {};
     const uri = text(record.uri);
     const mimeType = text(record.mimeType) ?? text(record.mime_type);
@@ -61,10 +100,23 @@ export function chatAttachmentsFromPicker(assets: unknown, existing: number = 0)
     const url = base64 && mimeType ? `data:${mimeType};base64,${base64}` : uri;
     if (!url || seen.has(url)) continue;
     if (mimeType && !IMAGE_MIME.test(mimeType)) continue;
+    // An image the turn cannot carry is not staged at all — holding it until
+    // Send is what put megabytes of strings on a phone that had to survive the
+    // picker — and it is counted, so the operator hears about it.
+    if (held + url.length > MAX_CHAT_ATTACHMENT_CHARS) {
+      picked.refused += 1;
+      continue;
+    }
     seen.add(url);
-    out.push({ kind: 'image', uri: url, mimeType, name: text(record.fileName) ?? text(record.name) });
+    held += url.length;
+    picked.attachments.push({
+      kind: 'image',
+      uri: url,
+      mimeType,
+      name: text(record.fileName) ?? text(record.name),
+    });
   }
-  return out;
+  return picked;
 }
 
 /**

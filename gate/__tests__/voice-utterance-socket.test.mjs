@@ -65,13 +65,10 @@ function makeControllableEngine() {
   return engine;
 }
 
-async function startCall({
-  engine,
-  runTurn,
-  utteranceHoldMs = 150,
-  continuationMs = 4_000,
-  speculationWindowMs,
-} = {}) {
+async function startCall(
+  { engine, runTurn, utteranceHoldMs = 150, continuationMs = 4_000, speculationWindowMs } = {},
+  t,
+) {
   const registry = new VoiceSessionRegistry();
   registry.create(SESSION);
   const deviceTokens = {
@@ -109,6 +106,17 @@ async function startCall({
   });
   await once(ws, 'open');
   await waitUntil(() => frames.some((frame) => frame.t === 'ready'));
+  const close = () =>
+    new Promise((done) => {
+      for (const client of wss.clients) client.terminate();
+      wss.close(() => server.close(done));
+    });
+  // Teardown belongs to the test context, not to the last line of the test. An
+  // assertion that throws never reaches a trailing `await call.close()`, and the
+  // leaked HTTP server and WebSocket keep this process alive for good — so one
+  // red assertion did not report, it hung `node --test` until the whole gate
+  // suite was killed on a timeout.
+  t.after(close);
   return {
     frames,
     audit,
@@ -123,11 +131,7 @@ async function startCall({
       await waitUntil(() => audit.length === 1);
       await closed;
     },
-    close: () =>
-      new Promise((done) => {
-        for (const client of wss.clients) client.terminate();
-        wss.close(() => server.close(done));
-      }),
+    close,
   };
 }
 
@@ -144,17 +148,20 @@ async function waitUntil(predicate, timeoutMs = 4000) {
 const ofType = (frames, t) => frames.filter((frame) => frame.t === t);
 const logged = (lines, pattern) => lines.filter((line) => pattern.test(line));
 
-test('the measured call is one utterance, and the call log accounts for every final', async () => {
+test('the measured call is one utterance, and the call log accounts for every final', async (t) => {
   const engine = makeControllableEngine();
   const turns = [];
-  const call = await startCall({
-    engine,
-    runTurn: async (_session, text, handlers) => {
-      turns.push(text);
-      handlers.onDelta('It will rain in Glasgow.');
-      return { hasContent: true };
+  const call = await startCall(
+    {
+      engine,
+      runTurn: async (_session, text, handlers) => {
+        turns.push(text);
+        handlers.onDelta('It will rain in Glasgow.');
+        return { hasContent: true };
+      },
     },
-  });
+    t,
+  );
 
   // Seven finals, each inside the hold of the one before it: one person saying
   // one long thing, which is what the log recorded as seven dropped turns. Each
@@ -209,21 +216,23 @@ test('the measured call is one utterance, and the call log accounts for every fi
   assert.equal(logged(call.lines, /^voice\.final queued /).length, 0);
   assert.equal(logged(call.lines, /^voice\.final duplicate /).length, 0);
   assert.match(logged(call.lines, /^voice\.end /)[0], /finals=7 .*utterances=1 queued=0 continued=0 turns=1/);
-  await call.close();
 });
 
-test('finals heard while the reply is spoken wait for one follow-up turn, not one each', async () => {
+test('finals heard while the reply is spoken wait for one follow-up turn, not one each', async (t) => {
   const engine = makeControllableEngine();
   const turns = [];
-  const call = await startCall({
-    engine,
-    utteranceHoldMs: 60,
-    runTurn: async (_session, text, handlers) => {
-      turns.push(text);
-      handlers.onDelta('Tell me more.');
-      return { hasContent: true };
+  const call = await startCall(
+    {
+      engine,
+      utteranceHoldMs: 60,
+      runTurn: async (_session, text, handlers) => {
+        turns.push(text);
+        handlers.onDelta('Tell me more.');
+        return { hasContent: true };
+      },
     },
-  });
+    t,
+  );
 
   engine.emit('final', { text: 'first question' });
   await waitUntil(() => turns.length === 1);
@@ -260,26 +269,28 @@ test('finals heard while the reply is spoken wait for one follow-up turn, not on
     ['1', '2'],
     'the follow-up turn was one utterance of the two segments that waited',
   );
-  await call.close();
 });
 
-test('a final heard while the turn is still thinking is folded into that turn', async () => {
+test('a final heard while the turn is still thinking is folded into that turn', async (t) => {
   const engine = makeControllableEngine();
   const attempts = [];
   let firstAborted = false;
-  const call = await startCall({
-    engine,
-    utteranceHoldMs: 60,
-    runTurn: (_session, text, handlers) => {
-      attempts.push(text);
-      return new Promise((_resolve, reject) => {
-        handlers.signal.addEventListener('abort', () => {
-          firstAborted = true;
-          reject(new Error('aborted'));
+  const call = await startCall(
+    {
+      engine,
+      utteranceHoldMs: 60,
+      runTurn: (_session, text, handlers) => {
+        attempts.push(text);
+        return new Promise((_resolve, reject) => {
+          handlers.signal.addEventListener('abort', () => {
+            firstAborted = true;
+            reject(new Error('aborted'));
+          });
         });
-      });
+      },
     },
-  });
+    t,
+  );
 
   engine.emit('final', { text: 'what is the' });
   await waitUntil(() => attempts.length === 1);
@@ -290,6 +301,10 @@ test('a final heard while the turn is still thinking is folded into that turn', 
 
   assert.ok(firstAborted, 'the unanswered turn was cancelled, not left running');
   assert.deepEqual(attempts, ['what is the', 'what is the weather in glasgow']);
+  // The turn starts before the phone has been handed the frame, so wait for the
+  // frames the assertion is about: a loaded machine delivers them a tick later
+  // and the transcript below is read before it arrives.
+  await waitUntil(() => ofType(call.frames, 'final').length === 2);
   assert.deepEqual(ofType(call.frames, 'final').map((frame) => frame.text), [
     'what is the',
     'what is the weather in glasgow',
@@ -301,28 +316,30 @@ test('a final heard while the turn is still thinking is folded into that turn', 
     { finals: 2, continued: 1, queued: 0 },
   );
   assert.equal(logged(call.lines, /^voice\.final merged /).length, 1);
-  await call.close();
 });
 
-test('a second segment ends a speculative turn, and the hold starts the only live one', async () => {
+test('a second segment ends a speculative turn, and the hold starts the only live one', async (t) => {
   const engine = makeControllableEngine();
   const attempts = [];
   let draftAborted = false;
-  const call = await startCall({
-    engine,
-    utteranceHoldMs: 60,
-    // Long enough that the lost-frame net cannot interfere with this scenario.
-    speculationWindowMs: 30_000,
-    runTurn: (_session, text, handlers) => {
-      attempts.push(text);
-      return new Promise((_resolve, reject) => {
-        handlers.signal.addEventListener('abort', () => {
-          if (text === 'draft') draftAborted = true;
-          reject(new Error('aborted'));
+  const call = await startCall(
+    {
+      engine,
+      utteranceHoldMs: 60,
+      // Long enough that the lost-frame net cannot interfere with this scenario.
+      speculationWindowMs: 30_000,
+      runTurn: (_session, text, handlers) => {
+        attempts.push(text);
+        return new Promise((_resolve, reject) => {
+          handlers.signal.addEventListener('abort', () => {
+            if (text === 'draft') draftAborted = true;
+            reject(new Error('aborted'));
+          });
         });
-      });
+      },
     },
-  });
+    t,
+  );
 
   // The engine was confident enough to name the turn early; the backend is
   // already answering the first segment.
@@ -338,6 +355,8 @@ test('a second segment ends a speculative turn, and the hold starts the only liv
 
   assert.ok(draftAborted, 'the speculative upstream was ended as soon as the segment merged');
   assert.deepEqual(attempts, ['draft', 'draft that was only half']);
+  // As above: the merged turn starts before the frame reaches the phone.
+  await waitUntil(() => ofType(call.frames, 'final').length >= 1);
   assert.deepEqual(ofType(call.frames, 'final').map((frame) => frame.text), ['draft that was only half']);
   assert.deepEqual(
     ofType(call.frames, 'phase').map((frame) => frame.phase),
@@ -351,20 +370,22 @@ test('a second segment ends a speculative turn, and the hold starts the only liv
     { finals: call.audit[0].finals, utterances: call.audit[0].utterances },
     { finals: 2, utterances: 1 },
   );
-  await call.close();
 });
 
-test('the audit reports how long a turn took to answer and to be heard', async () => {
+test('the audit reports how long a turn took to answer and to be heard', async (t) => {
   const engine = makeControllableEngine();
-  const call = await startCall({
-    engine,
-    utteranceHoldMs: 60,
-    runTurn: async (_session, _text, handlers) => {
-      call.advance(700);
-      handlers.onDelta('Here is the answer.');
-      return { hasContent: true };
+  const call = await startCall(
+    {
+      engine,
+      utteranceHoldMs: 60,
+      runTurn: async (_session, _text, handlers) => {
+        call.advance(700);
+        handlers.onDelta('Here is the answer.');
+        return { hasContent: true };
+      },
     },
-  });
+    t,
+  );
 
   engine.emit('final', { text: 'what is the weather' });
   await waitUntil(() => ofType(call.frames, 'phase').some((frame) => frame.phase === 'speaking'));
@@ -376,17 +397,18 @@ test('the audit reports how long a turn took to answer and to be heard', async (
   await call.end();
   assert.equal(call.audit[0].p50FirstReplyMs, 700, 'commit to the first reply delta');
   assert.equal(call.audit[0].p50FirstAudioMs, 750, 'commit to the first speech chunk');
-  await call.close();
 });
 
-test('a call with no turn records no latency at all', async () => {
-  const call = await startCall({ engine: makeControllableEngine(), runTurn: async () => ({ hasContent: true }) });
+test('a call with no turn records no latency at all', async (t) => {
+  const call = await startCall(
+    { engine: makeControllableEngine(), runTurn: async () => ({ hasContent: true }) },
+    t,
+  );
   await call.end();
   assert.equal(call.audit[0].p50FirstAudioMs, null);
   assert.equal(call.audit[0].p50FirstReplyMs, null);
   assert.equal(call.audit[0].turns, 0);
   assert.equal(call.audit[0].utterances, 0);
-  await call.close();
 });
 
 function sleep(ms) {

@@ -243,3 +243,44 @@ export async function saveVoicePreferences(preferences: VoicePreferences): Promi
     // best-effort: a voice preference must never break the header it is drawn in
   }
 }
+
+/**
+ * Every writer of this blob is a read-modify-write, and the speaker toggle, a
+ * Bot's voice chip and its rate step are three of them on the same screen. The
+ * read resolves from one `getItem` and the write completes on a later
+ * `setItem`, so two taps inside one storage round trip read the same pre-tap
+ * blob and the second write's base does not carry the first write's field —
+ * both read as set on screen, and after the next launch one of them is gone.
+ * Serialise them through one promise chain, the same rule the settings blob
+ * already follows (`app-settings.ts`), so each fold merges onto what the
+ * previous write stored.
+ */
+let mutationQueueTail: Promise<void> = Promise.resolve();
+
+function enqueueVoiceMutation<T>(task: () => Promise<T>): Promise<T> {
+  const result = mutationQueueTail.then(task);
+  // A refused write must not leave its record in the chain for the next caller:
+  // the tail always settles resolved, so the next fold still runs.
+  mutationQueueTail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+/**
+ * Fold one change onto the stored preferences and write the result, in the
+ * order the changes were made. Answers the blob that was written, so a caller
+ * that repaints from the store's own read (a rate step showing the step it
+ * actually stored) reads the same turn's answer rather than racing the next
+ * one.
+ */
+export async function updateVoicePreferences(
+  fold: (stored: VoicePreferences) => VoicePreferences,
+): Promise<VoicePreferences> {
+  return enqueueVoiceMutation(async () => {
+    const written = fold(await loadVoicePreferences());
+    await saveVoicePreferences(written);
+    return written;
+  });
+}

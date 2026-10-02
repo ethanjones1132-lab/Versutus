@@ -201,7 +201,7 @@ describe('chat-screen silent-mode hint wiring', () => {
       /if \(showHint\) \{\s*setSilentHintShown\(true\);\s*setSilentHintOwed\(false\);\s*\}/,
     );
     expect(screen).toMatch(
-      /saveVoicePreferences\(showHint \? acknowledgeSilentModeHint\(written\) : written\)/,
+      /updateVoicePreferences\(\(stored\) => \{\s*const written = applySpeakerOn\(stored, key, next\);\s*return showHint \? acknowledgeSilentModeHint\(written\) : written;/,
     );
     // Drawn from the state the edge set, never from a second platform test.
     expect(screen).toMatch(/\{silentHintShown \? \(/);

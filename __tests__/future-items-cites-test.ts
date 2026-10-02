@@ -31,8 +31,14 @@ describe('FUTURE-ITEMS open cites describe the live tree', () => {
     expect(p1Section).not.toContain('1157,2495');
     expect(p1Section).not.toContain('1173,2594');
     expect(p1Section).not.toContain('1216,2656');
-    expect(chatScreen[1228]).toContain('canAttach = supportsImageInput');
-    expect(chatScreen[2690]).toContain('onAttach={canAttach ? handleAttach : undefined}');
+    // R4S-chat1a moved both rows: the thread-keyed attachment reset, the one-walk
+    // transcript memo and the refused-clipboard notice all sit above `canAttach`,
+    // and the composer's send now hands the photos back when a turn did not
+    // travel, which is below it. FUTURE-ITEMS.md is outside this package's
+    // allowed files, so the cites there still read 1229,2691 and the pins below
+    // follow the tree.
+    expect(chatScreen[1310]).toContain('canAttach = supportsImageInput');
+    expect(chatScreen[2833]).toContain('onAttach={canAttach ? handleAttach : undefined}');
   });
 
   test('P1 keeps the live composer-draw and supportsImageInput cites', () => {
@@ -43,7 +49,9 @@ describe('FUTURE-ITEMS open cites describe the live tree', () => {
     // by one. The row itself is the one the cite names.
     expect(chatComposer[310]).toContain('onAttach && !callActive && !isStreaming');
     expect(chatComposer.slice(310, 329).join('\n')).toContain('accessibilityLabel="Attach an image"');
-    expect(chatParts[91]).toContain('export function supportsImageInput');
+    // Same drift, same cause: the picker fold now carries a per-turn byte budget
+    // beside the count cap, so `supportsImageInput` is further down.
+    expect(chatParts[143]).toContain('export function supportsImageInput');
   });
 
   test('D5 names spend-per-bot as the budget-cap surface, not scorecards', () => {

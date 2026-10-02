@@ -729,6 +729,12 @@ const CONNECTED_ROUTINE_REARM_DELAY_MS = 1_500;
 const CONNECTED_WORKFLOWS_DELAY_MS = 1_800;
 /** The default-model pin read is not what the operator is waiting for either. */
 const CONNECT_DEFAULT_MODEL_DELAY_MS = 1_000;
+/**
+ * The catalogue read, for the same reason: the composer's attach control is
+ * offered only when the catalogue DECLARES image input for the send model, so
+ * the read is what makes the paperclip exist at all.
+ */
+const CONNECTED_MODELS_DELAY_MS = 700;
 
 /**
  * How recently this gateway's fan-out ran before a `connected` the monitor
@@ -4773,6 +4779,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // Converting to statusRef or the connection reducer needs live-device
       // verification because it changes when this effect/callback re-runs.
       if (!fromQueue && (!activeGateway || !client || status !== 'connected')) {
+        // A turn with photos cannot be parked. An outbox row carries the words
+        // and nothing else, so queueing this one would deliver the sentence and
+        // drop the images with nothing anywhere saying so — and the screen has
+        // already handed its staged list over. Refusing leaves the send's
+        // outcome honest, which is what lets the composer keep the pictures and
+        // say they did not travel.
+        if ((options?.attachments?.length ?? 0) > 0) return 'offline';
         queueOfflineInput(trimmed, { botId: options?.botId, sessionId: options?.sessionId });
         return 'queued';
       }
@@ -5015,6 +5028,40 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       queueOfflineInput,
     ],
   );
+
+  /**
+   * The catalogue is read on CONNECT, not only when the picker is opened.
+   *
+   * `openModelPicker` used to be the only writer of `modelCatalog`, and the
+   * composer's attach control is gated on what the catalogue declares about the
+   * send model — so on a fresh session `modelCatalog` was `[]`, the lookup found
+   * nothing, `supportsImageInput(undefined)` failed closed and the paperclip was
+   * never rendered: a vision model that takes photos could not be given any
+   * until the operator had opened a sheet they had not come for. The gate stays
+   * exactly as strict — it is a catalogue nobody has read, not a model that
+   * cannot see.
+   *
+   * `modelCatalogLoaded` is deliberately NOT set: the picker has still not heard
+   * from this gateway, so its own loading copy and its refusal line stay honest
+   * until it reads for itself.
+   */
+  useEffect(() => {
+    if (status !== 'connected') return undefined;
+    return scheduleConnectedRead(CONNECTED_MODELS_DELAY_MS, () => {
+      if (!connectedFanOutDueRef.current) return;
+      const client = clientRef.current;
+      if (!client) return;
+      void client
+        .getModels()
+        .then((models) => {
+          // The client this read asked is the live one: a gateway switch, a
+          // reconnect or a teardown since means another scope's answer.
+          if (clientRef.current !== client) return;
+          setModelCatalog(models);
+        })
+        .catch(() => undefined);
+    });
+  }, [status, scheduleConnectedRead]);
 
   /**
    * Same shape as openSessionSelector: show first, read after. Awaiting

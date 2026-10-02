@@ -1,8 +1,10 @@
 import {
+  attachmentChars,
   buildChatContent,
   chatAttachmentFromUnknown,
   chatAttachmentsFromPicker,
   MAX_CHAT_ATTACHMENTS,
+  MAX_CHAT_ATTACHMENT_CHARS,
   supportsImageInput,
 } from '@/lib/gateway/chat-parts';
 
@@ -47,7 +49,7 @@ describe('chatAttachmentsFromPicker', () => {
       { uri: 'img:4', mimeType: 'image/png' },
       { uri: 'img:5', mimeType: 'image/png' },
     ];
-    expect(chatAttachmentsFromPicker(assets).map((a) => a.uri)).toEqual([
+    expect(chatAttachmentsFromPicker(assets).attachments.map((a) => a.uri)).toEqual([
       'img:1',
       'img:2',
       'img:3',
@@ -56,16 +58,90 @@ describe('chatAttachmentsFromPicker', () => {
   });
 
   it('turns a base64 picker asset into a data URL the provider can fetch', () => {
-    const [attachment] = chatAttachmentsFromPicker([
+    const { attachments } = chatAttachmentsFromPicker([
       { uri: 'file:///tmp/a.png', mimeType: 'image/png', base64: 'QUJD', fileName: 'a.png' },
     ]);
+    const [attachment] = attachments;
     expect(attachment.uri).toBe('data:image/png;base64,QUJD');
     expect(attachment.name).toBe('a.png');
   });
 
   it('respects the room left when attachments already exist', () => {
     const assets = [{ uri: 'a' }, { uri: 'b' }, { uri: 'c' }];
-    expect(chatAttachmentsFromPicker(assets, MAX_CHAT_ATTACHMENTS - 1).map((a) => a.uri)).toEqual(['a']);
+    expect(
+      chatAttachmentsFromPicker(assets, MAX_CHAT_ATTACHMENTS - 1).attachments.map((a) => a.uri),
+    ).toEqual(['a']);
+  });
+});
+
+/**
+ * ATTACH-2. A picker hands back the camera's own bytes as base64, and those
+ * strings are held for as long as the operator is typing — then copied into the
+ * user message AND into the one request body that carries them all or none.
+ * Four camera-roll photos are tens of megabytes on a phone that has to survive
+ * the picker, so a turn's image bytes are budgeted and a picture past it is
+ * refused out loud rather than held until send.
+ */
+describe('one turn of photos is bounded by bytes, not only by count', () => {
+  /** A picker asset of `chars` base64 characters — the size that is held here. */
+  function photo(chars: number, index: number) {
+    return {
+      uri: `file:///tmp/${index}.jpg`,
+      mimeType: 'image/jpeg',
+      // Distinct content per picture: the fold dedupes identical data URLs, so
+      // equal bytes would read as the same photo picked twice.
+      base64: String.fromCharCode(65 + index).repeat(chars),
+      fileName: `${index}.jpg`,
+    };
+  }
+
+  it('a photo that would push the turn past the budget is refused, not staged', () => {
+    const oneMiB = 1024 * 1024;
+    const picked = chatAttachmentsFromPicker([
+      photo(oneMiB, 1),
+      // A second picture that on its own would swallow the whole turn's budget.
+      photo(MAX_CHAT_ATTACHMENT_CHARS - 4096, 2),
+    ]);
+
+    expect(picked.attachments).toHaveLength(1);
+    expect(picked.refused).toBe(1);
+    // The refused picture is not held anywhere, so its bytes are not this
+    // phone's problem: the staged list is what the send would carry.
+    expect(attachmentChars(picked.attachments)).toBeLessThan(MAX_CHAT_ATTACHMENT_CHARS);
+  });
+
+  it('the budget is spent across picks, not reset by each one', () => {
+    const half = Math.floor(MAX_CHAT_ATTACHMENT_CHARS / 2) - 8192;
+    const first = chatAttachmentsFromPicker([photo(half, 1), photo(half, 2)]);
+    expect(first.refused).toBe(0);
+    expect(first.attachments).toHaveLength(2);
+
+    // What is already staged counts against the next pick: two more of the same
+    // pictures do not double what this phone is holding.
+    const second = chatAttachmentsFromPicker(
+      [photo(half, 3), photo(half, 4)],
+      first.attachments.length,
+      attachmentChars(first.attachments),
+    );
+    expect(second.attachments).toHaveLength(0);
+    expect(second.refused).toBe(2);
+  });
+
+  it('the pick asks the picker to compress, not for the camera bytes', () => {
+    const screen = readSource(['src', 'components', 'chat', 'chat-screen.tsx']);
+    const options = screen.match(/launchImageLibraryAsync\(\{[\s\S]*?\}\)/)?.[0];
+    expect(options).toBeDefined();
+    // quality: 1 is expo-image-picker's "maximum quality" — the bytes are the
+    // camera's, which is the whole cost this budget exists to bound.
+    expect(options).not.toMatch(/quality:\s*1\b/);
+    expect(options).toMatch(/quality:\s*0\.5/);
+  });
+
+  it('a refused photo is said out loud, and the notice is rendered', () => {
+    const screen = readSource(['src', 'components', 'chat', 'chat-screen.tsx']);
+    expect(screen).toMatch(/if \(picked\.refused > 0\) setAttachNotice\(attachmentRefusedCopy\(picked\.refused\)\)/);
+    expect(screen).toContain('attachmentRefusedCopy');
+    expect(screen).toMatch(/\{attachNotice \?/);
   });
 });
 

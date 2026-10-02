@@ -228,8 +228,16 @@ test('pruning drops the oldest finished turns and never a running one', async ()
     clock += 1000;
     finish('turn-trigger');
     assert.ok(
-      await until(() => journal.get('phone-a', 'turn-old1').then((meta) => meta === null)),
-      'the oldest finished turn is swept once the interval passes',
+      // The cap keeps two finished turns, so the sweep that drops the oldest
+      // drops the one behind it too — and a sweep that ran before
+      // `turn-trigger` finished had already dropped the oldest. Waiting for one
+      // turn alone therefore races: a loaded machine lists the half-pruned
+      // window and the assertion below fails on a journal that is behaving.
+      await until(async () => {
+        const kept = await journal.list('phone-a');
+        return kept.length === 3 && !kept.some((meta) => meta.turnId.startsWith('turn-old'));
+      }),
+      'the oldest finished turns are swept once the interval passes',
     );
     const listed = await journal.list('phone-a');
     assert.deepEqual(
