@@ -96,6 +96,75 @@ test('a second refresh joins the read already running instead of starting anothe
   assert.equal(one.refreshedAt, 1000);
 });
 
+test('two write-throughs issued in one tick both reach a cold window', async () => {
+  const dir = await tempDir();
+  const index = createSessionIndex({ dir });
+
+  // A created thread and a turn in another one, landing together on a key this
+  // process has never read. Both read the copy across the same file load and
+  // build their rows from the same pre-write entry, so the second write threw
+  // the first's row away: a thread the operator has just made was missing from
+  // the list for a whole stale window, with nothing anywhere reporting it.
+  const created = index.upsert('hermes-local|atlas', row('ses_new'));
+  const turned = index.upsert('hermes-local|atlas', row('ses_older', { last_active: 99 }));
+  await Promise.all([created, turned]);
+
+  const stored = await index.get('hermes-local|atlas');
+  assert.deepEqual(stored.sessions.map((entry) => entry.id), ['ses_older', 'ses_new']);
+  assert.equal(stored.sessions[0].last_active, 99, 'and neither of them wrote over the other');
+});
+
+test('a refill never throws away a write-through that landed while it was on the wire', async () => {
+  const dir = await tempDir();
+  const index = createSessionIndex({ dir });
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const refill = index.refresh('hermes-local|', async () => {
+    await held;
+    return [row('s1'), row('s2')];
+  }, { limit: 50 });
+
+  // The read is the 3-38 s query this copy exists for, and the operator creates
+  // a thread while it is in flight. Its rows are a snapshot from before that, so
+  // replacing the entry with them took the new thread off the list the phone is
+  // drawing -- the one window every stale list read opens, every 30 s.
+  await index.upsert('hermes-local|', row('ses_new'));
+  release();
+  const filled = await refill;
+
+  assert.deepEqual(
+    (await index.get('hermes-local|')).sessions.map((entry) => entry.id),
+    ['ses_new', 's1', 's2'],
+    'the copy keeps the thread the operator just made',
+  );
+  assert.deepEqual(
+    filled.sessions.map((entry) => entry.id),
+    ['ses_new', 's1', 's2'],
+    'and so does the answer this very read is drawn from',
+  );
+  assert.equal(filled.fetchedLimit, 50, 'while the window a real read filled is still a window');
+});
+
+test('a delete that lands during a refill does not come back in it', async () => {
+  const dir = await tempDir();
+  const index = createSessionIndex({ dir });
+  await index.refresh('hermes-local|', async () => [row('s1'), row('s2')], { limit: 50 });
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const refill = index.refresh('hermes-local|', async () => {
+    await held;
+    return [row('s1'), row('s2')];
+  }, { limit: 50 });
+
+  // The other direction: the read is already on the wire with this session in
+  // its rows, because it was asked before the delete reached the backend.
+  await index.remove('hermes-local|', 's2');
+  release();
+  await refill;
+
+  assert.deepEqual((await index.get('hermes-local|')).sessions.map((entry) => entry.id), ['s1']);
+});
+
 test('a window survives a restart: a new index reads it back from disk', async () => {
   const dir = await tempDir();
   const first = createSessionIndex({ dir, now: () => 4242 });

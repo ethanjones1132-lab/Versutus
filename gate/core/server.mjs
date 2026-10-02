@@ -2109,12 +2109,19 @@ export async function createGate(config = {}) {
         const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? requestedLimit : null;
         const isStale = (refreshedAt) => Date.now() - refreshedAt > sessionIndexStaleMs;
         const page = (sessions) => sessions.slice(0, limit ?? sessions.length);
-        // Rows served out of a window narrower than the ask are a SHORT page, and
-        // the caller has to be able to tell: the app compares the rows it got
-        // with the limit it sent (sessionListMayHaveOlder) and concludes there is
-        // nothing older when the page is short — so an unmarked short page hides a
-        // Bot Chat that is really there, and the caller opens a second one.
-        const isShort = (fetchedLimit) => limit !== null && limit > fetchedLimit;
+        // Rows fewer than the limit the caller sent are a SHORT page, and the
+        // caller has to be able to tell: the app compares the rows it got with
+        // the limit it sent (sessionListMayHaveOlder) and concludes there is
+        // nothing older when the page is short — so an unmarked short page hides
+        // a Bot Chat that is really there, and the caller opens a second one.
+        //
+        // Shortness is a fact about the ROWS, not about the ask. The copy
+        // records the window it asked for, so a backend that answers 30 rows to
+        // a 200-row ask leaves the copy believing it was filled at 200 — and the
+        // read that says "I asked for 200" marks nothing, exactly when the page
+        // is most likely to be short. Hermes answers /api/sessions with its own
+        // page when its own limit is the smaller one.
+        const isShort = (answered) => limit !== null && answered.length < limit;
         const refreshWindow = (window) => sessionListIndex.refresh(
           key,
           // The long bound belongs to the copy's own refill, not to the screen:
@@ -2140,7 +2147,8 @@ export async function createGate(config = {}) {
         if (cached && cached.fetchedLimit > 0 && (limit === null || limit <= cached.fetchedLimit)) {
           const stale = isStale(cached.refreshedAt);
           if (stale) void refreshWindow(cached.fetchedLimit).catch(() => undefined);
-          answer(page(cached.sessions), { refreshedAt: cached.refreshedAt, stale });
+          const held = page(cached.sessions);
+          answer(held, { refreshedAt: cached.refreshedAt, stale, partial: isShort(held) });
           return;
         }
 
@@ -2155,9 +2163,10 @@ export async function createGate(config = {}) {
             sessionReadError(outcome.error, botId, 'session_list_failed');
             return;
           }
-          answer(page(outcome.value.sessions), {
+          const shown = page(outcome.value.sessions);
+          answer(shown, {
             refreshedAt: outcome.value.refreshedAt,
-            partial: isShort(outcome.value.fetchedLimit),
+            partial: isShort(shown),
           });
           return;
         }
@@ -2165,10 +2174,11 @@ export async function createGate(config = {}) {
         // true and worth showing; an empty copy has nothing to say but the wait.
         const held = await sessionListIndex.get(key);
         if (held?.sessions.length) {
-          answer(page(held.sessions), {
+          const shown = page(held.sessions);
+          answer(shown, {
             refreshedAt: held.refreshedAt,
             stale: true,
-            partial: isShort(held.fetchedLimit),
+            partial: isShort(shown),
           });
           return;
         }

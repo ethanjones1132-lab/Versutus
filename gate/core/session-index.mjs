@@ -112,6 +112,14 @@ export function createSessionIndex({
   const loading = new Map();
   /** The one refresh in flight per key; a second caller joins it. */
   const inFlight = new Map();
+  /** The one write-through in flight per key; a second one waits for it. */
+  const mutating = new Map();
+  /**
+   * The refill now on the wire for a key, as the write-throughs it still owes.
+   * Present only while that read is in flight: a write-through with no read to
+   * race is already in the copy, so there is nothing to replay it into.
+   */
+  const collecting = new Map();
   /** Payloads waiting for the next write, keyed the same way. */
   const pending = new Map();
   let writeTimer = null;
@@ -222,7 +230,46 @@ export function createSessionIndex({
     return remember(key) ?? null;
   }
 
-  return {
+  /**
+   * Run one write-through alone on its key, and return its answer.
+   *
+   * A write-through reads the window and writes it back, and on a key this
+   * process has never filled that read awaits the file load. Two of them issued
+   * in the same tick therefore both build their rows from the same pre-write
+   * entry, and the second write discards the first's row — a thread the operator
+   * has just created or sent in, gone from the list for a stale window with
+   * nothing reporting it. One at a time per key is the whole fix: the second
+   * reads what the first wrote.
+   *
+   * Refills are deliberately not in this chain. A read is 3-38 s, and a turn
+   * that had to wait for it would be a turn that had to wait for it.
+   */
+  function exclusive(key, work) {
+    const running = mutating.get(key);
+    const attempt = (running ? running.catch(() => undefined) : Promise.resolve())
+      .then(work)
+      .finally(() => {
+        if (mutating.get(key) === attempt) mutating.delete(key);
+      });
+    mutating.set(key, attempt);
+    return attempt;
+  }
+
+  /**
+   * Remember a write-through for the refill already on the wire for that key.
+   *
+   * A refill's rows are the backend's snapshot, taken while the write-through
+   * was happening: a thread the operator has just created is not in them, and a
+   * session they have just deleted still is. Replacing the window with those
+   * rows is how the copy loses it, and the list the phone draws is answered
+   * from the copy. The replay is the write-through itself rather than a second
+   * implementation of it, so the two cannot drift.
+   */
+  function note(key, writeThrough) {
+    collecting.get(key)?.push(writeThrough);
+  }
+
+  const api = {
     /** The row cap the index keeps per key; a read may not ask for more. */
     maxRows,
 
@@ -286,17 +333,34 @@ export function createSessionIndex({
         // Another read for this key is already on the wire; ask the backend once,
         // not twice at once, however different the two windows are.
         if (running) await running.promise.catch(() => undefined);
+        // From here on, a write-through can be clobbered by the rows this read
+        // is about to land, so it is remembered for that read to replay.
+        const owed = [];
+        collecting.set(key, owed);
         const sessions = await loader(window || undefined);
         const rows = (Array.isArray(sessions) ? sessions : []).slice(0, maxRows);
         const entry = { sessions: rows, fetchedLimit: window, refreshedAt: now() };
         entries.delete(key);
         entries.set(key, entry);
         evictIfNeeded();
+        collecting.delete(key);
+        // The operator's own create, turn and delete are what the read cannot
+        // know: it left before they happened. They are applied over its rows
+        // through the write-throughs themselves, so the copy answers with the
+        // thread they are in rather than the one the backend had 38 s ago.
+        for (const writeThrough of owed) await writeThrough();
         schedule(key);
-        return { sessions: rows.slice(), fetchedLimit: entry.fetchedLimit, refreshedAt: entry.refreshedAt };
+        const filled = entries.get(key) ?? entry;
+        return {
+          sessions: filled.sessions.slice(),
+          fetchedLimit: filled.fetchedLimit,
+          refreshedAt: filled.refreshedAt,
+        };
       })().finally(() => {
         // Only this attempt's own registration: a bigger window that chained
-        // behind this one has already taken the key's place in the map.
+        // behind this one has already taken the key's place in the map. A read
+        // that failed owes nothing — it never wrote over the copy.
+        collecting.delete(key);
         if (inFlight.get(key)?.promise === attempt) inFlight.delete(key);
       });
       inFlight.set(key, { promise: attempt, window });
@@ -315,29 +379,35 @@ export function createSessionIndex({
      */
     async upsert(key, session) {
       if (!session || typeof session.id !== 'string' || !session.id) return;
-      const current = (await live(key)) ?? { sessions: [], fetchedLimit: 0, refreshedAt: 0 };
-      const rows = current.sessions.slice();
-      const at = rows.findIndex((row) => row.id === session.id);
-      const merged = at === -1
-        ? { ...(rowTemplate ? rowTemplate(session.id) : {}), ...session }
-        : mergeRow(rows[at], session);
-      if (at !== -1) rows.splice(at, 1);
-      // Always to the top: whatever the Gate's copy last knew, this session is
-      // the most recent thing that happened to it.
-      rows.unshift(merged);
-      entries.set(key, { ...current, sessions: rows.slice(0, maxRows) });
-      evictIfNeeded();
-      schedule(key);
+      return exclusive(key, async () => {
+        const current = (await live(key)) ?? { sessions: [], fetchedLimit: 0, refreshedAt: 0 };
+        const rows = current.sessions.slice();
+        const at = rows.findIndex((row) => row.id === session.id);
+        const merged = at === -1
+          ? { ...(rowTemplate ? rowTemplate(session.id) : {}), ...session }
+          : mergeRow(rows[at], session);
+        if (at !== -1) rows.splice(at, 1);
+        // Always to the top: whatever the Gate's copy last knew, this session is
+        // the most recent thing that happened to it.
+        rows.unshift(merged);
+        entries.set(key, { ...current, sessions: rows.slice(0, maxRows) });
+        evictIfNeeded();
+        note(key, () => api.upsert(key, session));
+        schedule(key);
+      });
     },
 
     /** Forget a session the operator deleted, under every window it may be in. */
     async remove(key, sessionId) {
-      const current = await live(key);
-      if (!current) return;
-      const rows = current.sessions.filter((row) => row.id !== sessionId);
-      if (rows.length === current.sessions.length) return;
-      entries.set(key, { ...current, sessions: rows });
-      schedule(key);
+      return exclusive(key, async () => {
+        const current = await live(key);
+        if (!current) return;
+        const rows = current.sessions.filter((row) => row.id !== sessionId);
+        if (rows.length === current.sessions.length) return;
+        entries.set(key, { ...current, sessions: rows });
+        note(key, () => api.remove(key, sessionId));
+        schedule(key);
+      });
     },
 
     /**
@@ -346,15 +416,18 @@ export function createSessionIndex({
      * subject under the new name until the next live read.
      */
     async rename(key, sessionId, title) {
-      const current = await live(key);
-      if (!current) return;
-      const at = current.sessions.findIndex((row) => row.id === sessionId);
-      if (at === -1) return;
-      const row = current.sessions[at];
-      const next = current.sessions.slice();
-      next.splice(at, 1, { ...row, title, preview: row.preview ?? title });
-      entries.set(key, { ...current, sessions: next });
-      schedule(key);
+      return exclusive(key, async () => {
+        const current = await live(key);
+        if (!current) return;
+        const at = current.sessions.findIndex((row) => row.id === sessionId);
+        if (at === -1) return;
+        const row = current.sessions[at];
+        const next = current.sessions.slice();
+        next.splice(at, 1, { ...row, title, preview: row.preview ?? title });
+        entries.set(key, { ...current, sessions: next });
+        note(key, () => api.rename(key, sessionId, title));
+        schedule(key);
+      });
     },
 
     /** Write the coalesced changes now (shutdown, or a test that wants them). */
@@ -366,4 +439,5 @@ export function createSessionIndex({
       await writePending();
     },
   };
+  return api;
 }

@@ -234,7 +234,10 @@ test('the first read waits for Hermes and answers what it returned', async () =>
     assert.equal(body.object, 'list');
     assert.deepEqual(body.data.map((row) => row.id), ['ses_1', 'ses_2']);
     assert.equal(body.index.stale, false, 'a window just filled is not stale');
-    assert.equal(body.partial, undefined, 'a complete read is not partial');
+    // Two rows for a 20 ask: the Gate cannot tell a small catalogue from a
+    // backend that served its own shorter page, so the honest mark is "short",
+    // and the caller is the one who decides what a short page means.
+    assert.equal(body.partial, true, 'a page that could not fill the limit is marked short');
     assert.deepEqual(hermes.reads(), [{ listSessions: 20, timeoutMs: 180_000 }], 'one live read, at the long bound a cold read needs');
   } finally {
     await gate.close();
@@ -336,6 +339,42 @@ test('a limit larger than the copy was filled at waits for a bigger read', async
     const warm = await listSessions(gate, '&limit=200');
     assert.equal(warm.body.data.length, 30);
     assert.equal(hermes.reads().length, 2, 'the third read asked Hermes nothing');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a page the backend could not fill is marked short, whatever the copy believes', async () => {
+  const { gate, hermes } = await makeGate();
+  hermes.setRows(Array.from({ length: 30 }, (_, i) => ROW(`ses_${i + 1}`)));
+  try {
+    const first = await listSessions(gate, '&limit=200');
+    assert.equal(first.status, 200);
+    assert.equal(first.body.data.length, 30);
+    // Hermes serves its own page when its own limit is the smaller one, and the
+    // copy then believes it was filled at 200 — so nothing about the ask says
+    // this page is short. The app compares the 30 rows it got with the 200 it
+    // asked for, concludes nothing is older, and the operator's Bot Chat reads as
+    // absent: so he opens a second one, which Hermes refuses by title.
+    assert.equal(first.body.partial, true, '30 rows for a 200 ask is a short page and must say so');
+
+    // And the read after it, answered from that same copy, is just as short.
+    const warm = await listSessions(gate, '&limit=200');
+    assert.equal(warm.body.data.length, 30);
+    assert.equal(warm.body.partial, true, 'a page served out of the copy is short for the same reason');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a page that filled the limit the caller sent is not marked short', async () => {
+  const { gate, hermes } = await makeGate();
+  hermes.setRows(Array.from({ length: 20 }, (_, i) => ROW(`ses_${i + 1}`)));
+  try {
+    const { status, body } = await listSessions(gate, '&limit=20');
+    assert.equal(status, 200);
+    assert.equal(body.data.length, 20);
+    assert.equal(body.partial, undefined, 'the page the caller asked for is not marked short');
   } finally {
     await gate.close();
   }
@@ -544,7 +583,7 @@ test('a load-older read that lands on a running refill still gets the bigger win
     );
     const later = await listSessions(gate, '&limit=200');
     assert.equal(later.body.data.length, 30);
-    assert.equal(later.body.partial, undefined);
+    assert.equal(later.body.partial, true, 'and the copy is still short of the 200 that was asked for');
   } finally {
     await gate.close();
   }
