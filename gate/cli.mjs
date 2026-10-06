@@ -7,7 +7,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PairingStore } from './core/pairing.mjs';
 import { DeviceTokenStore } from './core/device-tokens.mjs';
-import { validateId, buildInstanceConfigTemplate, getKindTemplate, describeStartFailure, resolveStartPort, startFailureExitCode } from './core/cli-helpers.mjs';
+import { validateId, buildInstanceConfigTemplate, getKindTemplate, describeStartFailure, resolveStartPort, resolveStartHost, isLoopbackHost, startFailureExitCode } from './core/cli-helpers.mjs';
 import { resolveGateHome } from './core/paths.mjs';
 import { ProviderStore } from './core/providers/store.mjs';
 import { migrateLegacyProviders } from './core/providers/migrate-v1.mjs';
@@ -351,6 +351,12 @@ async function handleStart(args = []) {
     process.exit(1);
   }
   const port = portResolution.port;
+  const hostResolution = resolveStartHost(args);
+  if (hostResolution.error) {
+    console.error(`Error: ${hostResolution.error}`);
+    process.exit(1);
+  }
+  const host = hostResolution.host;
 
   // Preflight: gate/package.json declares no dependencies of its own, so `ws`
   // (the voice media socket) resolves out of the repo root's node_modules, and
@@ -411,12 +417,16 @@ async function handleStart(args = []) {
     gate = await createGate({
       root: __dirname,
       port,
+      host,
       name: gateName,
       gateHome,
     });
 
     console.log(`Token: ${gate.token}`);
-    console.log(`Listening on port ${gate.port}`);
+    console.log(`Listening on ${host.includes(':') ? `[${host}]` : host}:${gate.port}`);
+    if (isLoopbackHost(host)) {
+      console.log('  loopback only: expose it with Tailscale Serve, or set VERSUTUS_GATE_HOST=0.0.0.0 (or --host) to accept tailnet/LAN connections directly');
+    }
     console.log(`Manifest: http://127.0.0.1:${gate.port}/.well-known/gateway.json`);
 
     // Handle graceful shutdown
@@ -859,7 +869,7 @@ async function main() {
     console.log('    Delete a CLI environment record from Gate home — also the recovery');
     console.log('    path when a record is too corrupt to read; no Gate restart needed');
     console.log('');
-    console.log('  start [--allow-origin <origin>[,<origin>...]] [--port <n>]');
+    console.log('  start [--allow-origin <origin>[,<origin>...]] [--port <n>] [--host <ip>]');
     console.log('    Start the Gate HTTP server (default port 8760; --port or');
     console.log('    VERSUTUS_GATE_PORT names another, e.g. a demo Gate beside a');
     console.log('    running production one). A second instance also needs its own');
@@ -868,6 +878,8 @@ async function main() {
     console.log('    home cannot run at the same time.');
     console.log('    --allow-origin names browser origins (web demo target) that may');
     console.log('    call this Gate cross-origin; off by default');
+    console.log('    --host names the bind address (default 127.0.0.1, for Tailscale');
+    console.log('    Serve; 0.0.0.0 listens on every interface)');
     console.log('');
     console.log('  pair <open|approve|revoke|list>');
     console.log('    Manage device pairing and access tokens');
@@ -902,6 +914,8 @@ async function main() {
     console.log('    refuses to start beside a running one.');
     console.log('  VERSUTUS_GATE_PORT - Listen port for start/doctor (default 8760;');
     console.log('    a --port flag wins over this)');
+    console.log('  VERSUTUS_GATE_HOST - Bind address for start (default 127.0.0.1;');
+    console.log('    0.0.0.0 accepts tailnet/LAN connections; a --host flag wins)');
     console.log('  VERSUTUS_GATE_ALLOW_ORIGIN - Browser origins allowed to call this');
     console.log('    Gate cross-origin (web demo target), comma-separated');
     console.log('');

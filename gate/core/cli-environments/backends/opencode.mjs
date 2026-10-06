@@ -437,6 +437,8 @@ export function createOpenCodeBackend({ baseUrl, fetchImpl = fetch, password } =
           const decoder = new TextDecoder();
           let buffer = '';
           const toolCalls = new Map();
+          // messageID -> role, learned from `message.updated`.
+          const messageRoles = new Map();
           const parts = createOpenCodePartTracker();
           const pendingDeltas = new Map();
           // Every delivery funnels through here so a callback that aborts the
@@ -489,6 +491,7 @@ export function createOpenCodeBackend({ baseUrl, fetchImpl = fetch, password } =
             pendingDeltas.clear();
             recoveredSnapshots.clear();
             requestedLookups.clear();
+            messageRoles.clear();
             parts.clear();
           };
           // Once the terminal frame is in hand, a lookup still settling must
@@ -539,6 +542,15 @@ export function createOpenCodeBackend({ baseUrl, fetchImpl = fetch, password } =
                 if (info && typeof info === 'object') {
                   if (info.id && info.id !== messageId) return;
                   if (info.sessionID && info.sessionID !== sessionId) return;
+                  if (typeof info.role === 'string') messageRoles.set(messageId, info.role);
+                  // The prompt's own message is never the answer: its held
+                  // text is dropped, not released.
+                  if (info.role === 'user') {
+                    for (const part of Array.isArray(message?.parts) ? message.parts : []) {
+                      if (part?.id) pendingDeltas.delete(part.id);
+                    }
+                    return;
+                  }
                 }
                 for (const part of Array.isArray(message?.parts) ? message.parts : []) {
                   if (!part?.id || !STREAMED_PART_TYPES.has(part.type)) continue;
@@ -680,6 +692,21 @@ export function createOpenCodeBackend({ baseUrl, fetchImpl = fetch, password } =
               const scoped = scopeToSession(parsed, sessionId);
               if (!scoped) continue;
               parsed = scoped;
+              // OpenCode publishes the prompt itself on this same bus: a
+              // `message.updated` with role:user, then that message's text
+              // part. Forwarding it streamed every reply with the user's own
+              // prompt in front -- and, because that echo counted as "content
+              // arrived", the turn runner no longer back-filled an answer the
+              // stream then missed. Parts are dropped by their message's role,
+              // which OpenCode announces before the message's parts.
+              const roleInfo = parsed.type === 'message.updated' ? parsed.properties?.info : null;
+              if (roleInfo?.id && typeof roleInfo.role === 'string') messageRoles.set(roleInfo.id, roleInfo.role);
+              if (parsed.type === 'message.part.updated' || parsed.type === 'message.part.delta') {
+                const ownerId = parsed.type === 'message.part.delta'
+                  ? parsed.properties?.messageID
+                  : parsed.properties?.part?.messageID ?? parsed.properties?.messageID;
+                if (ownerId && messageRoles.get(ownerId) === 'user') continue;
+              }
               // A streamed part's deltas name it only by id; its type arrives
               // on a separate `message.part.updated`. Hold undecided text
               // deltas until that metadata lands so a thought is never emitted

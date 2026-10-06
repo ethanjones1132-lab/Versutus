@@ -42,3 +42,69 @@ export function unresolvedBackendResponse(method, failures = []) {
     },
   };
 }
+
+// ─── Which backend answers a request that names none ───────────────────────
+// It used to be simply the first registered environment. On a Mac that was
+// Hermes, whose server could not start, so every request without a backendId
+// failed while OpenCode sat there ready. Now: a configured default if it is
+// usable, else the first environment whose state is ready, else a clear error
+// naming every candidate's state. An environment nobody has probed yet (the
+// state map starts empty after a Gate restart, or reads `stopped`) is probed
+// once here, so the first request after a restart is not refused just because
+// no client opened the Environments screen first.
+
+const USABLE_STATES = new Set(['ready', 'busy']);
+const UNPROBED_STATES = new Set([undefined, null, 'stopped']);
+
+/**
+ * @param {object} options
+ * @param {Array<{id: string}>} options.entries backend-capable environments, in registration order
+ * @param {(id: string) => string|undefined} options.stateOf current coarse state, if known
+ * @param {(id: string) => Promise<string|undefined>} [options.probe] probes an unprobed environment, returns its state
+ * @param {string} [options.defaultId] configured default backend id
+ * @returns {Promise<{id: string} | {status: number, body: object}>}
+ */
+export async function selectDefaultBackend({ entries = [], stateOf, probe, defaultId } = {}) {
+  if (entries.length === 0) {
+    return {
+      status: 404,
+      body: { error: { message: 'No chat backend is attached to this Gate', code: 'no_backend' } },
+    };
+  }
+  const states = new Map();
+  const stateFor = async (id) => {
+    if (states.has(id)) return states.get(id);
+    let state = stateOf?.(id);
+    if (UNPROBED_STATES.has(state) && probe) {
+      try {
+        state = (await probe(id)) ?? state;
+      } catch (error) {
+        state = `probe failed (${reasonOf(error)})`;
+      }
+    }
+    states.set(id, state ?? 'unknown');
+    return states.get(id);
+  };
+
+  const configured = defaultId ? entries.find((entry) => entry.id === defaultId) : undefined;
+  if (configured && USABLE_STATES.has(await stateFor(configured.id))) return { id: configured.id };
+
+  for (const entry of entries) {
+    if (USABLE_STATES.has(await stateFor(entry.id))) return { id: entry.id };
+  }
+
+  const summary = entries
+    .slice(0, 6)
+    .map((entry) => `${entry.id}: ${states.get(entry.id) ?? 'unknown'}`)
+    .join(', ');
+  const unknownDefault = defaultId && !configured ? ` (configured default "${defaultId}" is not attached)` : '';
+  return {
+    status: 503,
+    body: {
+      error: {
+        message: `No attached backend is ready${unknownDefault} — ${summary}. Pass backendId to choose one.`,
+        code: 'no_ready_backend',
+      },
+    },
+  };
+}
