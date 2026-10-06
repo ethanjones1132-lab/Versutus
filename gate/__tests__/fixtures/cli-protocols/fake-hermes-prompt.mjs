@@ -35,7 +35,7 @@ if (joined === '--version') {
   process.stdout.write(${JSON.stringify(version)} + '\\n');
   process.exit(0);
 }
-// The protocol handshake: real Hermes 0.19 answers `acp --version`.
+// The protocol handshake: real Hermes 0.19 answers "acp --version".
 if (argv.includes('--acp') || joined === 'acp --version') {
   process.exit(0);
 }
