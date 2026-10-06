@@ -12,6 +12,11 @@ if (arg.includes('--version') || arg === 'version' || arg === '-v') {
   process.stdout.write(${JSON.stringify(version)} + '\\n');
   process.exit(0);
 }
+// The claude/codex handshakes are help screens that must list the protocol.
+if (arg === '--help' || arg === 'exec --help') {
+  process.stdout.write('--output-format <format>  "text", "json" or "stream-json"\\n--json  Print events to stdout as JSONL\\n');
+  process.exit(0);
+}
 if (arg.includes('--acp') || /(^|\s)acp(\s|$)/.test(arg) || arg.includes('app-server') || arg.includes('--print0') || arg.includes('stream-json') || arg.includes('--output-format') || arg.includes('--format')) {
   process.stdout.write(${JSON.stringify(handshake)} + '\\n');
   process.exit(0);

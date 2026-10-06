@@ -433,16 +433,21 @@ export class CliEnvironmentService {
     // but the operator must see it in the run sheet at demo time — not only
     // in Gate-machine `gate doctor` output. References are named, never
     // values; resolved values travel only inside the child environment.
-    for (const { variable, reference } of unresolved) {
+    for (const { variable, reference, error } of unresolved) {
       log.emit({
         type: 'run.note',
         payload: {
           level: 'warning',
           variable,
           reference,
-          message:
-            `${variable} is bound to ${reference} but no value is stored for that reference — ` +
-            'set the key on the Providers screen or remove the binding; this task starts without it.',
+          ...(error ? { code: error.code ?? 'credential_unreadable' } : {}),
+          // A vault that could not be read is a different fix from a key that
+          // was never saved, so the note says which one happened.
+          message: error
+            ? `${variable} is bound to ${reference} but the credential vault could not read it ` +
+              `(${error.code ?? 'error'}: ${error.message}) — run \`gate doctor\`; this task starts without it.`
+            : `${variable} is bound to ${reference} but no value is stored for that reference — ` +
+              'set the key on the Providers screen or remove the binding; this task starts without it.',
         },
       });
     }
@@ -568,6 +573,11 @@ export class CliEnvironmentService {
       child = this.spawnImpl(command, [...prefix, ...args], {
         cwd: run.workspace.canonical,
         env: run.childEnv,
+        // Nothing is ever written to a task's stdin, and a CLI that reads it to
+        // EOF before starting (`opencode run` does) hung forever on an open
+        // pipe: ~4.6 s with stdin closed, nothing after 20 s with it open.
+        // 'ignore' hands the child /dev/null (NUL on Windows) -- immediate EOF.
+        stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       });
     } catch (error) {
@@ -632,9 +642,15 @@ export class CliEnvironmentService {
     const credentials = {};
     const unresolved = [];
     for (const [variable, reference] of bindings) {
-      const value = await this.vault.get(reference).catch(() => undefined);
+      let value;
+      let error;
+      try {
+        value = await this.vault.get(reference);
+      } catch (caught) {
+        error = { code: caught?.code, message: caught?.message ?? String(caught) };
+      }
       if (typeof value === 'string' && value) credentials[variable] = value;
-      else unresolved.push({ variable, reference });
+      else unresolved.push({ variable, reference, ...(error ? { error } : {}) });
     }
     return { credentials, unresolved };
   }

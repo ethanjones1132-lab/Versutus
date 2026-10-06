@@ -8,7 +8,7 @@ import { join } from 'node:path';
  * real Hermes install. Speaks the three invocations the hermes adapter makes:
  *
  *   --version        → the given semver (probeVersion)
- *   --acp ...        → exits 0 silently (the protocol handshake probe)
+ *   acp --version    → exits 0 silently (the protocol handshake probe)
  *   -z <prompt>      → streams a reply to stdout in chunks, then exits 0
  *
  * A prompt containing `SLOW_REPLY` writes one chunk and then stalls for 30s,
@@ -35,7 +35,8 @@ if (joined === '--version') {
   process.stdout.write(${JSON.stringify(version)} + '\\n');
   process.exit(0);
 }
-if (argv.includes('--acp')) {
+// The protocol handshake: real Hermes 0.19 answers `acp --version`.
+if (argv.includes('--acp') || joined === 'acp --version') {
   process.exit(0);
 }
 if (argv[0] === '-z') {

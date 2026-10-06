@@ -7,6 +7,7 @@ import { join } from 'node:path';
  * tests exercise real child processes without shipping a real agent:
  *
  * - `--version`            prints the given version line, exits 0
+ * - `... --help`           a help screen naming stream-json / --json, exits 0
  * - `<op-flag> PROMPT`     echoes the last argument back across two writes,
  *                          exits 0 (every adapter's prompt invocation ends
  *                          with the prompt as its final argument)
@@ -20,6 +21,12 @@ export async function fakeRunner(version) {
 const argv = process.argv.slice(2);
 if (argv.includes('--version')) {
   process.stdout.write(${JSON.stringify(version)} + '\\n');
+  process.exit(0);
+}
+// Help screens answer the claude/codex protocol handshakes, as the real
+// CLIs do: they exit 0 and list the streaming output formats.
+if (argv[argv.length - 1] === '--help') {
+  process.stdout.write('--output-format <format>  "text", "json" or "stream-json"\\n--json  Print events to stdout as JSONL\\n');
   process.exit(0);
 }
 const text = argv[argv.length - 1] ?? '';

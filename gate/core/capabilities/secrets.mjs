@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { CredentialVault } from '../credentials/vault.mjs';
-import { createWindowsDpapi } from '../credentials/windows-dpapi.mjs';
+import { createPlatformCredentialBackend } from '../credentials/platform-backend.mjs';
 
 const ALGORITHM = 'aes-256-gcm';
 const vaults = new Map();
@@ -38,7 +38,7 @@ function vaultFor(root) {
   if (!vaults.has(root)) {
     vaults.set(root, new CredentialVault({
       gateHome: root,
-      backend: injectedBackend ?? createWindowsDpapi(),
+      backend: injectedBackend ?? createPlatformCredentialBackend({ gateHome: root }),
     }));
   }
   return vaults.get(root);

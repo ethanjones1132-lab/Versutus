@@ -104,12 +104,20 @@ export function createNativeServer({
   }
 
   async function spawnServer(descriptor) {
-    const port = descriptor.ephemeralPort === false ? descriptor.defaultPort : 0;
+    // A fixed-port server (Hermes) listens where the record says, else on its
+    // default; an ephemeral one is handed 0 and announces its port on stdout.
+    const port = descriptor.ephemeralPort === false
+      ? (portOf(record?.server?.baseUrl) ?? descriptor.defaultPort)
+      : 0;
     const { command, prefix } = spawnCommand(record.executable.path);
     const args = [...prefix, ...descriptor.args(port)];
-    const env = buildEnvironment
+    const baseEnv = buildEnvironment
       ? await buildEnvironment({ record, credentials })
       : { ...process.env, ...credentials };
+    // A server configured through its environment (Hermes' API_SERVER_*)
+    // declares those variables itself; they are layered last so a stray
+    // inherited value cannot point the server somewhere the Gate is not polling.
+    const env = { ...baseEnv, ...(descriptor.env?.({ port, credentials, record }) ?? {}) };
 
     child = spawnImpl(command, args, {
       cwd: record.workspacePolicy?.defaultRoot,
@@ -154,7 +162,8 @@ export function createNativeServer({
       if (exited !== null) {
         throw new Error(`${adapter.adapterId} server exited with code ${exited} before becoming reachable.`);
       }
-      const target = announced ?? (descriptor.defaultPort ? `http://127.0.0.1:${descriptor.defaultPort}` : null);
+      const fallbackPort = port || descriptor.defaultPort;
+      const target = announced ?? (fallbackPort ? `http://127.0.0.1:${fallbackPort}` : null);
       if (target && (await isHealthy(target, descriptor))) return target;
       await Promise.race([delay(POLL_INTERVAL_MS), spawnFailed]);
     }
@@ -188,6 +197,17 @@ export function createNativeServer({
 
   function note(message) {
     onDiagnostic?.({ environmentId: record?.id, message });
+  }
+}
+
+/** The explicit port of a configured base URL, or null. */
+function portOf(baseUrl) {
+  if (!baseUrl) return null;
+  try {
+    const port = Number(new URL(String(baseUrl)).port);
+    return Number.isInteger(port) && port > 0 ? port : null;
+  } catch {
+    return null;
   }
 }
 

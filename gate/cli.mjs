@@ -21,6 +21,7 @@ import { installProcessGuards } from './core/process-guards.mjs';
 import { doctor } from './core/service/doctor.mjs';
 import { diagnoseBotGroupStore, diagnoseEnvironmentRecords, probeLocalGate } from './core/service/diagnostics.mjs';
 import { CredentialVault } from './core/credentials/vault.mjs';
+import { checkCredentialBackend } from './core/credentials/platform-backend.mjs';
 import { installVoice, uvRunner, voiceDoctor, voicePaths, voiceStatus } from './core/voice/runtime.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -774,23 +775,26 @@ async function handleDoctor(args = []) {
     process.exit(1);
   }
   const listen = `http://127.0.0.1:${portResolution.port}`;
+  const vault = new CredentialVault({ gateHome });
   const [environmentFindings, storeFindings, serverProbe] = await Promise.all([
-    diagnoseEnvironmentRecords(join(gateHome, 'config', 'environments'), {
-      vault: new CredentialVault({ gateHome }),
-    }),
+    diagnoseEnvironmentRecords(join(gateHome, 'config', 'environments'), { vault }),
     diagnoseBotGroupStore(gateHome),
     probeLocalGate(`${listen}/.well-known/gateway.json`),
   ]);
   const findings = [...environmentFindings, ...storeFindings];
+  const vaultCheck = await checkCredentialBackend(vault.backend);
   console.log(doctor({
     user,
     gateHome,
     listen,
+    vaultCheck,
     serverProbe,
     environmentFindings: findings,
   }));
   // Scriptable verdict: a health check that always exits 0 cannot gate a demo.
-  if (findings.some((finding) => finding.severity === 'error')) {
+  // A vault that cannot seal or open credentials is the same kind of failure:
+  // every provider key and Hermes API key binding silently stops resolving.
+  if (!vaultCheck.ok || findings.some((finding) => finding.severity === 'error')) {
     process.exitCode = 1;
   }
 }
