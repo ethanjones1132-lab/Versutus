@@ -14,7 +14,7 @@ import { migrateLegacyProviders } from './core/providers/migrate-v1.mjs';
 import { CliEnvironmentStore } from './core/cli-environments/store.mjs';
 import { CliAdapterRegistry } from './core/cli-environments/adapter-registry.mjs';
 import { TASK_NAME, buildTaskDefinition, writeTaskFile } from './core/service/windows-task.mjs';
-import { runLaunchdService, unsupportedServiceMessage } from './core/service/launchd-agent.mjs';
+import { runLaunchdService, serviceBackendFor, unsupportedServiceMessage } from './core/service/launchd-agent.mjs';
 import { acquireInstanceLock } from './core/service/instance-lock.mjs';
 import { RotatingLog } from './core/service/rotating-log.mjs';
 import { Supervisor } from './core/service/supervisor.mjs';
@@ -512,14 +512,15 @@ async function handleService(args) {
   const sub = args[0];
   // macOS: a per-user LaunchAgent, launchd being the supervisor. The
   // Windows Scheduled Task path below is untouched.
-  if (process.platform === 'darwin') {
+  const backend = serviceBackendFor(process.platform);
+  if (backend === 'launchd') {
     process.exitCode = await runLaunchdService(sub, args.slice(1), {
       codeRoot: join(__dirname, '..'),
       probe: (url) => probeLocalGate(url),
     });
     return;
   }
-  if (process.platform !== 'win32') {
+  if (backend !== 'windows-task') {
     console.error(unsupportedServiceMessage(process.platform));
     process.exit(1);
   }

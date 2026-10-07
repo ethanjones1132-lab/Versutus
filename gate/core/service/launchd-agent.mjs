@@ -517,6 +517,16 @@ export async function runLaunchdService(sub, args = [], {
   return 1;
 }
 
+/**
+ * Which service backend `service` uses on a platform. win32 keeps the
+ * Scheduled Task + `service run` supervisor exactly as before.
+ */
+export function serviceBackendFor(platform = process.platform) {
+  if (platform === 'win32') return 'windows-task';
+  if (platform === 'darwin') return 'launchd';
+  return 'unsupported';
+}
+
 /** What `service` says on a platform with no service backend yet. */
 export function unsupportedServiceMessage(platform = process.platform) {
   return `Error: \`service\` is not supported on ${platform} yet (Windows Scheduled Task and macOS LaunchAgent only). `
