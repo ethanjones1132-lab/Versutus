@@ -135,6 +135,25 @@ node --env-file=.env cli.mjs start
 
 Providers live at `gate/registry/<id>.json`, scaffolded with `node cli.mjs add <id> --kind provider` and validated against `gate/core/capabilities/provider/kind.mjs`. Provider keys are read from `gate/.env` and never committed — the ignore rules for `gate/credentials/`, `gate/.tokens.json`, and friends are deliberate.
 
+#### Running the Gate as a service
+
+`node gate/cli.mjs service <install|uninstall|status|start|stop|restart>` keeps the Gate running across logins and crashes. Run it from the checkout the Gate should serve.
+
+- **Windows:** a per-user Scheduled Task (hidden, logon + every-5-minute triggers) that launches the `service run` supervisor.
+- **macOS:** a per-user LaunchAgent, `~/Library/LaunchAgents/com.versutus.gate.plist`, loaded into `gui/<uid>`. launchd is the supervisor: it starts `gate/cli.mjs start` at login (`RunAtLoad`), restarts it if it crashes (`KeepAlive`, 10 s throttle) and writes `gate.out.log` / `gate.err.log` under `~/.local/share/Versutus/Gate/logs`. There is no `service run` on macOS.
+  - `install` writes the plist, checks it with `plutil -lint` and runs `launchctl bootstrap`. An agent already loaded under the label is booted out and reloaded, and a plist it replaces is saved as `<gate home>/service/com.versutus.gate.plist.previous`.
+  - The Gate binds `127.0.0.1` by default. **To keep phone/tailnet access, install with `--host 0.0.0.0`** (or a tailnet IP), or set `VERSUTUS_GATE_HOST` when you run `install`. Either way it is written into the agent's `EnvironmentVariables`. `--port` / `VERSUTUS_GATE_PORT` and `VERSUTUS_GATE_HOME` pass through the same way, and `--node <path>` picks the node binary (by default, the one running the command).
+  - `--dry-run` prints the plist and the `launchctl` commands and changes nothing.
+  - `uninstall` boots the agent out and deletes the plist. `stop` boots it out but keeps the plist, so it comes back at the next login or on `service start`. `restart` is `launchctl kickstart -k`.
+  - `status` reads `launchctl print gui/<uid>/com.versutus.gate` and probes the manifest. It exits 1 unless the agent is running and the Gate answers.
+- **Linux:** not supported yet. `service` says so; run `node gate/cli.mjs start` under your own process manager.
+
+```bash
+node gate/cli.mjs service install --host 0.0.0.0 --dry-run   # inspect first
+node gate/cli.mjs service install --host 0.0.0.0
+node gate/cli.mjs service status
+```
+
 ### Android APK without EAS
 
 EAS free-tier Android quota and `eas build --local` are frequently unavailable. Direct prebuild works:
