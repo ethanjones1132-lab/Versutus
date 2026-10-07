@@ -14,6 +14,7 @@ import { migrateLegacyProviders } from './core/providers/migrate-v1.mjs';
 import { CliEnvironmentStore } from './core/cli-environments/store.mjs';
 import { CliAdapterRegistry } from './core/cli-environments/adapter-registry.mjs';
 import { TASK_NAME, buildTaskDefinition, writeTaskFile } from './core/service/windows-task.mjs';
+import { runLaunchdService, unsupportedServiceMessage } from './core/service/launchd-agent.mjs';
 import { acquireInstanceLock } from './core/service/instance-lock.mjs';
 import { RotatingLog } from './core/service/rotating-log.mjs';
 import { Supervisor } from './core/service/supervisor.mjs';
@@ -509,6 +510,19 @@ async function handlePair(args) {
 
 async function handleService(args) {
   const sub = args[0];
+  // macOS: a per-user LaunchAgent, launchd being the supervisor. The
+  // Windows Scheduled Task path below is untouched.
+  if (process.platform === 'darwin') {
+    process.exitCode = await runLaunchdService(sub, args.slice(1), {
+      codeRoot: join(__dirname, '..'),
+      probe: (url) => probeLocalGate(url),
+    });
+    return;
+  }
+  if (process.platform !== 'win32') {
+    console.error(unsupportedServiceMessage(process.platform));
+    process.exit(1);
+  }
   if (sub === 'install') return serviceInstall();
   if (sub === 'run') return serviceRun();
   if (sub === 'stop') return serviceStop();
@@ -893,6 +907,13 @@ async function main() {
     console.log('    (hidden, logon + every-5-minute triggers). install registers');
     console.log('    and starts it; run is the supervisor the task launches;');
     console.log('    status exits 1 unless the Gate answers.');
+    console.log('    macOS: a per-user LaunchAgent (com.versutus.gate in');
+    console.log('    ~/Library/LaunchAgents; launchd restarts it, no `run`).');
+    console.log('    install [--host <ip>] [--port <n>] [--dry-run] writes and loads');
+    console.log('    it (reloads one already loaded); --host/VERSUTUS_GATE_HOST is');
+    console.log('    passed through so --host 0.0.0.0 keeps tailnet/phone access.');
+    console.log('    --dry-run prints the plist and launchctl commands only;');
+    console.log('    --node <path> picks the node binary (default: the one running).');
     console.log('');
     console.log('  doctor');
     console.log('    Inspect the Gate machine: local listener and every CLI');
