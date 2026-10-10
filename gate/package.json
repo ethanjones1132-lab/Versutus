@@ -5,7 +5,7 @@
   "type": "module",
   "bin": { "versutus-gate": "./cli.mjs" },
   "scripts": {
-    "test": "node --test",
+    "test": "node --import ./__tests__/fixtures/isolate-credential-vault.mjs --test",
     "start": "node cli.mjs start",
     "doctor": "node cli.mjs doctor"
   }

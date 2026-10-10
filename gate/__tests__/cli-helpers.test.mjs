@@ -168,3 +168,24 @@ test('startFailureExitCode is 75 for a held port or lock, 1 otherwise', () => {
   assert.equal(startFailureExitCode(new Error('LOCALAPPDATA is required')), 1);
   assert.equal(startFailureExitCode(null), 1);
 });
+
+test('resolveStartHost defaults to loopback, per the design spec', async () => {
+  const { resolveStartHost } = await import('../core/cli-helpers.mjs');
+  assert.deepEqual(resolveStartHost([], {}), { host: '127.0.0.1' });
+  assert.deepEqual(resolveStartHost([], { VERSUTUS_GATE_HOST: '' }), { host: '127.0.0.1' });
+});
+
+test('resolveStartHost takes --host over VERSUTUS_GATE_HOST and accepts IP literals only', async () => {
+  const { resolveStartHost, isLoopbackHost } = await import('../core/cli-helpers.mjs');
+  assert.deepEqual(resolveStartHost([], { VERSUTUS_GATE_HOST: '0.0.0.0' }), { host: '0.0.0.0' });
+  assert.deepEqual(resolveStartHost(['--host', '100.101.102.103'], { VERSUTUS_GATE_HOST: '0.0.0.0' }), { host: '100.101.102.103' });
+  assert.deepEqual(resolveStartHost(['--host', '[::1]'], {}), { host: '::1' });
+  assert.deepEqual(resolveStartHost(['--host', 'localhost'], {}), { host: 'localhost' });
+  assert.ok(resolveStartHost(['--host'], {}).error);
+  assert.ok(resolveStartHost(['--host', '--port'], {}).error);
+  assert.ok(resolveStartHost(['--host', 'my-mac.tailnet.ts.net'], {}).error);
+  assert.ok(resolveStartHost([], { VERSUTUS_GATE_HOST: '999.1.1.1' }).error);
+  assert.equal(isLoopbackHost('127.0.0.1'), true);
+  assert.equal(isLoopbackHost('::1'), true);
+  assert.equal(isLoopbackHost('0.0.0.0'), false);
+});

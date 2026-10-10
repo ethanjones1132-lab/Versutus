@@ -47,7 +47,7 @@ import { resolveVoiceBackend } from './voice/voice-backend.mjs';
 import { ScriptedEngine, scriptedEngineEnabled } from './voice/engines/scripted-engine.mjs';
 import { verifySignedAccessRequest, ReplayCache } from './signature.mjs';
 import { describeAuthFailure } from './auth-failure.mjs';
-import { unresolvedBackendResponse } from './backend-resolution.mjs';
+import { selectDefaultBackend, unresolvedBackendResponse } from './backend-resolution.mjs';
 import { backendUpstreamRefusal } from './upstream-refusal.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
 import * as anthropicFlavor from '../flavors/anthropic.mjs';
@@ -641,6 +641,12 @@ export async function createGate(config = {}) {
   const {
     root,
     port = 0,
+    // Loopback unless the caller says otherwise (design spec: 127.0.0.1
+    // behind Tailscale Serve; every interface only by explicit choice).
+    host = '127.0.0.1',
+    // Which environment answers a request that names no backendId, when it
+    // is usable; otherwise the first ready one does.
+    defaultBackendId = process.env.VERSUTUS_GATE_DEFAULT_BACKEND || undefined,
     name = 'Versutus Gate',
     version,
     gateHome = process.env.VERSUTUS_GATE_HOME || join(root, '.gate-home'),
@@ -1332,11 +1338,22 @@ export async function createGate(config = {}) {
 
       /** Resolve the backend for a request, or answer 404 and return null. */
       async function resolveBackend(backendId) {
-        const id = backendId ?? (await backendManager.list())[0]?.id;
+        let id = backendId;
         if (!id) {
-          res.writeHead(404, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: { message: 'No chat backend is attached to this Gate', code: 'no_backend' } }));
-          return null;
+          // Not simply the first registered environment: a configured default
+          // if usable, else the first ready one, else a 503 naming each state.
+          const picked = await selectDefaultBackend({
+            entries: await backendManager.list(),
+            stateOf: (environmentId) => environmentService.environmentState.get(environmentId)?.state,
+            probe: async (environmentId) => (await environmentService.check(environmentId)).state,
+            defaultId: defaultBackendId,
+          });
+          if (!picked.id) {
+            res.writeHead(picked.status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(picked.body));
+            return null;
+          }
+          id = picked.id;
         }
         try {
           return await backendManager.get(id);
@@ -2896,9 +2913,10 @@ export async function createGate(config = {}) {
       return state.providers;
     },
     port,
+    host,
     async listen() {
       return new Promise((resolve, reject) => {
-        server.listen(port, () => {
+        server.listen(port, host, () => {
           const actualPort = server.address().port;
           gateObj.port = actualPort;
           resolve(actualPort);

@@ -58,6 +58,30 @@ export function resolveHermesHome({
   return explicit || derived || fallback;
 }
 
+/**
+ * Environment for a Hermes API server the Gate spawns itself.
+ *
+ * API_SERVER_* is how Hermes 0.19 is told to serve (it has no flags for it);
+ * the host is pinned to loopback because the Gate is the only intended client.
+ * The key is the operator's bound API_SERVER_KEY (or its HERMES_ alias) --
+ * the same one the backend presents as its bearer token, so the server it
+ * starts accepts the calls it then makes. HERMES_HOME pins the spawned server
+ * to the home whose profiles/ the backend reads; the child environment is an
+ * allow-list, so without it the CLI would fall back to a bare ~/.hermes.
+ */
+export function hermesServerEnvironment({ port, credentials = {}, record } = {}) {
+  const env = {
+    API_SERVER_ENABLED: 'true',
+    API_SERVER_PORT: String(port || 8642),
+    API_SERVER_HOST: '127.0.0.1',
+  };
+  const key = credentials.API_SERVER_KEY || credentials.HERMES_API_SERVER_KEY;
+  if (key) env.API_SERVER_KEY = key;
+  const home = resolveHermesHome({ executablePath: record?.executable?.path });
+  if (home) env.HERMES_HOME = home;
+  return env;
+}
+
 export const hermesAdapter = {
   adapterId: 'hermes',
   adapterRevision: '1',
@@ -92,7 +116,13 @@ export const hermesAdapter = {
   server: {
     defaultPort: 8642,
     healthPath: '/health',
-    args: (port) => ['gateway', 'run', '--port', String(port)],
+    // Hermes 0.19 has no `--port` (spawning with it exits 2 before the server
+    // is reachable). Its API server is configured from the environment, so
+    // the port is fixed up front -- the record's own baseUrl port, else 8642 --
+    // rather than an ephemeral 0 announced back on stdout.
+    ephemeralPort: false,
+    args: () => ['gateway', 'run'],
+    env: hermesServerEnvironment,
     portFromOutput: (line) => /listening on https?:\/\/[^:]+:(\d+)/.exec(line)?.[1],
   },
 
@@ -113,7 +143,10 @@ export const hermesAdapter = {
       min: '0.18.0',
       maxExclusiveMajor: 1,
       protocol: 'acp',
-      handshakeArgs: ['--acp', '--probe'],
+      // Hermes 0.19 rejects `--acp --probe` (argparse exit 2); ACP is the
+      // `acp` subcommand, and `acp --version` prints its version and exits 0
+      // without starting anything (verified against 0.19.0).
+      handshakeArgs: ['acp', '--version'],
     });
   },
   /**

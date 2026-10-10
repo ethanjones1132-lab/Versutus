@@ -23,11 +23,17 @@ export function spawnCommand(executablePath) {
   return { command: executablePath, prefix: [] };
 }
 
-export async function runCli(executablePath, args, { timeoutMs = 5000 } = {}) {
+/**
+ * Run a CLI to completion. Resolves with { code, stdout, stderr } whatever the
+ * exit code -- callers that need a verdict (probeVersion) judge `code`
+ * themselves -- and rejects only on spawn failure or timeout.
+ */
+export async function runCli(executablePath, args, { timeoutMs = 5000, spawnImpl = spawn } = {}) {
   await access(executablePath.endsWith('.mjs') ? executablePath : executablePath.split(' ')[0]);
   const { command, prefix } = spawnCommand(executablePath);
   return new Promise((resolve, reject) => {
-    const child = spawn(command, [...prefix, ...args], { windowsHide: true });
+    // stdin is never written; an open pipe would park a CLI that reads to EOF.
+    const child = spawnImpl(command, [...prefix, ...args], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     const stdout = [];
     const stderr = [];
     const timer = setTimeout(() => {
@@ -51,7 +57,28 @@ export async function runCli(executablePath, args, { timeoutMs = 5000 } = {}) {
   });
 }
 
-export async function probeVersion(executablePath, { min, maxExclusiveMajor, protocol, handshakeArgs }) {
+/** First stderr line (else stdout), bounded, for a probe failure message. */
+function probeOutput(result) {
+  const text = (result?.stderr || result?.stdout || '').trim();
+  const line = text.split(/\r?\n/).find((entry) => entry.trim()) ?? '';
+  return line.length > 300 ? `${line.slice(0, 300)}…` : line;
+}
+
+function exitFailure(what, result) {
+  const detail = probeOutput(result);
+  return `${what} exited with code ${result?.code ?? 'null'}${detail ? `: ${detail}` : ''}`;
+}
+
+export async function probeVersion(executablePath, {
+  min,
+  maxExclusiveMajor,
+  protocol,
+  handshakeArgs,
+  // Optional: output the handshake must contain to prove the protocol, for a
+  // handshake (a --help) whose exit code alone only proves the CLI runs.
+  handshakeExpect,
+  runCliImpl = runCli,
+}) {
   try {
     await access(executablePath.endsWith('.mjs') ? executablePath : executablePath);
   } catch {
@@ -60,9 +87,17 @@ export async function probeVersion(executablePath, { min, maxExclusiveMajor, pro
 
   let versionResult;
   try {
-    versionResult = await runCli(executablePath, ['--version']);
+    versionResult = await runCliImpl(executablePath, ['--version']);
   } catch {
     return { state: 'not_installed', executablePath, message: 'executable not runnable' };
+  }
+  // A version line printed by a command that then failed is not a working CLI.
+  if (versionResult.code !== 0) {
+    return {
+      state: 'not_installed',
+      executablePath,
+      message: `executable not runnable: ${exitFailure('--version', versionResult)}`,
+    };
   }
 
   // CLIs decorate their version line differently — `1.17.9`,
@@ -78,8 +113,12 @@ export async function probeVersion(executablePath, { min, maxExclusiveMajor, pro
     };
   }
 
+  // The handshake is judged by its exit code, not just by having run: `hermes
+  // --acp --probe` exits 2 with "unrecognized arguments" on 0.19, and treating
+  // that as success reported a backend `ready` that could not do the protocol.
+  let handshake;
   try {
-    await runCli(executablePath, handshakeArgs);
+    handshake = await runCliImpl(executablePath, handshakeArgs);
   } catch (error) {
     return {
       state: 'degraded',
@@ -87,6 +126,25 @@ export async function probeVersion(executablePath, { min, maxExclusiveMajor, pro
       cliVersion: version,
       protocol,
       message: error.message,
+    };
+  }
+  if (handshake.code !== 0) {
+    return {
+      state: 'degraded',
+      executablePath,
+      cliVersion: version,
+      protocol,
+      message: `protocol probe failed: ${exitFailure(handshakeArgs.join(' '), handshake)}`,
+      ...(handshake.stderr ? { stderr: probeOutput({ stderr: handshake.stderr }) } : {}),
+    };
+  }
+  if (handshakeExpect && !handshakeExpect.test(`${handshake.stdout ?? ''}\n${handshake.stderr ?? ''}`)) {
+    return {
+      state: 'degraded',
+      executablePath,
+      cliVersion: version,
+      protocol,
+      message: `protocol probe failed: \`${handshakeArgs.join(' ')}\` does not offer ${handshakeExpect.source}`,
     };
   }
 
