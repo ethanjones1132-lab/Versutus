@@ -938,8 +938,8 @@ async function main() {
     console.log('    a --port flag wins over this)');
     console.log('  VERSUTUS_GATE_HOST - Bind address for start (default 127.0.0.1;');
     console.log('    0.0.0.0 accepts tailnet/LAN connections; a --host flag wins)');
-    console.log('  VERSUTUS_GATE_DEFAULT_BACKEND - Backend id a chat without a');
-    console.log('    backendId uses when it is ready (else the first ready one)');
+    console.log('  VERSUTUS_GATE_DEFAULT_BACKEND - Backend id a chat or voice call');
+    console.log('    without a backendId uses when it is ready (else the first ready one)');
     console.log('  VERSUTUS_GATE_VAULT - Credential store: dpapi, keychain or file');
     console.log('    (default: dpapi on Windows, keychain on macOS, file elsewhere)');
     console.log('  VERSUTUS_GATE_ALLOW_ORIGIN - Browser origins allowed to call this');

@@ -581,6 +581,7 @@ export async function resolveVoiceTurnBackend(backendManager, thread, {
   signal,
   attempt,
   onStage = () => {},
+  selection,
 } = {}) {
   const startedAt = Date.now();
   const meta = attempt === undefined ? {} : { attempt };
@@ -595,7 +596,7 @@ export async function resolveVoiceTurnBackend(backendManager, thread, {
   stage('resolve.start');
   let backend;
   try {
-    backend = await raceVoiceAbort(resolveVoiceBackend(backendManager, thread), signal);
+    backend = await raceVoiceAbort(resolveVoiceBackend(backendManager, thread, { selection }), signal);
   } catch (error) {
     stage('resolve.failed', { cause: error?.code ?? error?.name ?? 'resolve_error' });
     throw error;
@@ -614,12 +615,18 @@ export async function resolveVoiceTurnBackend(backendManager, thread, {
   return { backend, descriptor, aborted: false };
 }
 
-/** Resolve then run one voice turn, forwarding the backend descriptor. */
-export async function runVoiceTurn(backendManager, session, text, handlers = {}) {
+/**
+ * Resolve then run one voice turn, forwarding the backend descriptor.
+ * `selection` is the Gate's readiness view (state, probe, configured default);
+ * with it an unscoped thread picks its backend the way a typed request with no
+ * backendId does.
+ */
+export async function runVoiceTurn(backendManager, session, text, handlers = {}, { selection } = {}) {
   const resolved = await resolveVoiceTurnBackend(backendManager, session?.thread, {
     signal: handlers?.signal,
     attempt: handlers?.attempt,
     onStage: handlers?.onStage,
+    selection,
   });
   if (resolved.aborted) return VOICE_TURN_ABORTED;
   return runBackendTurn(resolved.backend, session?.thread?.sessionId, { text }, {
@@ -765,6 +772,15 @@ export async function createGate(config = {}) {
       }),
     createServer: backendServerFactory,
   });
+
+  // How a request or a spoken turn that names no backend picks one: the
+  // configured default if usable, else the first ready environment. Shared by
+  // the REST routes' `resolveBackend` and the voice path's `runVoiceTurn`.
+  const defaultBackendSelection = {
+    stateOf: (environmentId) => environmentService.environmentState.get(environmentId)?.state,
+    probe: async (environmentId) => (await environmentService.check(environmentId)).state,
+    defaultId: defaultBackendId,
+  };
 
   /**
    * Whether an environment's backend could serve `method`, answered without
@@ -1344,9 +1360,7 @@ export async function createGate(config = {}) {
           // if usable, else the first ready one, else a 503 naming each state.
           const picked = await selectDefaultBackend({
             entries: await backendManager.list(),
-            stateOf: (environmentId) => environmentService.environmentState.get(environmentId)?.state,
-            probe: async (environmentId) => (await environmentService.check(environmentId)).state,
-            defaultId: defaultBackendId,
+            ...defaultBackendSelection,
           });
           if (!picked.id) {
             res.writeHead(picked.status, { 'Content-Type': 'application/json' });
@@ -2903,7 +2917,9 @@ export async function createGate(config = {}) {
         ? new LocalEngine({ paths: voicePaths() })
         : new ScriptedEngine()
     ),
-    runTurn: (session, text, handlers) => runVoiceTurn(backendManager, session, text, handlers),
+    runTurn: (session, text, handlers) => runVoiceTurn(backendManager, session, text, handlers, {
+      selection: defaultBackendSelection,
+    }),
   });
 
   // Start listening immediately
