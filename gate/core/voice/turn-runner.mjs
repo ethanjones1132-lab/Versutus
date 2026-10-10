@@ -457,6 +457,9 @@ export async function runBackendTurn(backend, sessionId, { text, model, images }
     // A tool call is real turn activity with no closing text of its own -- only
     // a turn where *neither* text nor a tool ever happened counts as empty.
     let sawContent = false;
+    // The answer text the feed actually delivered, to reconcile against the
+    // send's own answer once it returns.
+    let streamedText = '';
 
     const startTool = (name, callId, input) => {
       if (seenTools.has(callId)) return seenTools.get(callId);
@@ -485,6 +488,7 @@ export async function runBackendTurn(backend, sessionId, { text, model, images }
       noteActivity('the backend turn');
       if (event.type === 'message.delta' && event.payload?.text) {
         sawContent = true;
+        streamedText += event.payload.text;
         onDelta(event.payload.text);
         onChunk(JSON.stringify({ choices: [{ delta: { content: event.payload.text } }] }));
         return;
@@ -625,6 +629,36 @@ export async function runBackendTurn(backend, sessionId, { text, model, images }
       // The send answered, or the feed already proved the backend was working:
       // either is evidence of acceptance, and neither is assumed at send time.
       accept();
+
+      // The send and the feed race. OpenCode's POST can answer while the bus
+      // still holds the reply's last parts, and the abort in the finally below
+      // then cut them off -- once the whole answer went missing although
+      // OpenCode had stored it (a tool call or an echoed prompt had already
+      // counted as content, so the back-fill below never ran). A finished turn
+      // must not wait on its feed, so instead: when the send's own answer
+      // extends what the feed delivered, send the missing tail now, exactly
+      // once -- the feed is stopped right after, with no await in between, so
+      // its late copy of the same text can never land on top.
+      const finalText = typeof result?.text === 'string' ? result.text : '';
+      // Only OpenCode's send result is a second copy of the same answer. Its
+      // POST returns the stored text while the bus is still catching up, and
+      // the abort below then drops those late frames. Another backend's send
+      // text is not that copy: appending it would put words the feed never
+      // produced into the durable turn.
+      const reconcileOpenCode = backend.kind === 'opencode' && subscription;
+      if (reconcileOpenCode && streamedText && finalText.length > streamedText.length
+        && finalText.startsWith(streamedText)) {
+        const missing = finalText.slice(streamedText.length);
+        streamedText = finalText;
+        onDelta(missing);
+        onChunk(JSON.stringify({ choices: [{ delta: { content: missing } }] }));
+      } else if (reconcileOpenCode && !streamedText && sawContent && finalText.trim()) {
+        // Tools streamed but none of the answer did: the answer is still owed.
+        streamedText = finalText;
+        onDelta(finalText);
+        onChunk(JSON.stringify({ choices: [{ delta: { content: finalText } }] }));
+      }
+
       const hasContent = sawContent
         || Boolean(result?.text && result.text.trim())
         || Boolean(result?.message?.tool_calls?.length);

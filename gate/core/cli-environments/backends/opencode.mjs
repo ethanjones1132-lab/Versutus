@@ -987,6 +987,7 @@ export function createOpenCodeBackend({
                 if (info && typeof info === 'object') {
                   if (info.id && info.id !== messageId) return;
                   if (info.sessionID && info.sessionID !== sessionId) return;
+                  if (typeof info.role === 'string') messageRoles.set(messageId, info.role);
                 }
                 // The message route carries the role beside the parts, so this
                 // lookup answers the role question as well as the type one.
@@ -1156,7 +1157,8 @@ export function createOpenCodeBackend({
               }
               // Only the assistant's own text is the answer; the operator's
               // prompt is a `text` part of a `role:'user'` message on this same
-              // session.
+              // session. Dropping it here is what stops the prompt echoing in
+              // front of the reply.
               if (publishesText(parsed) && holdForRole(parsed)) continue;
               // A streamed part's deltas name it only by id; its type arrives
               // on a separate `message.part.updated`. Hold undecided text

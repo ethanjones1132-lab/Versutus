@@ -7,13 +7,14 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PairingStore } from './core/pairing.mjs';
 import { DeviceTokenStore } from './core/device-tokens.mjs';
-import { validateId, buildInstanceConfigTemplate, getKindTemplate, describeStartFailure, resolveStartPort, startFailureExitCode } from './core/cli-helpers.mjs';
+import { validateId, buildInstanceConfigTemplate, getKindTemplate, describeStartFailure, resolveStartPort, resolveStartHost, isLoopbackHost, startFailureExitCode } from './core/cli-helpers.mjs';
 import { resolveGateHome } from './core/paths.mjs';
 import { ProviderStore } from './core/providers/store.mjs';
 import { migrateLegacyProviders } from './core/providers/migrate-v1.mjs';
 import { CliEnvironmentStore } from './core/cli-environments/store.mjs';
 import { CliAdapterRegistry } from './core/cli-environments/adapter-registry.mjs';
 import { TASK_NAME, buildTaskDefinition, writeTaskFile } from './core/service/windows-task.mjs';
+import { runLaunchdService, serviceBackendFor, unsupportedServiceMessage } from './core/service/launchd-agent.mjs';
 import { acquireInstanceLock } from './core/service/instance-lock.mjs';
 import { RotatingLog } from './core/service/rotating-log.mjs';
 import { Supervisor } from './core/service/supervisor.mjs';
@@ -21,6 +22,7 @@ import { installProcessGuards } from './core/process-guards.mjs';
 import { doctor } from './core/service/doctor.mjs';
 import { diagnoseBotGroupStore, diagnoseEnvironmentRecords, probeLocalGate } from './core/service/diagnostics.mjs';
 import { CredentialVault } from './core/credentials/vault.mjs';
+import { checkCredentialBackend } from './core/credentials/platform-backend.mjs';
 import { installVoice, uvRunner, voiceDoctor, voicePaths, voiceStatus } from './core/voice/runtime.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -350,6 +352,12 @@ async function handleStart(args = []) {
     process.exit(1);
   }
   const port = portResolution.port;
+  const hostResolution = resolveStartHost(args);
+  if (hostResolution.error) {
+    console.error(`Error: ${hostResolution.error}`);
+    process.exit(1);
+  }
+  const host = hostResolution.host;
 
   // Preflight: gate/package.json declares no dependencies of its own, so `ws`
   // (the voice media socket) resolves out of the repo root's node_modules, and
@@ -410,12 +418,16 @@ async function handleStart(args = []) {
     gate = await createGate({
       root: __dirname,
       port,
+      host,
       name: gateName,
       gateHome,
     });
 
     console.log(`Token: ${gate.token}`);
-    console.log(`Listening on port ${gate.port}`);
+    console.log(`Listening on ${host.includes(':') ? `[${host}]` : host}:${gate.port}`);
+    if (isLoopbackHost(host)) {
+      console.log('  loopback only: expose it with Tailscale Serve, or set VERSUTUS_GATE_HOST=0.0.0.0 (or --host) to accept tailnet/LAN connections directly');
+    }
     console.log(`Manifest: http://127.0.0.1:${gate.port}/.well-known/gateway.json`);
 
     // Handle graceful shutdown. Capped like the supervised path: an SSE
@@ -503,6 +515,20 @@ async function handlePair(args) {
 
 async function handleService(args) {
   const sub = args[0];
+  // macOS: a per-user LaunchAgent, launchd being the supervisor. The
+  // Windows Scheduled Task path below is untouched.
+  const backend = serviceBackendFor(process.platform);
+  if (backend === 'launchd') {
+    process.exitCode = await runLaunchdService(sub, args.slice(1), {
+      codeRoot: join(__dirname, '..'),
+      probe: (url) => probeLocalGate(url),
+    });
+    return;
+  }
+  if (backend !== 'windows-task') {
+    console.error(unsupportedServiceMessage(process.platform));
+    process.exit(1);
+  }
   if (sub === 'install') return serviceInstall();
   if (sub === 'run') return serviceRun();
   if (sub === 'stop') return serviceStop();
@@ -779,23 +805,26 @@ async function handleDoctor(args = []) {
     process.exit(1);
   }
   const listen = `http://127.0.0.1:${portResolution.port}`;
+  const vault = new CredentialVault({ gateHome });
   const [environmentFindings, storeFindings, serverProbe] = await Promise.all([
-    diagnoseEnvironmentRecords(join(gateHome, 'config', 'environments'), {
-      vault: new CredentialVault({ gateHome }),
-    }),
+    diagnoseEnvironmentRecords(join(gateHome, 'config', 'environments'), { vault }),
     diagnoseBotGroupStore(gateHome),
     probeLocalGate(`${listen}/.well-known/gateway.json`),
   ]);
   const findings = [...environmentFindings, ...storeFindings];
+  const vaultCheck = await checkCredentialBackend(vault.backend);
   console.log(doctor({
     user,
     gateHome,
     listen,
+    vaultCheck,
     serverProbe,
     environmentFindings: findings,
   }));
   // Scriptable verdict: a health check that always exits 0 cannot gate a demo.
-  if (findings.some((finding) => finding.severity === 'error')) {
+  // A vault that cannot seal or open credentials is the same kind of failure:
+  // every provider key and Hermes API key binding silently stops resolving.
+  if (!vaultCheck.ok || findings.some((finding) => finding.severity === 'error')) {
     process.exitCode = 1;
   }
 }
@@ -860,7 +889,7 @@ async function main() {
     console.log('    Delete a CLI environment record from Gate home — also the recovery');
     console.log('    path when a record is too corrupt to read; no Gate restart needed');
     console.log('');
-    console.log('  start [--allow-origin <origin>[,<origin>...]] [--port <n>]');
+    console.log('  start [--allow-origin <origin>[,<origin>...]] [--port <n>] [--host <ip>]');
     console.log('    Start the Gate HTTP server (default port 8760; --port or');
     console.log('    VERSUTUS_GATE_PORT names another, e.g. a demo Gate beside a');
     console.log('    running production one). A second instance also needs its own');
@@ -869,6 +898,8 @@ async function main() {
     console.log('    home cannot run at the same time.');
     console.log('    --allow-origin names browser origins (web demo target) that may');
     console.log('    call this Gate cross-origin; off by default');
+    console.log('    --host names the bind address (default 127.0.0.1, for Tailscale');
+    console.log('    Serve; 0.0.0.0 listens on every interface)');
     console.log('');
     console.log('  pair <open|approve|revoke|list>');
     console.log('    Manage device pairing and access tokens');
@@ -882,6 +913,13 @@ async function main() {
     console.log('    (hidden, logon + every-5-minute triggers). install registers');
     console.log('    and starts it; run is the supervisor the task launches;');
     console.log('    status exits 1 unless the Gate answers.');
+    console.log('    macOS: a per-user LaunchAgent (com.versutus.gate in');
+    console.log('    ~/Library/LaunchAgents; launchd restarts it, no `run`).');
+    console.log('    install [--host <ip>] [--port <n>] [--dry-run] writes and loads');
+    console.log('    it (reloads one already loaded); --host/VERSUTUS_GATE_HOST is');
+    console.log('    passed through so --host 0.0.0.0 keeps tailnet/phone access.');
+    console.log('    --dry-run prints the plist and launchctl commands only;');
+    console.log('    --node <path> picks the node binary (default: the one running).');
     console.log('');
     console.log('  doctor');
     console.log('    Inspect the Gate machine: local listener and every CLI');
@@ -903,6 +941,12 @@ async function main() {
     console.log('    refuses to start beside a running one.');
     console.log('  VERSUTUS_GATE_PORT - Listen port for start/doctor (default 8760;');
     console.log('    a --port flag wins over this)');
+    console.log('  VERSUTUS_GATE_HOST - Bind address for start (default 127.0.0.1;');
+    console.log('    0.0.0.0 accepts tailnet/LAN connections; a --host flag wins)');
+    console.log('  VERSUTUS_GATE_DEFAULT_BACKEND - Backend id a chat or voice call');
+    console.log('    without a backendId uses when it is ready (else the first ready one)');
+    console.log('  VERSUTUS_GATE_VAULT - Credential store: dpapi, keychain or file');
+    console.log('    (default: dpapi on Windows, keychain on macOS, file elsewhere)');
     console.log('  VERSUTUS_GATE_ALLOW_ORIGIN - Browser origins allowed to call this');
     console.log('    Gate cross-origin (web demo target), comma-separated');
     console.log('');

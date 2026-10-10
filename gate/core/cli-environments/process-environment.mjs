@@ -17,12 +17,20 @@ const ALLOWED = new Set([
   'PROCESSOR_ARCHITECTURE',
 ]);
 
+// On macOS and Linux a child also needs its user identity and scratch space:
+// without HOME a CLI cannot find its own config (~/.config, ~/.hermes), and
+// without TMPDIR macOS tools fall back to a shared /tmp. The Windows list above
+// is untouched; these are added only off Windows.
+const ALLOWED_POSIX = new Set(['HOME', 'USER', 'LOGNAME', 'TMPDIR', 'SHELL', 'LANG', 'PATH']);
+
 const BLOCKED = /(?:API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION)$/i;
 
-export function buildCliEnvironment(parentEnvironment = {}, request) {
+export function buildCliEnvironment(parentEnvironment = {}, request, { platform = process.platform } = {}) {
   const child = Object.create(null);
+  const posix = platform !== 'win32';
   for (const [key, value] of Object.entries(parentEnvironment)) {
-    if (!ALLOWED.has(key) || BLOCKED.test(key)) continue;
+    const allowed = ALLOWED.has(key) || (posix && ALLOWED_POSIX.has(key));
+    if (!allowed || BLOCKED.test(key)) continue;
     child[key] = value;
   }
 

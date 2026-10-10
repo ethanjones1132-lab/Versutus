@@ -2,7 +2,7 @@ import { mkdir, readFile, rm, stat, access } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { writeFileAtomic } from '../atomic-file.mjs';
-import { createWindowsDpapi } from './windows-dpapi.mjs';
+import { createPlatformCredentialBackend } from './platform-backend.mjs';
 
 // Caching a decrypted credential is safe here: the provider adapters already
 // materialise the plaintext in the heap for the life of a request, so a short
@@ -16,7 +16,9 @@ export class CredentialVault {
     if (!gateHome) throw new Error('gateHome is required');
     this.gateHome = gateHome;
     this.dir = join(gateHome, 'credentials');
-    this.backend = backend ?? createWindowsDpapi();
+    // DPAPI on Windows (unchanged), the Keychain-held key on macOS, a 0600 key
+    // file elsewhere -- see platform-backend.mjs.
+    this.backend = backend ?? createPlatformCredentialBackend({ gateHome });
     this.cacheTtlMs = cacheTtlMs;
     this.writeQueue = Promise.resolve();
     this.cache = new Map();
@@ -34,7 +36,9 @@ export class CredentialVault {
   }
 
   fileFor(ref) {
-    return join(this.dir, `${String(ref).replaceAll('/', '-')}.dpapi`);
+    // `.dpapi` stays the Windows name, so existing Windows vaults are untouched.
+    const extension = this.backend?.fileExtension ?? 'dpapi';
+    return join(this.dir, `${String(ref).replaceAll('/', '-')}.${extension}`);
   }
 
   invalidate(ref) {
@@ -49,8 +53,12 @@ export class CredentialVault {
   async set(ref, value) {
     return this.serialize(async () => {
       const protectedValue = await this.backend.protect(Buffer.from(String(value), 'utf8'));
-      await mkdir(this.dir, { recursive: true });
-      await writeFileAtomic(this.fileFor(ref), protectedValue);
+      await mkdir(this.dir, { recursive: true, ...(this.backend?.dirMode ? { mode: this.backend.dirMode } : {}) });
+      await writeFileAtomic(
+        this.fileFor(ref),
+        protectedValue,
+        this.backend?.fileMode ? { mode: this.backend.fileMode } : undefined,
+      );
       this.invalidate(ref);
     });
   }

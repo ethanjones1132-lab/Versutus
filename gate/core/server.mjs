@@ -52,7 +52,7 @@ import { resolveVoiceBackend, startVoiceBackendLease } from './voice/voice-backe
 import { ScriptedEngine, scriptedEngineEnabled } from './voice/engines/scripted-engine.mjs';
 import { verifySignedAccessRequest, ReplayCache } from './signature.mjs';
 import { describeAuthFailure } from './auth-failure.mjs';
-import { unresolvedBackendResponse } from './backend-resolution.mjs';
+import { selectDefaultBackend, unresolvedBackendResponse } from './backend-resolution.mjs';
 import {
   createBackendModelRouter,
   CATALOGUE_TTL_MS,
@@ -1208,6 +1208,7 @@ export async function resolveVoiceTurnBackend(backendManager, thread, {
   attempt,
   lease = null,
   onStage = () => {},
+  selection,
 } = {}) {
   const startedAt = Date.now();
   const meta = attempt === undefined ? {} : { attempt };
@@ -1223,7 +1224,7 @@ export async function resolveVoiceTurnBackend(backendManager, thread, {
   let backend;
   try {
     backend = await raceVoiceAbort(
-      lease ? lease.backend() : resolveVoiceBackend(backendManager, thread),
+      lease ? lease.backend() : resolveVoiceBackend(backendManager, thread, { selection }),
       signal,
     );
   } catch (error) {
@@ -1244,8 +1245,13 @@ export async function resolveVoiceTurnBackend(backendManager, thread, {
   return { backend, descriptor, aborted: false };
 }
 
-/** Resolve then run one voice turn, forwarding the backend descriptor. */
-export async function runVoiceTurn(backendManager, session, text, handlers = {}) {
+/**
+ * Resolve then run one voice turn, forwarding the backend descriptor.
+ * `selection` is the Gate's readiness view (state, probe, configured default);
+ * with it an unscoped thread picks its backend the way a typed request with no
+ * backendId does.
+ */
+export async function runVoiceTurn(backendManager, session, text, handlers = {}, { selection } = {}) {
   const resolved = await resolveVoiceTurnBackend(backendManager, session?.thread, {
     signal: handlers?.signal,
     attempt: handlers?.attempt,
@@ -1253,6 +1259,7 @@ export async function runVoiceTurn(backendManager, session, text, handlers = {})
     // per turn as it always has.
     lease: session?.backendLease ?? null,
     onStage: handlers?.onStage,
+    selection,
   });
   if (resolved.aborted) return VOICE_TURN_ABORTED;
   return runBackendTurn(resolved.backend, session?.thread?.sessionId, { text }, {
@@ -1308,6 +1315,12 @@ export async function createGate(config = {}) {
   const {
     root,
     port = 0,
+    // Loopback unless the caller says otherwise (design spec: 127.0.0.1
+    // behind Tailscale Serve; every interface only by explicit choice).
+    host = '127.0.0.1',
+    // Which environment answers a request that names no backendId, when it
+    // is usable; otherwise the first ready one does.
+    defaultBackendId = process.env.VERSUTUS_GATE_DEFAULT_BACKEND || undefined,
     name = 'Versutus Gate',
     version,
     gateHome = process.env.VERSUTUS_GATE_HOME || join(root, '.gate-home'),
@@ -1481,6 +1494,15 @@ export async function createGate(config = {}) {
       }),
     createServer: backendServerFactory,
   });
+
+  // How a request or a spoken turn that names no backend picks one: the
+  // configured default if usable, else the first ready environment. Shared by
+  // the REST routes' `resolveBackend` and the voice path's `runVoiceTurn`.
+  const defaultBackendSelection = {
+    stateOf: (environmentId) => environmentService.environmentState.get(environmentId)?.state,
+    probe: async (environmentId) => (await environmentService.check(environmentId)).state,
+    defaultId: defaultBackendId,
+  };
 
   /**
    * Whether an environment's backend could serve `method`, answered without
@@ -1720,7 +1742,9 @@ export async function createGate(config = {}) {
     // One resolve per call: the backend that will answer is chosen when the
     // phone asks for the session, not when it first speaks, and every turn of
     // the call takes that one answer.
-    prepareCallBackend: ({ thread }) => startVoiceBackendLease(backendManager, thread),
+    prepareCallBackend: ({ thread }) => startVoiceBackendLease(backendManager, thread, {
+      selection: defaultBackendSelection,
+    }),
   });
 
   /**
@@ -1803,7 +1827,27 @@ export async function createGate(config = {}) {
         return { backend: await forBotOrThrow(await backendManager.get(owner.id), botId), environmentId: owner.id };
       }
     }
-    const environmentId = backendId ?? (await backendManager.list())[0]?.id;
+    let environmentId = backendId;
+    if (!environmentId && !botId) {
+      // An unscoped read names no environment. The first attached one is wrong:
+      // on a Mac that was a Hermes that could not start, while a ready OpenCode
+      // sat beside it. The configured default wins when it is usable; otherwise
+      // the first ready environment does.
+      const picked = await selectDefaultBackend({
+        entries: await backendManager.list(),
+        ...defaultBackendSelection,
+      });
+      if (!picked.id) {
+        const failure = picked.body?.error ?? {};
+        throw namedRefusal(
+          failure.message ?? 'No chat backend is attached to this Gate',
+          failure.code ?? 'no_backend',
+          picked.status ?? 404,
+        );
+      }
+      environmentId = picked.id;
+    }
+    environmentId = environmentId ?? (await backendManager.list())[0]?.id;
     if (!environmentId) {
       throw namedRefusal('No chat backend is attached to this Gate', 'no_backend', 404);
     }
@@ -2458,11 +2502,20 @@ export async function createGate(config = {}) {
 
       /** Resolve the backend for a request, or answer 404 and return null. */
       async function resolveBackend(backendId) {
-        const id = backendId ?? (await backendManager.list())[0]?.id;
+        let id = backendId;
         if (!id) {
-          res.writeHead(404, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: { message: 'No chat backend is attached to this Gate', code: 'no_backend' } }));
-          return null;
+          // Not simply the first registered environment: a configured default
+          // if usable, else the first ready one, else a 503 naming each state.
+          const picked = await selectDefaultBackend({
+            entries: await backendManager.list(),
+            ...defaultBackendSelection,
+          });
+          if (!picked.id) {
+            res.writeHead(picked.status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(picked.body));
+            return null;
+          }
+          id = picked.id;
         }
         try {
           return await backendManager.get(id);
@@ -2495,8 +2548,8 @@ export async function createGate(config = {}) {
       /**
        * Resolve a backend that can actually serve `method`.
        *
-       * `resolveBackend` returns the *first* attached backend, which is right
-       * when any of them can serve the route. It is wrong for the fronted
+       * `resolveBackend` picks the configured default when it is usable, else
+       * the first ready environment. It is wrong for the fronted
        * Hermes surfaces: a Gate with claude/codex/hermes/opencode attached
        * would answer /v1/skills from claude-local and 501, while hermes-local
        * sat there able to serve it. An explicit ?backendId= still wins, so a
@@ -4478,7 +4531,9 @@ export async function createGate(config = {}) {
         ? new LocalEngine({ paths: voicePaths(), pool: voiceWorkerPool, log: (line) => console.log(line) })
         : new ScriptedEngine()
     ),
-    runTurn: (session, text, handlers) => runVoiceTurn(backendManager, session, text, handlers),
+    runTurn: (session, text, handlers) => runVoiceTurn(backendManager, session, text, handlers, {
+      selection: defaultBackendSelection,
+    }),
     // A turn whose phone went away runs to the end and its reply is pushed, the
     // same notice a completed chat turn gets: the words are already in the
     // thread, and this is how they reach a phone that is not on the call.
@@ -4499,9 +4554,10 @@ export async function createGate(config = {}) {
     // is exposed rather than left to be taken on trust.
     httpServer: server,
     port,
+    host,
     async listen() {
       return new Promise((resolve, reject) => {
-        server.listen(port, () => {
+        server.listen(port, host, () => {
           const actualPort = server.address().port;
           gateObj.port = actualPort;
           resolve(actualPort);

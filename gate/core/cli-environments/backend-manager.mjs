@@ -24,6 +24,11 @@ export function createBackendManager({
   environmentState,
   buildEnvironment,
   onDiagnostic,
+  // Where a credential binding that did not resolve is reported. It used to be
+  // swallowed: on a Mac with no working vault the Hermes API_SERVER_KEY was
+  // silently left out, Hermes attached anyway, and every call not tied to a bot
+  // answered 401 with nothing in any log saying why.
+  onCredentialIssue = (message) => console.warn(`[gate] ${message}`),
   // Left undefined so the transport picks the supervisor; an injected factory
   // (tests) overrides both.
   createServer,
@@ -257,8 +262,26 @@ export function createBackendManager({
     const credentials = {};
     for (const [envName, ref] of Object.entries(record.credentialBindings ?? {})) {
       if (!vault) break;
-      const value = await vault.get(ref).catch(() => undefined);
-      if (typeof value === 'string' && value) credentials[envName] = value;
+      let value;
+      let cause = 'no value stored for that reference';
+      try {
+        value = await vault.get(ref);
+      } catch (error) {
+        cause = `vault read failed (${error?.code ?? 'error'}: ${error?.message ?? error})`;
+      }
+      if (typeof value === 'string' && value) {
+        credentials[envName] = value;
+        continue;
+      }
+      // Still not fatal (an optional binding must not take a backend down), but
+      // never silent: name the variable and reference, never a value.
+      const message = `environment "${record.id}": credential binding ${envName} -> "${ref}" did not resolve: ${cause}`;
+      try {
+        onCredentialIssue(message, { environmentId: record.id, envName, ref });
+      } catch {
+        // a reporting hook must not break credential resolution
+      }
+      onDiagnostic?.({ environmentId: record.id, message });
     }
     return credentials;
   }

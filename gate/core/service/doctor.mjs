@@ -2,7 +2,10 @@ export function doctor({
   user,
   gateHome,
   listen,
-  dpapi = true,
+  // The result of checkCredentialBackend(): { backend, ok, detail }. This
+  // line used to be a hard-coded `dpapi: usable`, true on no platform but
+  // the one it was written on; it now reports what a real check found.
+  vaultCheck,
   serverProbe,
   environmentFindings,
 } = {}) {
@@ -15,8 +18,10 @@ export function doctor({
     `user: ${user}`,
     `gateHome: ${gateHome}`,
     `listen: ${listen}`,
-    `dpapi: ${dpapi ? 'usable' : 'unavailable'}`,
   ];
+  lines.push(vaultCheck
+    ? `credentials: ${vaultCheck.backend} ${vaultCheck.ok ? 'usable' : 'UNAVAILABLE'}${vaultCheck.detail ? ` (${vaultCheck.detail})` : ''}`
+    : 'credentials: not checked');
 
   if (serverProbe) {
     lines.push(

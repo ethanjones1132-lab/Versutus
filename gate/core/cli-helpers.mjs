@@ -1,3 +1,5 @@
+import { isIP } from 'node:net';
+
 /** Validate a kind id or instance id (lowercase alphanumeric + hyphens). Both use
  *  the same rule — instance ids are filenames, kind ids are directory names,
  *  and gate/registry/ is a flat namespace either way. */
@@ -90,6 +92,41 @@ export function resolveStartPort(args = [], env = process.env) {
     return { error: '--port expects an integer between 1 and 65535' };
   }
   return { port };
+}
+
+export const DEFAULT_GATE_HOST = '127.0.0.1';
+
+/**
+ * Which address `start` binds: `--host` wins over VERSUTUS_GATE_HOST, default
+ * 127.0.0.1. The design spec (2026-08-10, "Gate binds 127.0.0.1 by default and
+ * is exposed via Tailscale Serve ... Binding 0.0.0.0 requires an explicit
+ * flag") is the contract; listening on every interface used to be the
+ * accidental default. An IP literal or `localhost` only -- a hostname would
+ * bind whatever it happens to resolve to.
+ */
+export function resolveStartHost(args = [], env = process.env) {
+  const flagIndex = args.indexOf('--host');
+  let raw;
+  if (flagIndex !== -1) {
+    const next = args[flagIndex + 1];
+    if (next === undefined || next.startsWith('--')) {
+      return { error: '--host expects an IP address (e.g. 127.0.0.1, or 0.0.0.0 for every interface)' };
+    }
+    raw = String(next).trim();
+  } else {
+    raw = typeof env.VERSUTUS_GATE_HOST === 'string' ? env.VERSUTUS_GATE_HOST.trim() : '';
+  }
+  if (!raw) return { host: DEFAULT_GATE_HOST };
+  const unbracketed = raw.replace(/^\[(.*)\]$/, '$1');
+  if (unbracketed !== 'localhost' && isIP(unbracketed) === 0) {
+    return { error: `--host expects an IP address or localhost (got "${raw}")` };
+  }
+  return { host: unbracketed };
+}
+
+/** Whether a bind address only accepts connections from this machine. */
+export function isLoopbackHost(host) {
+  return host === 'localhost' || host === '::1' || /^127\./.test(String(host));
 }
 
 /** Source text for a newly-scaffolded kind.mjs — the required fields

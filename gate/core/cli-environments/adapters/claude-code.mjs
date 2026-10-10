@@ -47,7 +47,11 @@ export const claudeCodeAdapter = {
       min: '2.1.0',
       maxExclusiveMajor: 3,
       protocol: 'jsonl',
-      handshakeArgs: ['--output-format', 'stream-json', '--probe'],
+      // `--probe` is not a Claude Code flag; the old handshake only "passed"
+      // because exit codes were ignored. `--help` exits 0 and lists the
+      // stream-json output format the backend relies on.
+      handshakeArgs: ['--help'],
+      handshakeExpect: /stream-json/,
     });
   },
   /**

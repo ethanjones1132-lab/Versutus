@@ -50,7 +50,11 @@ export const codexAdapter = {
       min: '0.142.0',
       maxExclusiveMajor: 1,
       protocol: 'jsonl',
-      handshakeArgs: ['exec', '--json', '--probe'],
+      // `--probe` is not a Codex flag (clap rejects it with exit 2); the old
+      // handshake only "passed" because exit codes were ignored. `exec --help`
+      // exits 0 and lists the --json event stream the backend relies on.
+      handshakeArgs: ['exec', '--help'],
+      handshakeExpect: /--json/,
     });
   },
   /**
