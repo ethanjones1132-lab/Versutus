@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { createNativeServer } from '../core/cli-environments/native-server.mjs';
 import { hermesAdapter, hermesServerEnvironment } from '../core/cli-environments/adapters/hermes.mjs';
@@ -31,6 +34,15 @@ test('a spawned Hermes server gets `gateway run` and its port, host and key from
   const ambient = process.env.HERMES_HOME;
   delete process.env.HERMES_HOME;
   t.after(() => { if (ambient !== undefined) process.env.HERMES_HOME = ambient; });
+  // So does the ~/.hermes fallback (os.homedir() follows HOME): on a machine
+  // whose real ~/.hermes has profiles/ that home wins, as designed, over the
+  // record's profile-less one. Point HOME somewhere with no Hermes at all.
+  const ambientHome = process.env.HOME;
+  process.env.HOME = await mkdtemp(join(tmpdir(), 'hermes-spawn-home-'));
+  t.after(async () => {
+    await rm(process.env.HOME, { recursive: true, force: true });
+    process.env.HOME = ambientHome;
+  });
   const spawns = [];
   const up = new Set();
   const server = createNativeServer({
