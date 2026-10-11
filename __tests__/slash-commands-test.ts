@@ -720,6 +720,53 @@ describe('/workflow runs stored step sequences', () => {
   });
 });
 
+describe('/workflow names may hold spaces', () => {
+  const workflows = [
+    { id: 'w1', name: 'Morning', steps: [{ id: 'm1', prompt: 'Morning {{input}}' }] },
+    { id: 'w2', name: 'Morning Brief', steps: [{ id: 'b1', prompt: 'Brief {{input}}' }] },
+  ];
+
+  const run = async (input: string, runTask: jest.Mock) =>
+    executeGatewaySlashCommand(input, {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      runTask,
+    });
+
+  test('the longest stored name the text opens with runs, with the rest as its input', async () => {
+    const runTask = jest.fn().mockResolvedValue({ runId: 'r', status: 'succeeded', result: 'ok' });
+    await run('/workflow Morning Brief hello', runTask);
+    expect(runTask.mock.calls.map((call) => call[0])).toEqual(['Brief hello']);
+  });
+
+  test('a shorter name still runs when the text does not open with the longer one', async () => {
+    const runTask = jest.fn().mockResolvedValue({ runId: 'r', status: 'succeeded', result: 'ok' });
+    await run('/workflow morning x', runTask);
+    expect(runTask.mock.calls.map((call) => call[0])).toEqual(['Morning x']);
+  });
+
+  test('a multi-word name matches case-insensitively and runs with no input', async () => {
+    const runTask = jest.fn().mockResolvedValue({ runId: 'r', status: 'succeeded', result: 'ok' });
+    await run('/workflow morning BRIEF', runTask);
+    expect(runTask.mock.calls.map((call) => call[0])).toEqual(['Brief {{input}}']);
+  });
+
+  test('a multi-word name that matches nothing still names the first token as unknown', async () => {
+    const runTask = jest.fn();
+    const result = await executeGatewaySlashCommand('/workflow Evening Brief', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows: [workflows[1]],
+      runTask,
+    });
+    expect(runTask).not.toHaveBeenCalled();
+    expect(result.text).toContain('Unknown workflow: Evening');
+  });
+});
+
 describe('the palette completes stored workflow names', () => {
   test('each stored workflow is a `/workflow <name>` row', () => {
     const rows = getSlashCommandSuggestions(

@@ -180,13 +180,13 @@ describe('/device, /talk, /voicewake and /logs read honesty', () => {
       ),
     );
     await expect(
-      executeGatewaySlashCommand('/device revoke', {
+      executeGatewaySlashCommand('/device revoke dev-1', {
         hello: null,
         gatewayRequest,
         runAgentCommand: jest.fn(),
       }),
     ).rejects.toThrow(/no device registry REST/);
-    expect(gatewayRequest).toHaveBeenCalledWith('device.revoke', {});
+    expect(gatewayRequest).toHaveBeenCalledWith('device.revoke', { deviceId: 'dev-1' });
     expect(gatewayRequest).not.toHaveBeenCalledWith('device.info', expect.anything());
   });
 });

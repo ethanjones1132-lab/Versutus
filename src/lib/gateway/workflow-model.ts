@@ -105,6 +105,32 @@ export function findWorkflow(workflows: Workflow[], name: string): Workflow | un
   return workflows.find((workflow) => workflow.name.toLowerCase() === needle);
 }
 
+/**
+ * The workflow a `/workflow` argument opens with, and the text after its name.
+ * A name may hold spaces ("Morning Brief"), so the longest stored name the text
+ * starts with wins, compared the way findWorkflow does and ending on a
+ * whitespace boundary. Undefined when no stored name is the start of the text.
+ */
+export function findWorkflowInvocation(
+  workflows: Workflow[],
+  text: string,
+): { workflow: Workflow; rest: string } | undefined {
+  const trimmed = text.trim();
+  let best: Workflow | undefined;
+  let bestLength = 0;
+  for (const workflow of workflows) {
+    const name = workflow.name.trim();
+    if (!name || name.length <= bestLength) continue;
+    if (trimmed.slice(0, name.length).toLowerCase() !== name.toLowerCase()) continue;
+    const next = trimmed.charAt(name.length);
+    if (next && !/\s/.test(next)) continue;
+    best = workflow;
+    bestLength = name.length;
+  }
+  if (!best) return undefined;
+  return { workflow: best, rest: trimmed.slice(bestLength).trim() };
+}
+
 /** Replace every `{{input}}` with the command's argument; no input keeps it. */
 export function applyWorkflowInput(prompt: string, input: string): string {
   const value = input.trim();

@@ -11,14 +11,14 @@ import { findConfirmableSlash } from '@/lib/gateway/command-match';
  * surface instead of a "Device info" read.
  */
 describe('/device revoke forwards to the registered device-revoke entry', () => {
-  test('reaches device.revoke and never calls device.info', async () => {
+  test('reaches device.revoke with the typed id and never calls device.info', async () => {
     const gatewayRequest = jest.fn().mockResolvedValue({ ok: true });
-    const result = await executeGatewaySlashCommand('/device revoke', {
+    const result = await executeGatewaySlashCommand('/device revoke dev-1', {
       hello: null,
       gatewayRequest,
       runAgentCommand: jest.fn(),
     });
-    expect(gatewayRequest).toHaveBeenCalledWith('device.revoke', {});
+    expect(gatewayRequest).toHaveBeenCalledWith('device.revoke', { deviceId: 'dev-1' });
     expect(gatewayRequest).not.toHaveBeenCalledWith('device.info', expect.anything());
     expect(gatewayRequest).not.toHaveBeenCalledWith('device.repair', expect.anything());
     expect(result.text).toContain('Revoke device: complete');
@@ -32,14 +32,67 @@ describe('/device revoke forwards to the registered device-revoke entry', () => 
       ),
     );
     await expect(
-      executeGatewaySlashCommand('/device revoke', {
+      executeGatewaySlashCommand('/device revoke dev-1', {
         hello: null,
         gatewayRequest,
         runAgentCommand: jest.fn(),
       }),
     ).rejects.toThrow(/no device registry REST/);
-    expect(gatewayRequest).toHaveBeenCalledWith('device.revoke', {});
+    expect(gatewayRequest).toHaveBeenCalledWith('device.revoke', { deviceId: 'dev-1' });
     expect(gatewayRequest).not.toHaveBeenCalledWith('device.info', expect.anything());
+  });
+
+  test('a bare /device revoke asks for the device id and calls nothing', async () => {
+    const gatewayRequest = jest.fn();
+    const result = await executeGatewaySlashCommand('/device revoke', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(result.text).toBe('Usage: /device revoke <device-id>');
+    expect(gatewayRequest).not.toHaveBeenCalled();
+  });
+
+  test('a snapshot blocking only the /device info entry does not block a served revoke', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ ok: true });
+    const result = await executeGatewaySlashCommand('/device revoke x', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      methods: {
+        device: { available: false, reason: 'not dispatched by this gateway' },
+        'device-revoke': { available: true },
+      },
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('device.revoke', { deviceId: 'x' });
+    expect(result.text).toContain('Revoke device: complete');
+  });
+
+  test('a snapshot blocking device-revoke blocks /device revoke even when /device info is served', async () => {
+    const gatewayRequest = jest.fn();
+    const result = await executeGatewaySlashCommand('/device revoke x', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      methods: {
+        device: { available: true },
+        'device-revoke': { available: false, reason: 'not dispatched by this gateway' },
+      },
+    });
+    expect(gatewayRequest).not.toHaveBeenCalled();
+    expect(result.text).toContain('Use /help to see what is.');
+  });
+
+  test('a snapshot blocking the /device info entry still blocks /device info', async () => {
+    const gatewayRequest = jest.fn();
+    const result = await executeGatewaySlashCommand('/device info', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      methods: { device: { available: false, reason: 'not dispatched by this gateway' } },
+    });
+    expect(gatewayRequest).not.toHaveBeenCalled();
+    expect(result.text).toContain('/device is not available on this gateway');
   });
 
   test('a bare /device keeps reading device info', async () => {

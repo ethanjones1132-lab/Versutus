@@ -28,6 +28,7 @@ import {
   createWorkflow,
   deleteWorkflow,
   findWorkflow,
+  findWorkflowInvocation,
   recordWorkflowRun,
   renameWorkflow,
   workflowSummaryCopy,
@@ -312,8 +313,7 @@ export function shouldPassthroughSkillSlash(input: string, skills: Skill[]): boo
  * does. Exact slash/alias match wins; otherwise the longest registered slash
  * that is a prefix of the value — so a recent `/device revoke` resolves to
  * the destructive device-revoke entry and never to the shorter `/device` info
- * read that precedes it (commandIdForInput's shortest-token-first quirk).
- * An unresolvable recent keeps its generic row.
+ * read that precedes it. An unresolvable recent keeps its generic row.
  */
 function resolveRecentRegistryCommand(value: string): GatewayCommand | undefined {
   const lower = value.trim().toLowerCase();
@@ -691,22 +691,26 @@ function findCommandBySlash(value: string): GatewayCommand | undefined {
 /**
  * Multiple slashes can map to the same registry id (e.g. `/session get` shares
  * `session-get` with nothing, but `/agents <id>` shares `agents` with `/agents`).
- * Look up the id of the longest slash that is a prefix of the input.
+ * Look up the id of the longest slash that equals the whole input or prefixes
+ * it. The judgement is on the full input: the bare `/device` info entry must
+ * not claim `/device revoke x` ahead of the `/device revoke` entry it prefixes.
  */
 function commandIdForInput(input: string, args: string[]): string | undefined {
-  const tokens = [input, ...(input ? [input + ' ' + args.join(' ')] : [])];
-  for (const tokensList of tokens) {
-    const lower = tokensList.toLowerCase().trim();
-    if (!lower) continue;
-    const command = GATEWAY_COMMANDS.find((c) => {
-      const slashes = [c.slash, ...(c.aliases ?? [])]
-        .filter(Boolean)
-        .map((s) => (s as string).toLowerCase());
-      return slashes.some((slash) => lower === slash || lower.startsWith(`${slash} `));
-    });
-    if (command) return command.id;
+  const full = [input, ...args].join(' ').trim().toLowerCase();
+  if (!full) return undefined;
+  let best: GatewayCommand | undefined;
+  let bestLength = -1;
+  for (const command of GATEWAY_COMMANDS) {
+    const slashes = [command.slash, ...(command.aliases ?? [])].filter((item): item is string => Boolean(item));
+    for (const slash of slashes) {
+      const candidate = slash.toLowerCase();
+      if ((full === candidate || full.startsWith(`${candidate} `)) && candidate.length > bestLength) {
+        best = command;
+        bestLength = candidate.length;
+      }
+    }
   }
-  return undefined;
+  return best?.id;
 }
 
 /**
@@ -874,11 +878,14 @@ async function runWorkflowCommand(
     return runWorkflowManagement(trimmed, workflows, context);
   }
 
-  const [name, ...rest] = trimmed.split(/\s+/);
-  const workflow = findWorkflow(workflows, name);
-  if (!workflow) {
+  // A stored name may hold spaces, so the run takes the longest name the text
+  // opens with; with none, the first token is named as unknown, as before.
+  const invocation = findWorkflowInvocation(workflows, trimmed);
+  if (!invocation) {
+    const [name] = trimmed.split(/\s+/);
     return textResult(`Unknown workflow: ${name}\n\nSend /workflow to list them.`, '/workflow');
   }
+  const { workflow, rest } = invocation;
   if (!context.runTask) {
     return textResult(
       'This gateway does not support agentic runs (the Hermes run API is required).',
@@ -886,7 +893,7 @@ async function runWorkflowCommand(
     );
   }
 
-  const input = rest.join(' ');
+  const input = rest.split(/\s+/).join(' ');
   const lines: string[] = [];
   let stopped = false;
   for (const step of workflow.steps) {
@@ -1640,8 +1647,12 @@ async function runApprovalsDevicesCommand(commandName: string, args: string[], c
       // Forward into the registry entry (dashboard.ts device-revoke, danger
       // destructive) so the confirmation sheet matched by findConfirmableSlash,
       // the snapshot block with guidance, and honest RPC failures all apply
-      // instead of the device.info read every other sub falls into.
-      return runRegistryCommand('device-revoke', context);
+      // instead of the device.info read every other sub falls into. The id is
+      // the same `{ deviceId }` the Paired devices pane sends; without one
+      // device.revoke would only answer "deviceId is required", so ask first.
+      const deviceId = args[1]?.trim();
+      if (!deviceId) return textResult('Usage: /device revoke <device-id>', '/device revoke');
+      return runRegistryCommand('device-revoke', context, { deviceId });
     }
     const result = await context.gatewayRequest('device.info', {}).catch(e => ({ error: String(e) }));
     if (!(isRecord(result) && typeof result.error === 'string')) {
