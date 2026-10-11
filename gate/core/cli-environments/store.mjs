@@ -2,6 +2,7 @@ import { mkdir, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { readJsonFile, writeFileAtomic } from '../atomic-file.mjs';
+import { assertRecordId, isValidRecordId } from '../record-id.mjs';
 import { validateCliEnvironmentRegistration } from './schema.mjs';
 
 const CORRUPT_RETRY_MS = 25;
@@ -77,6 +78,9 @@ export class CliEnvironmentStore {
   }
 
   async get(id) {
+    // Refused before the path is built: an id like `../x` names a file outside
+    // this directory, and a record there is not an environment.
+    if (!isValidRecordId(id)) return null;
     const result = await readRecord(join(this.dir, `${id}.json`));
     return result.state === 'ok' ? result.value : null;
   }
@@ -87,6 +91,7 @@ export class CliEnvironmentStore {
       if (!validation.ok) {
         throw new Error(validation.errors.map((error) => `${error.field}: ${error.message}`).join('; '));
       }
+      assertRecordId(record.id);
       await mkdir(this.dir, { recursive: true });
       // Temp-then-rename onto the live path: a kill can only orphan the temp
       // copy, and a concurrent read sees the old record or the new one — never
@@ -103,6 +108,7 @@ export class CliEnvironmentStore {
 
   async delete(id) {
     return this.serialize(async () => {
+      assertRecordId(id);
       await rm(join(this.dir, `${id}.json`), { force: true });
     });
   }

@@ -1,4 +1,4 @@
-import { chmod, mkdir } from 'node:fs/promises';
+import { chmod, mkdir, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { readJsonFile, writeFileAtomic } from './atomic-file.mjs';
@@ -41,16 +41,43 @@ export class PushTokenStore {
     return run;
   }
 
-  async #readAll() {
-    const first = await readJsonFile(this.path);
-    if (first.state === 'corrupt') {
+  // A file that exists but cannot be read comes back as `failure` with no rows.
+  // Whether that is an empty roster or an error depends on who is asking.
+  async #read() {
+    let result = await readJsonFile(this.path);
+    if (result.state === 'corrupt') {
       await new Promise((resolve) => setTimeout(resolve, CORRUPT_RETRY_MS));
-      const second = await readJsonFile(this.path);
-      if (second.state === 'ok') return isRecord(second.value) ? second.value : {};
-      return {};
+      result = await readJsonFile(this.path);
     }
-    if (first.state === 'missing') return {};
-    return isRecord(first.value) ? first.value : {};
+    if (result.state === 'missing') return { rows: {} };
+    if (result.state === 'corrupt') return { rows: {}, failure: result.error };
+    return { rows: isRecord(result.value) ? result.value : {} };
+  }
+
+  // Read-only callers answer an unreadable roster as empty and leave the file alone.
+  async #readAll() {
+    return (await this.#read()).rows;
+  }
+
+  // A mutation writes the whole roster back, so it must never write over a roster
+  // it could not read. A file that does not parse is damaged: it is moved aside
+  // (its rows stay recoverable) and the write starts from empty. Any other read
+  // failure stops the mutation, because the file may be perfectly good.
+  async #rosterForWrite() {
+    const { rows, failure } = await this.#read();
+    if (!failure) return rows;
+    if (!(failure instanceof SyntaxError)) throw failure;
+    await this.#quarantine(failure);
+    return {};
+  }
+
+  async #quarantine(error) {
+    const backup = `${this.path}.corrupt-${Date.now()}`;
+    await rename(this.path, backup);
+    console.error(
+      `Push token store ${this.path} is not readable JSON (${error.message}); `
+      + `it was moved to ${backup}. Proceeding from an empty roster.`,
+    );
   }
 
   async #writeAll(rows) {
@@ -67,7 +94,7 @@ export class PushTokenStore {
     if (!isRecord(patch)) throw new Error('patch must be an object');
 
     return this.#serialize(async () => {
-      const rows = await this.#readAll();
+      const rows = await this.#rosterForWrite();
       const existing = isRecord(rows[deviceId]) ? rows[deviceId] : {};
       const botIds = patch.botIds === undefined
         ? (Array.isArray(existing.botIds) ? existing.botIds : [])
@@ -111,7 +138,7 @@ export class PushTokenStore {
   async remove(deviceId) {
     if (!validDeviceId(deviceId)) return false;
     return this.#serialize(async () => {
-      const rows = await this.#readAll();
+      const rows = await this.#rosterForWrite();
       if (!(deviceId in rows)) return false;
       delete rows[deviceId];
       await this.#writeAll(rows);
@@ -122,7 +149,7 @@ export class PushTokenStore {
   async removeByToken(expoPushToken) {
     if (typeof expoPushToken !== 'string' || !expoPushToken) return false;
     return this.#serialize(async () => {
-      const rows = await this.#readAll();
+      const rows = await this.#rosterForWrite();
       const deviceId = Object.keys(rows).find((id) => rows[id]?.expoPushToken === expoPushToken);
       if (!deviceId) return false;
       delete rows[deviceId];

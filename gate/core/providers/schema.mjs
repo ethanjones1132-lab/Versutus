@@ -1,4 +1,5 @@
 import { releaseProfiles } from './profiles/registry.mjs';
+import { isValidRecordId, RECORD_ID_MESSAGE } from '../record-id.mjs';
 
 const SCHEMA_VERSION = 2;
 const KIND = 'provider';
@@ -106,7 +107,10 @@ export function validateProviderRegistration(value) {
   if (value.kind !== KIND) {
     err(errors, 'kind', `must be '${KIND}'`);
   }
-  requireString(value.id, 'id', errors);
+  // The id is the record's file name, so it is held to the path-safe rule too.
+  if (requireString(value.id, 'id', errors) && !isValidRecordId(value.id)) {
+    err(errors, 'id', RECORD_ID_MESSAGE);
+  }
   requireString(value.label, 'label', errors);
   if (requireString(value.providerType, 'providerType', errors)) {
     // A remote provider is reached through a shipped profile (origins, models

@@ -29,7 +29,11 @@ export function buildCliEnvironment(parentEnvironment = {}, request, { platform 
   const child = Object.create(null);
   const posix = platform !== 'win32';
   for (const [key, value] of Object.entries(parentEnvironment)) {
-    const allowed = ALLOWED.has(key) || (posix && ALLOWED_POSIX.has(key));
+    // Windows variable names are case-insensitive, and the OS hands them over
+    // as spelled (`Path`, `SystemRoot`), so they are matched on their upper-case
+    // form. The child keeps the name it was given. POSIX names are case-sensitive.
+    const name = posix ? key : key.toUpperCase();
+    const allowed = ALLOWED.has(name) || (posix && ALLOWED_POSIX.has(name));
     if (!allowed || BLOCKED.test(key)) continue;
     child[key] = value;
   }

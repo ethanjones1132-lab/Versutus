@@ -2,6 +2,7 @@ import { mkdir, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { readJsonFile, writeFileAtomic } from '../atomic-file.mjs';
+import { assertRecordId, isValidRecordId } from '../record-id.mjs';
 import { validateProviderRegistration } from './schema.mjs';
 
 const CORRUPT_RETRY_MS = 25;
@@ -103,6 +104,9 @@ export class ProviderStore {
   }
 
   async get(id) {
+    // Refused before either path is built: an id like `../x` names a file
+    // outside the provider directories.
+    if (!isValidRecordId(id)) return null;
     const registration = await readRecord(join(this.configDir, `${id}.json`));
     if (registration.state !== 'ok') return null;
     // The filename is the canonical id -- it is what `get` is addressed by, and
@@ -135,6 +139,7 @@ export class ProviderStore {
       if (!validation.ok) {
         throw new Error(validation.errors.map((error) => `${error.field}: ${error.message}`).join('; '));
       }
+      assertRecordId(config.id);
       await mkdir(this.configDir, { recursive: true });
       await mkdir(this.stateDir, { recursive: true });
       // Each file lands on its own: temp copy, then a rename onto the live
@@ -153,6 +158,7 @@ export class ProviderStore {
 
   async delete(id) {
     return this.serialize(async () => {
+      assertRecordId(id);
       await rm(join(this.configDir, `${id}.json`), { force: true });
       await rm(join(this.stateDir, `${id}.json`), { force: true });
       this.lastKnownState.delete(id);
