@@ -63,7 +63,12 @@ export function budgetsFromUnknown(value: unknown): BotBudgets {
  * clear, never a store of junk.
  */
 export function parseSpendCapInput(text: string): number | undefined {
-  const cleaned = text.trim().replace(/^\$/, '').replace(/,/g, '');
+  const withoutDollar = text.trim().replace(/^\$/, '');
+  // A comma only counts when it groups digits in threes; `1,5` or `12,34,56`
+  // is a typo, and stripping its commas would invent a different cap.
+  const thousandsGrouped = /^\d{1,3}(,\d{3})+(\.\d+)?$/.test(withoutDollar);
+  if (withoutDollar.includes(',') && !thousandsGrouped) return undefined;
+  const cleaned = withoutDollar.replace(/,/g, '');
   const value = cleaned === '' ? Number.NaN : Number(cleaned);
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }

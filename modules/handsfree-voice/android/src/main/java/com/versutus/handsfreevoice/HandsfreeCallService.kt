@@ -86,6 +86,10 @@ class HandsfreeCallService : Service() {
 
   private var audioFocusRequest: AudioFocusRequest? = null
   private var focused = false
+  // The mode and loudspeaker route are applied before focus is requested, so a
+  // refused request still leaves them set. Tracked apart from `focused` so the
+  // undo runs whether or not focus was granted.
+  private var communicationModeApplied = false
 
   private var destroyed = false
   private var foregroundStarted = false
@@ -283,6 +287,7 @@ class HandsfreeCallService : Service() {
   private fun requestAudioFocus() {
     if (focused) return
     audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+    communicationModeApplied = true
     routeToLoudspeaker()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
@@ -307,17 +312,24 @@ class HandsfreeCallService : Service() {
   }
 
   private fun releaseAudioFocus() {
-    if (!focused) return
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
-    } else {
-      @Suppress("DEPRECATION")
-      audioManager.abandonAudioFocus(focusListener)
+    // Focus is abandoned only if it was granted. The mode and route are undone
+    // whenever they were applied, so a refused request does not leave the
+    // device in communication mode on the loudspeaker.
+    if (focused) {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+      } else {
+        @Suppress("DEPRECATION")
+        audioManager.abandonAudioFocus(focusListener)
+      }
     }
     focused = false
     audioFocusRequest = null
-    releaseLoudspeaker()
-    audioManager.mode = AudioManager.MODE_NORMAL
+    if (communicationModeApplied) {
+      releaseLoudspeaker()
+      audioManager.mode = AudioManager.MODE_NORMAL
+      communicationModeApplied = false
+    }
   }
 
   // A communication-mode call plays through the earpiece unless told

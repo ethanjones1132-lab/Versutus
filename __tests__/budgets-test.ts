@@ -68,6 +68,17 @@ describe('budget keys and storage', () => {
     expect(parseSpendCapInput('0')).toBeUndefined();
   });
 
+  test('a comma that is not a thousands separator is refused, never read as a number', () => {
+    expect(parseSpendCapInput('1500')).toBe(1500);
+    expect(parseSpendCapInput('$1,500.00')).toBe(1500);
+    expect(parseSpendCapInput('1,500,000')).toBe(1500000);
+    expect(parseSpendCapInput('1,5')).toBeUndefined();
+    expect(parseSpendCapInput('12,34,56')).toBeUndefined();
+    expect(parseSpendCapInput('1,50')).toBeUndefined();
+    expect(parseSpendCapInput('1,500,00')).toBeUndefined();
+    expect(parseSpendCapInput('0')).toBeUndefined();
+  });
+
   test('the row copy names the cap or says there is none', () => {
     expect(budgetRowCopy(5)).toBe('Budget $5.00');
     expect(budgetRowCopy(undefined)).toBe('No budget');

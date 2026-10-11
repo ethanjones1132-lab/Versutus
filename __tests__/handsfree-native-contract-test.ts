@@ -303,6 +303,24 @@ describe('hands-free native contract', () => {
     expect(ownershipCode).not.toContain('@Volatile');
   });
 
+  it('restores the communication mode and loudspeaker even when audio focus was refused', () => {
+    // The mode and the loudspeaker route are applied before focus is asked for,
+    // so a refused request leaves them set. Release used to return early when
+    // focus was not held, and nothing undid them. The undo must run on its own
+    // flag, not behind the `focused` guard that only the abandon needs.
+    const release = between(service, 'private fun releaseAudioFocus()', '// A communication-mode call');
+    expect(release).not.toMatch(/if \(!focused\) return/);
+    expect(release).toMatch(/if \(focused\) \{[\s\S]*?abandonAudioFocus/);
+    expect(release).toMatch(
+      /if \(communicationModeApplied\) \{[\s\S]*?releaseLoudspeaker\(\)[\s\S]*?audioManager\.mode = AudioManager\.MODE_NORMAL[\s\S]*?communicationModeApplied = false/,
+    );
+    const request = between(service, 'private fun requestAudioFocus()', 'private fun releaseAudioFocus()');
+    expect(request).toContain('communicationModeApplied = true');
+    expect(request.indexOf('communicationModeApplied = true')).toBeLessThan(
+      request.indexOf('audioManager.requestAudioFocus('),
+    );
+  });
+
   it('retires the silent notification channel for a visible one', () => {
     expect(service).toContain('private const val CHANNEL_ID = "handsfree-call-v2"');
     expect(service).toContain('deleteNotificationChannel(LEGACY_CHANNEL_ID)');
