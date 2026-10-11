@@ -237,6 +237,8 @@ type FakeClient = PortalClient & {
   turnListReads: { sessionId?: string; status?: string }[];
   turnReads: string[];
   historyReads: number;
+  /** How many healthy foreground returns re-armed this client's monitor. */
+  resumeMonitoringCalls: number;
   /** Flip the fake to `connected` the way its own monitor would. */
   goConnected(): void;
 };
@@ -320,6 +322,7 @@ function mockMakeClient(callbacks: PortalClientCallbacks, gateway: GatewayProfil
     turnListReads: [] as { sessionId?: string; status?: string }[],
     turnReads: [] as string[],
     historyReads: 0,
+    resumeMonitoringCalls: 0,
     canManageSessions: !mockState.sessionless,
     get turnsUnsupported() {
       return mockState.turnsUnsupported;
@@ -461,6 +464,9 @@ function mockMakeClient(callbacks: PortalClientCallbacks, gateway: GatewayProfil
     setBackendId: () => undefined,
     suspendReconnect: () => undefined,
     resumeReconnect: () => undefined,
+    resumeMonitoring: () => {
+      client.resumeMonitoringCalls += 1;
+    },
   };
   void gateway;
   return client as unknown as FakeClient;
@@ -702,6 +708,21 @@ describe('a foreground return finds the turn the PC is still running', () => {
     // The thread is not merely "not interrupted" — it is not busy any more.
     expect(chatApi().isSending).toBe(false);
     expect(mockClients[0].turnStreams[0]).toMatchObject({ turnId: 'turn-lost', after: 0 });
+  });
+
+  test('a healthy foreground return re-arms the monitor of the live client', async () => {
+    await mount();
+    const client = mockClients[0];
+    expect(client.connectionStatus).toBe('connected');
+
+    await emitAppState('background');
+    await emitAppState('active');
+    await settle(2, 5);
+
+    // suspendReconnect() paused the monitor on the way out; the healthy return
+    // is the only place it is resumed for a client that never dropped.
+    expect(client.resumeMonitoringCalls).toBe(1);
+    expect(client.connectionStatus).toBe('connected');
   });
 
   test('while the turn runs, the thread is busy the way a live send is', async () => {

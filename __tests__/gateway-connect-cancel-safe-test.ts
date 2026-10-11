@@ -277,3 +277,86 @@ describe('nudge and forceReconnect reach the monitor through the client', () => 
     });
   }
 });
+
+describe('a connect after a disconnect starts a fresh attempt', () => {
+  beforeEach(() => jest.useFakeTimers());
+
+  test('hermes: connect() after disconnect() checks health again instead of joining the orphaned attempt', async () => {
+    // The first /health hangs until released; every later one answers.
+    let healthCalls = 0;
+    let releaseFirst!: (response: Response) => void;
+    const firstHealth = new Promise<Response>((resolve) => {
+      releaseFirst = resolve;
+    });
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      if (url.includes('/health')) {
+        healthCalls += 1;
+        return healthCalls === 1 ? firstHealth : Promise.resolve(jsonResponse(HEALTH));
+      }
+      if (url.includes('/v1/models')) return Promise.resolve(jsonResponse(MODELS));
+      return Promise.resolve(jsonResponse({ object: 'caps' }));
+    });
+    const calls: ConnectionStatus[] = [];
+    const client = new HermesGatewayClient(HERMES_PROFILE, { onStatus: (status) => calls.push(status) });
+
+    const orphaned = client.connect();
+    client.disconnect();
+    const fresh = client.connect();
+    releaseFirst(jsonResponse(HEALTH));
+    await Promise.all([orphaned, fresh]);
+
+    // Before the fix, fresh was the orphaned attempt: it resolved with no
+    // second health check and the client stayed 'disconnected'.
+    expect(healthCalls).toBe(2);
+    expect(client.connectionStatus).toBe('connected');
+    expect(calls.filter((status) => status === 'connected')).toHaveLength(1);
+    client.disconnect();
+  });
+});
+
+describe('a suspended health monitor is re-armed', () => {
+  beforeEach(() => jest.useFakeTimers());
+
+  function monitorOf(client: HermesGatewayClient): { isSuspended: boolean } {
+    return (client as unknown as { monitor: { isSuspended: boolean } }).monitor;
+  }
+
+  function healthCallCount(): number {
+    const fetchMock = (globalThis as { fetch: unknown }).fetch as { mock: { calls: unknown[][] } };
+    return fetchMock.mock.calls.filter(([input]) => String(input).includes('/health')).length;
+  }
+
+  test('hermes: a successful connect clears a suspendReconnect() left over from the background', async () => {
+    releaseHealthNothing();
+    const client = new HermesGatewayClient(HERMES_PROFILE, {});
+    await client.connect();
+    client.suspendReconnect();
+    expect(monitorOf(client).isSuspended).toBe(true);
+
+    await client.connect();
+
+    expect(monitorOf(client).isSuspended).toBe(false);
+    expect(client.connectionStatus).toBe('connected');
+    client.disconnect();
+  });
+
+  test('hermes: resumeMonitoring() re-arms the interval on a live connection without a reconnect', async () => {
+    releaseHealthNothing();
+    const client = new HermesGatewayClient(HERMES_PROFILE, {});
+    await client.connect();
+    client.suspendReconnect();
+    const before = healthCallCount();
+
+    client.resumeMonitoring();
+
+    expect(monitorOf(client).isSuspended).toBe(false);
+    expect(client.connectionStatus).toBe('connected');
+    expect(healthCallCount()).toBe(before);
+
+    // The interval probes again: the monitor is live, not just unflagged.
+    await jest.advanceTimersByTimeAsync(HEALTH_INTERVAL_MS);
+    expect(healthCallCount()).toBe(before + 1);
+    client.disconnect();
+  });
+});

@@ -37,6 +37,22 @@ export function stringifyFieldValue(field: GatewayCapabilityField, value: unknow
   return String(value);
 }
 
+/**
+ * Why a number field's text cannot be saved, or undefined when it can. An empty
+ * optional number is not an error: the save leaves it out of the config.
+ */
+export function numberFieldError(field: GatewayCapabilityField, text: string): string | undefined {
+  if (field.type !== 'number') return undefined;
+  const trimmed = text.trim();
+  if (trimmed === '') return field.required ? `"${field.label}" needs a number.` : undefined;
+  if (!Number.isFinite(Number(trimmed))) return `"${field.label}" must be a number, not "${trimmed}".`;
+  return undefined;
+}
+
+/**
+ * A number field that is empty or not a finite number parses to undefined, never
+ * 0: a silent 0 is a stored value the operator did not type.
+ */
 export function parseFieldValue(field: GatewayCapabilityField, text: string): unknown {
   const trimmed = text.trim();
   switch (field.type) {
@@ -44,7 +60,7 @@ export function parseFieldValue(field: GatewayCapabilityField, text: string): un
       return trimmed ? trimmed.split(',').map((item) => item.trim()).filter(Boolean) : [];
     case 'number': {
       const parsed = Number(trimmed);
-      return Number.isFinite(parsed) ? parsed : 0;
+      return trimmed !== '' && Number.isFinite(parsed) ? parsed : undefined;
     }
     case 'boolean':
       return trimmed === 'true' || trimmed === '1' || trimmed.toLowerCase() === 'yes';

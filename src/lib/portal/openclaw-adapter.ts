@@ -191,6 +191,10 @@ export class OpenClawAdapterClient implements PortalClient {
     this.inner.suspendReconnect();
   }
 
+  resumeMonitoring() {
+    this.inner.resumeMonitoring();
+  }
+
   resumeReconnect() {
     this.inner.resumeReconnect();
   }

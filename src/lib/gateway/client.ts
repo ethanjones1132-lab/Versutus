@@ -220,8 +220,10 @@ export class HermesGatewayClient {
    */
   async connect(): Promise<void> {
     if (this.connectAttempt) return this.connectAttempt;
-    const attempt = this.attemptConnect().finally(() => {
-      this.connectAttempt = null;
+    const attempt: Promise<void> = this.attemptConnect().finally(() => {
+      // Clear only our own handle. disconnect() may already have dropped it and
+      // a newer connect() may own it now; a stale finally must not null that.
+      if (this.connectAttempt === attempt) this.connectAttempt = null;
     });
     this.connectAttempt = attempt;
     return attempt;
@@ -280,11 +282,17 @@ export class HermesGatewayClient {
     if (capabilities) this.callbacks.onCapabilities?.(capabilities);
     this.callbacks.onHealthCheck?.(true, health);
     this.monitor.noteConnected();
+    // A suspend() left over from a background cycle silences every tick, and
+    // only resume() clears it. A connect that just succeeded re-arms it.
+    this.monitor.resume();
     this.monitor.start();
   }
 
   disconnect() {
     this.connectEpoch += 1;
+    // A connect() after this must start a fresh attempt. Joining the one this
+    // epoch orphaned would resolve without connecting.
+    this.connectAttempt = null;
     this.closed = true;
     this.monitor.stop();
     this.abortAllRuns();
@@ -302,6 +310,14 @@ export class HermesGatewayClient {
    */
   suspendReconnect() {
     this.monitor.suspend();
+  }
+
+  /**
+   * Re-arm the health monitor after a foreground return that found a live
+   * connection healthy. Unlike resumeReconnect() this never starts a connect.
+   */
+  resumeMonitoring() {
+    this.monitor.resume();
   }
 
   /**

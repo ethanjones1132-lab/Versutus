@@ -316,6 +316,11 @@ export class ManifestClient implements PortalClient {
     this.monitor.suspend();
   }
 
+  /** Re-arm the health monitor without starting a connect; see HermesGatewayClient. */
+  resumeMonitoring() {
+    this.monitor.resume();
+  }
+
   resumeReconnect() {
     this.monitor.resume();
     if (!this.closed && this.status !== 'connected') {

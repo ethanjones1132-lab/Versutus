@@ -186,6 +186,11 @@ export class OpenClawGatewayClient {
     this.clearChallengeTimer();
   }
 
+  /** Re-arm the liveness monitor without starting a handshake. */
+  resumeMonitoring() {
+    this.monitor.resume();
+  }
+
   /**
    * Resume automatic reconnect and, if not connected, attempt immediately.
    */

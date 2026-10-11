@@ -1,6 +1,7 @@
 import {
   defaultConfigForFields,
   isValidInstanceId,
+  numberFieldError,
   parseFieldValue,
   stringifyFieldValue,
 } from '@/lib/gateway/capability-form';
@@ -38,5 +39,26 @@ describe('capability-form', () => {
     expect(isValidInstanceId('standup')).toBe(true);
     expect(isValidInstanceId('registry')).toBe(false);
     expect(isValidInstanceId('Standup')).toBe(false);
+  });
+
+  describe('number fields', () => {
+    const OPTIONAL: GatewayCapabilityField = { key: 'limit', label: 'Request limit', type: 'number' };
+    const REQUIRED: GatewayCapabilityField = { ...OPTIONAL, required: true };
+
+    test('"12a" is refused and never saved as 0', () => {
+      expect(numberFieldError(OPTIONAL, '12a')).toContain('Request limit');
+      expect(parseFieldValue(OPTIONAL, '12a')).toBeUndefined();
+    });
+
+    test('an empty optional number is omitted, while an empty required one is refused', () => {
+      expect(numberFieldError(OPTIONAL, '')).toBeUndefined();
+      expect(parseFieldValue(OPTIONAL, '')).toBeUndefined();
+      expect(numberFieldError(REQUIRED, '  ')).toContain('needs a number');
+    });
+
+    test('"42" parses to 42', () => {
+      expect(numberFieldError(OPTIONAL, ' 42 ')).toBeUndefined();
+      expect(parseFieldValue(OPTIONAL, ' 42 ')).toBe(42);
+    });
   });
 });

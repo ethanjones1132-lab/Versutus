@@ -8,6 +8,7 @@ import { looksLikeCredential, isProviderCredentialRef } from '@/lib/gateway/cred
 import {
   defaultConfigForFields,
   isValidInstanceId,
+  numberFieldError,
   parseFieldValue,
   stringifyFieldValue,
 } from '@/lib/gateway/capability-form';
@@ -113,7 +114,9 @@ export function CapabilitiesSection() {
   function configFromDraft(fields: GatewayCapabilityField[]): Record<string, unknown> {
     const config: Record<string, unknown> = {};
     for (const field of fields) {
-      config[field.key] = parseFieldValue(field, draft?.values[field.key] ?? '');
+      const value = parseFieldValue(field, draft?.values[field.key] ?? '');
+      // An empty optional number is left out, so the Gate stores no value for it.
+      if (value !== undefined) config[field.key] = value;
     }
     return config;
   }
@@ -123,6 +126,15 @@ export function CapabilitiesSection() {
     if (draft.mode === 'create' && !isValidInstanceId(draft.id)) {
       setError('Instance id must be lowercase alphanumeric with hyphens.');
       return;
+    }
+    // Refuse before anything is written: a cleared or mistyped number must not
+    // reach the Gate as 0.
+    for (const field of selectedKind.configFields) {
+      const message = numberFieldError(field, draft.values[field.key] ?? '');
+      if (message) {
+        setError(message);
+        return;
+      }
     }
     setBusy(true);
     setError(null);

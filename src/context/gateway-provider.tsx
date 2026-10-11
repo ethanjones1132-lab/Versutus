@@ -5963,6 +5963,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             healLiveClient();
             return;
           }
+          // suspendReconnect() paused this client's monitor on the way to the
+          // background, and nothing on this healthy path resumes it. Re-arm it
+          // for the client that was verified, without reconnecting a live one.
+          if (clientRef.current === client) client.resumeMonitoring?.();
           // The locked-phone return. A turn the Gate is still running (or one
           // that finished while the app was away) belongs to the Gate, and a
           // client that never lost `connected` fires no health-check branch to

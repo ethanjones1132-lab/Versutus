@@ -202,6 +202,12 @@ export interface PortalClient {
   /** Resume automatic reconnect; attempts immediately if not connected. */
   resumeReconnect(): void;
   /**
+   * Re-arm the liveness monitor after a foreground return that found a live
+   * connection healthy, without reconnecting it. Optional: adapters without a
+   * monitor omit it.
+   */
+  resumeMonitoring?(): void;
+  /**
    * Probe liveness NOW on the caller's own evidence of trouble, instead of
    * waiting out the health interval. Optional: adapters without a health probe
    * omit it and the caller keeps the interval's answer.
