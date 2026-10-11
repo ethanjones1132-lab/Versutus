@@ -73,6 +73,34 @@ describe('/approval bare usage names approve and deny', () => {
     expect(result.title).toBe('/approval deny ap-2');
   });
 
+  test('/approval approve <id> reports the failure when the RPC rejects, not a recorded approval', async () => {
+    const gatewayRequest = jest.fn().mockRejectedValue(new Error('run already settled'));
+    const result = await executeGatewaySlashCommand('/approval approve ap-1', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('approval.approve', { id: 'ap-1' });
+    expect(result.text).toContain('Could not approve ap-1');
+    expect(result.text).toContain('run already settled');
+    expect(result.text).not.toContain('Approval approve for ap-1');
+    expect(result.title).toBe('/approval approve ap-1');
+  });
+
+  test('/approval deny <id> reports the failure when the RPC answers with an error', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ error: 'approval not found' });
+    const result = await executeGatewaySlashCommand('/approval deny ap-2', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('approval.deny', { id: 'ap-2' });
+    expect(result.text).toContain('Could not deny ap-2');
+    expect(result.text).toContain('approval not found');
+    expect(result.text).not.toContain('Approval deny for ap-2');
+    expect(result.title).toBe('/approval deny ap-2');
+  });
+
   test('the composer still matches both working forms as danger write for the confirmation sheet', () => {
     const approve = findConfirmableSlash('/approval approve ap-1');
     expect(approve).not.toBeUndefined();

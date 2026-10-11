@@ -153,3 +153,59 @@ describe('/model <name> direct switch', () => {
     expect(result.text).toMatch(/session will reopen/i);
   });
 });
+
+/**
+ * `/model fallbacks` and `/model set-agent` have their own handlers further
+ * down runModelCommand. With a Hermes setModelOverride wired, the bare
+ * `/model <name>` branch used to swallow them and switch the session to a
+ * model literally named after the verb, so those handlers never ran.
+ */
+describe('/model subcommands are not bare model ids', () => {
+  test('/model fallbacks reaches its own handler when setModelOverride is wired', async () => {
+    const setModelOverride = jest.fn().mockResolvedValue(undefined);
+    const gatewayRequest = jest.fn().mockImplementation(async (method: string) => {
+      if (method === 'config.get') {
+        return { hash: 'h1', config: { agents: { defaults: { model: { fallbacks: [] } } } } };
+      }
+      if (method === 'models.list') return { models: [{ id: 'a' }, { id: 'b' }] };
+      if (method === 'config.patch') return { ok: true, hash: 'h2' };
+      throw new Error(`unexpected: ${method}`);
+    });
+    const result = await executeGatewaySlashCommand('/model fallbacks a,b --confirm', {
+      hello: null,
+      currentModel: 'gateway-default',
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      setModelOverride,
+    });
+    expect(setModelOverride).not.toHaveBeenCalled();
+    expect(gatewayRequest).toHaveBeenCalledWith('config.patch', expect.objectContaining({
+      replacePaths: ['agents.defaults.model.fallbacks'],
+    }));
+    expect(result.title).toBe('/model fallbacks');
+    expect(result.text).toContain('Default model fallbacks updated');
+  });
+
+  test('/model set-agent reaches its own handler when setModelOverride is wired', async () => {
+    const setModelOverride = jest.fn().mockResolvedValue(undefined);
+    const gatewayRequest = jest.fn().mockImplementation(async (method: string) => {
+      if (method === 'config.get') {
+        return { hash: 'h1', config: { agents: { list: [{ id: 'main', model: 'gateway-default' }] } } };
+      }
+      if (method === 'models.list') return { models: [{ id: 'grok-4' }] };
+      if (method === 'config.patch') return { ok: true, hash: 'h2' };
+      throw new Error(`unexpected: ${method}`);
+    });
+    const result = await executeGatewaySlashCommand('/model set-agent main grok-4 --confirm', {
+      hello: null,
+      currentModel: 'gateway-default',
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      setModelOverride,
+    });
+    expect(setModelOverride).not.toHaveBeenCalled();
+    expect(gatewayRequest).toHaveBeenCalledWith('config.patch', expect.objectContaining({ baseHash: 'h1' }));
+    expect(result.title).toBe('/model set-agent');
+    expect(result.text).toContain('Agent main model updated to grok-4');
+  });
+});

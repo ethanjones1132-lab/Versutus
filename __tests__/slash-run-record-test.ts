@@ -51,6 +51,20 @@ describe('/run run id and verdict vocabulary', () => {
     expect(result.text).toContain('Run cancelled');
   });
 
+  test('a stop the gateway did not confirm is not reported as cancelled and carries the error', async () => {
+    // requestStop's outcome: cancelled AND unresolved, with the gateway's error.
+    const error = 'Stop was requested but the gateway did not confirm it (timeout). The run may still be going.';
+    const runTask = jest
+      .fn()
+      .mockResolvedValue({ runId: 'r5', status: 'cancelled', cancelled: true, unresolved: true, error });
+    const result = await executeGatewaySlashCommand('/run ship the release', contextWith(runTask));
+    expect(result.runId).toBe('r5');
+    expect(result.text).not.toMatch(/cancelled/i);
+    expect(result.raw ?? '').not.toMatch(/was cancelled/);
+    expect(result.text).toContain('not confirmed');
+    expect(result.text).toContain(error);
+  });
+
   test('non-run commands carry no run id', async () => {
     const result = await executeGatewaySlashCommand('/agent', {
       hello: null,

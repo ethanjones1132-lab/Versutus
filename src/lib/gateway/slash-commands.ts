@@ -807,6 +807,19 @@ async function runTaskCommand(argText: string, context: SlashCommandContext): Pr
     }
   });
 
+  // A stop the gateway did not confirm arrives as cancelled AND unresolved
+  // (requestStop). It must not read as "was cancelled": the run may still be
+  // going, so say the stop is unconfirmed and carry the gateway's error.
+  if (outcome.cancelled && outcome.unresolved) {
+    return {
+      ...textResult(
+        `Run stop not confirmed${outcome.error ? `: ${outcome.error}` : ''}`,
+        '/run',
+        `Run ${outcome.runId} stop was requested but not confirmed by the gateway.`,
+      ),
+      runId: outcome.runId,
+    };
+  }
   if (outcome.cancelled) {
     return { ...textResult('Run cancelled', '/run', `Run ${outcome.runId} was cancelled.`), runId: outcome.runId };
   }
@@ -1026,6 +1039,16 @@ async function runAgentSubcommand(args: string[], context: SlashCommandContext):
   return textResult('Usage: /agent status or /agent stop', '/agent');
 }
 
+/**
+ * Every `/model` subcommand that has its own branch in runModelCommand. A bare
+ * `/model <name>` must never claim one of these as a model id: with
+ * setModelOverride wired, `/model fallbacks a,b` used to switch the session to
+ * a model literally named "fallbacks" and never reached the fallbacks handler.
+ */
+const MODEL_SUBCOMMANDS = new Set([
+  'show', 'status', 'auth', 'routing', 'policy', 'agent', 'agents', 'set', 'set-agent', 'fallbacks',
+]);
+
 async function runModelCommand(args: string[], context: SlashCommandContext): Promise<SlashCommandResult> {
   const subcommand = args[0]?.toLowerCase();
   if (!subcommand || subcommand === 'show' || subcommand === 'status') {
@@ -1052,7 +1075,7 @@ async function runModelCommand(args: string[], context: SlashCommandContext): Pr
   // Bare /model <name> — switch directly through setModelOverride
   // (no --confirm needed; picking a model is not destructive).
   // Fall through to config.patch if no per-request override is available.
-  if (subcommand && subcommand !== 'set' && subcommand !== 'auth' && subcommand !== 'routing' && subcommand !== 'policy' && subcommand !== 'agent' && subcommand !== 'agents') {
+  if (subcommand && !MODEL_SUBCOMMANDS.has(subcommand)) {
     const modelId = subcommand;
     const validation = await validateModelId(modelId, context);
     if (context.setModelOverride) {
@@ -1580,6 +1603,15 @@ async function runApprovalsDevicesCommand(commandName: string, args: string[], c
     }
     const method = action === 'approve' ? 'approval.approve' : 'approval.deny';
     const result = await context.gatewayRequest(method, { id }).catch(e => ({ error: String(e) }));
+    // A rejected decision must not read as recorded: the run keeps waiting on
+    // it, so the success line would leave the operator believing it was
+    // answered. Same honesty rule as directReadResult / sessionActionResult.
+    const error = isRecord(result) && typeof result.error === 'string' ? result.error : undefined;
+    if (error) {
+      const guidance = METHOD_GUIDANCE[method];
+      const detail = guidance && !error.includes(guidance) ? `${error} ${guidance}` : error;
+      return textResult(`Could not ${action} ${id}: ${detail}`, `/approval ${action} ${id}`, compactJson(result));
+    }
     return textResult(`Approval ${action} for ${id}`, `/approval ${action} ${id}`, compactJson(result));
   }
 
