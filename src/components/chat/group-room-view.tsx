@@ -250,12 +250,23 @@ export function GroupRoomView({
   // continues the conversation instead of starting blank. Stored lines are
   // merged by id and send-window BEFORE anything typed this session — a send
   // that lands while history is in flight is never clobbered or duplicated.
+  // The parent passes a fresh loadHistory closure on every render. Keyed on its
+  // identity, a re-render mid-load would cancel the read and the re-run would
+  // skip it (already requested), dropping the lines and leaving the skeleton up.
+  // So the read runs once per mount, through the latest loader in a ref. The
+  // parent keys this room by its id, so one mount is one room.
+  const loadHistoryRef = useRef(loadHistory);
+  useEffect(() => {
+    loadHistoryRef.current = loadHistory;
+  }, [loadHistory]);
+  const hasHistoryLoader = Boolean(loadHistory);
   const historyRequested = useRef(false);
   useEffect(() => {
-    if (!loadHistory || historyRequested.current) return;
+    const readHistory = loadHistoryRef.current;
+    if (!readHistory || historyRequested.current) return;
     historyRequested.current = true;
     let alive = true;
-    loadHistory()
+    readHistory()
       .then((stored) => {
         if (!alive) return;
         setEntries((prev) => mergeTranscriptRows(prev, stored));
@@ -270,7 +281,7 @@ export function GroupRoomView({
     return () => {
       alive = false;
     };
-  }, [loadHistory]);
+  }, [hasHistoryLoader]);
 
   // Pull-to-refresh re-reads the same transcript in place (the roster pattern
   // from 3824b97): new stored lines are folded in oldest-first, and a failed

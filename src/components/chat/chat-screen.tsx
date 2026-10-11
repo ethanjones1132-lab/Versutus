@@ -1110,21 +1110,6 @@ export function ChatScreen() {
     clearRequestedComposeRequest,
   ]);
 
-  // A `versutus://call` link lands here: the router opened the Bot Chat and
-  // passed `call=1`. A link never starts capture on its own — the confirm
-  // sheet is what opens, and the operator's Start is what begins a call. The
-  // param is handled once so a re-render cannot reopen the sheet after the
-  // operator dismisses it.
-  const callEntry = params.call;
-  const callEntryHandledRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    if (!isFocused || callEntry !== '1' || !draftThread) return undefined;
-    if (callEntryHandledRef.current === callEntry) return undefined;
-    callEntryHandledRef.current = callEntry;
-    const timer = setTimeout(() => setCallSheetVisible(true), 0);
-    return () => clearTimeout(timer);
-  }, [isFocused, callEntry, draftThread]);
-
   // Stable header callbacks. The chat header is memoized (chat-header.tsx) so it
   // skips a re-render when only the transcript changes; inline arrow wrappers here
   // would hand it a fresh function identity every frame and defeat that memo. These
@@ -1473,6 +1458,30 @@ export function ChatScreen() {
       }
     })();
   }, [draftThread?.sessionId, gatewayRequest]);
+
+  // A `versutus://call` link lands here: the router opened the Bot Chat and
+  // passed `call=1`. A link never starts capture on its own — the confirm
+  // sheet is what opens, and the operator's Start is what begins a call. The
+  // sheet opens through openCallSheet, the same path as the call button, so the
+  // stored engine and the Gate's readiness are read before it shows. This effect
+  // sits below openCallSheet because its deps read that binding. The param is
+  // handled once so a re-render cannot reopen the sheet after the operator
+  // dismisses it.
+  const callEntry = params.call;
+  const callEntryHandledRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!isFocused || callEntry !== '1' || !draftThread) return undefined;
+    if (callEntryHandledRef.current === callEntry) return undefined;
+    // Marked handled when the sheet opens, not when the timer is scheduled: a
+    // re-render that clears the timer before it fires must leave the link free
+    // to open the sheet on the next pass.
+    const timer = setTimeout(() => {
+      callEntryHandledRef.current = callEntry;
+      openCallSheet();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [isFocused, callEntry, draftThread, openCallSheet]);
+
   const handleChangeEngine = useCallback(() => {
     setCallPreference((current) => {
       const index = CALL_ENGINE_ORDER.indexOf(current);

@@ -135,15 +135,17 @@ export function ProvidersSection() {
     try {
       await client.setApiKey(id, value);
       const snapshot = await client.check(id);
+      setEditingId(null);
+      // Reload before the verdict lands: load() clears the section error once
+      // the list reads, which would erase a verdict set ahead of it. A reload
+      // that fails keeps its own error, so the verdict only fills an empty slot.
+      await load();
       if (snapshot.readiness?.state === 'ready') {
         setNotice(`${snapshot.label} is ready.`);
       } else {
-        setError(
-          `${snapshot.label}: ${snapshot.readiness?.message ?? snapshot.readiness?.state ?? 'not ready'}`,
-        );
+        const verdict = `${snapshot.label}: ${snapshot.readiness?.message ?? snapshot.readiness?.state ?? 'not ready'}`;
+        setError((current) => current ?? verdict);
       }
-      setEditingId(null);
-      void load();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {

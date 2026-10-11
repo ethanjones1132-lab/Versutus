@@ -50,10 +50,10 @@ describe('provider key sheet keeps the draft on a refused Save', () => {
     const tryBlock = saveKey.slice(tryAt, finallyAt);
     expect(tryBlock).toContain('await client.setApiKey(id, value);');
     expect(tryBlock).toContain('setEditingId(null);');
-    expect(tryBlock).toContain('void load();');
+    expect(tryBlock).toContain('await load();');
     const setKeyAt = tryBlock.indexOf('await client.setApiKey(id, value);');
     expect(tryBlock.indexOf('setEditingId(null);')).toBeGreaterThan(setKeyAt);
-    expect(tryBlock.indexOf('void load();')).toBeGreaterThan(setKeyAt);
+    expect(tryBlock.indexOf('await load();')).toBeGreaterThan(setKeyAt);
   });
 
   test('saveKey finally only clears busy — a refusal does not dismiss the sheet', () => {
@@ -63,6 +63,7 @@ describe('provider key sheet keeps the draft on a refused Save', () => {
     const finallyBlock = saveKey.slice(finallyAt);
     expect(finallyBlock).toContain('setBusy(false);');
     expect(finallyBlock).not.toContain('setEditingId(null);');
+    expect(finallyBlock).not.toContain('await load();');
     expect(finallyBlock).not.toContain('void load();');
   });
 

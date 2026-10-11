@@ -54,13 +54,15 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 );
 /** Focus effects the screen registered, so a test can run the focus reads. */
 const focusEffects: (() => unknown)[] = [];
+/** The route params the screen reads; a `versutus://call` link sets `call: '1'`. */
+let mockRouteParams: Record<string, string> = {};
 jest.mock('expo-router', () => ({
   useRouter: () => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn() }),
   useFocusEffect: (effect: () => unknown) => {
     focusEffects.push(effect);
   },
   useIsFocused: () => true,
-  useLocalSearchParams: () => ({}),
+  useLocalSearchParams: () => mockRouteParams,
   useNavigation: () => ({ dispatch: jest.fn() }),
 }));
 jest.mock('@/hooks/use-tokens', () => ({
@@ -200,6 +202,7 @@ import * as Clipboard from 'expo-clipboard';
 import { haptics } from '@/lib/haptics';
 import { MAX_CHAT_ATTACHMENT_CHARS } from '@/lib/gateway/chat-parts';
 import { VOICE_PREFERENCES_STORAGE_KEY } from '@/lib/voice/voice-preferences';
+import { saveAppSettings } from '@/lib/settings/app-settings';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { ChatMessage } from '@/lib/gateway/types';
 
@@ -387,6 +390,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   refMocks.length = 0;
   focusEffects.length = 0;
+  mockRouteParams = {};
   mockDeviceSpeech.voices = [{ identifier: 'en-GB-Samantha' }];
   (ImagePicker.launchImageLibraryAsync as jest.Mock).mockResolvedValue({ canceled: true, assets: null });
   (Clipboard.setStringAsync as jest.Mock).mockResolvedValue(true);
@@ -807,6 +811,59 @@ describe('CALL-1 — two opens of the call sheet cannot race', () => {
     const sheet = find(CALL_SHEET).props as { busy: boolean; startDisabled: boolean };
     expect(sheet.busy).toBe(false);
     expect(sheet.startDisabled).toBe(false);
+  });
+});
+
+describe('CALL-2 — a call link opens the sheet the way the button does', () => {
+  // Local is not installed here and Codex is ready, so a stored `local`
+  // preference cannot be honoured: the sheet must say so and hold Start. An
+  // `auto` preference would start on Codex with nothing to flag.
+  const CAPS = {
+    enabled: true,
+    engines: {
+      local: { state: 'unavailable', reason: 'Local voice is not installed.' },
+      codex: { state: 'ready' },
+    },
+  };
+
+  test('the link reads the Gate capabilities and the stored engine before the sheet is up', async () => {
+    await saveAppSettings({ voiceEngine: 'local' });
+    (mockGateway.gatewayRequest as jest.Mock).mockImplementation(async (method: string) =>
+      method === 'voice.capabilities' ? CAPS : {},
+    );
+    mockRouteParams = { call: '1' };
+    await mount();
+    await openConfigurableThread();
+
+    expect(mockGateway.gatewayRequest).toHaveBeenCalledWith('voice.capabilities', expect.anything());
+    const sheet = find(CALL_SHEET).props as { visible: boolean; busy: boolean; startDisabled: boolean };
+    expect(sheet.visible).toBe(true);
+    expect(sheet.busy).toBe(false);
+    // The stored preference reached the engine choice: an unready `local` holds Start.
+    expect(sheet.startDisabled).toBe(true);
+  });
+
+  test('dismissing the link sheet does not bring it back on the next render', async () => {
+    (mockGateway.gatewayRequest as jest.Mock).mockImplementation(async (method: string) =>
+      method === 'voice.capabilities' ? CAPS : {},
+    );
+    mockRouteParams = { call: '1' };
+    await mount();
+    await openConfigurableThread();
+    expect((find(CALL_SHEET).props as { visible: boolean }).visible).toBe(true);
+
+    await pressCancelCall();
+    // A new read function re-keys the opener, which re-runs the link effect; the
+    // handled guard is what keeps the dismissed sheet shut.
+    mockGateway.gatewayRequest = jest.fn(async (method: string) =>
+      method === 'voice.capabilities' ? CAPS : {},
+    );
+    await act(async () => {
+      renderer.update(createElement(ChatScreen));
+    });
+    await settle();
+
+    expect((find(CALL_SHEET).props as { visible: boolean }).visible).toBe(false);
   });
 });
 

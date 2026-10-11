@@ -21,7 +21,7 @@ const d5Section = futureItems.split('### D5.')[1]?.split('\n## ')[0] ?? '';
 
 describe('FUTURE-ITEMS open cites describe the live tree', () => {
   test('P1 attach offer cites the live chat-screen lines, not the drifted ones', () => {
-    expect(p1Section).toContain('`src/components/chat/chat-screen.tsx:1357,2968`');
+    expect(p1Section).toContain('`src/components/chat/chat-screen.tsx:1343,2978`');
     expect(p1Section).not.toContain('1146,2446');
     expect(p1Section).not.toContain('1157,2492');
     expect(p1Section).not.toContain('1154,2473');
@@ -34,8 +34,8 @@ describe('FUTURE-ITEMS open cites describe the live tree', () => {
     // R4X3 moved both rows again: the merged round-4 tree pulled more
     // voice/session code above `canAttach`. FUTURE-ITEMS.md and the pins below
     // now follow the same live lines.
-    expect(chatScreen[1356]).toContain('canAttach = supportsImageInput');
-    expect(chatScreen[2967]).toContain('onAttach={canAttach ? handleAttach : undefined}');
+    expect(chatScreen[1342]).toContain('canAttach = supportsImageInput');
+    expect(chatScreen[2977]).toContain('onAttach={canAttach ? handleAttach : undefined}');
   });
 
   test('P1 keeps the live composer-draw and supportsImageInput cites', () => {

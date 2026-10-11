@@ -48,7 +48,7 @@ describe('group room history loading', () => {
     // A refused replay must reach the honest note + Retry path, never the
     // skeletons: both replay outcomes flip the flag.
     const src = readRoomSource();
-    const replay = src.match(/loadHistory\(\)\n      \.then\(\(stored\) => \{[\s\S]*?\n    return \(\) => \{/)?.[0];
+    const replay = src.match(/readHistory\(\)\n      \.then\(\(stored\) => \{[\s\S]*?\n    return \(\) => \{/)?.[0];
     expect(replay).toBeDefined();
     expect(replay).toMatch(/setHistoryLoaded\(true\)/);
     expect(replay?.match(/setHistoryLoaded\(true\)/g)).toHaveLength(2);
