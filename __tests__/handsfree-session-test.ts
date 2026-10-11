@@ -188,11 +188,12 @@ describe('reduceHandsfreeSession — every event has a destination', () => {
 });
 
 describe('reduceHandsfreeSession — the grace window', () => {
-  test('a resumed utterance cancels the pending send and concatenates', () => {
+  test('a resumed utterance cancels the pending send and shows in the tail, not held', () => {
     const confirming = step(listening(), { type: 'final', text: 'book a' }).state;
     const resumed = step(confirming, { type: 'partial', text: 'table for two' });
     expect(resumed.state.phase).toBe('confirming');
-    expect(resumed.state.held).toBe('book a table for two');
+    expect(resumed.state.held).toBe('book a');
+    expect(resumed.state.partial).toBe('book a table for two');
     expect(resumed.effects).toEqual([{ kind: 'arm-grace' }]);
   });
 
@@ -215,6 +216,62 @@ describe('reduceHandsfreeSession — the grace window', () => {
       { kind: 'send-turn', text: 'book a table for two' },
       { kind: 'play-earcon' },
     ]);
+  });
+
+  test('cumulative partials do not repeat the words they re-report', () => {
+    const out = reduce(listening(), [
+      { type: 'final', text: 'turn on the light' },
+      { type: 'partial', text: 'and' },
+      { type: 'partial', text: 'and the' },
+      { type: 'partial', text: 'and the fan' },
+    ]);
+    expect(out.state.held).toBe('turn on the light');
+    expect(out.state.partial).toBe('turn on the light and the fan');
+  });
+
+  test('a final of the resumed utterance replaces its partials, sent once', () => {
+    const out = reduce(listening(), [
+      { type: 'final', text: 'turn on the light' },
+      { type: 'partial', text: 'and' },
+      { type: 'partial', text: 'and the' },
+      { type: 'partial', text: 'and the fan' },
+      { type: 'final', text: 'and the fan' },
+    ]);
+    expect(out.state.held).toBe('turn on the light and the fan');
+    expect(out.state.tail).toBe('');
+
+    const sent = step(out.state, { type: 'grace-elapsed' });
+    expect(sent.effects).toEqual([
+      { kind: 'stop-listening' },
+      { kind: 'send-turn', text: 'turn on the light and the fan' },
+      { kind: 'play-earcon' },
+    ]);
+  });
+
+  test('partials with no second final send held plus the in-flight tail', () => {
+    const out = reduce(listening(), [
+      { type: 'final', text: 'turn on the light' },
+      { type: 'partial', text: 'and' },
+      { type: 'partial', text: 'and the' },
+      { type: 'partial', text: 'and the fan' },
+      { type: 'grace-elapsed' },
+    ]);
+    expect(out.effects).toEqual([
+      { kind: 'stop-listening' },
+      { kind: 'send-turn', text: 'turn on the light and the fan' },
+      { kind: 'play-earcon' },
+    ]);
+    expect(out.state.tail).toBe('');
+  });
+
+  test('a mute in the grace window drops the tail along with the held words', () => {
+    const out = reduce(listening(), [
+      { type: 'final', text: 'turn on the light' },
+      { type: 'partial', text: 'and the fan' },
+      { type: 'mute' },
+    ]);
+    expect(out.state.held).toBe('');
+    expect(out.state.tail).toBe('');
   });
 
   test('an empty held text never sends on grace-elapsed', () => {

@@ -504,6 +504,55 @@ test('barge-in cancels the spoken reply and reopens listening', async () => {
   await call.close();
 });
 
+test('a reply the operator talked over never lands in the turn that replaced it', async () => {
+  const engine = makeControllableEngine();
+  const turns = [];
+  const call = await startControllableCall({
+    engine,
+    // Ignores its abort signal on purpose: a backend that keeps streaming after
+    // it was cancelled is exactly what must not reach the next turn.
+    runTurn: (_session, text, handlers) =>
+      new Promise((resolve) => {
+        turns.push({ text, handlers, resolve });
+      }),
+  });
+  engine.emit('final', { text: 'turn one' });
+  await waitUntil(() => turns.length === 1);
+  turns[0].handlers.onDelta('First answer.');
+  await waitUntil(() => engine.spoken.some((spoken) => spoken.text === 'First answer.'));
+
+  engine.emit('userSpeechStart', {});
+  await waitUntil(() => engine.cancelled.length === 1);
+
+  try {
+    engine.emit('final', { text: 'turn two' });
+    await waitUntil(() => turns.length === 2);
+
+    // The talked-over turn finishes its reply after the replacement has started.
+    turns[0].handlers.onDelta('Stale reply.');
+    turns[0].resolve({ hasContent: true });
+    await new Promise((done) => setTimeout(done, 50));
+    assert.equal(
+      engine.spoken.filter((spoken) => /Stale|could not be completed/.test(spoken.text)).length,
+      0,
+      'nothing from the talked-over turn is spoken',
+    );
+    assert.equal(
+      call.frames.filter((frame) => frame.t === 'turn' && frame.state === 'failed').length,
+      0,
+      'the replacement turn is not failed by the stale completion',
+    );
+
+    // The replacement turn still answers as its own.
+    turns[1].handlers.onDelta('Second answer.');
+    turns[1].resolve({ hasContent: true });
+    await waitUntil(() => engine.spoken.some((spoken) => spoken.text === 'Second answer.'));
+  } finally {
+    call.first.terminate();
+    await call.close();
+  }
+});
+
 test('hanging up during a reply aborts the turn and ends the call', async () => {
   const engine = makeControllableEngine();
   let abortSeen = false;

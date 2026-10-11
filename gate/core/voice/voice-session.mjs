@@ -184,10 +184,15 @@ function isContinuation(state, event) {
   return Number.isFinite(elapsed) && elapsed >= 0 && elapsed < state.continuationMs;
 }
 
-/** Someone started talking over the reply: the speech stops and the mic reopens. */
+/**
+ * Someone started talking over the reply: the speech stops and the mic reopens.
+ * The turn behind the reply is cancelled too. It is talked over, not finished,
+ * and left running it would keep answering into whatever turn comes next.
+ */
 function bargeIn(state) {
   const cancelled = state.gen;
   return stay({ ...state, phase: 'listening', gen: state.gen + 1 }, [
+    { kind: 'turn.cancel' },
     { kind: 'engine.cancelSpeech', gen: cancelled },
     phaseEffect('listening'),
   ]);

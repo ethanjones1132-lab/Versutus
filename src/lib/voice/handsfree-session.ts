@@ -10,9 +10,10 @@
 // silence thresholds inevitably mistake a pause to think for "done talking" —
 // OpenAI's original turn-based voice mode was interrupted mid-thought by
 // exactly that rule. So a silence-triggered `final` does not send: it enters
-// `confirming`, a short hold during which a resumed `partial`/`final` is
-// concatenated onto the held text and the hold restarts. Only a hold that
-// elapses with nothing new sends.
+// `confirming`, a short hold during which a resumed `final` is concatenated
+// onto the held text and the hold restarts. A `partial` in the hold is only the
+// utterance still in flight, so it shows as a tail rather than joining `held`.
+// Only a hold that elapses with nothing new sends.
 
 /** The phases a call moves through, in the order a turn meets them. */
 export type HandsfreePhase =
@@ -104,8 +105,14 @@ export type HandsfreeSessionState = {
   callsEnded: number;
   /** The live transcript of the current turn, for the banner. */
   partial: string;
-  /** The text accumulated for the pending turn (finals + grace-window speech). */
+  /** The text accumulated for the pending turn (its finals, including grace-window ones). */
   held: string;
+  /**
+   * The latest partial in the grace window: the utterance still in flight, not
+   * yet finalized into `held`. Partials are cumulative hypotheses, so each one
+   * replaces the tail rather than appending to `held`.
+   */
+  tail?: string;
   /** The epoch (`Date.now()`) at which the call actually started, so the
    * surface can say how long it has been running; set only once the
    * native side confirms `started`. The reducer stays clock-free — the
@@ -129,6 +136,7 @@ export const INITIAL_HANDSFREE_SESSION: HandsfreeSessionState = {
   callsEnded: 0,
   partial: '',
   held: '',
+  tail: '',
   replyPlaying: false,
 };
 
@@ -159,6 +167,7 @@ function endCall(
       reason,
       partial: '',
       held: '',
+      tail: '',
       resumePhase: undefined,
       muteIntent: undefined,
       replyPlaying: false,
@@ -260,7 +269,14 @@ export function reduceHandsfreeSession(
     case 'starting': {
       if (event.type === 'started') {
         return {
-          state: { ...state, phase: 'listening', partial: '', held: '', startedAtMs: event.startedAtMs },
+          state: {
+            ...state,
+            phase: 'listening',
+            partial: '',
+            held: '',
+            tail: '',
+            startedAtMs: event.startedAtMs,
+          },
           effects: [{ kind: 'start-listening' }],
         };
       }
@@ -286,7 +302,13 @@ export function reduceHandsfreeSession(
       if (event.type === 'final') {
         if (!event.text.trim()) return stay(state);
         return {
-          state: { ...state, phase: 'confirming', partial: event.text, held: event.text.trim() },
+          state: {
+            ...state,
+            phase: 'confirming',
+            partial: event.text,
+            held: event.text.trim(),
+            tail: '',
+          },
           effects: [{ kind: 'arm-grace' }],
         };
       }
@@ -303,19 +325,29 @@ export function reduceHandsfreeSession(
     }
 
     case 'confirming': {
-      if (event.type === 'partial' || event.type === 'final') {
+      // A partial is the recognizer's cumulative hypothesis of the utterance in
+      // flight. Joining it onto `held` would repeat its words on every partial,
+      // so it only replaces the tail; a final is what finalizes words into `held`.
+      if (event.type === 'partial') {
+        const tail = event.text.trim();
+        return {
+          state: { ...state, tail, partial: joinSpoken(state.held, tail) },
+          effects: [{ kind: 'arm-grace' }],
+        };
+      }
+      if (event.type === 'final') {
         const held = joinSpoken(state.held, event.text);
         return {
-          state: { ...state, held, partial: held },
+          state: { ...state, held, tail: '', partial: held },
           effects: [{ kind: 'arm-grace' }],
         };
       }
       if (event.type === 'noSpeech') return stay(state);
       if (event.type === 'grace-elapsed') {
-        const text = state.held.trim();
+        const text = joinSpoken(state.held, state.tail ?? '').trim();
         if (!text) return stay(state);
         return {
-          state: { ...state, phase: 'sending', partial: '' },
+          state: { ...state, phase: 'sending', partial: '', tail: '' },
           effects: [
             { kind: 'stop-listening' },
             { kind: 'send-turn', text },
@@ -331,6 +363,7 @@ export function reduceHandsfreeSession(
             resumePhase: 'listening',
             partial: '',
             held: '',
+            tail: '',
           },
           effects: [{ kind: 'cancel-grace' }, { kind: 'set-muted', muted: true }],
         };

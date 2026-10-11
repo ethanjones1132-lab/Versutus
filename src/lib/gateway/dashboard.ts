@@ -901,6 +901,11 @@ const CAPABILITY_GROUP_DEFS: CapabilityGroupDef[] = [
   { id: 'nodes', label: 'Nodes' },
 ];
 
+/** Command groups some capability family claims. Any other group has no family to advertise it. */
+const CLAIMED_COMMAND_GROUPS = new Set<GatewayCommand['group']>(
+  CAPABILITY_GROUP_DEFS.flatMap((definition) => definition.commandGroups ?? []),
+);
+
 function groupIsAdvertised(
   definition: CapabilityGroupDef,
   capabilities: import('@/lib/gateway/types').GatewayCapabilities,
@@ -1144,7 +1149,11 @@ export function buildCapabilitySnapshot(
       methods[command.id] = { available: false, reason: 'not dispatched by this gateway' };
       return;
     }
-    const available = advertised.has(command.group) && commandAllowed(command, hello);
+    // The System group (environments, cron, artifacts) is claimed by no family,
+    // so nothing can advertise it. Its dispatch check above is the whole route
+    // signal; claimed groups still have to be advertised.
+    const groupOffered = !CLAIMED_COMMAND_GROUPS.has(command.group) || advertised.has(command.group);
+    const available = groupOffered && commandAllowed(command, hello);
     methods[command.id] = {
       available,
       reason: available ? undefined : 'not offered by this gateway',

@@ -282,6 +282,53 @@ describe('capability instances drive the snapshot', () => {
   });
 });
 
+describe('System-group commands follow method dispatch on a Gate', () => {
+  // A Gate that dispatches these methods but advertises no capability group
+  // that claims the System commands (environments, cron, artifacts).
+  const GATE_RPC_CAPABILITIES = {
+    object: 'manifest-derived.capabilities',
+    platform: 'Custom — versutus-gate',
+    features: { chat: true },
+    endpoints: { chat: { method: 'POST', path: '/v1/chat/completions' } },
+    rpcMethods: ['cron.status', 'environments.list', 'artifacts.list', 'sessions.list'],
+  } as unknown as GatewayCapabilities;
+  const operatorHello = { auth: { scopes: ['operator.read'] } } as any;
+
+  function methodsFor(capabilities: GatewayCapabilities, hello: any = null) {
+    return buildCapabilitySnapshot('connected', hello, undefined, Date.now(), capabilities).methods;
+  }
+
+  test('cron is available when the gateway dispatches cron.status', () => {
+    expect(methodsFor(GATE_RPC_CAPABILITIES, operatorHello).cron).toEqual({
+      available: true,
+      reason: undefined,
+    });
+  });
+
+  test('environments and artifacts are available when the gateway dispatches them', () => {
+    const methods = methodsFor(GATE_RPC_CAPABILITIES, operatorHello);
+    expect(methods['env-list'].available).toBe(true);
+    expect(methods.artifacts.available).toBe(true);
+  });
+
+  test('a System command is still refused when its method is not dispatched', () => {
+    const methods = methodsFor({ ...GATE_RPC_CAPABILITIES, rpcMethods: ['sessions.list'] } as GatewayCapabilities, operatorHello);
+    expect(methods.cron).toEqual({ available: false, reason: 'not dispatched by this gateway' });
+  });
+
+  test('a System command still needs its scope', () => {
+    const chatOnly = { auth: { scopes: ['chat'] } } as any;
+    expect(methodsFor(GATE_RPC_CAPABILITIES, chatOnly).cron.available).toBe(false);
+  });
+
+  test('a claimed group the gateway does not advertise stays unavailable', () => {
+    // Sessions is claimed by the sessions capability, which this chat-only
+    // Gate does not advertise, even though it dispatches sessions.list.
+    const methods = methodsFor(GATE_RPC_CAPABILITIES, operatorHello);
+    expect(methods['session-list']).toEqual({ available: false, reason: 'not offered by this gateway' });
+  });
+});
+
 describe('capability tiles reflect the selected backend', () => {
   const backends = [
     { id: 'opencode-local', label: 'OpenCode', kind: 'environment' as const, capabilities: ['sessions', 'tools'] },

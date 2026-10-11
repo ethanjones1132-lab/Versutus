@@ -50,6 +50,15 @@ test('barge-in cancels only the generation being spoken', () => {
   assert.equal(late.effects.length, 0);
 });
 
+test('barge-in cancels the turn behind the reply, as skip does', () => {
+  const live = speaking();
+  const barged = run([{ type: 'bargein' }], live.state);
+  assert.ok(barged.effects.some((e) => e.kind === 'turn.cancel'));
+  // A barge-in from a phone frame or the engine's own speech detection is the same fact.
+  const detected = run([{ type: 'userSpeechStart' }], live.state);
+  assert.ok(detected.effects.some((e) => e.kind === 'turn.cancel'));
+});
+
 test('skip stops the turn and reopens listening', () => {
   const live = speaking();
   const skipped = run([{ type: 'skip' }], live.state);

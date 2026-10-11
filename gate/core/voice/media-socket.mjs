@@ -430,6 +430,11 @@ export function attachVoiceMediaSocket({
             entry.controller.abort();
             speculative = null;
           }
+          // A turn still running here was talked over (a barge-in stops the speech
+          // but not the turn), so it is aborted before its replacement starts.
+          // Otherwise its late deltas would land in this turn's reply.
+          turnAbort?.abort();
+          turnAbort = null;
           turns += 1;
           void startTurn(effect.text);
           break;
@@ -580,6 +585,9 @@ export function attachVoiceMediaSocket({
           if (speculative === entry) entry.pending.push(event);
           return;
         }
+        // Only the turn the call is still waiting on may speak. One that was
+        // cancelled, or superseded by a newer turn, has no reply left to give.
+        if (turnAbort !== controller) return;
         dispatch(event);
       };
       const timer = setTimeout(() => {
