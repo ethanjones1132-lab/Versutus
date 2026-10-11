@@ -491,6 +491,38 @@ describe('PROV-3: a send a streaming turn turned away is parked, not dropped', (
     const rows = await loadOfflineQueue();
     expect(rows.map((row) => row.text)).toContain('typed after leaving');
   });
+
+  test('a photo turn a live turn turns away is refused, not parked without its pictures', async () => {
+    const PHOTO = { kind: 'image' as const, uri: 'data:image/jpeg;base64,QUJD', mimeType: 'image/jpeg' };
+    streamScript = async (options, onDelta) => {
+      onDelta('half an ans');
+      return hangUntilAborted(options);
+    };
+    await mount();
+    await startSend('explain');
+    expect(chatApi().isSending).toBe(true);
+
+    let outcome = '';
+    await act(async () => {
+      outcome = await gatewayApi().sendChatInput('what is this?', { attachments: [PHOTO] });
+    });
+    await settleStream();
+
+    // An outbox row carries the words and nothing else, so parking this turn
+    // would deliver the sentence and drop the images. The send reports `busy`
+    // and the composer keeps the pictures.
+    expect(outcome).toBe('busy');
+    expect(await loadOfflineQueue()).toEqual([]);
+    expect(chatApi().messages.some((message) => message.queued)).toBe(false);
+
+    // A text-only line typed against the same live turn is still parked.
+    await act(async () => {
+      outcome = await gatewayApi().sendChatInput('and one more thing');
+    });
+    await settleStream();
+    expect(outcome).toBe('queued');
+    expect((await loadOfflineQueue()).map((row) => row.text)).toEqual(['and one more thing']);
+  });
 });
 
 // Stop clears `isSending` synchronously, before the turn it stopped has actually
@@ -558,5 +590,32 @@ describe('PROV-6: the stopped turn unwinding cannot unlock the turn that replace
     expect(secondStream?.signal?.aborted).toBe(false);
     expect(chatApi().isSending).toBe(true);
     expect(chatApi().messages.filter((message) => message.streaming)).toHaveLength(1);
+  });
+});
+
+// A run-shaped outbox row leaves the queue before its run starts, so a run that
+// throws is a lost run and not a row to put back: a row put back on the queue is
+// sent again by the next flush, and the run executes a second time. The line
+// behind a failed run is still the operator's, and it still goes out.
+describe('a queued run that throws is not put back on the queue to run again', () => {
+  beforeEach(() => {
+    stageActive({ id: 'alpha', url: 'http://alpha.test:8642' });
+  });
+
+  test('the failed run leaves the durable outbox and the next queued line still goes out', async () => {
+    await saveOfflineQueue([
+      { id: 'run-1', text: '/run sweep the garage', gatewayId: 'alpha', createdAt: 1, run: {} },
+      { id: 'chat-1', text: 'after the run', gatewayId: 'alpha', createdAt: 2, turnId: 'turn-chat-1' },
+    ]);
+
+    // The fake client has no run API, so the run throws before it reaches the Gate.
+    await mount();
+    await settleStream();
+
+    // The failure is in the thread, where the operator can see it.
+    expect(chatApi().messages.some((message) => message.text.startsWith('Queued run failed:'))).toBe(true);
+    // Neither row is owed any more: the run was sent once and the line went out after it.
+    expect(await loadOfflineQueue()).toEqual([]);
+    expect(mockClients[0].streams).toHaveLength(1);
   });
 });

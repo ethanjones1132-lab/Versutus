@@ -5102,8 +5102,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // outbox exists for exactly this case, and a `busy` that stayed a
         // `busy` was a line the operator had typed, watched vanish, and never
         // saw again. A row the flush is sending keeps its own bookkeeping — it
-        // ends the batch and goes back on the queue itself.
-        if (outcome === 'busy' && !fromQueue) {
+        // ends the batch and goes back on the queue itself. A turn with photos
+        // is not parked, for the same reason the offline branch above refuses
+        // one: the row would carry the words and drop the images.
+        if (outcome === 'busy' && !fromQueue && (options?.attachments?.length ?? 0) === 0) {
           queueOfflineInput(trimmed, { botId: options?.botId, sessionId: options?.sessionId });
           return 'queued';
         }
@@ -7207,7 +7209,15 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           // notifyRunComplete as a live run's does. Its Bot was opened above,
           // so the run starts under the Bot it was typed for.
           if (isRunQueuedRow(item)) {
-            await sendRunQueued(item.text, item.id, item.run);
+            // A run that throws has still used up its row: sendRunQueued has
+            // already put the failure in the thread. Letting the throw escape
+            // would re-queue the row in the finally below, and the next flush
+            // would start the same run again. The flush goes on to the next row.
+            try {
+              await sendRunQueued(item.text, item.id, item.run);
+            } catch {
+              // Reported in the thread by sendRunQueued; the row is not re-sent.
+            }
           } else {
             const outcome = await sendChatInput(item.text, {
               fromQueue: true,

@@ -85,16 +85,17 @@ function baselineFor(document, engine) {
 }
 
 /** One call: send the fixture, then time `final` → the first binary frame. */
-async function measureOne({ WebSocket, url, token, fixture }) {
+export async function measureOne({ WebSocket, url, token, fixture }) {
   return new Promise((resolvePromise, rejectPromise) => {
     const ws = new WebSocket(url, { headers: { Authorization: `Bearer ${token}` } });
     let satisfied = false;
-    let endOfSpeechAt = null;
+    let timeout = null;
     const sample = { endOfSpeechAt: null, firstAudioAt: null };
 
     const finish = (error) => {
       if (satisfied) return;
       satisfied = true;
+      clearTimeout(timeout);
       try {
         ws.close();
       } catch {
@@ -110,12 +111,14 @@ async function measureOne({ WebSocket, url, token, fixture }) {
         ws.send(fixture.subarray(offset, offset + frameBytes), { binary: true });
         await sleep(FRAME_MS);
       }
-      setTimeout(() => finish(new Error('timed out waiting for the final/audio')), 20_000);
+      // Armed only if the answer has not already landed, or the timer would
+      // outlive the call and hold the process open.
+      if (!satisfied) timeout = setTimeout(() => finish(new Error('timed out waiting for the final/audio')), 20_000);
     });
 
     ws.on('message', (data, isBinary) => {
       if (isBinary) {
-        if (endOfSpeechAt !== null && sample.firstAudioAt === null) {
+        if (sample.endOfSpeechAt !== null && sample.firstAudioAt === null) {
           sample.firstAudioAt = Date.now();
           finish(null);
         }
@@ -123,7 +126,7 @@ async function measureOne({ WebSocket, url, token, fixture }) {
       }
       try {
         const frame = JSON.parse(data.toString());
-        if (frame.t === 'final' && endOfSpeechAt === null) endOfSpeechAt = Date.now();
+        if (frame.t === 'final' && sample.endOfSpeechAt === null) sample.endOfSpeechAt = Date.now();
       } catch {
         // ignore frames that are not JSON
       }
