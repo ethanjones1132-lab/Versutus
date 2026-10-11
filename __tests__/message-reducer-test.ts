@@ -124,6 +124,26 @@ describe('message reducer regression locks', () => {
     expect(result[0].interrupted).toBe(true);
   });
 
+  test('reconcileInterruptedMessages places a history turn once when two bubbles are its prefixes', () => {
+    let current = addStreamingPlaceholder([], 'r1');
+    current = appendStreamDelta(current, 'r1', 'Sure');
+    current = markInterrupted(current, 'r1');
+    current = addStreamingPlaceholder(current, 'r2');
+    current = appendStreamDelta(current, 'r2', 'Sure, here');
+    current = markInterrupted(current, 'r2');
+
+    const history: ChatMessage[] = [
+      { id: 'hist-1', role: 'assistant', text: 'Sure, here is the full answer' },
+    ];
+
+    const result = reconcileInterruptedMessages(current, history);
+    // The turn is placed once; the second bubble has no unplaced turn to take,
+    // so it stays as it was rather than duplicating hist-1's id.
+    expect(result.map((m) => m.id)).toEqual(['hist-1', 'run-r2']);
+    expect(result[1].interrupted).toBe(true);
+    expect(result[1].text).toBe('Sure, here');
+  });
+
   test('appendSystemNote appends a visible system-role note and stays bounded', () => {
     let messages: ChatMessage[] = [];
     for (let i = 0; i < MESSAGE_WINDOW_CAP + 3; i += 1) {

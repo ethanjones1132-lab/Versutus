@@ -1,5 +1,14 @@
 import { formatRunFailure } from '@/lib/gateway/run-failures';
 
+// Characters that can sit in an email address just before its `@`. An `@`
+// glued to one of these belongs to an address (ethan@ledger.com, first.last@x,
+// ethan+tag@x), so it is not a mention and must not offer or send a bot handoff.
+const ADDRESS_LOCAL_CHAR = /[\p{L}\p{N}_.+@-]/u;
+
+function startsMention(value: string, atIndex: number): boolean {
+  return atIndex === 0 || !ADDRESS_LOCAL_CHAR.test(value[atIndex - 1]);
+}
+
 export function extractMentions(text: string, rosterIds: string[]): string[] {
   const allowed = new Set(rosterIds.map((id) => id.toLowerCase()));
   const found: string[] = [];
@@ -9,6 +18,7 @@ export function extractMentions(text: string, rosterIds: string[]): string[] {
   while ((match = pattern.exec(text ?? '')) !== null) {
     const start = match.index ?? 0;
     const end = start + match[0].length;
+    if (!startsMention(text, start)) continue;
     if (text[end] === '@') continue;
     const id = match[1].toLowerCase();
     if (!allowed.has(id) || seen.has(id)) continue;
@@ -30,7 +40,8 @@ function isMentionTokenChar(ch: string | undefined): boolean {
  * The @token the caret sits in: prefix is what has been typed to the left of
  * the caret (empty right after `@`); start/end span the whole token so a pick
  * replaces it rather than splicing. Null when the caret is not inside one —
- * including email-shaped `@user@host`, which extractMentions also skips.
+ * including an `@` inside an address (`ethan@led`, or `@user@host`), which
+ * extractMentions also skips.
  */
 export function mentionTokenAtCaret(
   text: string,
@@ -42,6 +53,7 @@ export function mentionTokenAtCaret(
   while (i > 0 && isMentionTokenChar(value[i - 1])) i -= 1;
   if (i === 0 || value[i - 1] !== '@') return null;
   const start = i - 1;
+  if (!startsMention(value, start)) return null;
   let end = pos;
   while (end < value.length && isMentionTokenChar(value[end])) end += 1;
   if (value[end] === '@') return null;

@@ -19,6 +19,17 @@ test('extractMentions returns roster ids only', () => {
   expect(extractMentions('@Researcher', ids)).toEqual(['researcher']);
 });
 
+test('extractMentions skips an @ glued to an address before it', () => {
+  // A roster bot whose id is the email's domain must not be handed the message.
+  const ids = ['ledger'];
+  expect(extractMentions('hi @ledger', ids)).toEqual(['ledger']);
+  expect(extractMentions('mail ethan@ledger.com', ids)).toEqual([]);
+  expect(extractMentions('(@ledger)', ids)).toEqual(['ledger']);
+  expect(extractMentions('first.last@ledger', ids)).toEqual([]);
+  expect(extractMentions('ethan+tag@ledger', ids)).toEqual([]);
+  expect(extractMentions('x@@ledger', ids)).toEqual([]);
+});
+
 test('mentionPrefix matches Desktop handoff attribution', () => {
   expect(mentionPrefix('coder', 'look at this')).toBe('Message from 🤖 coder (@coder):\n\nlook at this');
 });
@@ -73,6 +84,13 @@ test('mentionTokenAtCaret skips an email-shaped @user@host token', () => {
   // extractMentions also drops @user because the next char is @.
   expect(mentionTokenAtCaret('email me @user@example.com', 10)).toBeNull();
   expect(mentionTokenAtCaret('email me @user@example.com', 14)).toBeNull();
+});
+
+test('mentionTokenAtCaret does not open the picker inside an address being typed', () => {
+  // Typing "ethan@led" must not offer @led as a mention of the host's bot.
+  expect(mentionTokenAtCaret('ethan@led', 9)).toBeNull();
+  expect(mentionTokenAtCaret('first.last@led', 14)).toBeNull();
+  expect(mentionTokenAtCaret('hi @led', 7)).toEqual({ prefix: 'led', start: 3, end: 7 });
 });
 
 test('filterMentionMembers is a case-insensitive prefix of the room, in room order', () => {

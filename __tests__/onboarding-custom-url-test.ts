@@ -58,7 +58,7 @@ describe('onboarding custom gateway URL affordance', () => {
 
   test('the validator keeps its dotted-decimal-first octet/hostname split', () => {
     const src = readValidator();
-    const ipBranch = src.indexOf('tailnetIpPattern.test(withoutPort) || lanIpPattern.test(withoutPort)');
+    const ipBranch = src.indexOf('dottedDecimalPattern.test(withoutPort)');
     const hostnameBranch = src.indexOf('hostnamePattern.test(withoutPort)');
     expect(ipBranch).toBeGreaterThanOrEqual(0);
     expect(hostnameBranch).toBeGreaterThan(ipBranch);

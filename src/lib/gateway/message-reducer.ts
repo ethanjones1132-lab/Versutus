@@ -362,6 +362,10 @@ export function reconcileInterruptedMessages(
 ): ChatMessage[] {
   let changed = false;
   const next: ChatMessage[] = [];
+  // History turns already placed into `next`. Two interrupted bubbles that are
+  // prefixes of one turn ("Sure", "Sure, here") must not both become it: the
+  // second would repeat the first's id, and React keys on that id.
+  const placed = new Set<string>();
 
   for (const message of current) {
     if (message.interrupted && message.role === 'assistant') {
@@ -371,10 +375,12 @@ export function reconcileInterruptedMessages(
           h.role === 'assistant' &&
           // History already in the list is not a reconciliation candidate.
           !current.some((m) => m.id === h.id) &&
+          !placed.has(h.id) &&
           (prefix.length === 0 || h.text.trim().startsWith(prefix)),
       );
       if (match) {
         next.push(match);
+        placed.add(match.id);
         changed = true;
         continue;
       }

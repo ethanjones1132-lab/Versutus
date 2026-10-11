@@ -10,6 +10,7 @@ describe('validatePcAddress', () => {
     ['studio.tailnet.ts.net', 'a tailnet hostname — what onboarding asks for'],
     ['ethans-pc.tail1234.ts.net', 'a hostname with digits and a hyphen'],
     ['studio.tailnet.ts.net:8760', 'a hostname with the Gate port'],
+    ['host-1.local', 'a mDNS name with a digit in its first label'],
   ])('accepts %s (%s)', (value) => {
     expect(validatePcAddress(value).valid).toBe(true);
   });
@@ -18,8 +19,26 @@ describe('validatePcAddress', () => {
     ['100.81.238.109', 'a tailnet IP'],
     ['192.168.1.5', 'a LAN IP'],
     ['100.81.238.109:8760', 'a tailnet IP with a port'],
+    ['192.168.1.10:8760', 'a LAN IP with the Gate port'],
   ])('accepts %s (%s)', (value) => {
     expect(validatePcAddress(value).valid).toBe(true);
+  });
+
+  // "1.2.3" has no hostname label to be one, but hostnamePattern accepts an
+  // all-digit dotted string; the URL parser reads it as 1.2.0.3. Any all-numeric
+  // dotted form must be a canonical quad or refused, whatever its part count.
+  test.each([
+    ['1.2.3', 'three numeric parts, which the URL parser reads as 1.2.0.3'],
+    ['1.2.3:8760', 'the same with the Gate port'],
+    ['1.2.3.4.5', 'five numeric parts'],
+    ['0250.168.0.1', 'a leading-zero octet the parser reinterprets'],
+    ['10', 'a bare number is not a hostname either'],
+  ])('rejects %s (%s) with the address message', (value) => {
+    const verdict = validatePcAddress(value);
+    expect(verdict.valid).toBe(false);
+    expect(verdict.message).toBe(
+      'Use a Tailscale hostname, tailnet IP (100.x.x.x), or LAN IP — optional :port (Gate is 8760).',
+    );
   });
 
   test.each([
