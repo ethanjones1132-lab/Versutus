@@ -455,3 +455,104 @@ describe('probeGatewayUrl body release', () => {
     expect(cancelled).toBe(true);
   });
 });
+
+describe('probeGatewayCandidates decides as soon as the verdict is known', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    (globalThis as { fetch: unknown }).fetch = realFetch;
+    jest.useRealTimers();
+  });
+
+  async function flushMicrotasks() {
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  }
+
+  /** A host that never answers, but settles once its request is aborted, as the real fetch does. */
+  function neverAnswers(signal: AbortSignal): Promise<Response> {
+    return new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener('abort', () =>
+        reject(new Error('fetch failed: Fetch request has been canceled')),
+      );
+    });
+  }
+
+  test('a healthy first candidate resolves without waiting for a black-holed one', async () => {
+    jest.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init: RequestInit) => {
+      const url = String(input);
+      signals.push(init.signal!);
+      return url.startsWith('http://fast:8641') ? Promise.resolve(okResponse()) : neverAnswers(init.signal!);
+    });
+
+    let settled = false;
+    const run = probeGatewayCandidates(
+      ['http://fast:8641', 'http://dead:8642'],
+      undefined,
+      10_000,
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    // The dead host would hold the wave for its full 10s timeout; the verdict
+    // is already known, so it must not.
+    await flushMicrotasks();
+    expect(settled).toBe(true);
+    const result = await run;
+    expect(result?.ok && result.url).toBe('http://fast:8641');
+    // The probe still in flight is aborted, not left running.
+    expect(signals[1]?.aborted).toBe(true);
+  });
+
+  test('a slow first candidate keeps its priority: the verdict waits for it to settle', async () => {
+    jest.useFakeTimers();
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init: RequestInit) => {
+      const url = String(input);
+      return url.startsWith('http://hang:8641') ? neverAnswers(init.signal!) : Promise.resolve(okResponse());
+    });
+
+    let settled = false;
+    const run = probeGatewayCandidates(
+      ['http://hang:8641', 'http://ok:8642'],
+      undefined,
+      10_000,
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    // The second candidate answered at once, but the first is listed before it
+    // and has not settled, so the verdict is still open...
+    await jest.advanceTimersByTimeAsync(9_000);
+    expect(settled).toBe(false);
+    // ...until the first times out. Then the second is the earliest success.
+    await jest.advanceTimersByTimeAsync(1_000);
+    const result = await run;
+    expect(result?.ok && result.url).toBe('http://ok:8642');
+  });
+
+  test('candidates listed after an answered success are never started', async () => {
+    jest.useFakeTimers();
+    const fetchMock = jest.fn((input: unknown, init: RequestInit) => {
+      const url = String(input);
+      return url.startsWith('http://ok:8642') ? Promise.resolve(okResponse()) : neverAnswers(init.signal!);
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const run = probeGatewayCandidates(
+      ['http://hang:8641', 'http://ok:8642', 'http://c:8643', 'http://late:8644'],
+      undefined,
+      10_000,
+    );
+    await flushMicrotasks();
+    // Only the lanes that were already open ran: the candidate after the
+    // answered success is not probed, since it cannot change the verdict.
+    const probed = fetchMock.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(probed.some((url) => url.includes('late'))).toBe(false);
+
+    await jest.advanceTimersByTimeAsync(10_000);
+    const result = await run;
+    expect(result?.ok && result.url).toBe('http://ok:8642');
+  });
+});

@@ -102,6 +102,7 @@ import {
   threadSpendFinishedRead,
   threadSpendNeedsWideRead,
   threadSpendRefreshKey,
+  threadSpendTrailingDelay,
   threadSpendWideReadDue,
   THREAD_SPEND_GLANCE_LIMIT,
   type SessionSpendRead,
@@ -1807,18 +1808,43 @@ export function ChatScreen() {
   // Held per surface like the narrow stamp, and on its own clock: the narrow
   // read's 10s floor is a floor, not a bound on the 200-row read's cost.
   const spendWideAtRef = useRef<Record<string, number>>({});
+  // The one trailing read a throttled finish owes: it runs when the minimum gap
+  // ends, so the newest turn is not lost to the throttle. Cleared by any read
+  // that runs first (it already sees the turn) and when the surface changes.
+  const spendTrailingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    const finished = threadSpendFinishedRead({
+    const edge = {
       surfaceKey: spendSurfaceKey,
       wasSending: spendWasSendingRef.current,
       sending: isSending,
       lastReadAt: spendSurfaceKey ? spendLastReadRef.current[spendSurfaceKey] : undefined,
       now: Date.now(),
-    });
+    };
+    const finished = threadSpendFinishedRead(edge);
     spendWasSendingRef.current = isSending;
-    if (!finished) return;
+    if (!finished) {
+      const delay = threadSpendTrailingDelay(edge);
+      if (delay === undefined) return;
+      // A newer throttled finish moves the one timer to its own deadline.
+      if (spendTrailingTimerRef.current !== null) clearTimeout(spendTrailingTimerRef.current);
+      spendTrailingTimerRef.current = setTimeout(() => {
+        spendTrailingTimerRef.current = null;
+        setSpendFinishTick((tick) => tick + 1);
+      }, delay);
+      return;
+    }
     setSpendFinishTick((tick) => tick + 1);
   }, [isSending, spendSurfaceKey]);
+  // A trailing read belongs to the surface it was scheduled on: switching
+  // surface clears it, and so does leaving the screen.
+  useEffect(
+    () => () => {
+      if (spendTrailingTimerRef.current === null) return;
+      clearTimeout(spendTrailingTimerRef.current);
+      spendTrailingTimerRef.current = null;
+    },
+    [spendSurfaceKey],
+  );
   const toolsSurfaceKey = toolsetsVisibleOn(surface)
     ? surface.kind === 'configurable'
       ? `cfg:${selectedBackendId ?? ''}`
@@ -2084,6 +2110,12 @@ export function ChatScreen() {
   const spendGlanceRef = useRef<Record<string, SessionSpendRead>>({});
   useEffect(() => {
     if (!spendEffectKey || !spendSurfaceKey || status !== 'connected') return;
+    // This read is sent after every turn that has finished so far, so a trailing
+    // read still owed for a throttled finish is redundant now.
+    if (spendTrailingTimerRef.current !== null) {
+      clearTimeout(spendTrailingTimerRef.current);
+      spendTrailingTimerRef.current = null;
+    }
     let cancelled = false;
     spendLastReadRef.current[spendSurfaceKey] = Date.now();
     const applyRead = (read: SessionSpendRead) => {

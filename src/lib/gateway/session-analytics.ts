@@ -296,8 +296,11 @@ export function threadSpendWideReadDue(input: {
 /**
  * Whether this edge is a turn finishing, far enough from the last read of this
  * surface. Two turns that end within `THREAD_SPEND_MIN_READ_MS` of each other
- * are ONE re-read: the second one is dropped, not queued behind a timer, so a
- * burst of short turns cannot turn the glance into a poll.
+ * do not each read: the finish that lands inside the floor is throttled, and
+ * `threadSpendTrailingDelay` says when the ONE read it owes falls due. The
+ * screen runs that read at the end of the floor, so the newest turn still
+ * reaches the glance, and a burst of short turns still costs one read per floor
+ * rather than one per turn.
  */
 export function threadSpendFinishedRead(input: {
   surfaceKey: string | undefined;
@@ -310,6 +313,29 @@ export function threadSpendFinishedRead(input: {
   if (input.wasSending !== true || input.sending !== false) return false;
   if (input.lastReadAt === undefined) return true;
   return input.now - input.lastReadAt >= THREAD_SPEND_MIN_READ_MS;
+}
+
+/**
+ * How long until the trailing read owed by a throttled turn finish falls due,
+ * or `undefined` when nothing is owed: the edge is not a turn finishing, the
+ * surface has no glance, the surface was never read (`threadSpendFinishedRead`
+ * reads that at once), or the floor has already passed (that finish reads now).
+ * The screen holds one timer for this delay. A newer throttled finish replaces
+ * it, and any read that runs first cancels it, since that read already sees the
+ * finished turn.
+ */
+export function threadSpendTrailingDelay(input: {
+  surfaceKey: string | undefined;
+  wasSending: boolean;
+  sending: boolean;
+  lastReadAt: number | undefined;
+  now: number;
+}): number | undefined {
+  if (!input.surfaceKey) return undefined;
+  if (input.wasSending !== true || input.sending !== false) return undefined;
+  if (input.lastReadAt === undefined) return undefined;
+  const wait = input.lastReadAt + THREAD_SPEND_MIN_READ_MS - input.now;
+  return wait > 0 ? wait : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

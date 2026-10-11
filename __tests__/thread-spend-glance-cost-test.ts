@@ -8,6 +8,7 @@ import {
   threadSpendFinishedRead,
   threadSpendNeedsWideRead,
   threadSpendRefreshKey,
+  threadSpendTrailingDelay,
 } from '@/lib/gateway/session-analytics';
 
 declare const __dirname: string;
@@ -77,8 +78,9 @@ describe('a turn finishing buys exactly one re-read', () => {
     // Turn one ends at t=0 against a surface last read long ago: it reads.
     expect(edge(true, false, 0 - 60_000, 0)).toBe(true);
     const lastReadAt = 0;
-    // Turn two ends 3s later — inside the 10s floor, so it is DROPPED rather
-    // than queued, and the glance stays on the total it already has.
+    // Turn two ends 3s later — inside the 10s floor, so it does not read on its
+    // own. The screen owes one trailing read at the end of the floor instead
+    // (see threadSpendTrailingDelay below), so the glance still catches up.
     expect(edge(true, false, lastReadAt, 3_000)).toBe(false);
     // A third at 4s after that first read is still inside the floor.
     expect(edge(true, false, lastReadAt, 4_000)).toBe(false);
@@ -110,6 +112,47 @@ describe('a turn finishing buys exactly one re-read', () => {
     expect(chatScreen).toMatch(/\n    setSpendFinishTick\(\(tick\) => tick \+ 1\);/);
     // The finish tick rides the same key the manual Retry bump uses.
     expect(chatScreen).toContain('`${spendRefreshKey}:finish${spendFinishTick}:retry${spendRetryTick}`');
+  });
+});
+
+describe('a throttled turn finish owes one trailing read', () => {
+  function delay(wasSending: boolean, sending: boolean, lastReadAt: number | undefined, now: number) {
+    return threadSpendTrailingDelay({ surfaceKey: 'bot:research', wasSending, sending, lastReadAt, now });
+  }
+
+  test('a finish inside the minimum gap is due when that gap ends', () => {
+    // Read at t=0, turn ends at t=3s: the trailing read falls due at t=10s.
+    expect(delay(true, false, 0, 3_000)).toBe(THREAD_SPEND_MIN_READ_MS - 3_000);
+    // A later throttled finish is due at the same moment, so it replaces the timer.
+    expect(delay(true, false, 0, 9_999)).toBe(1);
+  });
+
+  test('a finish that reads at once owes nothing trailing', () => {
+    expect(delay(true, false, undefined, 1_000)).toBeUndefined();
+    expect(delay(true, false, 0, THREAD_SPEND_MIN_READ_MS)).toBeUndefined();
+    expect(delay(true, false, 0, 60_000)).toBeUndefined();
+  });
+
+  test('anything that is not a finish edge owes nothing', () => {
+    expect(delay(false, false, 0, 3_000)).toBeUndefined();
+    expect(delay(false, true, 0, 3_000)).toBeUndefined();
+    expect(delay(true, true, 0, 3_000)).toBeUndefined();
+    expect(
+      threadSpendTrailingDelay({ surfaceKey: undefined, wasSending: true, sending: false, lastReadAt: 0, now: 3_000 }),
+    ).toBeUndefined();
+  });
+
+  test('a delay exists exactly when the finish edge is throttled', () => {
+    for (const now of [1_000, 5_000, 9_999, 10_000, 12_000]) {
+      const throttled = !threadSpendFinishedRead({
+        surfaceKey: 'bot:research',
+        wasSending: true,
+        sending: false,
+        lastReadAt: 0,
+        now,
+      });
+      expect(delay(true, false, 0, now) !== undefined).toBe(throttled);
+    }
   });
 });
 

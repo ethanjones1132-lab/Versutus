@@ -1,8 +1,15 @@
-import { PROBE_WAVE_CONCURRENCY, runCapped } from '@/lib/gateway/reachability-wave';
+import { PROBE_WAVE_CONCURRENCY } from '@/lib/gateway/reachability-wave';
 
 export type ProbeResult =
   | { ok: true; url: string; latencyMs: number; hasManifest?: boolean }
-  | { ok: false; url: string; error: string; code?: 'timeout' | 'connect-failed' | 'closed' | 'unreachable' };
+  | {
+      ok: false;
+      url: string;
+      error: string;
+      /** The HTTP status, when the gateway answered with a non-OK response. */
+      status?: number;
+      code?: 'timeout' | 'connect-failed' | 'http-error' | 'closed' | 'unreachable';
+    };
 
 /**
  * Phone → PC over a Tailscale DERP relay was measured at 0.9–1.7s RTT
@@ -70,11 +77,14 @@ export async function probeGatewayUrl(
     if (response.ok) {
       return { ok: true, url: baseUrl, latencyMs: Date.now() - started };
     }
+    // The host answered, so this is not a connect failure: the gateway itself
+    // refused or errored. Kept distinct so the copy does not blame the network.
     return {
       ok: false,
       url: baseUrl,
       error: `Gateway returned HTTP ${response.status}`,
-      code: 'connect-failed',
+      status: response.status,
+      code: 'http-error',
     };
   } catch (error) {
     clearTimeout(timer);
@@ -105,19 +115,68 @@ export async function probeGatewayCandidates(
   timeoutMs = GATEWAY_PROBE_TIMEOUT_MS,
 ): Promise<ProbeResult | null> {
   if (urls.length === 0) return null;
-  // Every candidate is attempted, so every candidate is announced up front in
-  // listed order. The pool below probes them concurrently; results keep input
-  // order, so the earliest-listed healthy candidate still wins.
+  // Every candidate is announced up front in listed order. The pool below probes
+  // them concurrently, but the verdict is priority-ordered: the earliest-listed
+  // success wins, and it is decided as soon as every candidate listed before it
+  // has failed. A healthy first candidate therefore never waits on a dead one
+  // further down the list.
   for (const url of urls) {
     onProgress?.(describeProbeTarget(url));
   }
-  const results = await runCapped(urls, PROBE_WAVE_CONCURRENCY, (url) =>
-    probeGatewayUrl(url, timeoutMs),
-  );
-  for (const result of results) {
-    if (result.ok) return result;
-  }
-  return null;
+  const controllers = urls.map(() => new AbortController());
+  return new Promise<ProbeResult | null>((resolve) => {
+    const results: (ProbeResult | undefined)[] = urls.map(() => undefined);
+    let next = 0;
+    let decided = false;
+
+    const finish = (verdict: ProbeResult | null) => {
+      if (decided) return;
+      decided = true;
+      // Probes still in flight cannot change the verdict any more: abort them.
+      for (let i = 0; i < urls.length; i += 1) {
+        if (results[i] === undefined) controllers[i].abort();
+      }
+      resolve(verdict);
+    };
+
+    // Scan in listed order. Stop at the first candidate still out: a success
+    // behind it cannot decide yet. The first success decides; if the scan gets
+    // through every candidate without one, there is no healthy gateway.
+    const evaluate = () => {
+      for (const result of results) {
+        if (result === undefined) return;
+        if (result.ok) {
+          finish(result);
+          return;
+        }
+      }
+      finish(null);
+    };
+
+    const startNext = () => {
+      // A success already on hand decides everything listed after it, so those
+      // candidates are never started.
+      const firstSuccess = results.findIndex((result) => result?.ok === true);
+      if (decided || next >= urls.length || (firstSuccess !== -1 && next > firstSuccess)) return;
+      const index = next;
+      next += 1;
+      const settle = (result: ProbeResult) => {
+        results[index] = result;
+        if (decided) return;
+        evaluate();
+        startNext();
+      };
+      probeGatewayUrl(urls[index], timeoutMs, controllers[index].signal).then(settle, () =>
+        settle({ ok: false, url: urls[index], error: 'Probe failed', code: 'unreachable' }),
+      );
+    };
+
+    // Fill the pool now, so the lanes run concurrently; each settled probe then
+    // starts the next candidate, keeping the pool at its cap.
+    for (let lane = 0; lane < Math.min(PROBE_WAVE_CONCURRENCY, urls.length); lane += 1) {
+      startNext();
+    }
+  });
 }
 
 /**
@@ -290,6 +349,13 @@ function describeProbeTarget(url: string): string {
 
 export function categorizeProbeError(result: ProbeResult | null): string {
   if (!result || result.ok) return '';
+  // The host answered, so name the answer before any network wording below.
+  if (result.code === 'http-error') {
+    if (result.status === 401 || result.status === 403) {
+      return `The gateway refused this device (HTTP ${result.status}). Check the token.`;
+    }
+    return `The gateway answered with HTTP ${result.status}. It may still be starting, or the address points at something else.`;
+  }
   const err = result.error.toLowerCase();
   if (result.code === 'timeout' || err.includes('time')) {
     return 'Gateway not responding in time. It may be starting up or blocked.';

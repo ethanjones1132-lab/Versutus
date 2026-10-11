@@ -20,6 +20,7 @@ import type { BotGroupRoom } from '@/lib/gateway/groups';
 import {
   SESSION_SPEND_LIST_LIMIT,
   THREAD_SPEND_GLANCE_LIMIT,
+  THREAD_SPEND_MIN_READ_MS,
   THREAD_SPEND_WIDE_MIN_READ_MS,
   threadSpendWideReadDue,
 } from '@/lib/gateway/session-analytics';
@@ -499,6 +500,26 @@ describe('the spend glance on a thread outside the newest 50 (SPEND-6)', () => {
     await redraw({});
     await settle();
     // The finish does read — once, and narrow.
+    expect(sessionListCalls().slice(before)).toEqual([THREAD_SPEND_GLANCE_LIMIT]);
+  });
+
+  test('a turn finishing inside the minimum gap is still read, once the gap has passed', async () => {
+    await mount();
+    await openBotThread();
+    const before = sessionListCalls().length;
+
+    mockEnv.chatSurface = { ...mockEnv.chatSurface, isSending: true };
+    await redraw({});
+    await advance(2_000);
+    mockEnv.chatSurface = { ...mockEnv.chatSurface, isSending: false };
+    await redraw({});
+    await settle();
+    // Two seconds after the last read the finish does not read on its own...
+    expect(sessionListCalls()).toHaveLength(before);
+
+    // ...but the turn is not lost: the one read it owes falls due when the floor
+    // passes, and it is narrow, since the wide read is still inside its cooldown.
+    await advance(THREAD_SPEND_MIN_READ_MS);
     expect(sessionListCalls().slice(before)).toEqual([THREAD_SPEND_GLANCE_LIMIT]);
   });
 });
