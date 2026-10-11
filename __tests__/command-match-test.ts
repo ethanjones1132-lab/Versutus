@@ -73,4 +73,49 @@ describe('findConfirmableSlash', () => {
     // word is a workflow name to run, so it must never read as destructive.
     expect(findConfirmableSlash('/workflow delete')).toBeUndefined();
   });
+
+  test('/env stop <id> matches as danger destructive so the confirmation sheet fires', () => {
+    expect(findConfirmableSlash('/env stop dev')).toMatchObject({
+      slash: '/env stop',
+      danger: 'destructive',
+      label: 'Stop environment',
+    });
+  });
+
+  test('/env start <id> matches as danger write', () => {
+    expect(findConfirmableSlash('/env start dev')).toMatchObject({
+      slash: '/env start',
+      danger: 'write',
+    });
+  });
+
+  test('/cron run|pause|resume|create with an argument match as danger write', () => {
+    expect(findConfirmableSlash('/cron run job1')).toMatchObject({
+      slash: '/cron run',
+      danger: 'write',
+      label: 'Run scheduled job',
+    });
+    expect(findConfirmableSlash('/cron pause job1')).toMatchObject({ slash: '/cron pause', danger: 'write' });
+    expect(findConfirmableSlash('/cron resume job1')).toMatchObject({ slash: '/cron resume', danger: 'write' });
+    expect(findConfirmableSlash('/cron create Nightly | 0 9 * * * | check')).toMatchObject({
+      slash: '/cron create',
+      danger: 'write',
+    });
+  });
+
+  test('/config rollback matches as danger destructive', () => {
+    expect(findConfirmableSlash('/config rollback')).toMatchObject({
+      slash: '/config rollback',
+      danger: 'destructive',
+      label: 'Roll back gateway config',
+    });
+  });
+
+  test('read-only /cron, /env and /config forms stay safe', () => {
+    expect(findConfirmableSlash('/cron list')).toMatchObject({ danger: 'safe' });
+    expect(findConfirmableSlash('/cron run')?.danger).toBe('safe');
+    expect(findConfirmableSlash('/env stop')?.danger).toBe('safe');
+    expect(findConfirmableSlash('/env list')).toMatchObject({ danger: 'safe' });
+    expect(findConfirmableSlash('/config')).toMatchObject({ danger: 'safe' });
+  });
 });

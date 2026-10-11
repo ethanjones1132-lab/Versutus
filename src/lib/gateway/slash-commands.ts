@@ -900,6 +900,17 @@ async function runWorkflowCommand(
     const prompt = applyWorkflowInput(step.prompt, input);
     try {
       const outcome = await context.runTask(prompt, () => undefined);
+      // An unresolved run never reached a terminal status, so its result is
+      // unknown (RunOutcome: not a finished run). Stop before a later step
+      // runs on top of it; the run is then not recorded below.
+      if (outcome.unresolved) {
+        lines.push(
+          `Step ${step.id} did not finish: its run's status is unknown${outcome.error ? ` (${outcome.error})` : ''}.`,
+        );
+        lines.push(`Stopped at step ${step.id}.`);
+        stopped = true;
+        break;
+      }
       const summary = outcome.result ?? outcome.error ?? outcome.status ?? 'no result';
       lines.push(`${step.id}: ${summary}`);
       const failed =
@@ -2345,9 +2356,14 @@ function describeCronRun(value: unknown): string {
   const name = (typeof value.at === 'string' && value.at.trim())
     ? value.at.trim()
     : (typeof value.id === 'string' ? value.id : 'unknown');
-  const status = value.status === 'running' ? 'running' : 'completed';
+  // The Gate reports an errored run through `error` and leaves `status` at
+  // 'completed', so the error field is what makes it failed. The bare 'error'
+  // end reason says nothing more than that, so only other text is shown.
+  const errorText = typeof value.error === 'string' ? value.error.trim() : '';
+  const status = value.status === 'running' ? 'running' : value.error ? 'failed' : 'completed';
+  const reason = errorText && errorText !== 'error' ? ` (${truncateLine(errorText, 80)})` : '';
   const turns = typeof value.turnCount === 'number' ? ` · ${value.turnCount} turns` : '';
-  return `- ${truncateLine(name, 120)} · ${status}${turns}`;
+  return `- ${truncateLine(name, 120)} · ${status}${reason}${turns}`;
 }
 
 /**

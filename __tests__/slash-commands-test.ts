@@ -644,6 +644,30 @@ describe('/workflow runs stored step sequences', () => {
     expect(result.text).toContain('Stopped at step s1');
   });
 
+  test('a step whose run never resolved stops the workflow, is not recorded as a run, and says so', async () => {
+    // The client stopped polling before the run reached a terminal status: the
+    // step's outcome is unknown, so step 2 must not run and the run must not
+    // tally as completed.
+    const runTask = jest
+      .fn()
+      .mockResolvedValueOnce({ runId: 'r1', status: 'unknown', unresolved: true, error: 'poll timed out' })
+      .mockResolvedValue({ runId: 'r2', status: 'succeeded', result: 'ok' });
+    const onWorkflowsChanged = jest.fn();
+    const result = await executeGatewaySlashCommand('/workflow Digest', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      runTask,
+      onWorkflowsChanged,
+    });
+    expect(runTask).toHaveBeenCalledTimes(1);
+    expect(result.text).toContain('Step s1 did not finish');
+    expect(result.text).toContain('status is unknown (poll timed out)');
+    expect(result.text).toContain('Stopped at step s1');
+    expect(onWorkflowsChanged).not.toHaveBeenCalled();
+  });
+
   test('an unknown name is refused without running anything', async () => {
     const runTask = jest.fn();
     const result = await executeGatewaySlashCommand('/workflow nope', {

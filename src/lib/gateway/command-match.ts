@@ -14,8 +14,11 @@ const LOCAL_RESERVED = ['/help', '/model', '/model set', '/model agent', '/model
  * `/workflow`'s management half is dispatched entirely on this device
  * (runWorkflowManagement), so GATEWAY_COMMANDS and dynamicCommands never
  * carry its danger — without this table the confirmation sheet can never
- * fire for them. `needsArg` marks a verb that is only that verb when a
- * workflow name follows: the dispatcher enters management on
+ * fire for them. `/cron run|pause|resume|create`, `/env start|stop` and
+ * `/config rollback` are the same case: their family handlers call the write
+ * RPCs directly, and the `/cron`, `/env` and `/config` registry rows are safe
+ * reads. `needsArg` marks a verb that is only that verb when a workflow name
+ * or job/environment id follows: the dispatcher enters management on
  * `verb<whitespace>` only, so `/workflow delete` alone is a run of a
  * workflow named "delete", not a removal.
  */
@@ -28,6 +31,13 @@ const LOCAL_DANGER_SLASHES: ReadonlyArray<{
   { prefix: '/workflow delete', label: 'Remove workflow', danger: 'destructive', needsArg: true },
   { prefix: '/workflow rename', label: 'Rename workflow', danger: 'write', needsArg: true },
   { prefix: '/workflow new', label: 'Save workflow', danger: 'write', needsArg: true },
+  { prefix: '/cron run', label: 'Run scheduled job', danger: 'write', needsArg: true },
+  { prefix: '/cron pause', label: 'Pause scheduled job', danger: 'write', needsArg: true },
+  { prefix: '/cron resume', label: 'Resume scheduled job', danger: 'write', needsArg: true },
+  { prefix: '/cron create', label: 'Create scheduled job', danger: 'write', needsArg: true },
+  { prefix: '/env start', label: 'Start environment', danger: 'write', needsArg: true },
+  { prefix: '/env stop', label: 'Stop environment', danger: 'destructive', needsArg: true },
+  { prefix: '/config rollback', label: 'Roll back gateway config', danger: 'destructive' },
 ];
 
 export function findConfirmableSlash(

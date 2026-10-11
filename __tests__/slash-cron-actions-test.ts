@@ -63,3 +63,37 @@ describe('/cron run|pause|resume routine actions', () => {
     expect(resume?.route.method).toBe('POST');
   });
 });
+
+describe('/cron history reports an errored run as failed', () => {
+  const runs = (extra: Record<string, unknown>) => ({
+    object: 'list',
+    data: [{ id: 'cron:abc123:2026-10-10T09:00', at: '2026-10-10T09:00', status: 'completed', turnCount: 3, ...extra }],
+  });
+
+  test('a run the Gate marks with an error renders failed, not completed', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue(runs({ error: 'error' }));
+    const result = await executeGatewaySlashCommand('/cron history abc123', testContext(gatewayRequest));
+    const [line] = result.text.split('\n').slice(1);
+    expect(line).toContain('failed');
+    expect(line).not.toContain('completed');
+    // The bare 'error' end reason adds nothing to the status word.
+    expect(line).not.toContain('(error)');
+  });
+
+  test('the error text is shown, truncated, when it says more than the end reason', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue(runs({ error: `provider timeout ${'x'.repeat(200)}` }));
+    const result = await executeGatewaySlashCommand('/cron history abc123', testContext(gatewayRequest));
+    const [line] = result.text.split('\n').slice(1);
+    expect(line).toContain('failed (provider timeout');
+    expect(line).toContain('...');
+    expect(line.length).toBeLessThan(200);
+  });
+
+  test('a run without an error still renders completed', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue(runs({}));
+    const result = await executeGatewaySlashCommand('/cron history abc123', testContext(gatewayRequest));
+    const [line] = result.text.split('\n').slice(1);
+    expect(line).toContain('completed');
+    expect(line).not.toContain('failed');
+  });
+});
