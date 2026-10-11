@@ -64,6 +64,59 @@ describe('a Bot handoff packet', () => {
     expect(botHandoffFromUnknown(JSON.parse(JSON.stringify(built)))).toEqual(built);
   });
 
+  test('a hand-edited packet is read into the full shape, so the import plan never has to guess', () => {
+    const handEdited = {
+      format: BOT_HANDOFF_FORMAT,
+      version: BOT_HANDOFF_VERSION,
+      bot: { id: 'scout', name: 'Scout' },
+    };
+    expect(botHandoffFromUnknown(handEdited)).toEqual({
+      format: BOT_HANDOFF_FORMAT,
+      version: BOT_HANDOFF_VERSION,
+      createdAt: '',
+      bot: { id: 'scout', name: 'Scout' },
+      routines: [],
+      skills: [],
+      chrome: {},
+      excluded: [],
+    });
+
+    // A field of the wrong kind is read as absent, never passed through.
+    const mistyped = botHandoffFromUnknown({
+      ...handEdited,
+      createdAt: 1700000000,
+      routines: 'two of them',
+      skills: { s1: true },
+      chrome: ['blue'],
+      excluded: 'memory',
+    });
+    expect(mistyped).toMatchObject({ createdAt: '', routines: [], skills: [], chrome: {}, excluded: [] });
+  });
+
+  test('an excluded list keeps only its string entries', () => {
+    const packet = botHandoffFromUnknown({
+      format: BOT_HANDOFF_FORMAT,
+      version: BOT_HANDOFF_VERSION,
+      bot: { id: 'scout' },
+      excluded: ['memory', 42, null, { credentials: true }, 'credentials'],
+    });
+    expect(packet?.excluded).toEqual(['memory', 'credentials']);
+  });
+
+  test('a valid packet reads back with every field it carries', () => {
+    const valid = {
+      format: BOT_HANDOFF_FORMAT,
+      version: BOT_HANDOFF_VERSION,
+      createdAt: '2026-09-13T00:00:00.000Z',
+      bot: { id: 'scout', name: 'Scout', modelId: null },
+      routines: [{ id: 'r1' }],
+      skills: [{ id: 's1' }],
+      chrome: { accent: 'blue' },
+      excluded: ['memory', 'credentials'],
+    };
+    expect(botHandoffFromUnknown(valid)).toEqual(valid);
+  });
+
   test('the file name is a safe slug of the Bot', () => {
     expect(handoffFileName(buildBotHandoff({ ...SOURCE, now: NOW }))).toBe('versutus-bot-scout.json');
     expect(

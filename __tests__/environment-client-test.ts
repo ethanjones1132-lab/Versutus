@@ -205,6 +205,61 @@ describe('buildEnvironmentUpdatePatch', () => {
       maxRunSeconds: 900,
     });
   });
+
+  it('keeps the additional roots an operator widened the policy with', () => {
+    const widened: Pick<EnvironmentSnapshot, 'workspacePolicy' | 'lifecycle'> = {
+      ...SNAPSHOT,
+      workspacePolicy: {
+        defaultRoot: 'C:\\Projects\\A',
+        defaultSandbox: 'read_only',
+        roots: ['C:\\Projects\\A', 'C:\\Projects\\B', 'C:\\Projects\\C'],
+        allowAdditionalRoots: true,
+      },
+    };
+    // Editing only the executable must not collapse the list to the default.
+    const sameDefault = buildEnvironmentUpdatePatch(
+      snapshotToEditInput({ ...SNAPSHOT, workspacePolicy: widened.workspacePolicy }),
+      widened,
+    ) as { workspacePolicy: Record<string, unknown> };
+    expect(sameDefault.workspacePolicy).toEqual({
+      defaultRoot: 'C:\\Projects\\A',
+      defaultSandbox: 'read_only',
+      roots: ['C:\\Projects\\A', 'C:\\Projects\\B', 'C:\\Projects\\C'],
+      allowAdditionalRoots: true,
+    });
+
+    // A new default replaces the old default's slot and keeps the rest.
+    const movedDefault = buildEnvironmentUpdatePatch(
+      { ...snapshotToEditInput(SNAPSHOT), workspaceRoot: 'C:\\Projects\\D' },
+      widened,
+    ) as { workspacePolicy: Record<string, unknown> };
+    expect(movedDefault.workspacePolicy.defaultRoot).toBe('C:\\Projects\\D');
+    expect(movedDefault.workspacePolicy.roots).toEqual([
+      'C:\\Projects\\D',
+      'C:\\Projects\\B',
+      'C:\\Projects\\C',
+    ]);
+    expect(movedDefault.workspacePolicy.allowAdditionalRoots).toBe(true);
+
+    // A new default that is already an additional root takes its place once.
+    const promoted = buildEnvironmentUpdatePatch(
+      { ...snapshotToEditInput(SNAPSHOT), workspaceRoot: 'C:\\Projects\\B' },
+      widened,
+    ) as { workspacePolicy: Record<string, unknown> };
+    expect(promoted.workspacePolicy.roots).toEqual(['C:\\Projects\\B', 'C:\\Projects\\C']);
+  });
+
+  it('falls back to the form root when the stored record has no roots list', () => {
+    const bare: Pick<EnvironmentSnapshot, 'workspacePolicy' | 'lifecycle'> = {
+      ...SNAPSHOT,
+      workspacePolicy: { defaultRoot: 'C:\\Projects\\A', defaultSandbox: 'read_only', allowAdditionalRoots: false },
+    };
+    const patch = buildEnvironmentUpdatePatch(
+      { ...snapshotToEditInput(SNAPSHOT), workspaceRoot: 'C:\\Projects\\D' },
+      bare,
+    ) as { workspacePolicy: Record<string, unknown> };
+    expect(patch.workspacePolicy.roots).toEqual(['C:\\Projects\\D']);
+  });
 });
 
 describe('buildEnvironmentRecord credential bindings', () => {

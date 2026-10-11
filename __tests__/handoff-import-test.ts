@@ -93,6 +93,27 @@ describe('botHandoffImportPlan refuses what the receiving host cannot take', () 
   });
 });
 
+describe('a hand-edited packet still plans without throwing', () => {
+  test('a packet with no excluded list imports with an empty exclusion list', () => {
+    const handEdited = { format: BOT_HANDOFF_FORMAT, version: BOT_HANDOFF_VERSION, bot: { id: 'scout', name: 'Scout' } };
+    const plan = botHandoffImportPlan(parseBotHandoffText(JSON.stringify(handEdited)), { canCreateBots: true });
+    expect(plan.ok).toBe(true);
+    if (plan.ok) expect(plan.excluded).toEqual([]);
+  });
+
+  test('non-string exclusion entries are dropped, not shown on the screen', () => {
+    const handEdited = {
+      format: BOT_HANDOFF_FORMAT,
+      version: BOT_HANDOFF_VERSION,
+      bot: { id: 'scout' },
+      excluded: ['memory', 7, null],
+    };
+    const plan = botHandoffImportPlan(parseBotHandoffText(handEdited), { canCreateBots: true });
+    expect(plan.ok).toBe(true);
+    if (plan.ok) expect(plan.excluded).toEqual(['memory']);
+  });
+});
+
 describe('the import copy never promises what the packet excludes', () => {
   test('an allowed plan names the Bot and what this host applies', () => {
     const copy = botHandoffImportCopy(botHandoffImportPlan(parseBotHandoffText(packet), { canCreateBots: true }));

@@ -301,3 +301,44 @@ describe('a refusal is attributed to whoever refused', () => {
     expect(humanizeGatewayError(gateRefusal).title).toBe('Gateway rejected the key');
   });
 });
+
+describe('a run failure outranks the auth heuristic', () => {
+  // A provider's 401 forwarded inside a run or Bot-send failure rides along
+  // with the Gate's own verdict (here the CLI probe's stderr). Reading it as
+  // this gateway's key sent the operator to replace a token that worked.
+  test('an upstream 401 inside a run failure reads as the run failure', () => {
+    const probe =
+      'environment degraded: protocol probe failed: exit 1 — 401 Unauthorized from the model provider (C:\\tools\\hermes.exe)';
+    for (const error of [new Error(probe), new GatewayHttpError(probe, 401)]) {
+      const result = humanizeGatewayError(error);
+      expect(result.title).toBe('Environment unreachable');
+      expect(result.affected).toBe('remote task');
+      expect(result.action).toBe('copy');
+      expect(result.cause).toContain('401 Unauthorized');
+    }
+  });
+
+  test('a bare gateway 401 still reads as a rejected key and reaches setup', () => {
+    const bare = [
+      new GatewayHttpError('HTTP 401 Unauthorized', 401),
+      new GatewayHttpError('Gateway rejected the API key', 403),
+      new Error('Gateway rejected the API key — HTTP 401 Unauthorized'),
+    ];
+    for (const error of bare) {
+      const result = humanizeGatewayError(error);
+      expect(result.title).toBe('Gateway rejected the key');
+      expect(result.action).toBe('setup');
+    }
+  });
+
+  test('an address or token refusal keeps its own verdict even when its text names a run state', () => {
+    // "expired" is a run-failure word; these refusals were already decided
+    // before the run-failure verdict and must still be.
+    const address = humanizeGatewayError(
+      new Error('Invalid gateway URL: "http://expired.local" does not parse — include host and port'),
+    );
+    expect(address.title).toBe('Gateway address looks wrong');
+    const token = humanizeGatewayError(new Error('setup token required; the old token expired'));
+    expect(token.title).toBe('Setup token required');
+  });
+});

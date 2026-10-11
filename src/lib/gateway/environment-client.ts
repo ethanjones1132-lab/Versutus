@@ -184,6 +184,21 @@ export function snapshotToEditInput(environment: EnvironmentSnapshot): CreateEnv
 }
 
 /**
+ * The stored roots with the default swapped for the form's. The old default's
+ * slot takes the new one; a new default the list does not hold leads it.
+ * Duplicates fold to their first position, so the Gate's order stays stable.
+ */
+function rootsWithDefault(
+  storedRoots: string[],
+  storedDefault: string | undefined,
+  nextDefault: string,
+): string[] {
+  const swapped = storedRoots.map((root) => (root === storedDefault ? nextDefault : root));
+  const listed = swapped.includes(nextDefault) ? swapped : [nextDefault, ...swapped];
+  return [...new Set(listed)];
+}
+
+/**
  * Fields the edit form owns, expressed as an `environments.update` patch. The
  * Gate shallow-merges this over the stored record, so everything else —
  * sandbox level, additional-roots flag, enabled — survives untouched: fixing
@@ -208,6 +223,10 @@ export function buildEnvironmentUpdatePatch(
   if (record.lifecycle.maxRunSeconds !== undefined) {
     preservedLifecycle.maxRunSeconds = record.lifecycle.maxRunSeconds;
   }
+  // The form edits only the default root. Extra roots the operator widened the
+  // policy with are kept; the form's single root is the fallback when the
+  // stored record reports no list at all.
+  const storedRoots = existing.workspacePolicy?.roots;
   const patch: Record<string, unknown> = {
     label: record.label,
     adapterId: record.adapterId,
@@ -217,7 +236,9 @@ export function buildEnvironmentUpdatePatch(
     providerRefs: record.providerRefs,
     workspacePolicy: {
       ...existing.workspacePolicy,
-      roots: record.workspacePolicy.roots,
+      roots: Array.isArray(storedRoots)
+        ? rootsWithDefault(storedRoots, existing.workspacePolicy?.defaultRoot, record.workspacePolicy.defaultRoot)
+        : record.workspacePolicy.roots,
       defaultRoot: record.workspacePolicy.defaultRoot,
     },
     lifecycle: preservedLifecycle,

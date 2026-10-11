@@ -142,7 +142,14 @@ export function humanizeGatewayError(
     };
   }
 
-  if (isAuthRejection(error)) {
+  // Run/Bot-send failures carry their own verdict — the Gate names the host
+  // state (multiplex off, refused key, dead environment, spent budget) in the
+  // message it forwards. Classify before the auth and network heuristics, so
+  // e.g. a spawn failure is not mistaken for a transport problem, and a
+  // provider's 401 forwarded inside a run failure is not read as this gateway's key.
+  const failureView = describeRunFailure(message);
+
+  if (failureView.kind === 'generic' && isAuthRejection(error)) {
     return {
       title: 'Gateway rejected the key',
       cause: 'The API key or token was refused.',
@@ -173,11 +180,6 @@ export function humanizeGatewayError(
     };
   }
 
-  // Run/Bot-send failures carry their own verdict — the Gate names the host
-  // state (multiplex off, refused key, dead environment, spent budget) in the
-  // message it forwards. Classify before the network heuristic so e.g. a
-  // spawn failure is not mistaken for a transport problem.
-  const failureView = describeRunFailure(error instanceof Error ? error.message : String(error));
   if (failureView.kind !== 'generic') {
     return {
       title: failureView.title,

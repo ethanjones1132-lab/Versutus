@@ -102,7 +102,21 @@ export function botHandoffFromUnknown(value: unknown): BotHandoffPacket | null {
   const bot = raw.bot;
   if (!bot || typeof bot !== 'object' || Array.isArray(bot)) return null;
   if (!text((bot as Record<string, unknown>).id)) return null;
-  return raw as unknown as BotHandoffPacket;
+  // A hand-edited packet may omit or mistype anything after the Bot record.
+  // Read every field into its declared shape here, so the import plan can
+  // rely on `excluded` being an array without checking it again.
+  return {
+    format: BOT_HANDOFF_FORMAT,
+    version: BOT_HANDOFF_VERSION,
+    createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
+    bot: bot as BotHandoffBot,
+    routines: list(raw.routines),
+    skills: list(raw.skills),
+    chrome: record(raw.chrome),
+    excluded: Array.isArray(raw.excluded)
+      ? raw.excluded.filter((entry): entry is string => typeof entry === 'string')
+      : [],
+  };
 }
 
 /** The file a packet is written under: `versutus-bot-<slug>.json`. */
