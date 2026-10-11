@@ -88,7 +88,9 @@ describe('/config patch forwards to the registered config-patch entry', () => {
       },
     });
     expect(gatewayRequest).not.toHaveBeenCalled();
-    expect(result.text).toContain('no config REST');
+    // Judged by its own config-patch entry (longest slash), so the guidance is
+    // config.patch's: a write, which Hermes has no remote route for.
+    expect(result.text).toContain('no remote config writes exist');
     expect(result.text).toContain('Use /help to see what is.');
     expect(result.text).not.toContain('Config path not found');
   });
