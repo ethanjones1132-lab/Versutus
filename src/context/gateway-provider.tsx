@@ -239,6 +239,7 @@ import {
   loadTranscripts,
   removeTranscript,
   removeTranscriptsForSession,
+  reportTranscriptWriteFailure,
   updateTranscript,
 } from '@/lib/gateway/transcript';
 import { clearSessionLabelsForGateway } from '@/lib/gateway/session-labels';
@@ -3999,7 +4000,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       };
       void appendTranscript(activeGateway.id, sessionKey, entry).then((updated) => {
         setTranscripts(updated);
-      });
+      }).catch(reportTranscriptWriteFailure);
     }
 
       return id;
@@ -4085,7 +4086,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         const sessionKey = activeGateway.sessionKey ?? sessionIdRef.current ?? 'default';
         void updateTranscript(activeGateway.id, sessionKey, id, statusPatch).then((updated) => {
           setTranscripts(updated);
-        });
+        }).catch(reportTranscriptWriteFailure);
       }
     }
   }, [activeGateway]);
@@ -5289,7 +5290,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             status: 'complete',
             durationMs: duration,
             runId: response.runId,
-          }).then((t) => setTranscripts(t));
+          }).then((t) => setTranscripts(t)).catch(reportTranscriptWriteFailure);
         }
         return 'complete';
       } catch (error) {
@@ -6024,7 +6025,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const sessionKey = activeGateway.sessionKey ?? sessionIdRef.current ?? 'default';
       void updateTranscript(activeGateway.id, sessionKey, id, {
         status: 'cancelled',
-      }).then((t) => setTranscripts(t));
+      }).then((t) => setTranscripts(t)).catch(reportTranscriptWriteFailure);
     }
     setIsCommandRunning(false);
     setRunningCommandLabel(null);
@@ -7385,7 +7386,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const gateway = activeGatewayRef.current;
       if (gateway) {
         const sessionKey = gateway.sessionKey ?? sessionIdRef.current ?? 'default';
-        void removeTranscript(gateway.id, sessionKey, id).then((updated) => setTranscripts(updated));
+        void removeTranscript(gateway.id, sessionKey, id).then((updated) => setTranscripts(updated)).catch(reportTranscriptWriteFailure);
       }
     },
     [persistOfflineQueue],

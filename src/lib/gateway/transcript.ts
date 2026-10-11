@@ -189,6 +189,36 @@ async function readStoredEntries(key: string): Promise<CommandTranscriptEntry[]>
   }
 }
 
+/**
+ * The read a mutation builds its list from. `readStoredEntries` answers [] for
+ * every failure because the display path can afford to; a mutation cannot, since
+ * the write behind it replaces whatever the key holds. So the three cases are
+ * told apart here:
+ *   - the read is refused: it throws, the mutation rejects, and nothing is
+ *     written. An empty list here would overwrite the whole transcript;
+ *   - nothing is stored: [] is right, there is nothing to lose;
+ *   - the blob is there but is not a list: it is kept under a sibling key before
+ *     the mutation continues from [], so one bad blob cannot wedge the thread and
+ *     nothing is silently erased.
+ */
+async function readEntriesForMutation(key: string): Promise<CommandTranscriptEntry[]> {
+  const raw = await keyValueStorage.getItem(key);
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = undefined;
+  }
+  if (Array.isArray(parsed)) return parsed as CommandTranscriptEntry[];
+  // Preserved before the key is written over. If the copy cannot be stored the
+  // mutation rejects here, and the corrupt blob is still where it was.
+  const preserved = `${key}.corrupt`;
+  await keyValueStorage.setItem(preserved, raw);
+  console.warn(`[transcript] "${key}" did not hold a transcript list; kept it as "${preserved}" and starting over`);
+  return [];
+}
+
 export async function loadTranscripts(gatewayId: string, sessionKey: string): Promise<CommandTranscriptEntry[]> {
   const key = transcriptKey(gatewayId, sessionKey);
   // The held copy, not the stored one: a read that went back to storage while
@@ -223,7 +253,7 @@ async function mutateEntries(
 ): Promise<CommandTranscriptEntry[]> {
   const key = transcriptKey(gatewayId, sessionKey);
   return enqueueTranscriptMutation(key, async () => {
-    const existing = entriesByKey.get(key) ?? (await readStoredEntries(key));
+    const existing = entriesByKey.get(key) ?? (await readEntriesForMutation(key));
     // The bound is applied here, so what a caller is handed is the list the
     // store will hold rather than a longer one it never sees again.
     const limited = apply(existing).slice(-200);
@@ -318,4 +348,14 @@ export async function clearTranscriptsForGateway(gatewayId: string): Promise<voi
 
 export function createTranscriptId(prefix = 'cmd'): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * The catch for a fire-and-forget transcript mutation. A mutation now rejects
+ * when the store refuses its read (rather than writing an empty list over the
+ * transcript), and a caller that does not await it must not turn that into an
+ * unhandled rejection. Nothing was written, so a warning is all there is to say.
+ */
+export function reportTranscriptWriteFailure(error: unknown): void {
+  console.warn(`[transcript] A transcript change was not saved: ${describeError(error)}`);
 }

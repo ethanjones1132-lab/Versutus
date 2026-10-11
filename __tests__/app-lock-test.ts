@@ -134,6 +134,13 @@ describe('the stored flag', () => {
     mockGetItem.mockResolvedValueOnce('{"appLock":');
     expect(await loadAppLock()).toBe(false);
   });
+
+  test('a read the store refuses throws — it is not an absent flag', async () => {
+    // Reading a refused read as off is what let a cold start open the app
+    // unlocked, so the caller has to be able to see the difference.
+    mockGetItem.mockRejectedValueOnce(new Error('the keychain is locked'));
+    await expect(loadAppLock()).rejects.toThrow('the keychain is locked');
+  });
 });
 
 describe('heldRouteHref', () => {
@@ -181,6 +188,25 @@ describe('deviceAppLockState', () => {
     mockGetItem.mockResolvedValueOnce('true');
     mockHasHardware.mockRejectedValueOnce(new Error('UnavailabilityError'));
     expect(await deviceAppLockState()).toEqual({ enabled: true, reason: 'unsupported' });
+  });
+
+  test('an absent flag is off on a device that can authenticate', async () => {
+    expect(await deviceAppLockState()).toEqual({ enabled: false, reason: null });
+  });
+
+  test('a refused read of the flag on a device that can authenticate holds the lock', async () => {
+    // The stored value is unknown, not off. The device can answer the biometric
+    // prompt, so the lock holds and the operator unlocks with Face ID, a
+    // fingerprint or the passcode, rather than the app opening with no check.
+    mockGetItem.mockRejectedValueOnce(new Error('the keychain is locked'));
+    expect(await deviceAppLockState()).toEqual({ enabled: true, reason: null });
+  });
+
+  test('a refused read of the flag on a device that cannot authenticate stays off', async () => {
+    // Nothing could lift a lock here, so holding one would seal the operator out.
+    mockGetItem.mockRejectedValueOnce(new Error('the keychain is locked'));
+    mockHasHardware.mockResolvedValueOnce(false);
+    expect(await deviceAppLockState()).toEqual({ enabled: false, reason: 'unsupported' });
   });
 });
 

@@ -95,11 +95,16 @@ export function heldRouteHref(pathname: string, query: HeldRouteQuery): string {
   return search ? `${pathname}?${search}` : pathname;
 }
 
-/** Read this device's stored opt-in. Absent and corrupt both read as off. */
+/**
+ * Read this device's stored opt-in. Absent and corrupt both read as off. A read
+ * the store refuses THROWS rather than reading as off: a refused read is not an
+ * absent flag, and the caller has to be able to tell the two apart so a device
+ * that can authenticate fails closed (see `deviceAppLockState`).
+ */
 export async function loadAppLock(): Promise<boolean> {
+  const raw = await keyValueStorage.getItem(APP_LOCK_STORAGE_KEY);
+  if (raw === null) return false;
   try {
-    const raw = await keyValueStorage.getItem(APP_LOCK_STORAGE_KEY);
-    if (raw === null) return false;
     return appLockFromStored(JSON.parse(raw) as unknown);
   } catch {
     return false;

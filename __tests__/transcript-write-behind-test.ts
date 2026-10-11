@@ -311,3 +311,83 @@ describe('a store that will not hand the key over', () => {
     warn.mockRestore();
   });
 });
+
+describe('a mutation never writes over a transcript it could not read', () => {
+  test('a refused read rejects the mutation, writes nothing, and does not strand the key', async () => {
+    const gatewayId = freshGateway();
+    const key = storageKey(gatewayId, 'session');
+    const original = JSON.stringify([entry({ id: 'cmd-1', gatewayId })]);
+    mockBacking.set(key, original);
+
+    // The store refuses the one read the append makes. Reading that as "nothing
+    // stored" would write the new entry over the whole transcript.
+    mockGet.mockImplementationOnce(async () => {
+      throw new Error('SQLite disk image is malformed');
+    });
+
+    await expect(
+      appendTranscript(gatewayId, 'session', entry({ id: 'cmd-2', gatewayId })),
+    ).rejects.toThrow('SQLite disk image is malformed');
+    await flushTranscripts();
+
+    expect(mockSet).not.toHaveBeenCalled();
+    expect(mockBacking.get(key)).toBe(original);
+
+    // The refusal was one read. The next append reads the stored list and adds
+    // to it, rather than starting from nothing.
+    await appendTranscript(gatewayId, 'session', entry({ id: 'cmd-3', gatewayId }));
+    await flushTranscripts();
+    expect(stored(gatewayId, 'session').map((item) => item.id)).toEqual(['cmd-1', 'cmd-3']);
+  });
+
+  test.each([
+    ['an unparsable blob', '{not json'],
+    ['a blob that is not a list', '{"summary":"not a list"}'],
+  ])('%s is kept under a sibling key before the list replaces it', async (_case, raw) => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const gatewayId = freshGateway();
+    const key = storageKey(gatewayId, 'session');
+    const preserved = `${key}.corrupt`;
+    mockBacking.set(key, raw);
+
+    const fresh = entry({ id: 'cmd-new', gatewayId });
+    await appendTranscript(gatewayId, 'session', fresh);
+
+    // The copy is written first, and the list that replaces the key only lands
+    // on the flush after it.
+    expect(mockSet.mock.calls.map(([written]) => written)).toEqual([preserved]);
+    expect(mockBacking.get(preserved)).toBe(raw);
+
+    await flushTranscripts();
+    expect(mockSet.mock.calls.map(([written]) => written)).toEqual([preserved, key]);
+    expect(stored(gatewayId, 'session')).toEqual([fresh]);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    warn.mockRestore();
+  });
+
+  test('a key that stores nothing starts a fresh list with no copy kept', async () => {
+    const gatewayId = freshGateway();
+    await appendTranscript(gatewayId, 'session', entry({ id: 'cmd-1', gatewayId }));
+    await flushTranscripts();
+
+    expect([...mockBacking.keys()].some((written) => written.endsWith('.corrupt'))).toBe(false);
+  });
+
+  test('a copy that cannot be kept rejects the mutation and leaves the corrupt blob in place', async () => {
+    const gatewayId = freshGateway();
+    const key = storageKey(gatewayId, 'session');
+    mockBacking.set(key, '{not json');
+    mockSet.mockImplementationOnce(async () => {
+      throw new Error('row too big');
+    });
+
+    await expect(
+      appendTranscript(gatewayId, 'session', entry({ id: 'cmd-1', gatewayId })),
+    ).rejects.toThrow('row too big');
+    await flushTranscripts();
+
+    expect(mockBacking.get(key)).toBe('{not json');
+    expect(mockBacking.has(`${key}.corrupt`)).toBe(false);
+  });
+});

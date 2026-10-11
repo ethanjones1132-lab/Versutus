@@ -235,6 +235,23 @@ export async function loadVoicePreferences(): Promise<VoicePreferences> {
   }
 }
 
+/**
+ * The read a fold is built on. `loadVoicePreferences` answers {} for a refused
+ * read too, which is right for the header but wrong here: the write behind a
+ * fold replaces the whole blob, so an empty base would erase every Bot voice and
+ * speaker toggle the device holds. A refused read therefore throws. Only a
+ * missing blob, or one that does not parse, reads as {}.
+ */
+async function readVoicePreferencesForWrite(): Promise<VoicePreferences> {
+  const raw = await keyValueStorage.getItem(VOICE_PREFERENCES_STORAGE_KEY);
+  if (!raw) return {};
+  try {
+    return voicePreferencesFromUnknown(JSON.parse(raw) as unknown);
+  } catch {
+    return {};
+  }
+}
+
 /** Write the preferences back. Best-effort, like the labels and the draft. */
 export async function saveVoicePreferences(preferences: VoicePreferences): Promise<void> {
   try {
@@ -279,8 +296,17 @@ export async function updateVoicePreferences(
   fold: (stored: VoicePreferences) => VoicePreferences,
 ): Promise<VoicePreferences> {
   return enqueueVoiceMutation(async () => {
-    const written = fold(await loadVoicePreferences());
+    const written = fold(await readVoicePreferencesForWrite());
     await saveVoicePreferences(written);
     return written;
   });
+}
+
+/**
+ * The catch for an update nobody awaits. `updateVoicePreferences` rejects when
+ * the store refuses its read (nothing is written then), and a fire-and-forget
+ * caller must not turn that into an unhandled rejection.
+ */
+export function reportVoicePreferencesWriteFailure(error: unknown): void {
+  console.warn(`[voice-preferences] A voice preference change was not saved: ${error instanceof Error ? error.message : String(error)}`);
 }

@@ -23,10 +23,23 @@ export type AppLockState = {
   reason: AppLockUnavailableReason | null;
 };
 
-/** The stored opt-in read against what this device can actually do. */
+/**
+ * The stored opt-in read against what this device can actually do. A flag the
+ * store refuses to give up is held as on when the device can answer the biometric
+ * prompt: the operator unlocks with Face ID, a fingerprint or the passcode, so
+ * that fails closed without sealing anyone out. A device that cannot answer
+ * keeps the lock off, as it always has.
+ */
 export async function deviceAppLockState(): Promise<AppLockState> {
-  const enabled = await loadAppLock();
-  return { enabled, reason: await deviceAppLockUnavailableReason() };
+  let stored: boolean | null;
+  try {
+    stored = await loadAppLock();
+  } catch {
+    stored = null;
+  }
+  const reason = await deviceAppLockUnavailableReason();
+  if (stored === null) return { enabled: reason === null, reason };
+  return { enabled: stored, reason };
 }
 
 /**

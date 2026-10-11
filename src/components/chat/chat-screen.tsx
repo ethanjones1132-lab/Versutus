@@ -185,6 +185,7 @@ import {
   SILENT_MODE_HINT_COPY,
   speakerPreferenceKey,
   updateVoicePreferences,
+  reportVoicePreferencesWriteFailure,
   type BotVoice,
 } from '@/lib/voice/voice-preferences';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
@@ -836,7 +837,7 @@ export function ChatScreen() {
     void updateVoicePreferences((stored) => {
       const written = applySpeakerOn(stored, key, next);
       return showHint ? acknowledgeSilentModeHint(written) : written;
-    });
+    }).catch(reportVoicePreferencesWriteFailure);
   }, [speakerKey, speakerOn, silentHintOwed]);
 
   // A Bot's own voice (B2) is the same device store's, keyed by the gateway and
@@ -914,7 +915,7 @@ export function ChatScreen() {
         identifier
           ? applyBotVoice(stored, key, { voiceIdentifier: identifier })
           : clearVoicePreference(stored, key),
-      );
+      ).catch(reportVoicePreferencesWriteFailure);
     },
     [botVoiceKey],
   );
@@ -934,7 +935,7 @@ export function ChatScreen() {
         const written = applyBotVoice(stored, key, patch);
         setBotVoice(readBotVoice(written, key));
         return written;
-      });
+      }).catch(reportVoicePreferencesWriteFailure);
     },
     [botVoiceKey],
   );

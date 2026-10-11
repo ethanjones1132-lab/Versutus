@@ -27,6 +27,7 @@ import {
   saveVoicePreferences,
   shouldShowSilentModeHint,
   speakerPreferenceKey,
+  updateVoicePreferences,
   voicePreferencesFromUnknown,
   VOICE_PREFERENCES_STORAGE_KEY,
   type BotVoice,
@@ -515,6 +516,59 @@ describe('loadVoicePreferences / saveVoicePreferences', () => {
   test('a refused read does not throw — an unread preference is nothing stored', async () => {
     mockGet.mockRejectedValue(new Error('disk full'));
     await expect(loadVoicePreferences()).resolves.toEqual({});
+  });
+});
+
+describe('updateVoicePreferences', () => {
+  const backing = new Map<string, string>();
+  const KEY = speakerPreferenceKey(BOT_CHAT);
+
+  beforeEach(() => {
+    backing.clear();
+    mockGet.mockReset().mockImplementation(async (key: string) => backing.get(key) ?? null);
+    mockSet.mockReset().mockImplementation(async (key: string, value: string) => {
+      backing.set(key, value);
+    });
+  });
+
+  test('a normal update folds onto what is stored, and what it writes is what it answers', async () => {
+    backing.set(VOICE_PREFERENCES_STORAGE_KEY, JSON.stringify({ [VOICE_KEY]: CHOSEN_VOICE }));
+    const fold = jest.fn((stored: VoicePreferences) => applySpeakerOn(stored, KEY, true));
+
+    const written = await updateVoicePreferences(fold);
+
+    expect(fold).toHaveBeenCalledWith({ [VOICE_KEY]: CHOSEN_VOICE });
+    expect(written).toEqual({ [VOICE_KEY]: CHOSEN_VOICE, [KEY]: true });
+    expect(mockSet).toHaveBeenCalledWith(VOICE_PREFERENCES_STORAGE_KEY, JSON.stringify(written));
+    await expect(loadVoicePreferences()).resolves.toEqual(written);
+  });
+
+  test('a refused read rejects the update and writes nothing, so no Bot voice is erased', async () => {
+    // A read that failed is not an empty blob. Folding one change onto {} and
+    // writing it back would erase the Bot voice stored beside it.
+    const stored = JSON.stringify({ [VOICE_KEY]: CHOSEN_VOICE });
+    backing.set(VOICE_PREFERENCES_STORAGE_KEY, stored);
+    mockGet.mockRejectedValueOnce(new Error('disk full'));
+    const fold = jest.fn((current: VoicePreferences) => applySpeakerOn(current, KEY, true));
+
+    await expect(updateVoicePreferences(fold)).rejects.toThrow('disk full');
+    expect(fold).not.toHaveBeenCalled();
+    expect(mockSet).not.toHaveBeenCalled();
+    expect(backing.get(VOICE_PREFERENCES_STORAGE_KEY)).toBe(stored);
+
+    // The refusal does not wedge the queue behind it: the next change reads the
+    // stored blob and keeps the voice.
+    await expect(updateVoicePreferences((current) => applySpeakerOn(current, KEY, true))).resolves.toEqual({
+      [VOICE_KEY]: CHOSEN_VOICE,
+      [KEY]: true,
+    });
+  });
+
+  test('an unparsable blob folds onto nothing, as the display path reads it', async () => {
+    backing.set(VOICE_PREFERENCES_STORAGE_KEY, '{not-json');
+    await expect(updateVoicePreferences((current) => applySpeakerOn(current, KEY, true))).resolves.toEqual({
+      [KEY]: true,
+    });
   });
 });
 
