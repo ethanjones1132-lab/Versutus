@@ -16,7 +16,7 @@ export function workflowsStorageKey(gatewayId: string): string {
   return `${WORKFLOWS_STORAGE_PREFIX}${gatewayId}`;
 }
 
-/** Read this gateway's workflows. A refused or unreadable store is none. */
+/** Read this gateway's workflows for display. A refused or unreadable store is none. */
 export async function loadWorkflows(gatewayId: string): Promise<Workflow[]> {
   try {
     const raw = await keyValueStorage.getItem(workflowsStorageKey(gatewayId));
@@ -27,11 +27,40 @@ export async function loadWorkflows(gatewayId: string): Promise<Workflow[]> {
   }
 }
 
-/** Write this gateway's workflows back. Best-effort. */
-export async function saveWorkflows(gatewayId: string, workflows: Workflow[]): Promise<void> {
+export type WorkflowStoreRead =
+  | { ok: true; workflows: Workflow[] }
+  | { ok: false; error: string };
+
+/**
+ * Read this gateway's workflows before a write that saves the list back. Unlike
+ * loadWorkflows, a store that cannot be read is reported rather than read as
+ * none: a list built on an empty snapshot would overwrite every stored workflow.
+ */
+export async function readWorkflowsForWrite(gatewayId: string): Promise<WorkflowStoreRead> {
+  let raw: string | null;
   try {
-    await keyValueStorage.setItem(workflowsStorageKey(gatewayId), JSON.stringify(workflows));
-  } catch {
-    // best-effort: a workflow must never break the surface that set it
+    raw = await keyValueStorage.getItem(workflowsStorageKey(gatewayId));
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
+  if (!raw) return { ok: true, workflows: [] };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return { ok: false, error: 'the stored workflows are not valid JSON' };
+  }
+  // Anything but a list is not a store this app wrote; saving over it would destroy it.
+  if (!Array.isArray(parsed)) {
+    return { ok: false, error: 'the stored workflows are not a list' };
+  }
+  return { ok: true, workflows: workflowsFromUnknown(parsed) };
+}
+
+/**
+ * Write this gateway's workflows back. Rejects when the store refuses the write,
+ * so a caller that reports a save can tell it did not land.
+ */
+export async function saveWorkflows(gatewayId: string, workflows: Workflow[]): Promise<void> {
+  await keyValueStorage.setItem(workflowsStorageKey(gatewayId), JSON.stringify(workflows));
 }

@@ -255,7 +255,7 @@ import {
 } from '@/lib/gateway/approval-policy';
 import { approvalRowsFromUnknown, type ApprovalRow } from '@/lib/gateway/approvals';
 import { buildChatContent, type ChatAttachment } from '@/lib/gateway/chat-parts';
-import { loadWorkflows, saveWorkflows, type Workflow } from '@/lib/gateway/workflows';
+import { loadWorkflows, readWorkflowsForWrite, saveWorkflows, type Workflow } from '@/lib/gateway/workflows';
 import { glanceableSnapshot } from '@/lib/widget/snapshot';
 import { clearWidgetSnapshot, writeWidgetSnapshot } from '@/lib/widget/widget-device';
 import {
@@ -5185,19 +5185,27 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // Execute gateway slash command — stream agent-transport output live.
         let streamedText = '';
         // `/workflow` reads this device's stored step sequences for the
-        // active gateway; no gateway route carries them.
-        const workflows = activeGateway ? await loadWorkflows(activeGateway.id) : [];
+        // active gateway; no gateway route carries them. The read is strict: a
+        // store that cannot be read gives management no save path, so a list
+        // built on an empty snapshot is never written back over the stored set.
+        const workflowsRead = activeGateway ? await readWorkflowsForWrite(activeGateway.id) : null;
+        const workflows = workflowsRead?.ok ? workflowsRead.workflows : [];
         const response = await executeGatewaySlashCommand(trimmed, {
           hello: activeHello,
           workflows,
-          onWorkflowsChanged: (next) => {
-            const gateway = activeGatewayRef.current;
-            if (gateway) {
-              void saveWorkflows(gateway.id, next).then(() =>
-                setWorkflowStore({ gatewayId: gateway.id, workflows: next }),
-              );
-            }
-          },
+          onWorkflowsChanged: workflowsRead?.ok
+            ? async (next) => {
+                const gateway = activeGatewayRef.current;
+                if (!gateway) throw new Error('No gateway is active.');
+                // The save's rejection reaches the reply, so a failed write is never reported as saved.
+                await saveWorkflows(gateway.id, next);
+                setWorkflowStore({ gatewayId: gateway.id, workflows: next });
+              }
+            : undefined,
+          workflowsUnavailable:
+            workflowsRead && !workflowsRead.ok
+              ? "Could not read this device's saved workflows, so nothing was changed."
+              : undefined,
           currentModel: activeGateway?.model,
           gatewayRequest,
           runAgentCommand,

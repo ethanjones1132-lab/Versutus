@@ -68,7 +68,12 @@ export function workflowsFromUnknown(value: unknown): Workflow[] {
   return workflows;
 }
 
-/** Add a workflow. An empty name or no non-blank steps changes nothing. */
+/**
+ * Add a workflow. An empty name, no non-blank steps, or a name another workflow
+ * already holds (trimmed and case-insensitive, as findWorkflow matches) changes
+ * nothing and returns the same list. A second workflow under a held name could
+ * never run, since findWorkflow answers with the first.
+ */
 export function createWorkflow(
   workflows: Workflow[],
   input: { name: string; steps: string[]; botId?: string },
@@ -84,6 +89,7 @@ export function createWorkflow(
       ...(input.botId ? { botId: input.botId } : {}),
     }));
   if (!name || steps.length === 0) return workflows;
+  if (findWorkflow(workflows, name)) return workflows;
   return [...workflows, { id: makeId(), name, steps }];
 }
 

@@ -88,8 +88,17 @@ type SlashCommandContext = {
   ) => Promise<RunOutcome>;
   /** This device's stored workflows, for `/workflow`. */
   workflows?: Workflow[];
-  /** Persist a `/workflow` create/rename/delete. Absent means the command refuses. */
+  /**
+   * Persist a `/workflow` create/rename/delete. A rejection means the save did
+   * not land and the reply says so. Absent means the command refuses.
+   */
   onWorkflowsChanged?: (next: Workflow[]) => void | Promise<void>;
+  /**
+   * Why this device's workflows could not be read. The host then passes no
+   * onWorkflowsChanged, so management refuses with this reason rather than
+   * saving a list built on an empty snapshot.
+   */
+  workflowsUnavailable?: string;
   /**
    * Per-request model override on the active gateway profile (Hermes / Gate).
    * Used when the gateway has no remote config REST for `/model set`.
@@ -932,7 +941,13 @@ async function runWorkflowCommand(
   // Only a run that reached its last step counts as a run; the list copy then
   // shows it alongside the step count.
   if (!stopped && context.onWorkflowsChanged) {
-    await context.onWorkflowsChanged(recordWorkflowRun(workflows, workflow.id));
+    // The steps already ran; a tally that could not be saved must not turn the
+    // run's own reply into a failure. Saves now reject instead of passing silently.
+    try {
+      await context.onWorkflowsChanged(recordWorkflowRun(workflows, workflow.id));
+    } catch (error) {
+      console.warn(`[workflow] Run tally for "${workflow.name}" was not saved: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   const tally = workflowRunTallyCopy(workflow);
   return textResult(
@@ -959,10 +974,16 @@ async function runWorkflowManagement(
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   if (!context.onWorkflowsChanged) {
-    return textResult('This surface cannot save workflows.', '/workflow');
+    return textResult(context.workflowsUnavailable ?? 'This surface cannot save workflows.', '/workflow');
   }
   const commit = async (next: Workflow[], line: string): Promise<SlashCommandResult> => {
-    await context.onWorkflowsChanged?.(next);
+    // A save the store refused did not land, so it is not reported as saved.
+    try {
+      await context.onWorkflowsChanged?.(next);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return textResult(`Could not save workflows: ${reason}`, '/workflow');
+    }
     return textResult(line, '/workflow');
   };
 
@@ -973,6 +994,9 @@ async function runWorkflowManagement(
     if (!name || steps.length === 0) {
       return textResult('Usage: /workflow new <name> | <step> | <step>', '/workflow');
     }
+    // Names are the lookup key, so a second workflow under a held name is refused.
+    const held = findWorkflow(workflows, name);
+    if (held) return textResult(`A workflow named ${held.name} already exists.`, '/workflow');
     const next = createWorkflow(workflows, { name, steps });
     if (next === workflows) {
       return textResult('A workflow needs a name and at least one step.', '/workflow');
@@ -987,6 +1011,11 @@ async function runWorkflowManagement(
     const workflow = findWorkflow(workflows, oldName);
     if (!workflow) return textResult(`Unknown workflow: ${oldName}`, '/workflow');
     if (!newName) return textResult('Usage: /workflow rename <old> | <new name>', '/workflow');
+    // Its own name in another case is fine; another workflow's name is not.
+    const held = findWorkflow(workflows, newName);
+    if (held && held.id !== workflow.id) {
+      return textResult(`A workflow named ${held.name} already exists.`, '/workflow');
+    }
     return commit(
       renameWorkflow(workflows, workflow.id, newName),
       `Renamed ${workflow.name} to ${newName}.`,

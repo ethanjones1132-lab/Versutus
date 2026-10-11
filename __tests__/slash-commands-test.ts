@@ -878,4 +878,82 @@ describe('/workflow management', () => {
     });
     expect(result.text).toContain('cannot save');
   });
+
+  test('a store that could not be read refuses with that reason, without a save path', async () => {
+    // The provider passes no onWorkflowsChanged when the read failed, so an
+    // empty snapshot can never be written back over the stored set.
+    const result = await executeGatewaySlashCommand('/workflow new Digest | read mail', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows: [],
+      workflowsUnavailable: "Could not read this device's saved workflows, so nothing was changed.",
+    });
+    expect(result.text).toBe(
+      "Could not read this device's saved workflows, so nothing was changed.",
+    );
+  });
+
+  test('a save that fails is reported, not announced as done', async () => {
+    const workflows = [{ id: 'w1', name: 'Digest', steps: [{ id: 's1', prompt: 'p' }] }];
+    const onWorkflowsChanged = jest.fn().mockRejectedValue(new Error('disk full'));
+    const removed = await executeGatewaySlashCommand('/workflow delete Digest', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      onWorkflowsChanged,
+    });
+    expect(removed.text).toBe('Could not save workflows: disk full');
+
+    const created = await executeGatewaySlashCommand('/workflow new Morning | read mail', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      onWorkflowsChanged,
+    });
+    expect(created.text).toBe('Could not save workflows: disk full');
+  });
+
+  test('new refuses a name another workflow holds, and saves nothing', async () => {
+    const workflows = [{ id: 'w1', name: 'Digest', steps: [{ id: 's1', prompt: 'p' }] }];
+    const onWorkflowsChanged = jest.fn();
+    const result = await executeGatewaySlashCommand('/workflow new  digest  | read mail', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      onWorkflowsChanged,
+    });
+    expect(result.text).toContain('A workflow named Digest already exists.');
+    expect(onWorkflowsChanged).not.toHaveBeenCalled();
+  });
+
+  test('rename refuses a name another workflow holds, but allows its own name in a new case', async () => {
+    const workflows = [
+      { id: 'w1', name: 'Digest', steps: [{ id: 's1', prompt: 'p' }] },
+      { id: 'w2', name: 'Morning', steps: [{ id: 's2', prompt: 'q' }] },
+    ];
+    const onWorkflowsChanged = jest.fn();
+    const clash = await executeGatewaySlashCommand('/workflow rename Morning | digest', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      onWorkflowsChanged,
+    });
+    expect(clash.text).toContain('A workflow named Digest already exists.');
+    expect(onWorkflowsChanged).not.toHaveBeenCalled();
+
+    const sameName = await executeGatewaySlashCommand('/workflow rename Digest | digest', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      onWorkflowsChanged,
+    });
+    expect(sameName.text).toContain('Renamed Digest to digest.');
+    expect(onWorkflowsChanged.mock.calls[0][0][0].name).toBe('digest');
+  });
 });

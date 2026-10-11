@@ -5,6 +5,7 @@ import {
   deleteWorkflow,
   findWorkflow,
   loadWorkflows,
+  readWorkflowsForWrite,
   recordWorkflowRun,
   renameWorkflow,
   saveWorkflows,
@@ -43,6 +44,13 @@ describe('a workflow is a named ordered list of steps', () => {
   test('an empty name or no steps is a no-op', () => {
     expect(createWorkflow([], { name: '  ', steps: ['x'] }, makeId)).toEqual([]);
     expect(createWorkflow([], { name: 'A', steps: ['', '  '] }, makeId)).toEqual([]);
+  });
+
+  test('a name another workflow holds, trimmed and case-insensitively, is a no-op', () => {
+    const workflows = createWorkflow([], { name: 'Digest', steps: ['x'] }, makeId);
+    // The same list back, not a copy: nothing was added and nothing should be saved.
+    expect(createWorkflow(workflows, { name: '  digest ', steps: ['y'] }, makeId)).toBe(workflows);
+    expect(workflows).toHaveLength(1);
   });
 
   test('findWorkflow matches a trimmed, case-insensitive name', () => {
@@ -86,6 +94,33 @@ describe('a workflow is a named ordered list of steps', () => {
 
     mockGet.mockRejectedValue(new Error('offline'));
     expect(await loadWorkflows('gw-1')).toEqual([]);
+  });
+
+  test('the write read tells a missing store from one it cannot read', async () => {
+    mockGet.mockResolvedValueOnce(null);
+    expect(await readWorkflowsForWrite('gw-1')).toEqual({ ok: true, workflows: [] });
+
+    mockGet.mockResolvedValueOnce(
+      JSON.stringify([{ id: '1', name: 'A', steps: [{ id: 's', prompt: 'p' }] }]),
+    );
+    expect(await readWorkflowsForWrite('gw-1')).toEqual({
+      ok: true,
+      workflows: [{ id: '1', name: 'A', steps: [{ id: 's', prompt: 'p' }] }],
+    });
+
+    mockGet.mockRejectedValueOnce(new Error('offline'));
+    expect(await readWorkflowsForWrite('gw-1')).toEqual({ ok: false, error: 'offline' });
+
+    // A store that is not the list the app wrote must not be overwritten by one.
+    mockGet.mockResolvedValueOnce('{not json');
+    expect((await readWorkflowsForWrite('gw-1')).ok).toBe(false);
+    mockGet.mockResolvedValueOnce(JSON.stringify({ version: 2, workflows: [] }));
+    expect((await readWorkflowsForWrite('gw-1')).ok).toBe(false);
+  });
+
+  test('a save the store refuses rejects, so the caller can say so', async () => {
+    mockSet.mockRejectedValueOnce(new Error('quota exceeded'));
+    await expect(saveWorkflows('gw-1', [])).rejects.toThrow('quota exceeded');
   });
 
   test('the summary names the workflow and counts its steps', () => {
