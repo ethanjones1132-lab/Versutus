@@ -454,27 +454,48 @@ export async function executeRun(
     // the driver.
     let streamFailed = false;
     let streamTimedOut = false;
-    try {
-      const raced = await raceDeadline(
-        client.streamRunEvents(
-          runId,
-          (event) => {
-            const data = event.data as Record<string, unknown> | undefined;
-            const eventStatus = String(data?.status ?? '');
-            if (runNeedsApproval(event.type) || (eventStatus && runNeedsApproval(eventStatus))) {
-              const klass = data?.risk ?? data?.action ?? data?.class;
-              if (typeof klass === 'string' && klass) commandClass = klass;
-              return;
-            }
-            options.onEvent?.(event);
-          },
-          options.signal,
-        ),
-        deadlineAt - Date.now(),
-      );
-      streamTimedOut = raced === RUN_DEADLINE;
-    } catch {
-      streamFailed = true;
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) {
+      // The wall clock already ran out: do not open a stream nothing will read.
+      streamTimedOut = true;
+    } else {
+      // Each attempt owns a controller, so the deadline can abort the socket it
+      // abandons. It follows the caller's signal, but cancellation is still read
+      // from `options.signal` below, never from this controller.
+      const streamAbort = new AbortController();
+      const abortStream = () => streamAbort.abort();
+      if (options.signal?.aborted) streamAbort.abort();
+      options.signal?.addEventListener('abort', abortStream);
+      try {
+        const raced = await raceDeadline(
+          client.streamRunEvents(
+            runId,
+            (event) => {
+              // A frame that lands after this attempt was abandoned must not
+              // reach the caller: the run is already reported unresolved.
+              if (streamAbort.signal.aborted) return;
+              const data = event.data as Record<string, unknown> | undefined;
+              const eventStatus = String(data?.status ?? '');
+              if (runNeedsApproval(event.type) || (eventStatus && runNeedsApproval(eventStatus))) {
+                const klass = data?.risk ?? data?.action ?? data?.class;
+                if (typeof klass === 'string' && klass) commandClass = klass;
+                return;
+              }
+              options.onEvent?.(event);
+            },
+            streamAbort.signal,
+          ),
+          remainingMs,
+        );
+        streamTimedOut = raced === RUN_DEADLINE;
+      } catch {
+        streamFailed = true;
+      } finally {
+        options.signal?.removeEventListener('abort', abortStream);
+        // Closes the socket when the deadline abandoned the stream; a no-op once
+        // the stream has already settled on its own.
+        streamAbort.abort();
+      }
     }
 
     // The wall clock ran out mid-stream: stop driving and report unresolved.

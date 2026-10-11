@@ -8,7 +8,7 @@ import {
   settleUnresolvedRuns,
   type RunCapableClient,
 } from '@/lib/gateway/runs';
-import type { RunResponse, RunStatus } from '@/lib/gateway/types';
+import type { RunEvent, RunResponse, RunStatus } from '@/lib/gateway/types';
 
 /**
  * A client whose run status walks a scripted sequence, holding on the last
@@ -372,6 +372,79 @@ describe('executeRun bounds a stream that never ends (RUNS-2)', () => {
 
     expect(outcome.unresolved).toBe(true);
     expect(outcome.status).toBe('running');
+  });
+});
+
+describe('executeRun closes the stream it abandons at the deadline', () => {
+  it('aborts the stream signal and drops frames that arrive after the deadline', async () => {
+    // Before the fix the stream was only abandoned: its socket stayed open and
+    // kept calling onEvent after the run was already reported unresolved.
+    const { client } = countedStatusClient({ fail: {}, status: () => 'running' });
+    const stream: { onEvent?: (event: RunEvent) => void; signal?: AbortSignal } = {};
+    const stalled: RunCapableClient = {
+      ...client,
+      streamRunEvents: (_runId, onEvent, signal) => {
+        stream.onEvent = onEvent;
+        stream.signal = signal;
+        return new Promise<void>(() => undefined);
+      },
+    };
+    const forwarded: RunEvent[] = [];
+
+    const outcome = await executeRun(stalled, 'do the thing', {
+      onApprovalRequired: async () => ({ approved: true }),
+      onEvent: (event) => forwarded.push(event),
+      sleep: noSleep,
+      maxWallClockMs: 30,
+    });
+
+    expect(outcome.unresolved).toBe(true);
+    expect(stream.signal?.aborted).toBe(true);
+    stream.onEvent?.({ type: 'message.delta', data: { text: 'late frame' } });
+    expect(forwarded).toEqual([]);
+  });
+
+  it('does not open a stream once the wall clock has already run out', async () => {
+    const streamStarted = jest.fn(async () => undefined);
+    const { client } = countedStatusClient({ fail: {}, status: () => 'running', stream: streamStarted });
+
+    const outcome = await executeRun(client, 'do the thing', {
+      onApprovalRequired: async () => ({ approved: true }),
+      sleep: noSleep,
+      maxWallClockMs: 0,
+    });
+
+    expect(streamStarted).not.toHaveBeenCalled();
+    expect(outcome.unresolved).toBe(true);
+  });
+
+  it('still reports a user stop as cancelled, and aborts the stream with it', async () => {
+    // The deadline controller must not change how a user stop is read: the
+    // caller's signal still decides, and the stream still hears about it.
+    const controller = new AbortController();
+    const stream: { signal?: AbortSignal } = {};
+    const { client, stops } = countedStatusClient({ fail: {}, status: () => 'running' });
+    const stoppable: RunCapableClient = {
+      ...client,
+      streamRunEvents: (_runId, _onEvent, signal) => {
+        stream.signal = signal;
+        return new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        });
+      },
+    };
+    setTimeout(() => controller.abort(), 5);
+
+    const outcome = await executeRun(stoppable, 'do the thing', {
+      signal: controller.signal,
+      onApprovalRequired: async () => ({ approved: true }),
+      sleep: noSleep,
+    });
+
+    expect(outcome.cancelled).toBe(true);
+    expect(outcome.unresolved).toBeFalsy();
+    expect(stream.signal?.aborted).toBe(true);
+    expect(stops.count).toBe(1);
   });
 });
 

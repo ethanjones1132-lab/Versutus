@@ -251,7 +251,17 @@ export function classifyRunFailure(message: string): RunFailureKind {
   // verified. Checked LATE on purpose — the embedded cause often names a
   // state above (an unconfigured CLI environment), and that verdict wins.
   if (/cannot verify group members/i.test(text)) return 'roster_unavailable';
-  if (/\bexpired\b/i.test(text)) return 'expired';
+  // A task or job whose valid window closed. The Gate emits no such wording
+  // today, so this is anchored to the task/job/run nouns: a bare "expired" also
+  // matched a credential expiry ("OAuth token expired", "API key expired"),
+  // which is not a reason to resubmit the task. A credential word in the same
+  // sentence wins, so such a text stays generic and shows its raw cause.
+  if (
+    /\b(?:task|job|run)\b[^.]*\bexpired\b|\bexpired\b[^.]*\b(?:task|job|run)\b/i.test(text) &&
+    !/\b(?:token|key|session|credentials?)\b[^.]*\bexpired\b/i.test(text)
+  ) {
+    return 'expired';
+  }
   // gate/core/server.mjs: a turn finished with neither text nor a tool. Hermes
   // does this when the pinned provider cannot authenticate (observed 2026-08-30:
   // Nous Portal, no access token) and still answers HTTP 200. The Gate wraps

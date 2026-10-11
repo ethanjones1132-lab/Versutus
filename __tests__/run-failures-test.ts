@@ -63,11 +63,23 @@ test('the maxRunSeconds kill names the limit and the fix', () => {
   expect(view.next).toContain('maxRunSeconds');
 });
 
-test('expired authorization windows classify as expired', () => {
-  expect(classifyRunFailure('invocation token expired')).toBe('expired');
+test('a task or job past its valid window classifies as expired', () => {
+  expect(classifyRunFailure('job expired')).toBe('expired');
+  expect(classifyRunFailure('the task expired before it started')).toBe('expired');
   const view = describeRunFailure('job expired');
   expect(view.title).toBe('Task expired');
   expect(view.next).toMatch(/resubmit/i);
+});
+
+test('a credential expiry is not read as a task expiry', () => {
+  // "expired" alone used to match all of these and tell the operator to
+  // resubmit a task whose only problem is a dead login.
+  expect(classifyRunFailure('OAuth token expired')).not.toBe('expired');
+  expect(classifyRunFailure('invocation token expired')).not.toBe('expired');
+  expect(classifyRunFailure('API key expired')).not.toBe('expired');
+  expect(classifyRunFailure('session expired')).not.toBe('expired');
+  expect(classifyRunFailure('credentials expired')).not.toBe('expired');
+  expect(classifyRunFailure('task failed: refresh token expired')).not.toBe('expired');
 });
 
 test('a refused environment probe classifies even as a bare state word', () => {

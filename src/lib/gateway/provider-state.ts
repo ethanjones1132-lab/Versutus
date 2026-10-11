@@ -19,9 +19,14 @@ export function providerUiState(snapshot: ProviderSnapshot): string {
   if (snapshot.auth.state === 'authorizing') return 'Authorizing';
   if (snapshot.readiness.state === 'disabled') return 'Disabled';
   if (snapshot.auth.state === 'denied') return 'Access denied';
-  if (snapshot.auth.state === 'needs_reauth') return 'Needs sign-in';
+  if (snapshot.auth.state === 'needs_reauth' || snapshot.auth.state === 'disconnected') return 'Needs sign-in';
+  // A sign-in in flight: the OAuth grant is being renewed, not lost.
+  if (snapshot.auth.state === 'refreshing') return 'Refreshing sign-in';
   if (snapshot.mode === 'local_interface' && snapshot.readiness.state === 'unavailable') return 'Local service offline';
   if (snapshot.readiness.state === 'degraded' || snapshot.catalog.state === 'stale') return 'Degraded/stale';
   if (snapshot.readiness.state === 'ready' && snapshot.auth.state === 'ready') return 'Ready';
-  return snapshot.readiness.state;
+  // Never the raw enum: a readiness state with no label of its own, or an auth
+  // state this build does not know, reads as not ready.
+  if (snapshot.readiness.state === 'unavailable') return 'Unavailable';
+  return 'Not ready';
 }
