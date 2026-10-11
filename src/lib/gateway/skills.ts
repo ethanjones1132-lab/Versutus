@@ -53,7 +53,8 @@ function skillItems(raw: unknown): unknown[] | null {
  * of `{ name, description, category }`. The Gate's REST stub and
  * `getSkills()` also wrap the same list as `{ data }`. Anything else is a
  * failed read — never an empty-ok list — so a junk envelope cannot render
- * as "no skills".
+ * as "no skills". An array whose entries all fail to parse is the same
+ * failure: that is schema drift, not an empty host.
  */
 export function skillsReadFromUnknown(raw: unknown): SkillsRead {
   const items = skillItems(raw);
@@ -63,6 +64,7 @@ export function skillsReadFromUnknown(raw: unknown): SkillsRead {
     const skill = parseSkill(item);
     if (skill) skills.push(skill);
   }
+  if (items.length > 0 && skills.length === 0) return { ok: false };
   return { ok: true, skills };
 }
 

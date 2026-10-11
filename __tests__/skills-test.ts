@@ -46,6 +46,28 @@ test('an empty array is empty-ok — the host really has no skills', () => {
   expect(skillsReadFromUnknown({ data: [] })).toEqual({ ok: true, skills: [] });
 });
 
+test('an array whose entries all fail to parse is a failed read, not "no skills"', () => {
+  // Schema drift: the host renamed the field, so nothing parses. Showing an
+  // empty list here would also clear the last good one on a re-read.
+  expect(skillsReadFromUnknown([{ description: 'x' }])).toEqual({ ok: false });
+  expect(skillsReadFromUnknown([null, 42, { name: '  ' }])).toEqual({ ok: false });
+  expect(skillsReadFromUnknown({ data: [{ description: 'x' }] })).toEqual({ ok: false });
+});
+
+test('partial success stays ok with the entries that parsed', () => {
+  const read = skillsReadFromUnknown([{ description: 'x' }, { name: 'weather', description: 'Look up the forecast' }]);
+  expect(read).toEqual({ ok: true, skills: [WEATHER] });
+});
+
+test('schema drift on a re-read keeps the last good list, marked stale', () => {
+  const first = applySkillsRead(EMPTY_SKILLS, skillsReadFromUnknown([{ name: 'weather', description: 'Look up the forecast' }]));
+  const again = applySkillsRead(first, skillsReadFromUnknown([{ description: 'x' }]));
+  expect(again.skills).toEqual([WEATHER]);
+  expect(again.loaded).toBe(true);
+  expect(again.failed).toBe(true);
+  expect(skillsListCopy(again)).toBe('Could not re-read skills — showing the last list.');
+});
+
 test('an unparseable payload is a failed read, not "no skills"', () => {
   expect(skillsReadFromUnknown(null).ok).toBe(false);
   expect(skillsReadFromUnknown('nope').ok).toBe(false);

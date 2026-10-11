@@ -17,6 +17,7 @@ import {
   SHOWCASE_SESSIONS,
   SHOWCASE_TRANSCRIPTS,
 } from '@/lib/demo/showcase-fleet';
+import type { BotGroupRoom } from '@/lib/gateway/groups';
 import type { ChatMessage, GatewayCapabilities, GatewayHelloOk } from '@/lib/gateway/types';
 import { registerCrestFleet } from '@/lib/bot-avatar';
 import { GATEWAY_COMMANDS, buildCapabilitySnapshot } from '@/lib/gateway/dashboard';
@@ -66,6 +67,16 @@ const settle = async () => undefined;
 /** Words a reply streams in, a few at a time, so the stream reads live. */
 function chunks(text: string): string[] {
   return text.match(/\S+\s*/g) ?? [text];
+}
+
+/**
+ * The showcase room a group mutator answers for: the one with this id, so the
+ * sheet fed back with it keeps its own roster. An unknown id falls back to the
+ * first room, still under the id it was asked with.
+ */
+function showcaseRoom(groupId: string): BotGroupRoom {
+  const found = SHOWCASE_GROUPS.find((group) => group.id === groupId) ?? SHOWCASE_GROUPS[0];
+  return { ...found, id: groupId };
 }
 
 /**
@@ -236,10 +247,17 @@ export function DemoGatewayProvider({ children }: { children: React.ReactNode })
         create: async (input) => ({ id: input.name.toLowerCase(), name: input.name, memberIds: input.memberIds }),
         send: async () => ({ replies: [{ botId: 'aria', text: 'Noted — I will fold that into the 9:00 note.' }] }),
         history: async () => SHOWCASE_GROUP_HISTORY,
-        rename: async (groupId, name) => ({ ...SHOWCASE_GROUPS[0], id: groupId, name }),
-        leave: async () => SHOWCASE_GROUPS[0],
+        rename: async (groupId, name) => ({ ...showcaseRoom(groupId), name }),
+        leave: async (groupId, memberId) => {
+          const room = showcaseRoom(groupId);
+          return { ...room, memberIds: room.memberIds.filter((id) => id !== memberId) };
+        },
         deleteGroup: async () => ({ ok: true }),
-        addMembers: async () => SHOWCASE_GROUPS[0],
+        addMembers: async (groupId, memberIds) => {
+          const room = showcaseRoom(groupId);
+          // A member already in the room is not listed twice.
+          return { ...room, memberIds: [...new Set([...room.memberIds, ...memberIds])] };
+        },
       },
       runAgentCommand: async () => '',
       relatedWorkflows: [],

@@ -77,17 +77,32 @@ const SECRET_WORDS = new Set([
   'signature',
 ]);
 
-export function isSecretFieldName(name: string): boolean {
-  const words = name
+/** A field name split into lowercase words: `api_key`, `apiKey` and `API-KEY` alike. */
+function nameWords(name: string): string[] {
+  return name
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .split(/[^A-Za-z0-9]+/)
     .filter(Boolean)
     .map((word) => word.toLowerCase());
-  return words.some((word) => SECRET_WORDS.has(word));
+}
+
+export function isSecretFieldName(name: string): boolean {
+  return nameWords(name).some((word) => SECRET_WORDS.has(word));
 }
 
 /**
- * A deep copy of `value` with every credential-shaped field dropped. Unknown
+ * A usage count such as `input_tokens` or `totalTokens`: a finite number under
+ * a name whose last word is `tokens`. A count is never a credential. A string
+ * or object under the same name is still a secret-shaped value and is dropped.
+ */
+function isTokenCount(name: string, value: unknown): boolean {
+  const words = nameWords(name);
+  return typeof value === 'number' && Number.isFinite(value) && words[words.length - 1] === 'tokens';
+}
+
+/**
+ * A deep copy of `value` with every credential-shaped field dropped, except
+ * usage counts (see `isTokenCount`), which the session list paints from. Unknown
  * shapes pass through untouched apart from the sweep: this is a backstop for
  * whatever a future Gate adds to a DTO, not a validator.
  */
@@ -96,7 +111,7 @@ export function stripSecretFields(value: unknown): unknown {
   if (!value || typeof value !== 'object') return value;
   const out: Record<string, unknown> = {};
   for (const [name, item] of Object.entries(value as Record<string, unknown>)) {
-    if (isSecretFieldName(name)) continue;
+    if (isSecretFieldName(name) && !isTokenCount(name, item)) continue;
     out[name] = stripSecretFields(item);
   }
   return out;

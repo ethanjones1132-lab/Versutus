@@ -222,6 +222,37 @@ describe('nothing secret is ever written', () => {
   });
 });
 
+describe('usage counts are kept', () => {
+  test('a finite number under a name ending in "tokens" is a count, not a credential', () => {
+    expect(
+      store.stripSecretFields({ input_tokens: 12, totalTokens: 30, access_token: 'x', api_keys: ['a'], tokens: 'abc' }),
+    ).toEqual({ input_tokens: 12, totalTokens: 30 });
+  });
+
+  test('the count exemption reaches nested objects and arrays', () => {
+    expect(
+      store.stripSecretFields({
+        sessions: [{ id: 's1', input_tokens: 3, cache_read_tokens: 0, api_key: 'ak' }],
+        usage: { reasoning_tokens: 7, bearer: 'b' },
+      }),
+    ).toEqual({
+      sessions: [{ id: 's1', input_tokens: 3, cache_read_tokens: 0 }],
+      usage: { reasoning_tokens: 7 },
+    });
+  });
+
+  test('a non-numeric or non-finite value under a token name is still dropped', () => {
+    expect(store.stripSecretFields({ tokens: 'abc', refresh_tokens: { value: 1 }, output_tokens: NaN })).toEqual({});
+  });
+
+  test('a session list keeps its usage across a cached read', async () => {
+    await store.writeCached('sessions', 'gw-1', 'list', [{ id: 's1', input_tokens: 12, output_tokens: 4, token: 'leak' }]);
+    const cached = await store.readCached<Record<string, unknown>[]>('sessions', 'gw-1', 'list');
+    expect(cached?.value).toEqual([{ id: 's1', input_tokens: 12, output_tokens: 4 }]);
+    expect(backing.get('versutus:swr:sessions:gw-1:list')).not.toContain('leak');
+  });
+});
+
 describe('clearing one gateway', () => {
   test('every namespace of that gateway goes, other gateways stay', async () => {
     await store.writeCached('roster', 'gw-1', 'bots', ['a']);
