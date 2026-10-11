@@ -219,11 +219,12 @@ export async function loadApprovalAudit(): Promise<ApprovalAuditEntry[]> {
 }
 
 /**
- * Where an unparsable audit blob is parked before the log restarts. One slot,
- * best-effort: key-value storage cannot be listed, so the newest copy is simply
- * overwritten by the next one. It exists because the log is the only durable
- * record of what the operator answered, and a value we cannot parse is still
- * bytes we were handed — not something to overwrite silently.
+ * Where an audit blob the writer cannot keep whole is parked before the log is
+ * rewritten. One slot, best-effort: key-value storage cannot be listed, so the
+ * newest copy is simply overwritten by the next one. It exists because the log
+ * is the only durable record of what the operator answered, and a value we
+ * cannot parse, or cannot fully read, is still bytes we were handed — not
+ * something to overwrite silently.
  */
 export const APPROVAL_AUDIT_CORRUPT_STORAGE_KEY = `${APPROVAL_AUDIT_STORAGE_KEY}:corrupt`;
 
@@ -257,9 +258,9 @@ function enqueueAuditWrite<T>(task: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Park an unparsable audit blob before the writer restarts the log, so the
- * history stays recoverable. Best-effort in both directions: a store that
- * refuses the copy costs the recovery, never the decision being recorded.
+ * Park an audit blob before the writer rewrites the log, so the history stays
+ * recoverable. Best-effort in both directions: a store that refuses the copy
+ * costs the recovery, never the decision being recorded.
  */
 async function preserveCorruptApprovalAudit(raw: string): Promise<void> {
   try {
@@ -302,12 +303,25 @@ export async function recordApprovalDecision(entry: ApprovalAuditEntry): Promise
 
     let log: ApprovalAuditEntry[] = [];
     if (raw) {
+      let parsed: unknown;
+      let parsedOk = true;
       try {
-        log = approvalAuditFromUnknown(JSON.parse(raw) as unknown);
+        parsed = JSON.parse(raw) as unknown;
       } catch {
+        parsedOk = false;
+      }
+      if (!parsedOk) {
         // Unparsable bytes are worth more than the empty log this writer would
         // otherwise start from, so park them before a fresh log overwrites them.
         await preserveCorruptApprovalAudit(raw);
+      } else {
+        log = approvalAuditFromUnknown(parsed);
+        // Valid JSON can still lose rows: a value that is not a log at all, or
+        // rows that fail validation, would be dropped by the write below. Park the
+        // whole blob first. The cap is not loss; every write trims to it anyway.
+        if (!Array.isArray(parsed) || log.length < Math.min(parsed.length, APPROVAL_AUDIT_CAP)) {
+          await preserveCorruptApprovalAudit(raw);
+        }
       }
     }
 

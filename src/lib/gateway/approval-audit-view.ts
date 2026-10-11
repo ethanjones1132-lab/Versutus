@@ -14,8 +14,8 @@ export function approvalAuditTallyCopy(log: ApprovalAuditEntry[]): string {
 }
 
 /** The newest decisions first, capped — ready to render one line each.
-    The persisted log is oldest first (entries are appended); sort by `at`
-    descending before cutting. */
+    The persisted log is already newest first (appendApprovalAudit prepends);
+    sorting by `at` descending still holds if the stored order ever differs. */
 export function approvalAuditRecent(
   log: ApprovalAuditEntry[],
   limit: number,

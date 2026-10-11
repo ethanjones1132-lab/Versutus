@@ -55,7 +55,12 @@ export function compareToBaseline(measured, baseline, tolerance = 0.25) {
   return { regressed, measured, baseline, tolerance, allowed };
 }
 
-function parseArgs(argv) {
+/**
+ * Read the flags. A missing or non-numeric value becomes NaN, and NaN passes
+ * every `>`/`<` check downstream, so a bad `--runs` used to measure nothing and
+ * a bad `--tolerance` used to pass `--check`. Reject both here instead.
+ */
+export function parseArgs(argv) {
   const args = { runs: 1, engine: 'local', tolerance: 0.25 };
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
@@ -69,6 +74,12 @@ function parseArgs(argv) {
     else if (token === '--baseline') args.baseline = argv[++i];
     else if (token === '--tolerance') args.tolerance = Number(argv[++i]);
   }
+  if (!Number.isInteger(args.runs) || args.runs < 1) {
+    throw new Error(`usage: --runs must be a positive integer (got ${args.runs})`);
+  }
+  if (!Number.isFinite(args.tolerance) || args.tolerance < 0) {
+    throw new Error(`usage: --tolerance must be a finite number >= 0 (got ${args.tolerance})`);
+  }
   return args;
 }
 
@@ -78,6 +89,44 @@ function sleep(ms) {
 
 function readBaseline(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+/** The stored baseline document, or `null` when the file has not been written yet. */
+function readExistingBaseline(path) {
+  try {
+    return readBaseline(path);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    // A file that does not parse may hold other engines' numbers; refuse to
+    // replace it rather than start over from nothing.
+    if (error instanceof SyntaxError) {
+      throw new Error(`refusing to overwrite ${path}: it does not parse (${error.message})`);
+    }
+    throw error;
+  }
+}
+
+const isRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+/**
+ * Fold one engine's measurement into the baseline document. Other engines'
+ * entries and the document's status survive; only this engine's entry, the
+ * source line and the tolerance are replaced. `existing` is `null` when there
+ * was no document, which is the only case that starts from PENDING-DEVICE.
+ * Pure: the input document is not modified.
+ */
+export function mergeBaselineDocument(existing, engine, measured, tolerance, nowIso) {
+  const base = isRecord(existing) ? existing : {};
+  return {
+    ...base,
+    source: `measured by latency-harness.mjs on ${nowIso}`,
+    status: base.status ?? 'PENDING-DEVICE',
+    tolerance,
+    engines: {
+      ...(isRecord(base.engines) ? base.engines : {}),
+      [engine]: { p50: measured.p50, p95: measured.p95 },
+    },
+  };
 }
 
 function baselineFor(document, engine) {
@@ -141,6 +190,10 @@ export async function main(argv = process.argv.slice(2)) {
   if (!args.url || !args.token || !args.fixture) {
     throw new Error('usage: latency-harness --url <ws-url> --token <token> --fixture <pcm16le-file>');
   }
+  const baselinePath = args.baseline ? resolve(args.baseline) : DEFAULT_BASELINE;
+  // Read the stored document before the calls, so a file that will be refused
+  // fails now rather than after the measurements.
+  const existingBaseline = args.save ? readExistingBaseline(baselinePath) : null;
   const { WebSocket } = await import('ws');
   const fixture = readFileSync(resolve(args.fixture));
 
@@ -148,17 +201,20 @@ export async function main(argv = process.argv.slice(2)) {
   for (let run = 0; run < Math.max(1, args.runs); run += 1) {
     samples.push(await measureOne({ WebSocket, url: args.url, token: args.token, fixture }));
   }
+  // An empty run would summarize to p50 = p95 = 0, which `--check` then
+  // reads as a pass. Refuse rather than report a measurement that did not happen.
+  if (samples.length === 0) throw new Error('latency-harness: no samples were measured');
   const measured = { ...summarize(samples), engine: args.engine };
   console.log(JSON.stringify({ engine: args.engine, samples, measured }, null, 2));
 
-  const baselinePath = args.baseline ? resolve(args.baseline) : DEFAULT_BASELINE;
   if (args.save) {
-    const document = {
-      source: `measured by latency-harness.mjs on ${new Date().toISOString()}`,
-      status: 'PENDING-DEVICE',
-      tolerance: args.tolerance,
-      engines: { [args.engine]: { p50: measured.p50, p95: measured.p95 } },
-    };
+    const document = mergeBaselineDocument(
+      existingBaseline,
+      args.engine,
+      measured,
+      args.tolerance,
+      new Date().toISOString(),
+    );
     mkdirSync(dirname(baselinePath), { recursive: true });
     writeFileSync(baselinePath, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
     console.log(`[latency] wrote baseline to ${baselinePath}`);

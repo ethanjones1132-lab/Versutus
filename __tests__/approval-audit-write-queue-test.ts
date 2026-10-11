@@ -6,7 +6,7 @@
 // durable record the device keeps. And because the writer read through the
 // LENIENT loader, one refused read answered `[]` and the write then replaced
 // the whole history with a single entry. These pin the queue and the strict
-// read, plus the recovery copy for bytes we cannot parse.
+// read, plus the recovery copy for bytes the writer cannot keep whole.
 
 const mockStore = new Map<string, string>();
 
@@ -29,6 +29,7 @@ jest.mock('@/lib/storage/key-value', () => ({
 }));
 
 import {
+  APPROVAL_AUDIT_CAP,
   APPROVAL_AUDIT_CORRUPT_STORAGE_KEY,
   APPROVAL_AUDIT_STORAGE_KEY,
   loadApprovalAuditStrict,
@@ -142,11 +143,44 @@ describe('a corrupt audit value is recoverable, not silently overwritten', () =>
     expect(stored().map((row) => row.approvalId)).toEqual(['new']);
   });
 
-  it('valid JSON that is not a log reads as a fresh log, unrescued', async () => {
-    mockStore.set(APPROVAL_AUDIT_STORAGE_KEY, '{"not":"an array"}');
+  it('valid JSON that is not a log is rescued before the fresh log replaces it', async () => {
+    const raw = '{"not":"an array"}';
+    mockStore.set(APPROVAL_AUDIT_STORAGE_KEY, raw);
     await recordApprovalDecision(entry('new', 1));
 
-    expect(mockStore.get(APPROVAL_AUDIT_CORRUPT_STORAGE_KEY)).toBeUndefined();
+    expect(mockStore.get(APPROVAL_AUDIT_CORRUPT_STORAGE_KEY)).toBe(raw);
     expect(stored().map((row) => row.approvalId)).toEqual(['new']);
+  });
+
+  it('a stored array with one malformed row is parked whole, not overwritten', async () => {
+    // The malformed row fails validation, so the write below would drop it. It
+    // is an operator answer too (its approvalId is the only handle), so the
+    // blob as it was handed over is kept before the log is rewritten.
+    const malformed = { approvalId: 'broken', decision: 'maybe', source: 'operator', at: 2 };
+    const raw = JSON.stringify([entry('kept', 1), malformed]);
+    mockStore.set(APPROVAL_AUDIT_STORAGE_KEY, raw);
+
+    await recordApprovalDecision(entry('new', 3));
+
+    expect(mockStore.get(APPROVAL_AUDIT_CORRUPT_STORAGE_KEY)).toBe(raw);
+    expect(stored().map((row) => row.approvalId)).toEqual(['new', 'kept']);
+  });
+
+  it('a stored array whose rows are all valid is not parked', async () => {
+    mockStore.set(APPROVAL_AUDIT_STORAGE_KEY, JSON.stringify([entry('kept', 1)]));
+    await recordApprovalDecision(entry('new', 2));
+
+    expect(mockStore.get(APPROVAL_AUDIT_CORRUPT_STORAGE_KEY)).toBeUndefined();
+    expect(stored().map((row) => row.approvalId)).toEqual(['new', 'kept']);
+  });
+
+  it('a stored log over the cap is trimmed by design, so it is not parked as corrupt', async () => {
+    const full = Array.from({ length: APPROVAL_AUDIT_CAP + 1 }, (_unused, index) => entry(`c${index}`, index + 1));
+    mockStore.set(APPROVAL_AUDIT_STORAGE_KEY, JSON.stringify(full));
+
+    await recordApprovalDecision(entry('new', APPROVAL_AUDIT_CAP + 2));
+
+    expect(mockStore.get(APPROVAL_AUDIT_CORRUPT_STORAGE_KEY)).toBeUndefined();
+    expect(stored()).toHaveLength(APPROVAL_AUDIT_CAP);
   });
 });
