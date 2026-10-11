@@ -88,7 +88,14 @@ export function normalizeGatewayUrl(
 
   // Hermes listens on plain HTTP :8642. When a host is fronted by Tailscale
   // Serve or another TLS reverse proxy, HTTPS uses its standard :443 port.
-  const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '8642');
+  // WHATWG clears `port` when it equals the scheme default (http :80, https
+  // :443), so a port the operator typed is read from the authority text, and
+  // an explicit default port is kept rather than replaced by the fallback.
+  const authority = withScheme.replace(/^https?:\/\//i, '').match(/^[^/?#]*/)?.[0] ?? '';
+  const portTyped = /:\d+$/.test(authority);
+  const schemeDefault = parsed.protocol === 'https:' ? '443' : '80';
+  const fallback = parsed.protocol === 'https:' ? '443' : '8642';
+  const port = parsed.port || (portTyped ? schemeDefault : fallback);
 
   // Strip trailing slash
   return `${parsed.protocol}//${host}:${port}`;

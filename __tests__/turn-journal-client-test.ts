@@ -373,6 +373,52 @@ describe('the turn journal routes', () => {
     expect(result).toMatchObject({ completed: true, lastSeq: 13, error: null });
   });
 
+  test('a replay that ignores ?after= does not render frames at or below that seq again', async () => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
+      Promise.resolve(
+        streamResponse([
+          'id: 1\ndata: {"choices":[{"delta":{"content":"one"}}]}',
+          'id: 2\ndata: {"choices":[{"delta":{"content":"two"}}]}',
+          'id: 3\ndata: {"choices":[{"delta":{"content":"three"}}]}',
+          'data: [DONE]',
+        ]),
+      ),
+    );
+
+    const deltas: string[] = [];
+    const seqs: number[] = [];
+    const result = await gateWithJournal().streamTurnEvents('t-1', {
+      after: 2,
+      onDelta: (text) => deltas.push(text),
+      onSeq: (seq) => seqs.push(seq),
+    });
+
+    expect(deltas).toEqual(['three']);
+    expect(seqs).toEqual([3]);
+    expect(result).toMatchObject({ completed: true, lastSeq: 3, error: null });
+  });
+
+  test('a replayed failure frame at or below that seq still ends the read as failed', async () => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
+      Promise.resolve(
+        streamResponse([
+          'id: 1\ndata: {"error":{"code":"gate_restart","message":"The Gate restarted while this turn was running."}}',
+          'data: [DONE]',
+        ]),
+      ),
+    );
+
+    const deltas: string[] = [];
+    const result = await gateWithJournal().streamTurnEvents('t-1', {
+      after: 2,
+      onDelta: (text) => deltas.push(text),
+    });
+
+    expect(deltas).toEqual([]);
+    expect(result.error).toBe('The Gate restarted while this turn was running.');
+    expect(result.errorCode).toBe('gate_restart');
+  });
+
   test('an event replay that ends in a coded failure keeps the code', async () => {
     const fetchMock = jest.fn(() =>
       Promise.resolve(

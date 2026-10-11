@@ -277,18 +277,29 @@ export async function readChatFrames(args: {
   let streamError: string | null = null;
   let streamErrorCode: string | undefined;
   let lastSeq = after;
+  // The seq from the `id:` line of the event block being read. The Gate writes
+  // `id:` before its `data:`, so it is set for exactly the frame that follows.
+  let currentSeq: number | undefined;
   const acc = createChatStreamAcc();
   const completed = await transport.streamSSE(
     response,
     (data) => {
+      const seq = currentSeq;
+      currentSeq = undefined;
       try {
         const frame: unknown = JSON.parse(data);
+        // Every frame still runs through the accumulator, even ones not reported:
+        // a tool call split across frames keeps its name and arguments only if
+        // the fragments before `after` were read too.
         const interpreted = interpretChatStreamChunk(frame, acc);
         if (interpreted.streamError) {
           streamError = interpreted.streamError;
           streamErrorCode = streamFrameErrorCode(frame);
           return;
         }
+        // The Gate starts a replay after `after`, but a gateway or proxy that
+        // ignores the query would replay frames already rendered. Those are dropped.
+        if (seq !== undefined && seq <= after) return;
         if (interpreted.telemetryWarning) callbacks.onTelemetryWarning?.(interpreted.telemetryWarning);
         if (interpreted.text) {
           fullText += interpreted.text;
@@ -315,6 +326,7 @@ export async function readChatFrames(args: {
       onId: (raw) => {
         const seq = Number(raw);
         if (!Number.isFinite(seq)) return;
+        currentSeq = seq;
         lastSeq = seq;
         if (seq > after) callbacks.onSeq?.(seq);
       },

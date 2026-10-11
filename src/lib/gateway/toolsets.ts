@@ -44,7 +44,8 @@ function toolsDescription(raw: Record<string, unknown>): string {
 
 function parseToolset(raw: unknown): Toolset | null {
   if (!isRecord(raw)) return null;
-  const name = (stringField(raw, 'name') ?? stringField(raw, 'id') ?? '').trim();
+  // `??` only falls through on undefined, so a blank name must fall back by truthiness.
+  const name = stringField(raw, 'name')?.trim() || stringField(raw, 'id')?.trim();
   if (!name) return null;
   return { name, description: toolsDescription(raw) };
 }

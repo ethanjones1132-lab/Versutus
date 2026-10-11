@@ -37,6 +37,22 @@ test('a toolset named only by id still parses', () => {
   expect(read).toEqual({ ok: true, toolsets: [{ name: 'fs', description: '' }] });
 });
 
+test('a blank name falls back to the id instead of dropping the toolset', () => {
+  const read = toolsetsReadFromUnknown({
+    toolsets: [
+      { name: '', id: 'web' },
+      { name: '   ', id: 'fs', tools: ['read'] },
+    ],
+  });
+  expect(read).toEqual({
+    ok: true,
+    toolsets: [
+      { name: 'web', description: '' },
+      { name: 'fs', description: 'read' },
+    ],
+  });
+});
+
 test('nameless and non-object items are dropped, not a failed read', () => {
   const read = toolsetsReadFromUnknown([
     null,

@@ -1,4 +1,5 @@
 import {
+  buildGatewayUrlFromBeacon,
   hasImpossibleNumericOctets,
   isCanonicalIpv4,
   normalizeGatewayUrl,
@@ -40,6 +41,23 @@ describe('normalizeGatewayUrl', () => {
     expect(normalizeGatewayUrl('ethanspc.tail3a1a8a.ts.net')).toBe(
       'http://ethanspc.tail3a1a8a.ts.net:8642',
     );
+  });
+
+  it('keeps an explicitly typed scheme-default port instead of swapping in 8642', () => {
+    // WHATWG reports port '' for these, so the port has to be read from the text.
+    expect(normalizeGatewayUrl('http://h.example:80')).toBe('http://h.example:80');
+    expect(normalizeGatewayUrl('h.example:80')).toBe('http://h.example:80');
+    expect(normalizeGatewayUrl('https://h.example:443')).toBe('https://h.example:443');
+  });
+
+  it('reads an explicit port off a bracketed IPv6 host', () => {
+    expect(normalizeGatewayUrl('http://[::1]:80')).toBe('http://[::1]:80');
+    expect(normalizeGatewayUrl('http://[::1]')).toBe('http://[::1]:8642');
+  });
+
+  it('still defaults https and a bare host when no port was typed', () => {
+    expect(normalizeGatewayUrl('https://h')).toBe('https://h:443');
+    expect(normalizeGatewayUrl('http://h.example')).toBe('http://h.example:8642');
   });
 
   it('is idempotent for every accepted shape', () => {
@@ -89,6 +107,20 @@ describe('normalizeGatewayUrl', () => {
 
   it('rejects a hostless entry with the invalid-URL message the screen surfaces', () => {
     expect(() => normalizeGatewayUrl('http://')).toThrow(/^Invalid gateway URL:/);
+  });
+});
+
+describe('buildGatewayUrlFromBeacon', () => {
+  it('keeps a beacon that advertises port 80 on port 80', () => {
+    expect(buildGatewayUrlFromBeacon({ host: 'gate.test', port: 80 }).url).toBe(
+      'http://gate.test:80',
+    );
+  });
+
+  it('falls back to the Hermes port when the beacon names none', () => {
+    expect(buildGatewayUrlFromBeacon({ host: 'gate.test', port: 0 }).url).toBe(
+      'http://gate.test:8642',
+    );
   });
 });
 
