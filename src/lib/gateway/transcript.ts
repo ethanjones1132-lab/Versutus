@@ -69,6 +69,9 @@ function enqueueTranscriptMutation<T>(key: string, task: () => Promise<T>): Prom
 // still queued.
 const entriesByKey = new Map<string, CommandTranscriptEntry[]>();
 const flushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+// Keys whose debounced write the store refused, and whose held copy has not
+// landed since. `flushTranscripts` owes each one another write.
+const failedWrites = new Set<string>();
 
 /**
  * How many session transcripts this process keeps in memory. Each held copy is
@@ -82,16 +85,18 @@ const MAX_HELD_TRANSCRIPTS = 16;
 
 /**
  * Hold a key's entries and evict the oldest if the ring is over budget. A key
- * with a pending debounced write or an in-flight mutation is skipped — its held
- * copy is what that write reads, so dropping it would lose the delta. Map
- * insertion order is the age order (`loadTranscripts` re-inserts a hit).
+ * with a pending debounced write, a refused write still owed, or an in-flight
+ * mutation is skipped — its held copy is what that write reads, so dropping it
+ * would lose the delta (or, for a refused write, the whole transcript, since
+ * nothing of it reached the store). Map insertion order is the age order
+ * (`loadTranscripts` re-inserts a hit).
  */
 function holdEntries(key: string, entries: CommandTranscriptEntry[]): void {
   entriesByKey.set(key, entries);
   if (entriesByKey.size <= MAX_HELD_TRANSCRIPTS) return;
   for (const candidate of [...entriesByKey.keys()]) {
     if (entriesByKey.size <= MAX_HELD_TRANSCRIPTS) break;
-    if (flushTimers.has(candidate) || busyKeys.has(candidate)) continue;
+    if (flushTimers.has(candidate) || busyKeys.has(candidate) || failedWrites.has(candidate)) continue;
     entriesByKey.delete(candidate);
     mutationTails.delete(candidate);
   }
@@ -102,9 +107,8 @@ const pendingWrites = new Set<Promise<void>>();
 
 function trackWrite(write: Promise<void>): void {
   pendingWrites.add(write);
-  // A debounced write has no caller to reject to, so its failure is held here
-  // and handed to whoever forces the next flush. The tail always settles
-  // resolved so the set drains even when the write did not.
+  // The tail always settles resolved so the set drains even when the write did
+  // not. `enqueueWrite` records a refused write against its key.
   void write.then(
     () => pendingWrites.delete(write),
     () => pendingWrites.delete(write),
@@ -117,6 +121,18 @@ function cancelFlush(key: string): void {
   flushTimers.delete(key);
 }
 
+/**
+ * Drop everything held for a key: the held copy, its debounce and a refused
+ * write still owed. A deletion runs this synchronously and again inside the
+ * key's queue, because a mutation queued before the deletion runs first and
+ * re-holds the key, arming its flush.
+ */
+function forgetKey(key: string): void {
+  cancelFlush(key);
+  entriesByKey.delete(key);
+  failedWrites.delete(key);
+}
+
 function enqueueWrite(key: string): void {
   const write = enqueueTranscriptMutation(key, async () => {
     const entries = entriesByKey.get(key);
@@ -126,6 +142,22 @@ function enqueueWrite(key: string): void {
     await keyValueStorage.setItem(key, JSON.stringify(entries));
   });
   trackWrite(write);
+  // A debounced write has no caller to reject to, so a refusal is kept against
+  // its key for the next flush to write again, and warned about here. A write
+  // that lands clears it.
+  void write.then(
+    () => {
+      failedWrites.delete(key);
+    },
+    (error: unknown) => {
+      // Deleted while the write was in flight: nothing of it is owed a retry.
+      if (!entriesByKey.has(key)) return;
+      failedWrites.add(key);
+      console.warn(
+        `[transcript] "${key}" was not saved and will be written again on the next flush: ${describeError(error)}`,
+      );
+    },
+  );
 }
 
 function scheduleFlush(key: string): void {
@@ -149,7 +181,19 @@ function scheduleFlush(key: string): void {
  * not waited for — flush after the mutations it should cover.
  */
 export async function flushTranscripts(): Promise<void> {
-  for (const key of [...flushTimers.keys()]) {
+  // A key is owed a write when its debounce is armed or its debounced write was
+  // refused. Each gets one write, and a refused one is written again from the
+  // copy still held.
+  const owed = new Set(flushTimers.keys());
+  for (const key of [...failedWrites]) {
+    if (entriesByKey.has(key)) {
+      owed.add(key);
+    } else {
+      // Deleted since it was refused: there is nothing left to write.
+      failedWrites.delete(key);
+    }
+  }
+  for (const key of owed) {
     cancelFlush(key);
     enqueueWrite(key);
   }
@@ -243,7 +287,11 @@ export async function saveTranscripts(gatewayId: string, sessionKey: string, ent
   // A whole-list save is not a delta, so it writes through now instead of
   // waiting for a gap nobody is going to extend.
   cancelFlush(key);
-  await enqueueTranscriptMutation(key, () => keyValueStorage.setItem(key, JSON.stringify(limited)));
+  await enqueueTranscriptMutation(key, async () => {
+    await keyValueStorage.setItem(key, JSON.stringify(limited));
+    // The whole list landed, so an earlier refused write owes nothing more.
+    failedWrites.delete(key);
+  });
 }
 
 async function mutateEntries(
@@ -314,9 +362,14 @@ export async function removeTranscriptsForSession(
   if (sessionKey === sessionId) {
     // Every entry under this key belongs to the deleted thread; drop the key
     // whole, held copy, debounce and stored value alike.
-    cancelFlush(key);
-    entriesByKey.delete(key);
-    await enqueueTranscriptMutation(key, () => keyValueStorage.removeItem(key));
+    forgetKey(key);
+    await enqueueTranscriptMutation(key, () => {
+      // A mutation queued before this one has run by now and may have re-held
+      // the key and armed its flush; drop that again or its write lands after
+      // the removal.
+      forgetKey(key);
+      return keyValueStorage.removeItem(key);
+    });
     return;
   }
   await mutateEntries(gatewayId, sessionKey, (existing) =>
@@ -332,18 +385,28 @@ export async function clearTranscriptsForGateway(gatewayId: string): Promise<voi
   // Keys are `versutus:transcript:{gatewayId}:{sessionKey}`. Matching includes
   // the trailing separator so `gw-1` does not also clear `gw-10`.
   const prefix = `${TRANSCRIPT_PREFIX}:${gatewayId}:`;
+  const isOwned = (key: string) => key.startsWith(prefix);
   // Dropped by prefix, not by the keys storage holds: a transcript still
   // waiting on its write-behind flush is only in the held copy, and so is the
   // timer that would put it back seconds after the profile it belonged to is
   // gone.
   for (const key of [...entriesByKey.keys()]) {
-    if (!key.startsWith(prefix)) continue;
-    cancelFlush(key);
-    entriesByKey.delete(key);
+    if (isOwned(key)) forgetKey(key);
   }
-  const keys = await keyValueStorage.getAllKeys();
-  const owned = keys.filter((key) => key.startsWith(prefix));
-  await keyValueStorage.multiRemove(owned);
+  const stored = await keyValueStorage.getAllKeys();
+  // Each key is removed through its own queue. A mutation already waiting on a
+  // key runs first and may hold it and arm its flush again, and the removal
+  // behind it undoes that. The keys are read again after the await, so one such
+  // mutation may have held a key the first pass did not see.
+  const owned = new Set([...entriesByKey.keys(), ...busyKeys.keys(), ...stored].filter(isOwned));
+  await Promise.all(
+    [...owned].map((key) =>
+      enqueueTranscriptMutation(key, async () => {
+        forgetKey(key);
+        await keyValueStorage.removeItem(key);
+      }),
+    ),
+  );
 }
 
 export function createTranscriptId(prefix = 'cmd'): string {

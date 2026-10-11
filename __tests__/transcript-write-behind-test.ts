@@ -198,6 +198,87 @@ describe('transcript write-behind', () => {
   });
 });
 
+describe('a debounced write the store refuses', () => {
+  test('the next flush writes the held copy again', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const gatewayId = freshGateway();
+      const key = storageKey(gatewayId, 'session');
+      const first = entry({ id: 'cmd-1', gatewayId });
+      mockSet.mockImplementationOnce(async () => {
+        throw new Error('row too big');
+      });
+
+      await appendTranscript(gatewayId, 'session', first);
+      // The debounce fires and the refusal has no caller to reach.
+      await sleep(AFTER_THE_DEBOUNCE_MS);
+      expect(mockSet).toHaveBeenCalledTimes(1);
+      expect(mockBacking.has(key)).toBe(false);
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      mockSet.mockClear();
+      await flushTranscripts();
+
+      expect(mockSet).toHaveBeenCalledTimes(1);
+      expect(mockSet).toHaveBeenCalledWith(key, JSON.stringify([first]));
+      expect(stored(gatewayId, 'session')).toEqual([first]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('a retry the store refuses again is reported by the flush and stays owed', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const gatewayId = freshGateway();
+      const key = storageKey(gatewayId, 'session');
+      const first = entry({ id: 'cmd-1', gatewayId });
+      mockSet
+        .mockImplementationOnce(async () => {
+          throw new Error('row too big');
+        })
+        .mockImplementationOnce(async () => {
+          throw new Error('row too big');
+        });
+
+      await appendTranscript(gatewayId, 'session', first);
+      await sleep(AFTER_THE_DEBOUNCE_MS);
+
+      await expect(flushTranscripts()).rejects.toThrow('row too big');
+      expect(mockBacking.has(key)).toBe(false);
+
+      // Still owed: the next flush finds the store accepting writes again.
+      await flushTranscripts();
+      expect(stored(gatewayId, 'session')).toEqual([first]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('a key deleted before its retry drops the write it was still owed', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const gatewayId = freshGateway();
+      const key = storageKey(gatewayId, 'session');
+      mockSet.mockImplementationOnce(async () => {
+        throw new Error('row too big');
+      });
+
+      await appendTranscript(gatewayId, 'session', entry({ id: 'cmd-1', gatewayId }));
+      await sleep(AFTER_THE_DEBOUNCE_MS);
+
+      await clearTranscriptsForGateway(gatewayId);
+      mockSet.mockClear();
+      await flushTranscripts();
+
+      expect(mockSet).not.toHaveBeenCalledWith(key, expect.anything());
+      expect(mockBacking.has(key)).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
 describe('the held-transcript ring stays bounded', () => {
   test('visiting many sessions does not retain every transcript in memory', async () => {
     const gatewayId = freshGateway();
@@ -275,6 +356,27 @@ describe('clearing a gateway', () => {
     await sleep(AFTER_THE_DEBOUNCE_MS);
     expect(mockSet).not.toHaveBeenCalled();
     expect(mockBacking.has(key)).toBe(false);
+  });
+
+  test('an append queued before the clear does not bring the transcript back', async () => {
+    jest.useFakeTimers();
+    try {
+      const gatewayId = freshGateway();
+      const key = storageKey(gatewayId, 'session');
+
+      // The append is still waiting its turn when the profile is deleted. Its
+      // task runs first and arms a flush; the clear's removal has to undo it.
+      const appended = appendTranscript(gatewayId, 'session', entry({ id: 'cmd-1', gatewayId }));
+      const cleared = clearTranscriptsForGateway(gatewayId);
+      await Promise.all([appended, cleared]);
+
+      await jest.advanceTimersByTimeAsync(AFTER_THE_DEBOUNCE_MS);
+      expect(mockSet).not.toHaveBeenCalled();
+      expect(mockBacking.has(key)).toBe(false);
+      expect(await loadTranscripts(gatewayId, 'session')).toEqual([]);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 

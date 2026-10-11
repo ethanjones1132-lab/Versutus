@@ -147,6 +147,34 @@ describe('a gateways blob that will not parse', () => {
     expect(corruptCopies().size).toBe(3);
   });
 
+  test('loading the same blob again keeps one copy, so older rescues survive', async () => {
+    const raw = '[{"id":"gw-1","token":"listen-hermes"';
+    mockSecure.set(GATEWAYS_KEY, raw);
+    mockSecureSet.mockClear();
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await loadGateways();
+    }
+
+    // Every load reads the same bad blob. Writing it again each time filled the
+    // ring with copies of it and erased the distinct rescues before it.
+    const slotWrites = mockSecureSet.mock.calls.filter(
+      ([key]) => key.startsWith(CORRUPT_PREFIX) && key !== CORRUPT_NEXT_KEY,
+    );
+    expect(slotWrites).toHaveLength(1);
+    expect(mockSecure.get(CORRUPT_NEXT_KEY)).toBe('1');
+    expect([...corruptCopies().values()]).toEqual([raw]);
+    expect(String(warnSpy.mock.calls[2]?.[0] ?? '')).toContain(slotKey(0));
+
+    const other = '[{"id":"gw-2","token":"other"';
+    mockSecure.set(GATEWAYS_KEY, other);
+    await loadGateways();
+
+    expect(mockSecure.get(slotKey(0))).toBe(raw);
+    expect(mockSecure.get(slotKey(1))).toBe(other);
+    expect(mockSecure.get(CORRUPT_NEXT_KEY)).toBe('2');
+  });
+
   test('a rescue copy the secure store refuses does not break the load', async () => {
     const raw = '[{"id":"gw-1","token":"listen-hermes"';
     mockSecure.set(GATEWAYS_KEY, raw);

@@ -98,4 +98,29 @@ describe('removeTranscriptsForSession', () => {
     expect((await loadTranscripts(gatewayId, key)).map((item) => item.id)).toEqual(['cmd-b']);
     expect(stored(gatewayId, key).map((item) => item.id)).toEqual(['cmd-b']);
   });
+
+  test('a deletion queued behind an append does not let the append write the key back', async () => {
+    jest.useFakeTimers();
+    try {
+      const gatewayId = 'rm-queued-append';
+      const sessionKey = 'sess-1';
+
+      // The append is still waiting its turn when its whole key is deleted. The
+      // append runs first and arms a flush; the removal has to drop it.
+      const appended = appendTranscript(
+        gatewayId,
+        sessionKey,
+        entry({ id: 'cmd-1', gatewayId, sessionKey, sessionId: sessionKey }),
+      );
+      const removed = removeTranscriptsForSession(gatewayId, sessionKey, sessionKey);
+      await Promise.all([appended, removed]);
+
+      await jest.advanceTimersByTimeAsync(400);
+
+      expect(mockBacking.has(storageKey(gatewayId, sessionKey))).toBe(false);
+      expect(await loadTranscripts(gatewayId, sessionKey)).toEqual([]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });

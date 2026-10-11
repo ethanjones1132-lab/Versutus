@@ -83,6 +83,24 @@ async function preserveCorruptGateways(raw: string): Promise<void> {
   } catch {
     // A counter we cannot read is worth less than the copy itself.
   }
+  // Every load of the same bad blob comes back here. Its copy is already in the
+  // newest slot, so it is not written again: a second copy would push an older,
+  // different rescue out of the ring.
+  if (counter > 0) {
+    const newest = corruptGatewaysSlotKey((counter - 1) % CORRUPT_GATEWAYS_SLOTS);
+    let held: string | null = null;
+    try {
+      held = await secureKeyValueStorage.getItem(newest);
+    } catch {
+      // An unreadable slot is treated as empty, and the copy is written.
+    }
+    if (held === raw) {
+      console.warn(
+        `[gateway-storage] Stored gateways could not be parsed — the copy is already kept at "${newest}" and continuing with none.`,
+      );
+      return;
+    }
+  }
   const key = corruptGatewaysSlotKey(counter % CORRUPT_GATEWAYS_SLOTS);
   try {
     await secureKeyValueStorage.setItem(key, raw);
