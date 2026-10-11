@@ -196,7 +196,9 @@ export class OpenClawGatewayClient {
    */
   resumeReconnect() {
     this.monitor.resume();
-    if (!this.closed && this.status !== 'connected') {
+    // A socket that closed while suspended leaves status 'connected' behind, so
+    // a missing socket is a reason to connect too.
+    if (!this.closed && (this.status !== 'connected' || !this.socket)) {
       this.connect();
     }
   }
@@ -273,6 +275,14 @@ export class OpenClawGatewayClient {
     const id = randomId('req');
     const frame = { type: 'req', id, method, params };
     return new Promise<T>((resolve, reject) => {
+      // waitUntilConnected() passes on status alone, and a socket that dropped
+      // while the monitor was suspended leaves status 'connected' with no socket.
+      // send() on nothing is a silent no-op, so the request would only die on its
+      // timer. Fail it now instead.
+      if (!this.socket) {
+        reject(new Error('Gateway socket is not connected'));
+        return;
+      }
       const timer = setTimeout(() => {
         this.pending.delete(id);
         // A request unanswered for its whole budget is evidence of a dead path
@@ -575,6 +585,9 @@ export class OpenClawGatewayClient {
         // Hermes dialects fire it — after the handshake, before the probe
         // interval starts — so both dialects feed the same machinery.
         this.callbacks.onHealthCheck?.(true, this.healthReport(hello.server?.version));
+        // A suspend() left over from a background cycle silences every tick, and
+        // only resume() clears it. A handshake that just completed re-arms it.
+        this.monitor.resume();
         this.monitor.start();
       } else {
         const code = frame.error?.details?.code ?? frame.error?.code ?? 'CONNECT_FAILED';

@@ -3,7 +3,7 @@ import type { ChatContentPart } from '@/lib/gateway/chat-parts';
 import type { CronJob, CronRun, CronTurn } from '@/lib/gateway/cron';
 import type { BotGroupRoom, GroupReply, GroupTranscriptEntry, GroupTurnError } from '@/lib/gateway/groups';
 import { HEALTH_CHECK_TIMEOUT_MS, CANCEL_TURN_TIMEOUT_MS, createTurnId } from '@/lib/gateway/client';
-import { isAuthRejection } from '@/lib/gateway/errors';
+import { GatewayHttpError, isAuthRejection } from '@/lib/gateway/errors';
 import { gatewayRootUrl } from '@/lib/gateway/gateway-origin';
 import { withGetSessionsRetry } from '@/lib/gateway/get-sessions-retry';
 import { errorCodeFromHttpBody, messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
@@ -237,8 +237,10 @@ export class ManifestClient implements PortalClient {
    */
   async connect(): Promise<void> {
     if (this.connectAttempt) return this.connectAttempt;
-    const attempt = this.attemptConnect().finally(() => {
-      this.connectAttempt = null;
+    const attempt: Promise<void> = this.attemptConnect().finally(() => {
+      // Clear only our own handle. disconnect() may already have dropped it and
+      // a newer connect() may own it now; a stale finally must not null that.
+      if (this.connectAttempt === attempt) this.connectAttempt = null;
     });
     this.connectAttempt = attempt;
     return attempt;
@@ -296,11 +298,17 @@ export class ManifestClient implements PortalClient {
     if (capabilities) this.callbacks.onCapabilities?.(capabilities);
     this.callbacks.onHealthCheck?.(true, health);
     this.monitor.noteConnected();
+    // A suspend() left over from a background cycle silences every tick, and
+    // only resume() clears it. A connect that just succeeded re-arms it.
+    this.monitor.resume();
     this.monitor.start();
   }
 
   disconnect() {
     this.connectEpoch += 1;
+    // A connect() after this must start a fresh attempt. Joining the one this
+    // epoch orphaned would resolve without connecting.
+    this.connectAttempt = null;
     this.closed = true;
     this.monitor.stop();
     // A turn still streaming belongs to the client being discarded: stop it here
@@ -557,8 +565,14 @@ export class ManifestClient implements PortalClient {
         // assistant bubble on 2026-08-26 — wire text presented as if the model had
         // said it, in the banner as well. Every other call site in this file
         // already unwraps through the same helper.
+        // The status and code ride along too: isAuthRejection() reads the status,
+        // so a 401 whose body text carries no auth words is still recognized.
         const errorText = await response.text().catch(() => '');
-        throw new Error(messageFromHttpErrorBody(errorText, response.status));
+        throw new GatewayHttpError(
+          messageFromHttpErrorBody(errorText, response.status),
+          response.status,
+          errorCodeFromHttpBody(errorText),
+        );
       }
 
       // The Gate has the turn now, whichever way it answered: HTTP 200 opened a

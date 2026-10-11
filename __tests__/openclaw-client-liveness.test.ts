@@ -310,6 +310,97 @@ describe('OpenClawGatewayClient liveness', () => {
   });
 });
 
+describe('OpenClawGatewayClient after its socket drops while suspended', () => {
+  const realWebSocket = globalThis.WebSocket;
+  let randomSpy: jest.SpyInstance<number>;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    FakeWebSocket.instances = [];
+    mockLoadToken.mockReset().mockResolvedValue(null);
+    (globalThis as { WebSocket: unknown }).WebSocket = FakeWebSocket;
+  });
+
+  afterEach(() => {
+    randomSpy.mockRestore();
+    jest.useRealTimers();
+    (globalThis as { WebSocket: unknown }).WebSocket = realWebSocket;
+  });
+
+  function monitorOf(client: OpenClawGatewayClient): { isSuspended: boolean } {
+    return (client as unknown as { monitor: { isSuspended: boolean } }).monitor;
+  }
+
+  /**
+   * Connected, then the app backgrounds and the socket closes. The retry that
+   * close queues is refused by the suspended monitor, so nothing re-dials.
+   */
+  async function droppedWhileSuspended(c: OpenClawGatewayClient) {
+    await connected(c);
+    c.suspendReconnect();
+    FakeWebSocket.instances[FakeWebSocket.instances.length - 1].serverClose(1006);
+    await flush();
+  }
+
+  test('a request with no live socket rejects at once instead of hanging for its budget', async () => {
+    const c = new OpenClawGatewayClient(PROFILE, {});
+    await droppedWhileSuspended(c);
+    // The status still says connected: that is the stale state under test.
+    expect(c.connectionStatus).toBe('connected');
+
+    let failure: Error | undefined;
+    void c.request('sessions.list', {}, 30_000).catch((error: Error) => {
+      failure = error;
+    });
+    await flush();
+
+    // No timer advance: the rejection has to come from the missing socket itself.
+    expect(failure?.message).toBe('Gateway socket is not connected');
+    expect(FakeWebSocket.instances.at(-1)?.frames('sessions.list')).toEqual([]);
+    c.disconnect();
+  });
+
+  test('resumeReconnect dials again when the status says connected but the socket is gone', async () => {
+    const c = new OpenClawGatewayClient(PROFILE, {});
+    await droppedWhileSuspended(c);
+    const dialsBefore = FakeWebSocket.instances.length;
+
+    c.resumeReconnect();
+
+    expect(FakeWebSocket.instances).toHaveLength(dialsBefore + 1);
+    expect(c.connectionStatus).toBe('connecting');
+    const next = FakeWebSocket.instances[dialsBefore];
+    next.serverOpen();
+    next.serverFrame({ type: 'event', event: 'connect.challenge', payload: { nonce: 'n2' } });
+    await flush();
+    next.serverFrame(helloOk());
+    await flush();
+    expect(c.connectionStatus).toBe('connected');
+    c.disconnect();
+  });
+
+  test('a handshake that completes clears a suspendReconnect() left over from the background', async () => {
+    const c = new OpenClawGatewayClient(PROFILE, {});
+    await connected(c);
+    c.suspendReconnect();
+    expect(monitorOf(c).isSuspended).toBe(true);
+
+    // An explicit connect() does not resume the monitor; the handshake must.
+    c.connect();
+    const next = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+    next.serverOpen();
+    next.serverFrame({ type: 'event', event: 'connect.challenge', payload: { nonce: 'n2' } });
+    await flush();
+    next.serverFrame(helloOk());
+    await flush();
+
+    expect(c.connectionStatus).toBe('connected');
+    expect(monitorOf(c).isSuspended).toBe(false);
+    c.disconnect();
+  });
+});
+
 describe('OpenClawAdapterClient healthCheck', () => {
   const realWebSocket = globalThis.WebSocket;
   let randomSpy: jest.SpyInstance<number>;

@@ -313,12 +313,45 @@ describe('a connect after a disconnect starts a fresh attempt', () => {
     expect(calls.filter((status) => status === 'connected')).toHaveLength(1);
     client.disconnect();
   });
+
+  test('manifest: connect() after disconnect() checks health again instead of joining the orphaned attempt', async () => {
+    // Same shape as the hermes case above: the first /health hangs until released.
+    let healthCalls = 0;
+    let releaseFirst!: (response: Response) => void;
+    const firstHealth = new Promise<Response>((resolve) => {
+      releaseFirst = resolve;
+    });
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      if (url.includes('/health')) {
+        healthCalls += 1;
+        return healthCalls === 1 ? firstHealth : Promise.resolve(jsonResponse(HEALTH));
+      }
+      if (url.includes('/v1/models')) return Promise.resolve(jsonResponse(MODELS));
+      return Promise.resolve(jsonResponse({ object: 'caps' }));
+    });
+    const calls: ConnectionStatus[] = [];
+    const client = new ManifestClient(GATE_PROFILE, GATE_IDENTITY, { onStatus: (status) => calls.push(status) });
+
+    const orphaned = client.connect();
+    client.disconnect();
+    const fresh = client.connect();
+    releaseFirst(jsonResponse(HEALTH));
+    await Promise.all([orphaned, fresh]);
+
+    // Before the fix, fresh joined the orphaned attempt: no second health check,
+    // and the client stayed 'disconnected'.
+    expect(healthCalls).toBe(2);
+    expect(client.connectionStatus).toBe('connected');
+    expect(calls.filter((status) => status === 'connected')).toHaveLength(1);
+    client.disconnect();
+  });
 });
 
 describe('a suspended health monitor is re-armed', () => {
   beforeEach(() => jest.useFakeTimers());
 
-  function monitorOf(client: HermesGatewayClient): { isSuspended: boolean } {
+  function monitorOf(client: object): { isSuspended: boolean } {
     return (client as unknown as { monitor: { isSuspended: boolean } }).monitor;
   }
 
@@ -330,6 +363,20 @@ describe('a suspended health monitor is re-armed', () => {
   test('hermes: a successful connect clears a suspendReconnect() left over from the background', async () => {
     releaseHealthNothing();
     const client = new HermesGatewayClient(HERMES_PROFILE, {});
+    await client.connect();
+    client.suspendReconnect();
+    expect(monitorOf(client).isSuspended).toBe(true);
+
+    await client.connect();
+
+    expect(monitorOf(client).isSuspended).toBe(false);
+    expect(client.connectionStatus).toBe('connected');
+    client.disconnect();
+  });
+
+  test('manifest: a successful connect clears a suspendReconnect() left over from the background', async () => {
+    releaseHealthNothing();
+    const client = new ManifestClient(GATE_PROFILE, GATE_IDENTITY, {});
     await client.connect();
     client.suspendReconnect();
     expect(monitorOf(client).isSuspended).toBe(true);

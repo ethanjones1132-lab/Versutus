@@ -1,3 +1,4 @@
+import { GatewayHttpError, isAuthRejection } from '@/lib/gateway/errors';
 import { ManifestClient } from '@/lib/gateway/manifest-client';
 import { installStreamingFetch, resetStreamingFetchForTests } from '@/lib/net/streaming-fetch';
 import type { GatewayIdentity } from '@/lib/portal/identify';
@@ -73,4 +74,33 @@ test('an empty body falls back to the status rather than an empty error', async 
   await expect(
     client.streamChat([{ role: 'user', content: 'Test' }], () => undefined, { model: 'm' }),
   ).rejects.toThrow(/503/);
+});
+
+test('a refused chat keeps its HTTP status, so an auth refusal is recognized by status', async () => {
+  // The body's text carries no auth words, so only the status can say this was a
+  // credential refusal. The unwrapped message still reaches the screen.
+  const body = JSON.stringify({ error: { message: 'nope' } });
+  installStreamingFetch((async () => errorResponse(body, 401)) as unknown as typeof globalThis.fetch);
+
+  const client = new ManifestClient(PROFILE, IDENTITY, {});
+  const thrown = await client
+    .streamChat([{ role: 'user', content: 'Test' }], () => undefined, { model: 'm' })
+    .catch((e: unknown) => e);
+  expect(thrown).toBeInstanceOf(GatewayHttpError);
+  expect((thrown as GatewayHttpError).status).toBe(401);
+  expect(isAuthRejection(thrown)).toBe(true);
+  expect((thrown as Error).message).toBe('nope');
+});
+
+test('a refusal carries the Gate error code forward alongside the status', async () => {
+  const body = JSON.stringify({ error: { message: 'key not accepted', code: 'invalid_api_key' } });
+  installStreamingFetch((async () => errorResponse(body, 403)) as unknown as typeof globalThis.fetch);
+
+  const client = new ManifestClient(PROFILE, IDENTITY, {});
+  const thrown = await client
+    .streamChat([{ role: 'user', content: 'Test' }], () => undefined, { model: 'm' })
+    .catch((e: unknown) => e);
+  expect(thrown).toBeInstanceOf(GatewayHttpError);
+  expect((thrown as GatewayHttpError).code).toBe('invalid_api_key');
+  expect(isAuthRejection(thrown)).toBe(true);
 });
