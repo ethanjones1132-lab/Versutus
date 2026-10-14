@@ -101,6 +101,33 @@ async function collectRunEvents(gate, runId) {
     .map((line) => JSON.parse(line.slice(5).trim()));
 }
 
+async function startStatusRun(gate) {
+  const started = await fetch(`http://127.0.0.1:${gate.port}/v1/environments/codex-local/runs`, {
+    method: 'POST',
+    headers: auth(gate),
+    body: JSON.stringify({
+      operation: 'status',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      sandbox: 'read_only',
+      input: {},
+    }),
+  });
+  const startedBody = await started.text();
+  assert.equal(started.status, 200, startedBody);
+  return JSON.parse(startedBody).runId;
+}
+
+/** What the reporting CLI printed about the callback it was handed. */
+function reportedCallback(events) {
+  const stdout = events
+    .filter((event) => event.type === 'run.output' && event.payload.stream === 'stdout')
+    .map((event) => event.payload.text)
+    .join('');
+  const reported = stdout.split(/\r?\n/).find((line) => line.startsWith('ENV '));
+  assert.ok(reported, `the run's stdout must carry what its CLI was told: ${JSON.stringify(stdout)}`);
+  return JSON.parse(reported.slice(4));
+}
+
 test('a run on a Gate that never named its port is told the port it calls back on', async () => {
   const previousPort = process.env.VERSUTUS_GATE_PORT;
   // The Gate process is this process, so a developer's own VERSUTUS_GATE_PORT
@@ -108,29 +135,10 @@ test('a run on a Gate that never named its port is told the port it calls back o
   delete process.env.VERSUTUS_GATE_PORT;
   const { gate, root } = await setupGate();
   try {
-    const started = await fetch(`http://127.0.0.1:${gate.port}/v1/environments/codex-local/runs`, {
-      method: 'POST',
-      headers: auth(gate),
-      body: JSON.stringify({
-        operation: 'status',
-        providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
-        sandbox: 'read_only',
-        input: {},
-      }),
-    });
-    const startedBody = await started.text();
-    assert.equal(started.status, 200, startedBody);
-    const { runId } = JSON.parse(startedBody);
-
+    const runId = await startStatusRun(gate);
     const events = await collectRunEvents(gate, runId);
     assert.equal(events.at(-1)?.type, 'run.completed', JSON.stringify(events));
-    const stdout = events
-      .filter((event) => event.type === 'run.output' && event.payload.stream === 'stdout')
-      .map((event) => event.payload.text)
-      .join('');
-    const reported = stdout.split(/\r?\n/).find((line) => line.startsWith('ENV '));
-    assert.ok(reported, `the run's stdout must carry what its CLI was told: ${JSON.stringify(stdout)}`);
-    const { chat, token } = JSON.parse(reported.slice(4));
+    const { chat, token } = reportedCallback(events);
 
     // `port: 0` means only the listener knows the real port; the CLI must be
     // told that one, not left with no route back to the Gate.
@@ -139,6 +147,33 @@ test('a run on a Gate that never named its port is told the port it calls back o
 
     // The invocation token rides in the same environment, so its claims must
     // name the same endpoint the child can reach.
+    const verified = verifyInvocationToken(token, { runId });
+    assert.equal(verified.ok, true, `the invocation token must verify: ${verified.code}`);
+    assert.deepEqual(verified.claims.endpoints, { chat: expected });
+  } finally {
+    await gate.close();
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+    if (previousPort === undefined) delete process.env.VERSUTUS_GATE_PORT;
+    else process.env.VERSUTUS_GATE_PORT = previousPort;
+  }
+});
+
+test('a run is told the port the Gate bound, not the one VERSUTUS_GATE_PORT named', async () => {
+  const previousPort = process.env.VERSUTUS_GATE_PORT;
+  const { gate, root } = await setupGate();
+  // Once the Gate is listening, the variable that only ever asked `start` for
+  // a port can disagree with the one actually bound (an explicit --port wins
+  // over it; port 0 picks an ephemeral one), so it must not move the callback
+  // a run is handed. Name a port that is definitely not the bound one.
+  process.env.VERSUTUS_GATE_PORT = String(gate.port === 9123 ? 9124 : 9123);
+  try {
+    const runId = await startStatusRun(gate);
+    const events = await collectRunEvents(gate, runId);
+    assert.equal(events.at(-1)?.type, 'run.completed', JSON.stringify(events));
+    const { chat, token } = reportedCallback(events);
+
+    const expected = `http://127.0.0.1:${gate.port}/v1/chat/completions`;
+    assert.equal(chat, expected, 'the bound port must beat the port the environment asked for');
     const verified = verifyInvocationToken(token, { runId });
     assert.equal(verified.ok, true, `the invocation token must verify: ${verified.code}`);
     assert.deepEqual(verified.claims.endpoints, { chat: expected });

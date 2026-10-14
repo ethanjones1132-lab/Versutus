@@ -180,9 +180,10 @@ export class CliEnvironmentService {
     // Finished runs kept answerable in memory per environment; older ones are
     // evicted and their events keep replaying from the archive.
     maxRetainedRuns = DEFAULT_MAX_RETAINED_RUNS,
-    // Endpoints for a run whose caller names none. VERSUTUS_GATE_PORT wins when
-    // it names a real port; this is the escape hatch for a caller that knows
-    // the port the Gate actually bound (an ephemeral one) and can say so.
+    // Endpoints for a run whose caller names none. When set, this is the port
+    // the listener actually bound and beats VERSUTUS_GATE_PORT, which only ever
+    // asked `start` for a port (`--port` wins over it, and port 0 picks its own)
+    // — a variable that disagrees would hand runs a URL nothing listens on.
     defaultEndpoints = null,
   } = {}) {
     this.store = store;
@@ -797,14 +798,17 @@ export class CliEnvironmentService {
    * The endpoints a run is told to route its model call through. They come
    * from the Gate's own configuration, never from the request body: a caller
    * able to name them could point the CLI's callback — and the invocation
-   * token riding in its environment — at any host. Absent ones are derived
-   * from the port the Gate is actually listening on, and when nothing names
+   * token riding in its environment — at any host. The port the listener
+   * actually bound is the truth and wins when it is known; VERSUTUS_GATE_PORT
+   * only asks `start` for a port (an explicit --port beats it, and port 0 picks
+   * an ephemeral one), so preferring it can hand runs a URL nothing listens on.
+   * It stands in only where no bound port was published, and when neither names
    * one the chat variable is left out entirely: a CLI that finds no endpoint
    * stops, while one handed a portless URL believes the Gate is on port 80
    * and fails somewhere else entirely.
    */
   endpointsFor() {
-    return chatEndpointForPort(process.env.VERSUTUS_GATE_PORT) ?? this.defaultEndpoints ?? undefined;
+    return this.defaultEndpoints ?? chatEndpointForPort(process.env.VERSUTUS_GATE_PORT) ?? undefined;
   }
 
   trackLive(run) {
