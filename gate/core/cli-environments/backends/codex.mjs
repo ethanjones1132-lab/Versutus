@@ -15,6 +15,9 @@ const APPROVAL_METHODS = new Set([
   'commandExecutionRequestApproval',
   'fileChangeRequestApproval',
   'permissionsRequestApproval',
+  'item/commandExecution/requestApproval',
+  'item/fileChange/requestApproval',
+  'item/permissions/requestApproval',
 ]);
 
 /** Translate a Codex thread into the shape the app already parses. */
@@ -310,8 +313,11 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeou
       await interruptTurn(sessionId, threadTurns.get(sessionId));
     },
 
-    async replyApproval(_sessionId, requestId, reply) {
-      onApproval?.(requestId, reply);
+    async replyApproval(runId, { approved, feedback } = {}) {
+      if (typeof onApproval !== 'function') {
+        throw new Error('codex: no approval handler is connected');
+      }
+      return onApproval(runId, { approved: approved === true, feedback });
     },
 
     async listModels() {

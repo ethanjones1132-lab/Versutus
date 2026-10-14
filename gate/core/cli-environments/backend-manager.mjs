@@ -1,5 +1,6 @@
 import { createNativeServer } from './native-server.mjs';
 import { createStdioServer } from './stdio-server.mjs';
+import { isApprovalRequest } from './backends/codex.mjs';
 
 // How long a backend whose server will not start stays unretried. The first
 // cold read after a Gate restart otherwise pays the supervisor's whole start
@@ -22,6 +23,8 @@ export function createBackendManager({
   // capabilities are a static declaration; this is what says whether the CLI
   // behind them answered.
   environmentState,
+  approvals,
+  approvalTimeoutMs = 120_000,
   buildEnvironment,
   onDiagnostic,
   // Where a credential binding that did not resolve is reported. It used to be
@@ -179,7 +182,51 @@ export function createBackendManager({
         credentials,
         buildEnvironment,
         onDiagnostic,
-        ...(isStdio ? { onNotification: (message) => fanOut(environmentId, message) } : {}),
+        ...(isStdio ? {
+          onNotification: (message) => fanOut(environmentId, message),
+          onServerRequest: async ({ method, params = {} } = {}) => {
+            // An empty result grants the request. Only a method that is not an
+            // approval may take it; an approval stays unanswered until a ruling.
+            if (!isApprovalRequest(method)) return {};
+            if (!approvals) throw new Error('codex: no approval handler is connected');
+
+            const command = Array.isArray(params.command) ? params.command.join(' ') : params.command;
+            const rawSummary = typeof command === 'string' && command
+              ? command
+              : typeof params.reason === 'string' && params.reason
+                ? params.reason
+                : method;
+            const summary = rawSummary.replace(/[\r\n\u2028\u2029]+/g, ' ').trim().slice(0, 160);
+            const normalized = await approvals.normalize({
+              type: 'workspace_write',
+              runId: typeof params.threadId === 'string' ? params.threadId : null,
+              environmentId: record.id,
+              operation: method,
+              summary,
+            });
+
+            let ruling = normalized;
+            if (normalized?.decision !== 'approve' && normalized?.decision !== 'deny') {
+              const waiting = approvals.waitForDecision(normalized?.approvalId);
+              let timer;
+              const timeout = new Promise((resolve, reject) => {
+                timer = setTimeout(() => {
+                  Promise.resolve(approvals.decide(normalized?.approvalId, 'deny')).then(resolve, reject);
+                }, approvalTimeoutMs);
+                timer.unref?.();
+              });
+              try {
+                ruling = await Promise.race([waiting, timeout]);
+              } finally {
+                clearTimeout(timer);
+              }
+            }
+
+            const accepts = !Array.isArray(params.availableDecisions)
+              || params.availableDecisions.includes('accept');
+            return { decision: ruling?.decision === 'approve' && accepts ? 'accept' : 'decline' };
+          },
+        } : {}),
       });
       servers.set(environmentId, server);
     }
@@ -235,6 +282,17 @@ export function createBackendManager({
           // One connection multiplexes every thread, so the backend needs the
           // raw stream to await its own turn.
           subscribe: (handler) => subscribe(environmentId, handler),
+          onApproval: async (runId, { approved } = {}) => {
+            if (!approvals) throw new Error('codex: no approval handler is connected');
+            const pending = approvals.list().filter((entry) => entry.environmentId === environmentId);
+            // A different run id must not settle this command. The inbox decides
+            // by approval id; this path only answers the thread it names.
+            const entry = pending.find((candidate) => candidate.runId && candidate.runId === runId);
+            const noPendingApproval = () => new Error(`codex: no pending approval for run ${runId ?? 'null'}`);
+            if (!entry) throw noPendingApproval();
+            const result = await approvals.decide(entry.approvalId, approved ? 'approve' : 'deny');
+            if (result?.reason === 'unknown approval') throw noPendingApproval();
+          },
         })
       : adapter.createBackend({ baseUrl: handle.baseUrl, credentials, record });
     backends.set(environmentId, { key, backend });

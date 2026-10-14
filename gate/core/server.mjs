@@ -1483,6 +1483,7 @@ export async function createGate(config = {}) {
   const backendManager = createBackendManager({
     store: environmentStore,
     registry: environmentRegistry,
+    approvals: environmentService.approvals,
     vault,
     environmentState: environmentService.environmentState,
     buildEnvironment: async ({ record, credentials }) =>
