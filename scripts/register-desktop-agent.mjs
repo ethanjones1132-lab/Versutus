@@ -52,13 +52,12 @@ const out = {
   role: result.role ?? ROLE,
   scopes: result.scopes ?? SCOPES,
 };
-if (result.token) out.token = result.token;
 console.log(JSON.stringify(out, null, 2));
 
 if (result.status === 'granted' && result.token) {
   await writeFile(
     new URL('../gate/.grok-desktop-device.json', import.meta.url),
     JSON.stringify({ deviceId, clientId: CLIENT_ID, token: result.token, role: result.role, scopes: result.scopes }, null, 2) + '\n',
-    'utf8',
+    { encoding: 'utf8', mode: 0o600 },
   );
 }
