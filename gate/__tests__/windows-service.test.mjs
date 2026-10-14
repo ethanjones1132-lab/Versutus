@@ -181,6 +181,55 @@ test('a dry-run service run is refused before the supervisor starts', { skip: pr
   }
 });
 
+test('a flag on a no-argument Windows service subcommand is refused by name', { skip: process.platform !== 'win32' }, async () => {
+  // stop/start/restart/uninstall/status act through the installed task, and
+  // none takes a flag; before this guard one was dropped with no word
+  // (`service start --port 9500` started the Gate on the installed address
+  // anyway). A preload shim blocks schtasks/taskkill, so even a regression
+  // here cannot disable, stop or delete the operator's real task.
+  const dir = await mkdtemp(join(tmpdir(), 'gate-service-flag-'));
+  const shim = join(dir, 'block-service-commands.cjs');
+  const shimLog = join(dir, 'blocked-service-commands.log');
+  await writeFile(
+    shim,
+    [
+      "const childProcess = require('node:child_process');",
+      'const real = childProcess.execFileSync;',
+      'childProcess.execFileSync = function (file, args, options) {',
+      "  if (file === 'schtasks' || file === 'taskkill') {",
+      "    require('node:fs').appendFileSync(process.env.GATE_TEST_COMMAND_LOG, file + '\\n');",
+      "    throw new Error('test shim blocked ' + file);",
+      '  }',
+      '  return real.call(this, file, args, options);',
+      '};',
+    ].join('\n'),
+  );
+  const effects = [
+    ['stop', /stop the Gate and disable its task/],
+    ['start', /enable the task and start the Gate/],
+    ['restart', /restart the Gate/],
+    ['uninstall', /stop the Gate and delete its task/],
+    ['status', /report on the installed task/],
+  ];
+  try {
+    for (const [sub, effect] of effects) {
+      const { code, stdout, stderr } = await runCli(['service', sub, '--port', '9500'], {
+        VERSUTUS_GATE_HOME: dir,
+        GATE_TEST_COMMAND_LOG: shimLog,
+        NODE_OPTIONS: `--require "${shim.split('\\').join('/')}"`,
+      });
+      assert.equal(code, 1, `service ${sub} exited ${code}: ${stdout}`);
+      assert.match(stderr, new RegExp(`service ${sub} takes no arguments`), sub);
+      assert.match(stderr, effect, sub);
+      assert.match(stderr, /--port 9500/, sub);
+      assert.equal(existsSync(join(dir, 'service')), false, `service ${sub} acted before refusing`);
+    }
+    assert.equal(existsSync(shimLog), false, 'a refusal shelled out to schtasks or taskkill');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('service status probes the port the installed task names', { skip: process.platform !== 'win32' }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'gate-service-status-'));
   // The listener stands in for a Gate installed on a named port, and answers

@@ -529,6 +529,15 @@ const WINDOWS_SERVICE_EFFECTS = {
   status: 'report on the installed task without changing anything',
 };
 
+/**
+ * The Windows service subcommands with no flags of their own: their address
+ * comes from the installed task file (`installedServiceListen`), not the
+ * command line, so a flag here cannot change what they do. Refused by name
+ * like `--dry-run` was, never dropped: `service start --port 9500` used to
+ * enable and start the task with no word that the port never applied.
+ */
+const NO_ARGUMENT_SERVICE_SUBS = new Set(['stop', 'start', 'restart', 'uninstall', 'status']);
+
 async function handleService(args) {
   const sub = args[0];
   // macOS: a per-user LaunchAgent, launchd being the supervisor. The
@@ -552,6 +561,12 @@ async function handleService(args) {
   if (Object.hasOwn(WINDOWS_SERVICE_EFFECTS, sub) && args.includes('--dry-run')) {
     console.error(
       `Error: service ${sub} does not support --dry-run on Windows; it would really ${WINDOWS_SERVICE_EFFECTS[sub]}. Re-run without the flag.`,
+    );
+    process.exit(1);
+  }
+  if (NO_ARGUMENT_SERVICE_SUBS.has(sub) && args.length > 1) {
+    console.error(
+      `Error: service ${sub} takes no arguments on Windows; it would really ${WINDOWS_SERVICE_EFFECTS[sub]}. Re-run without "${args.slice(1).join(' ')}".`,
     );
     process.exit(1);
   }
@@ -1029,8 +1044,10 @@ async function main() {
     console.log('    carries it in the task\'s `service run` arguments, macOS in');
     console.log('    the plist EnvironmentVariables, so --host 0.0.0.0 keeps');
     console.log('    tailnet/phone access. install --dry-run names the task and');
-    console.log('    commands it would use and changes nothing (the other Windows');
-    console.log('    subcommands refuse it); --node is macOS-only.');
+    console.log('    commands it would use and changes nothing; on Windows, run');
+    console.log('    refuses --dry-run, and stop/start/restart/status/uninstall');
+    console.log('    take no flags at all (any flag is refused); --node is');
+    console.log('    macOS-only.');
     console.log('');
     console.log('  doctor');
     console.log('    Inspect the Gate machine: local listener and every CLI');
