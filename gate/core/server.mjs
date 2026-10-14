@@ -3778,8 +3778,10 @@ export async function createGate(config = {}) {
         const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         try {
           const handle = await environmentService.startRun({
-            environmentId: decodeURIComponent(runStart[1]),
             ...body,
+            // The path names the environment. A body field must not move the
+            // run onto a different one.
+            environmentId: decodeURIComponent(runStart[1]),
           });
           res.writeHead(200);
           res.end(JSON.stringify({ runId: handle.runId }));

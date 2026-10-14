@@ -210,3 +210,44 @@ test('listing runs of an unknown environment is a 404, not an empty list', async
     await gate.close();
   }
 });
+
+test('a body environmentId cannot move the run off the path', async () => {
+  const gate = await setupGate();
+  try {
+    // The path names the environment, so a body environmentId naming another
+    // environment must not move the run off it.
+    const started = await fetch(`http://127.0.0.1:${gate.port}/v1/environments/codex-local/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` },
+      body: JSON.stringify({ operation: 'status', input: {}, environmentId: 'other-env' }),
+    });
+    assert.equal(started.status, 200);
+    const { runId } = await started.json();
+    await fetch(
+      `http://127.0.0.1:${gate.port}/v1/environments/codex-local/runs/${runId}/events`,
+      { headers: { Authorization: `Bearer ${gate.token}` } },
+    ).then((response) => response.text());
+
+    const response = await listRuns(gate);
+    assert.equal(response.status, 200);
+    const { runs } = await response.json();
+    const run = runs.find((entry) => entry.runId === runId);
+    assert.ok(run, 'run started for the path environment is listed');
+    assert.equal(run.environmentId, 'codex-local');
+
+    // A caller that sends the same id as the path must still start.
+    const repeated = await fetch(`http://127.0.0.1:${gate.port}/v1/environments/codex-local/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` },
+      body: JSON.stringify({ operation: 'status', input: {}, environmentId: 'codex-local' }),
+    });
+    assert.equal(repeated.status, 200);
+    const { runId: repeatedRunId } = await repeated.json();
+    await fetch(
+      `http://127.0.0.1:${gate.port}/v1/environments/codex-local/runs/${repeatedRunId}/events`,
+      { headers: { Authorization: `Bearer ${gate.token}` } },
+    ).then((response) => response.text());
+  } finally {
+    await gate.close();
+  }
+});
