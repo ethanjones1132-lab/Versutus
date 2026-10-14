@@ -308,6 +308,10 @@ test('a final heard while the turn is still thinking is folded into that turn', 
   engine.emit('final', { text: 'weather in glasgow' });
   await waitUntil(() => attempts.length === 2);
   call.advance(500);
+  // The merged final is written to the socket in the same turn that arms the
+  // replacement. Under load the assertion used to read the frame list before
+  // that write landed.
+  await waitUntil(() => ofType(call.frames, 'final').some((frame) => frame.text === 'what is the weather in glasgow'));
 
   assert.ok(firstAborted, 'the unanswered turn was cancelled, not left running');
   assert.deepEqual(attempts, ['what is the', 'what is the weather in glasgow']);
