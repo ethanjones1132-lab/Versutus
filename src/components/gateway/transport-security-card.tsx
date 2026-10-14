@@ -30,7 +30,7 @@ export function TransportSecurityCard({ url, tlsFingerprint }: { url: string; tl
       </Text>
       {tlsFingerprint ? (
         <Text variant="mono" color="tertiary" numberOfLines={2}>
-          Observed fingerprint: {tlsFingerprint}
+          Discovery fingerprint: {tlsFingerprint}
         </Text>
       ) : null}
     </Card>

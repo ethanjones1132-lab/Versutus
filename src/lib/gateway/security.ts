@@ -57,11 +57,12 @@ export function inspectGatewayTransport(url: string, observedFingerprint?: strin
 }
 
 /**
- * Verify-on-first-use for a discovered TLS fingerprint.
+ * Classify a fingerprint that was actually presented against a stored record.
  *
- * The fingerprint is "observed, not verified" by the underlying fetch, so this
- * helper only tracks changes: first seen → trust; same → unchanged; different →
- * changed (caller must prompt).
+ * Fetch does not present a live certificate, so a caller must not pass the
+ * stored value as the observation: that comparison can never be `changed`.
+ * `changed` means a different fingerprint was presented and the caller prompts.
+ * `first-seen` means no trusted baseline exists yet. It does not grant trust.
  */
 export function checkTlsFingerprintTofu(
   profile: { tlsFingerprint?: string; tlsFingerprintTrusted?: boolean; tlsFingerprintFirstSeenAt?: number },
@@ -92,4 +93,28 @@ export function checkTlsFingerprintTofu(
   }
 
   return { kind: 'unchanged', fingerprint: observedFingerprint };
+}
+
+export type BeaconFingerprintDecision =
+  | { kind: 'none' }
+  | { kind: 'record'; fingerprint: string }
+  | { kind: 'changed'; previousFingerprint: string; observedFingerprint: string };
+
+/**
+ * A discovery beacon is the only presented fingerprint. The same value, or no
+ * value, is not a prompt. A different value is the change the operator approves
+ * or rejects. A first value is recorded and not trusted.
+ */
+export function beaconFingerprintDecision(
+  saved: { tlsFingerprint?: string } | undefined,
+  observed?: string,
+): BeaconFingerprintDecision {
+  const fingerprint = observed?.trim();
+  if (!fingerprint) return { kind: 'none' };
+  const stored = saved?.tlsFingerprint;
+  if (!stored) return { kind: 'record', fingerprint };
+  if (stored !== fingerprint) {
+    return { kind: 'changed', previousFingerprint: stored, observedFingerprint: fingerprint };
+  }
+  return { kind: 'none' };
 }

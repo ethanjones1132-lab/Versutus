@@ -1,4 +1,7 @@
-import { checkTlsFingerprintTofu, inspectGatewayTransport } from '@/lib/gateway/security';
+import { readFileSync } from 'fs';
+import path from 'path';
+
+import { beaconFingerprintDecision, checkTlsFingerprintTofu, inspectGatewayTransport } from '@/lib/gateway/security';
 
 describe('inspectGatewayTransport', () => {
   it('reports TLS for https URLs', () => {
@@ -82,5 +85,31 @@ describe('checkTlsFingerprintTofu', () => {
         fingerprint: 'AA:AA:AA',
       });
     });
+  });
+});
+
+describe('stored fingerprints are discovery records', () => {
+  const provider = readFileSync(path.join(__dirname, '../src/context/gateway-provider.tsx'), 'utf8');
+  const card = readFileSync(path.join(__dirname, '../src/components/gateway/transport-security-card.tsx'), 'utf8');
+
+  test('connect does not compare the stored fingerprint with itself', () => {
+    expect(provider).not.toContain('checkTlsFingerprintTofu(gateway, gateway.tlsFingerprint)');
+    expect(provider).toContain('beaconFingerprintDecision(saved, observed)');
+  });
+
+  test('a different beacon fingerprint is the only prompt, and it is not trusted', () => {
+    expect(beaconFingerprintDecision({ tlsFingerprint: 'AA' }, 'BB')).toEqual({
+      kind: 'changed',
+      previousFingerprint: 'AA',
+      observedFingerprint: 'BB',
+    });
+    expect(beaconFingerprintDecision({ tlsFingerprint: 'AA' }, 'AA')).toEqual({ kind: 'none' });
+    expect(beaconFingerprintDecision(undefined, 'BB')).toEqual({ kind: 'record', fingerprint: 'BB' });
+    expect(beaconFingerprintDecision({ tlsFingerprint: 'AA' }, '  ')).toEqual({ kind: 'none' });
+  });
+
+  test('the saved fingerprint is labelled as a discovery record', () => {
+    expect(card).toContain('Discovery fingerprint:');
+    expect(card).not.toContain('Observed fingerprint:');
   });
 });

@@ -170,7 +170,8 @@ import {
   type QueuedRunShape,
 } from '@/lib/gateway/session-persistence';
 import { retirementTookActiveGateway, syncChildProfiles } from '@/lib/gateway/child-sync';
-import { checkTlsFingerprintTofu } from '@/lib/gateway/security';
+import { beaconFingerprintDecision } from '@/lib/gateway/security';
+import { gatewayIdentityKey } from '@/lib/gateway/profile-dedupe';
 import {
   clearRunProgressThrottles,
   dismissGatewayDown,
@@ -3208,27 +3209,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         },
         identityForClient,
       );
-      // TLS fingerprint verify-on-first-use. A changed fingerprint blocks the
-      // connection until the user explicitly approves it.
-      const tofu = checkTlsFingerprintTofu(gateway, gateway.tlsFingerprint);
-      if (tofu.kind === 'first-seen') {
-        const updated = {
-          ...gateway,
-          tlsFingerprint: tofu.fingerprint,
-          tlsFingerprintTrusted: true,
-          tlsFingerprintFirstSeenAt: Date.now(),
-        };
-        gateway = updated;
-        setActiveGateway(updated);
-        persistGateway(updated);
-      } else if (tofu.kind === 'changed') {
-        updateTlsFingerprintChange({
-          gateway,
-          previousFingerprint: tofu.previousFingerprint,
-          observedFingerprint: tofu.observedFingerprint,
-        });
-        // Blocked until the operator approves: the client is never installed, so
-        // the window opened above has to be closed rather than left standing.
+      // The stored fingerprint is a discovery record. Fetch cannot present the
+      // certificate in use, so connect does not compare that record with itself,
+      // does not grant trust, and does not prompt. A beacon that presented a
+      // different fingerprint has already raised the approve/reject sheet; hold
+      // this attach until the operator answers it.
+      const pendingTls = tlsFingerprintChangeRef.current;
+      if (pendingTls && pendingTls.gateway.id === gateway.id) {
         abandonAttach();
         return;
       }
@@ -3316,7 +3303,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // patchActivityRuns is a useCallback with [] deps, so its identity is stable
     // for the provider's lifetime; listing it satisfies exhaustive-deps without
     // changing when this callback is rebuilt.
-    [reloadHistoryFor, abandonLiveTurn, applyStatus, applyConnectionPhase, patchActivityRuns, persistGateway, reconcileInterrupted, teardownRetiredActiveGateway, resetSessionSelector, updateTlsFingerprintChange, cancelConnectedReads, scheduleConnectedRead, noteConnectedFanOut, applyClientScope, reportAutoConnectFailure],
+    [reloadHistoryFor, abandonLiveTurn, applyStatus, applyConnectionPhase, patchActivityRuns, persistGateway, reconcileInterrupted, teardownRetiredActiveGateway, resetSessionSelector, cancelConnectedReads, scheduleConnectedRead, noteConnectedFanOut, applyClientScope, reportAutoConnectFailure],
   );
 
   useEffect(() => {
@@ -3728,10 +3715,26 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       agentId?: string;
       discoverySource?: GatewayProfile['discoverySource'];
     }) => {
-      const created = createGatewayProfile(input);
+      const observed = input.tlsFingerprint?.trim() || undefined;
+      const saved = (await loadGateways()).find(
+        (item) => !item.parentId && gatewayIdentityKey(item.url) === gatewayIdentityKey(input.url),
+      );
+      const beacon = beaconFingerprintDecision(saved, observed);
+      const created = createGatewayProfile(
+        beacon.kind === 'changed' ? { ...input, tlsFingerprint: undefined } : input,
+      );
       // A gateway already saved under this URL is updated, never duplicated (profile-dedupe.ts).
       const { profile, gateways: next } = await addGatewayProfile(created);
       setGateways(next);
+      // A different beacon fingerprint waits for the operator. The saved record
+      // is kept, including a token this add just filled, and is not trusted.
+      if (beacon.kind === 'changed' && saved) {
+        updateTlsFingerprintChange({
+          gateway: profile,
+          previousFingerprint: beacon.previousFingerprint,
+          observedFingerprint: beacon.observedFingerprint,
+        });
+      }
 
       // Adding a gateway IS completing onboarding: without this, a first-run
       // manual or deep-link add saved a profile yet left needsOnboarding set,
@@ -3745,7 +3748,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
       return profile;
     },
-    [],
+    [updateTlsFingerprintChange],
   );
 
   const gatewayRequest = useCallback(
