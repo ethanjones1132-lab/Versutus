@@ -798,6 +798,18 @@ async function proxyChat(root, provider, requestBody, res, { headersTimeoutMs, k
     return null;
   }
 
+  // The codecs deliberately emit no auth header — auth moved into provider
+  // profiles — but this legacy path has no profile to add one, so the key
+  // resolved above goes on the wire here or nowhere.
+  if (apiKey) {
+    upstreamRequest.init.headers = {
+      ...upstreamRequest.init.headers,
+      ...(provider.config.flavor === 'anthropic'
+        ? { 'x-api-key': apiKey }
+        : { Authorization: `Bearer ${apiKey}` }),
+    };
+  }
+
   const upstream = providerUpstreamCall(res, { headersTimeoutMs, abortSignal: durable?.controller.signal });
   let upstreamResponse;
   try {
