@@ -42,6 +42,36 @@ test('vault status never returns the value', async () => {
   assert.deepEqual(await vault.describe('provider/openai/api-key'), { present: true, readable: true });
 });
 
+test('a ref whose file name starts with two dots stays in the vault', async () => {
+  const { vault, gateHome } = await vaultFor();
+  await vault.set('..', 'dot-value');
+  await vault.set('../x', 'slash-value');
+  assert.equal(await vault.get('..'), 'dot-value');
+  assert.equal(await vault.get('../x'), 'slash-value');
+  await readFile(join(gateHome, 'credentials', '...dpapi'));
+  await readFile(join(gateHome, 'credentials', '..-x.dpapi'));
+});
+
+test('a credential ref that climbs out of the vault is rejected', async () => {
+  const { vault, gateHome } = await vaultFor();
+  const leaked = join(gateHome, '..', 'secret.dpapi');
+  try {
+    await assert.rejects(
+      () => vault.set('..\\..\\secret', 'secret-value'),
+      /invalid credential ref/,
+    );
+    await assert.rejects(() => readFile(leaked), { code: 'ENOENT' });
+    await vault.set('provider/acme/api-key', 'secret-value');
+    await vault.set('env.a_b-1', 'other');
+    assert.equal(await vault.get('provider/acme/api-key'), 'secret-value');
+    assert.equal(await vault.get('env.a_b-1'), 'other');
+    await readFile(join(gateHome, 'credentials', 'provider-acme-api-key.dpapi'));
+    await readFile(join(gateHome, 'credentials', 'env.a_b-1.dpapi'));
+  } finally {
+    await rm(leaked, { force: true });
+  }
+});
+
 test('round-trips a credential and deletes it', async () => {
   const { vault } = await vaultFor();
   await vault.set('provider/openai/api-key', 'secret-value');

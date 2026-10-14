@@ -1,5 +1,5 @@
 import { mkdir, readFile, rm, stat, access } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 
 import { writeFileAtomic } from '../atomic-file.mjs';
 import { createPlatformCredentialBackend } from './platform-backend.mjs';
@@ -37,8 +37,20 @@ export class CredentialVault {
 
   fileFor(ref) {
     // `.dpapi` stays the Windows name, so existing Windows vaults are untouched.
+    // Slashes stay hyphens: a ref is `provider/acme/api-key`, one file in this
+    // directory. A backslash or a drive path is navigation, and resolve would
+    // leave the vault, so that ref is refused by name.
     const extension = this.backend?.fileExtension ?? 'dpapi';
-    return join(this.dir, `${String(ref).replaceAll('/', '-')}.${extension}`);
+    const name = `${String(ref).replaceAll('/', '-')}.${extension}`;
+    const file = resolve(this.dir, name);
+    const relativePath = relative(resolve(this.dir), file);
+    // A file named "...dpapi" or "..-x.dpapi" is still in this directory.
+    // Only a ".." segment, or a path that left the drive, is navigation.
+    const climbed = relativePath.split(/[/\\]/).includes('..');
+    if (relativePath === '' || climbed || isAbsolute(relativePath)) {
+      throw new Error(`invalid credential ref: ${JSON.stringify(String(ref))} is outside the vault`);
+    }
+    return file;
   }
 
   invalidate(ref) {
