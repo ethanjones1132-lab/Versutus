@@ -36,6 +36,56 @@ test('PKCE attempts are one-use, state-bound, and expiry-bound', async () => {
   }
 });
 
+test('PKCE attempt refuses a non-https authorization endpoint before opening its listener', async () => {
+  const store = new AttemptStore();
+  // The authorization URL is handed to the phone, which opens it in the
+  // browser, so a cleartext (or non-web) endpoint must be refused here, before
+  // the loopback listener exists -- the same guard the app comment names in
+  // gate/core/service/browser.mjs.
+  await assert.rejects(
+    createPkceAttempt(store, {
+      providerId: 'fake-oauth',
+      authorizationEndpoint: 'http://issuer.example/authorize',
+      ttlMs: 2000,
+    }),
+    /https/i,
+  );
+  await assert.rejects(
+    createPkceAttempt(store, {
+      providerId: 'fake-oauth',
+      authorizationEndpoint: 'file:///etc/passwd',
+      ttlMs: 2000,
+    }),
+    /https/i,
+  );
+  // A refusal this early must not leave an attempt (or its listener) behind.
+  assert.equal(store.attempts.size, 0);
+  const attempt = await createPkceAttempt(store, {
+    providerId: 'fake-oauth',
+    authorizationEndpoint: 'https://issuer.example/authorize',
+    clientId: 'client',
+    ttlMs: 2000,
+  });
+  try {
+    assert.ok(attempt.authorizationUrl.startsWith('https://issuer.example/authorize?'));
+  } finally {
+    await attempt.close();
+  }
+  // Loopback http is the Gate's own dev-issuer model (see discovery.mjs's
+  // pinned hosts) and is allowed; the fixture-backed begin tests rely on it.
+  const loopback = await createPkceAttempt(store, {
+    providerId: 'fake-oauth',
+    authorizationEndpoint: 'http://127.0.0.1:49152/authorize',
+    clientId: 'client',
+    ttlMs: 2000,
+  });
+  try {
+    assert.ok(loopback.authorizationUrl.startsWith('http://127.0.0.1:49152/authorize?'));
+  } finally {
+    await loopback.close();
+  }
+});
+
 test('PKCE callback binds only 127.0.0.1 and captures the authorization code', async () => {
   const store = new AttemptStore();
   const attempt = await createPkceAttempt(store, { providerId: 'fake-oauth', ttlMs: 2000 });

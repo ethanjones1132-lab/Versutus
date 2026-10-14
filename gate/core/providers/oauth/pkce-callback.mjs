@@ -1,6 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 
+import { assertSafeAuthorizationUrl } from '../../service/browser.mjs';
+
 export async function createPkceAttempt(
   store,
   { providerId, authorizationEndpoint, clientId, scope = 'openid', ttlMs = 10 * 60_000 } = {},
@@ -8,8 +10,14 @@ export async function createPkceAttempt(
   const verifier = randomBytes(32).toString('base64url');
   const challenge = createHash('sha256').update(verifier).digest('base64url');
   // Validated before the loopback listener exists, so a malformed endpoint
-  // cannot leave one listening with nothing that will ever close it.
-  const authorizationUrl = authorizationEndpoint ? new URL(authorizationEndpoint) : null;
+  // cannot leave one listening with nothing that will ever close it. The
+  // https guard runs here too: the URL is handed to the phone, which opens it
+  // in the browser, so a cleartext endpoint must be refused before any
+  // listener exists — this is the check the app comment names in
+  // gate/core/service/browser.mjs.
+  const authorizationUrl = authorizationEndpoint
+    ? new URL(assertSafeAuthorizationUrl(authorizationEndpoint))
+    : null;
   const attempt = {
     id: randomBytes(16).toString('hex'),
     providerId,
