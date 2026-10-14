@@ -167,6 +167,35 @@ describe('group room history survives a parent re-render', () => {
       renderer.update(createElement(GroupRoomView, props(() => loadHistory())));
     });
     expect(loadHistory).toHaveBeenCalledTimes(1);
-    renderer.unmount();
+    await act(async () => {
+      renderer.unmount();
+    });
+  });
+
+  test('unmounting the room list commits before its cell timer can update', async () => {
+    const group = { id: 'room-1', name: 'Standup', memberIds: ['forge'] };
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(createElement(GroupRoomView, {
+        group,
+        members: [{ id: 'forge', displayName: 'Forge', routable: true }],
+        draft: '',
+        onDraftChange: () => undefined,
+        onSend: async () => ({ replies: [] }),
+        onRename: async (name: string) => ({ ...group, name }),
+        onLeave: async () => group,
+        onDisband: async () => undefined,
+        loadHistory: async () => [],
+      }));
+    });
+    const pendingTimers = () =>
+      (process.getActiveResourcesInfo?.() ?? []).filter((name) => name === 'Timeout').length;
+    const beforeUnmount = pendingTimers();
+    await act(async () => {
+      renderer.unmount();
+    });
+    // componentDidUpdate arms VirtualizedList's cell timer. The unmount has to
+    // commit inside act, or that timer calls setState after the file has finished.
+    expect(pendingTimers()).toBeLessThan(beforeUnmount);
   });
 });

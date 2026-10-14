@@ -174,6 +174,8 @@ describe('GRP-1 group room error line', () => {
 
     expect(onAddMembers).toHaveBeenCalledTimes(2);
     expect(collectText(renderer.root)).not.toContain('Gate unreachable');
-    renderer.unmount();
+    await act(async () => {
+      renderer.unmount();
+    });
   });
 });

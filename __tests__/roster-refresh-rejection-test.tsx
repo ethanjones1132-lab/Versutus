@@ -124,7 +124,11 @@ describe('ROS-1 roster pull-to-refresh', () => {
       expect(seen).toEqual([]);
     } finally {
       process.off('unhandledRejection', onUnhandled);
-      renderer?.unmount();
+      if (renderer) {
+        await act(async () => {
+          renderer.unmount();
+        });
+      }
     }
   });
 });
