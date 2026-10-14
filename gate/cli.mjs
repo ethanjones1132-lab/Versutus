@@ -13,7 +13,7 @@ import { ProviderStore } from './core/providers/store.mjs';
 import { migrateLegacyProviders } from './core/providers/migrate-v1.mjs';
 import { CliEnvironmentStore } from './core/cli-environments/store.mjs';
 import { CliAdapterRegistry } from './core/cli-environments/adapter-registry.mjs';
-import { TASK_NAME, buildTaskDefinition, writeTaskFile } from './core/service/windows-task.mjs';
+import { TASK_NAME, buildTaskDefinition, taskRunArgs, writeTaskFile } from './core/service/windows-task.mjs';
 import { runLaunchdService, serviceBackendFor, unsupportedServiceMessage } from './core/service/launchd-agent.mjs';
 import { acquireInstanceLock } from './core/service/instance-lock.mjs';
 import { RotatingLog } from './core/service/rotating-log.mjs';
@@ -529,8 +529,8 @@ async function handleService(args) {
     console.error(unsupportedServiceMessage(process.platform));
     process.exit(1);
   }
-  if (sub === 'install') return serviceInstall();
-  if (sub === 'run') return serviceRun();
+  if (sub === 'install') return serviceInstall(args.slice(1));
+  if (sub === 'run') return serviceRun(args.slice(1));
   if (sub === 'stop') return serviceStop();
   if (sub === 'start') return serviceStart();
   if (sub === 'restart') return serviceRestart();
@@ -547,7 +547,32 @@ async function handleService(args) {
  */
 const SERVICE_CODE_ROOT = 'C:\\Projects\\Versutus';
 const GATE_PORT = 8760;
-const GATE_MANIFEST = `http://127.0.0.1:${GATE_PORT}/.well-known/gateway.json`;
+
+/**
+ * The manifest URL to probe for a supervisor bound to `host`:`port`. 0.0.0.0
+ * and :: answer on loopback too; any other address has to be probed where it
+ * listens. A missing value means the Gate's own default, as before the
+ * install flags were carried through.
+ */
+function serviceManifestUrl({ host, port } = {}) {
+  const probeHost = host && !/^(0\.0\.0\.0|::|\[::\])$/.test(host) ? host : '127.0.0.1';
+  const hostPart = probeHost.includes(':') ? `[${probeHost}]` : probeHost;
+  return `http://${hostPart}:${port ?? GATE_PORT}/.well-known/gateway.json`;
+}
+
+/**
+ * What the installed task tells its supervisor. `service stop`/`status` have
+ * no arguments of their own and the supervisor may not be running yet, so the
+ * task file `service install` wrote is the record. A missing or unreadable
+ * file falls back to the Gate's defaults, exactly the old hard-coded probe.
+ */
+function installedServiceListen(paths) {
+  try {
+    return taskRunArgs(readFileSync(paths.xml, 'utf16le'));
+  } catch {
+    return {};
+  }
+}
 
 function serviceUser() {
   return process.env.USERNAME ? `${process.env.USERDOMAIN || 'USER'}\\${process.env.USERNAME}` : process.env.USER;
@@ -578,17 +603,58 @@ function serviceGitHead(codeRoot) {
 
 const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function serviceInstall() {
+async function serviceInstall(args = []) {
+  // The task launches `service run` headless with no environment block, so a
+  // flag accepted here and not written into its arguments is a silent no-op:
+  // the operator believes the bind address changed while the Gate keeps its
+  // own default. Resolve both the way `start` does, then bake what the
+  // operator gave into the task (the LaunchAgent's EnvironmentVariables
+  // counterpart — launchd-agent.mjs:89-95).
+  const hostResolution = resolveStartHost(args);
+  if (hostResolution.error) {
+    console.error(`Error: ${hostResolution.error}`);
+    process.exit(1);
+  }
+  const portResolution = resolveStartPort(args);
+  if (portResolution.error) {
+    console.error(`Error: ${portResolution.error}`);
+    process.exit(1);
+  }
+  const hostGiven = args.includes('--host') || Boolean(process.env.VERSUTUS_GATE_HOST?.trim());
+  const portGiven = args.includes('--port') || Boolean(process.env.VERSUTUS_GATE_PORT);
   const paths = servicePaths();
-  const definition = buildTaskDefinition({ user: serviceUser(), codeRoot: SERVICE_CODE_ROOT });
+  const definition = buildTaskDefinition({
+    user: serviceUser(),
+    codeRoot: SERVICE_CODE_ROOT,
+    host: hostGiven ? hostResolution.host : undefined,
+    port: portGiven ? portResolution.port : undefined,
+  });
   mkdirSync(paths.dir, { recursive: true });
   writeTaskFile(definition.xml, paths.xml);
   schtasks(['/Create', '/TN', TASK_NAME, '/XML', paths.xml, '/F']);
   schtasks(['/Run', '/TN', TASK_NAME]);
   console.log(`service installed from ${SERVICE_CODE_ROOT} at ${serviceGitHead(SERVICE_CODE_ROOT)}`);
+  if (hostGiven || portGiven) {
+    console.log(`  bind address: ${hostResolution.host}:${portResolution.port} (task arguments)`);
+  }
 }
 
-async function serviceRun() {
+async function serviceRun(args = []) {
+  // Resolve the listen address the way `start` does: the task's arguments
+  // first (the installed flags serviceInstall wrote), then
+  // VERSUTUS_GATE_HOST/PORT, then the Gate defaults. Resolving it here is what
+  // keeps the health probe and the child it supervises on one address.
+  const hostResolution = resolveStartHost(args);
+  if (hostResolution.error) {
+    console.error(`Error: ${hostResolution.error}`);
+    process.exit(1);
+  }
+  const portResolution = resolveStartPort(args);
+  if (portResolution.error) {
+    console.error(`Error: ${portResolution.error}`);
+    process.exit(1);
+  }
+  const listen = { host: hostResolution.host, port: portResolution.port };
   const paths = servicePaths();
   mkdirSync(paths.dir, { recursive: true });
   // One supervisor per machine: a second `service run` (a stale task entry
@@ -621,7 +687,9 @@ async function serviceRun() {
   const spawnGate = () => {
     const child = spawn(
       process.execPath,
-      [join(SERVICE_CODE_ROOT, 'gate', 'cli.mjs'), 'start'],
+      // Explicit flags keep the child on exactly the address probed below;
+      // resolving both from the same source makes it what `start` would pick.
+      [join(SERVICE_CODE_ROOT, 'gate', 'cli.mjs'), 'start', '--host', listen.host, '--port', String(listen.port)],
       { cwd: SERVICE_CODE_ROOT, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true },
     );
     // Separate stream keys: a half line held from stdout must never be glued
@@ -631,7 +699,7 @@ async function serviceRun() {
     return child;
   };
   const probe = async () => (await probeLocalGate(
-    GATE_MANIFEST,
+    serviceManifestUrl(listen),
     (url) => fetch(url, { signal: AbortSignal.timeout(10000) }),
   )).reachable;
   const killTree = (pid) => {
@@ -658,7 +726,7 @@ async function serviceRun() {
     codeRoot: SERVICE_CODE_ROOT,
     gitHead: serviceGitHead(SERVICE_CODE_ROOT),
   });
-  say(`supervisor starting (code root ${SERVICE_CODE_ROOT})`);
+  say(`supervisor starting (code root ${SERVICE_CODE_ROOT}, bind ${listen.host}:${listen.port})`);
   sup.start();
 
   // `service stop|restart` talks to the supervisor through this file — a
@@ -703,6 +771,9 @@ async function serviceRun() {
 
 async function serviceStop() {
   const paths = servicePaths();
+  // The task file names the port this Gate was installed on; the fallback
+  // probes are worthless against a hard-coded 8760 when it was not.
+  const manifest = serviceManifestUrl(installedServiceListen(paths));
   // Disable FIRST: otherwise the 5-minute time trigger revives the
   // supervisor while we are stopping it.
   schtasks(['/Change', '/TN', TASK_NAME, '/DISABLE']);
@@ -727,7 +798,7 @@ async function serviceStop() {
   // that accepts the connection and never answers headers used to hang both
   // probes below forever, so the taskkill fallback and this command's own
   // completion never happened.
-  const stillUp = await probeLocalGate(GATE_MANIFEST);
+  const stillUp = await probeLocalGate(manifest);
   if (stillUp.reachable) {
     try {
       const state = JSON.parse(readFileSync(paths.state, 'utf8'));
@@ -745,7 +816,7 @@ async function serviceStop() {
   }
   const closedBy = Date.now() + 20000;
   while (Date.now() < closedBy) {
-    if (!(await probeLocalGate(GATE_MANIFEST)).reachable) break;
+    if (!(await probeLocalGate(manifest)).reachable) break;
     await sleepMs(500);
   }
   console.log('service stopped');
@@ -777,6 +848,7 @@ async function serviceUninstall() {
 
 async function serviceStatus() {
   const paths = servicePaths();
+  const manifest = serviceManifestUrl(installedServiceListen(paths));
   let taskInfo = '';
   try {
     taskInfo = schtasks(['/Query', '/TN', TASK_NAME, '/V', '/FO', 'LIST']);
@@ -791,7 +863,7 @@ async function serviceStatus() {
   } catch {
     console.log('no supervisor state');
   }
-  const probe = await probeLocalGate(GATE_MANIFEST);
+  const probe = await probeLocalGate(manifest);
   console.log(`manifest: ${probe.reachable ? 'reachable' : 'UNREACHABLE'} (${probe.detail})`);
   if (!probe.reachable || state?.status !== 'running') process.exit(1);
 }
@@ -915,11 +987,11 @@ async function main() {
     console.log('    status exits 1 unless the Gate answers.');
     console.log('    macOS: a per-user LaunchAgent (com.versutus.gate in');
     console.log('    ~/Library/LaunchAgents; launchd restarts it, no `run`).');
-    console.log('    install [--host <ip>] [--port <n>] [--dry-run] writes and loads');
-    console.log('    it (reloads one already loaded); --host/VERSUTUS_GATE_HOST is');
-    console.log('    passed through so --host 0.0.0.0 keeps tailnet/phone access.');
-    console.log('    --dry-run prints the plist and launchctl commands only;');
-    console.log('    --node <path> picks the node binary (default: the one running).');
+    console.log('    install [--host <ip>] [--port <n>] writes the bind address');
+    console.log('    and (re)loads it (reloads one already loaded): Windows');
+    console.log('    carries it in the task\'s `service run` arguments, macOS in');
+    console.log('    the plist EnvironmentVariables, so --host 0.0.0.0 keeps');
+    console.log('    tailnet/phone access. --dry-run and --node are macOS-only.');
     console.log('');
     console.log('  doctor');
     console.log('    Inspect the Gate machine: local listener and every CLI');

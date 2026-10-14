@@ -1,14 +1,36 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { buildTaskDefinition, writeTaskFile } from '../core/service/windows-task.mjs';
+import { buildTaskDefinition, taskRunArgs, writeTaskFile } from '../core/service/windows-task.mjs';
 import { acquireInstanceLock } from '../core/service/instance-lock.mjs';
 import { assertSafeAuthorizationUrl } from '../core/service/browser.mjs';
 import { doctor } from '../core/service/doctor.mjs';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const cliPath = join(__dirname, '..', 'cli.mjs');
+
+/** Run the real CLI with a substituted environment, as the driver's shell would. */
+async function runCli(args, env = {}) {
+  return new Promise((resolve) => {
+    const proc = spawn(process.execPath, [cliPath, ...args], {
+      cwd: join(__dirname, '..'),
+      env: { ...process.env, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (chunk) => { stdout += chunk; });
+    proc.stderr.on('data', (chunk) => { stderr += chunk; });
+    proc.on('close', (code) => resolve({ code, stdout, stderr }));
+  });
+}
 
 test('service installation refuses SYSTEM identity', () => {
   assert.throws(() => buildTaskDefinition({ user: 'SYSTEM' }), /logged-in user/i);
@@ -47,6 +69,66 @@ test('task XML escapes user-controlled values', () => {
   const task = buildTaskDefinition({ user: 'A&B\\"<>', codeRoot: 'C:\\R&D' });
   assert.doesNotMatch(task.xml, /A&B/);
   assert.match(task.xml, /A&amp;B/);
+});
+
+test('a task definition names the host and port its installer resolved', () => {
+  const task = buildTaskDefinition({
+    user: 'ETHANSPC\\ethan',
+    codeRoot: 'C:\\Projects\\Versutus',
+    host: '0.0.0.0',
+    port: 9500,
+  });
+  assert.match(task.xml, /service run --host 0\.0\.0\.0 --port 9500/);
+  // An install with no flags is unchanged: the Gate's own defaults still apply.
+  const plain = buildTaskDefinition({ user: 'ETHANSPC\\ethan' });
+  assert.doesNotMatch(plain.xml, /--host|--port/);
+});
+
+test('an installed task reads its supervisor host and port back', () => {
+  const task = buildTaskDefinition({ user: 'ETHANSPC\\ethan', host: '127.0.0.1', port: 9500 });
+  assert.deepEqual(taskRunArgs(task.xml), { host: '127.0.0.1', port: 9500 });
+  // The flags are independent, and anything absent means the Gate's default.
+  assert.deepEqual(taskRunArgs(buildTaskDefinition({ user: 'ETHANSPC\\ethan', port: 9000 }).xml), { port: 9000 });
+  assert.deepEqual(taskRunArgs(buildTaskDefinition({ user: 'ETHANSPC\\ethan' }).xml), {});
+  assert.deepEqual(taskRunArgs(''), {});
+});
+
+test('a malformed install flag is refused before anything is written', { skip: process.platform !== 'win32' }, async () => {
+  const { code, stderr } = await runCli(['service', 'install', '--host', 'not-an-ip']);
+  assert.equal(code, 1);
+  assert.match(stderr, /--host expects an IP address/);
+});
+
+test('service status probes the port the installed task names', { skip: process.platform !== 'win32' }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'gate-service-status-'));
+  // The listener stands in for a Gate installed on a named port, and answers
+  // 500: only a probe of THAT port can report "listener responded 500", while
+  // the old hard-coded 8760 would answer 200 (a real Gate) or refuse.
+  const server = createServer((request, response) => {
+    response.writeHead(500);
+    response.end('not a Gate');
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = server.address().port;
+  try {
+    const serviceDir = join(dir, 'service');
+    await mkdir(serviceDir, { recursive: true });
+    writeTaskFile(
+      buildTaskDefinition({ user: 'ETHANSPC\\ethan', codeRoot: 'C:\\Projects\\Versutus', host: '127.0.0.1', port }).xml,
+      join(serviceDir, 'VersutusGate.xml'),
+    );
+    await writeFile(join(serviceDir, 'supervisor.json'), JSON.stringify({ status: 'running' }));
+
+    const { code, stdout, stderr } = await runCli(['service', 'status'], { VERSUTUS_GATE_HOME: dir });
+    assert.match(`${stdout}\n${stderr}`, /UNREACHABLE \(listener responded 500\)/);
+    assert.equal(code, 1);
+  } finally {
+    server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('task file is written UTF-16LE with a BOM', async () => {

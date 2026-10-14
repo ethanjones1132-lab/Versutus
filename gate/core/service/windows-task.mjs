@@ -11,12 +11,20 @@ export const TASK_NAME = 'VersutusGate';
  * Two Task Scheduler defaults are deliberately overridden: the 72 h
  * ExecutionTimeLimit (the Hermes task still has it) and the below-normal
  * priority 7.
+ *
+ * The definition also carries the listen `host`/`port` the installer resolved
+ * (a flag or VERSUTUS_GATE_HOST/PORT): the task launches the supervisor with
+ * no console and no environment block, so the supervisor's own arguments are
+ * the only way the operator's bind address reaches it. Read them back with
+ * `taskRunArgs()`.
  */
 export function buildTaskDefinition({
   user,
   codeRoot = 'C:\\Projects\\Versutus',
   nodeExe = 'C:\\Program Files\\nodejs\\node.exe',
   gateHome,
+  host,
+  port,
 } = {}) {
   if (!user || /^system$/i.test(user) || /\\system$/i.test(user)) {
     throw new Error('Scheduled Task must run as the logged-in user, not SYSTEM');
@@ -29,13 +37,36 @@ export function buildTaskDefinition({
     logonType: 'InteractiveToken',
     runLevel: 'LeastPrivilege',
     codeRoot,
-    xml: taskXml({ user, nodeExe, codeRoot, cli }),
+    xml: taskXml({ user, nodeExe, codeRoot, cli, host, port }),
   };
 }
 
 /** Write the XML UTF-16LE with a BOM, the encoding schtasks expects. */
 export function writeTaskFile(xml, dest) {
   writeFileSync(dest, Buffer.from(`\ufeff${xml}`, 'utf16le'));
+}
+
+/**
+ * The `--host`/`--port` a task definition hands its `service run` supervisor,
+ * read back from the XML `service install` wrote. `service stop` and
+ * `service status` run in a fresh shell with no arguments of their own, so the
+ * installed task file — not their command line — is how they learn the address
+ * to probe. A flag the installer never resolved means the Gate's own default.
+ */
+export function taskRunArgs(xml) {
+  const match = /<Arguments>([^<]*)<\/Arguments>/.exec(String(xml ?? ''));
+  if (!match) return {};
+  const args = match[1].split(' ');
+  const valueOf = (flag) => {
+    const index = args.indexOf(flag);
+    return index === -1 ? undefined : args[index + 1];
+  };
+  const host = valueOf('--host');
+  const port = Number(valueOf('--port'));
+  return {
+    ...(host ? { host } : {}),
+    ...(Number.isInteger(port) ? { port } : {}),
+  };
 }
 
 function escapeXml(value) {
@@ -47,9 +78,12 @@ function escapeXml(value) {
     .replace(/'/g, '&apos;');
 }
 
-function taskXml({ user, nodeExe, codeRoot, cli }) {
+function taskXml({ user, nodeExe, codeRoot, cli, host, port }) {
   const command = 'C:\\Windows\\System32\\conhost.exe';
-  const args = `--headless "${nodeExe}" "${cli}" service run`;
+  const supervisor = ['service', 'run'];
+  if (host) supervisor.push('--host', host);
+  if (port !== undefined && port !== null) supervisor.push('--port', String(port));
+  const args = `--headless "${nodeExe}" "${cli}" ${supervisor.join(' ')}`;
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
