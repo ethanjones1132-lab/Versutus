@@ -134,12 +134,18 @@ export class ProviderService {
     return this.commit(id, async () => {
       const record = await this.require(id);
       assertProviderDeletionAllowed(id, this.agents, { resolve });
+      // The credential is the provider's, not the vault's: leaving it behind
+      // strands a secret no surface can reach, name, or revoke. An oauth
+      // registration has no credentialRef (the schema forbids one); its token
+      // lives under `oauth/<id>`, the one key OAuthManager and
+      // credentialPresent already agree on (see credentialRefFor). The vault
+      // goes first and its failure aborts the delete: reporting `deleted` while
+      // the secret survived is the lie, and with the record still in place the
+      // operator can retry instead of losing the only surface that can name it.
+      const ref = credentialRefFor(record.config);
+      if (ref && this.vault) await this.vault.delete(ref);
       await this.store.delete(id);
       this.forgetAdapter(id);
-      // The credential is the provider's, not the vault's: leaving it behind
-      // strands a secret no surface can reach, name, or revoke.
-      const ref = record.config.registration?.credentialRef;
-      if (ref && this.vault) await this.vault.delete(ref).catch(() => undefined);
       return { deleted: true };
     });
   }

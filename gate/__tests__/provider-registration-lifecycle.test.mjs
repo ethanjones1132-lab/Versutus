@@ -43,13 +43,13 @@ function registration(overrides = {}) {
   };
 }
 
-async function makeService() {
+async function makeService({ vault } = {}) {
   const gateHome = await mkdtemp(join(tmpdir(), 'gate-reg-'));
   roots.push(gateHome);
   const store = new ProviderStore(gateHome);
-  const vault = new CredentialVault({ gateHome, backend: passthroughBackend });
-  const service = new ProviderService({ store, vault, createAdapter: () => ({}) });
-  return { service, store, vault, gateHome };
+  const realVault = vault ?? new CredentialVault({ gateHome, backend: passthroughBackend });
+  const service = new ProviderService({ store, vault: realVault, createAdapter: () => ({}) });
+  return { service, store, vault: realVault, gateHome };
 }
 
 test('deleting a provider also removes its vault credential', async () => {
@@ -64,6 +64,47 @@ test('deleting a provider also removes its vault credential', async () => {
     await vault.has('provider/acme/api-key'),
     false,
     'credential outlived the provider it belonged to',
+  );
+});
+
+test('deleting an oauth provider also removes its oauth vault entry', async () => {
+  const { service, vault } = await makeService();
+  await service.create(registration({
+    registration: {
+      mode: 'oauth',
+      protocol: 'openai_chat',
+      resourceBaseUrl: 'https://api.openai.com/v1',
+      oauthProfileId: 'openai',
+    },
+  }));
+  await vault.set('oauth/acme', JSON.stringify({ refreshToken: 'rt-secret' }));
+  assert.equal(await vault.has('oauth/acme'), true);
+
+  await service.delete('acme');
+
+  assert.equal(
+    await vault.has('oauth/acme'),
+    false,
+    'refresh token outlived the provider it belonged to',
+  );
+});
+
+test('a vault failure during delete keeps the provider and reports the failure', async () => {
+  const vault = {
+    has: async () => true,
+    get: async () => 'k',
+    set: async () => {},
+    delete: async () => {
+      throw new Error('vault locked');
+    },
+  };
+  const { service, store } = await makeService({ vault });
+  await service.create(registration());
+
+  await assert.rejects(() => service.delete('acme'), /vault locked/);
+  assert.ok(
+    await store.get('acme'),
+    'provider must stay registered when its credential could not be removed',
   );
 });
 
