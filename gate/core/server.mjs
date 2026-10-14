@@ -1406,6 +1406,7 @@ export async function createGate(config = {}) {
   const providerService = new ProviderService({
     store: providerStore,
     vault,
+    oauth,
     createAdapter: (registration) => createProviderAdapter(registration, { vault, store: providerStore, oauth }),
   });
   const providerRpc = createProviderRpc({

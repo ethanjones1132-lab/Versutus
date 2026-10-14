@@ -43,12 +43,12 @@ function registration(overrides = {}) {
   };
 }
 
-async function makeService({ vault } = {}) {
+async function makeService({ vault, oauth } = {}) {
   const gateHome = await mkdtemp(join(tmpdir(), 'gate-reg-'));
   roots.push(gateHome);
   const store = new ProviderStore(gateHome);
   const realVault = vault ?? new CredentialVault({ gateHome, backend: passthroughBackend });
-  const service = new ProviderService({ store, vault: realVault, createAdapter: () => ({}) });
+  const service = new ProviderService({ store, vault: realVault, oauth, createAdapter: () => ({}) });
   return { service, store, vault: realVault, gateHome };
 }
 
@@ -86,6 +86,63 @@ test('deleting an oauth provider also removes its oauth vault entry', async () =
     await vault.has('oauth/acme'),
     false,
     'refresh token outlived the provider it belonged to',
+  );
+});
+
+test('deleting an oauth provider revokes the refresh token at the vendor', async () => {
+  const calls = [];
+  const oauth = {
+    disconnect: async (providerId, options = {}) => {
+      calls.push([providerId, options]);
+    },
+  };
+  const { service, store, vault } = await makeService({ oauth });
+  await service.create(registration({
+    registration: {
+      mode: 'oauth',
+      protocol: 'openai_chat',
+      resourceBaseUrl: 'https://api.openai.com/v1',
+      oauthProfileId: 'openai',
+    },
+  }));
+  await vault.set('oauth/acme', JSON.stringify({ refreshToken: 'rt-secret' }));
+
+  await service.delete('acme');
+
+  assert.deepEqual(calls, [['acme', { oauthProfileId: 'openai' }]]);
+  assert.equal(
+    await store.get('acme'),
+    null,
+    'provider outlived its own delete',
+  );
+});
+
+test('a revocation failure during delete keeps the provider', async () => {
+  const oauth = {
+    disconnect: async () => {
+      throw new Error('revocation endpoint refused');
+    },
+  };
+  const { service, store, vault } = await makeService({ oauth });
+  await service.create(registration({
+    registration: {
+      mode: 'oauth',
+      protocol: 'openai_chat',
+      resourceBaseUrl: 'https://api.openai.com/v1',
+      oauthProfileId: 'openai',
+    },
+  }));
+  await vault.set('oauth/acme', JSON.stringify({ refreshToken: 'rt-secret' }));
+
+  await assert.rejects(() => service.delete('acme'), /revocation endpoint refused/);
+  assert.ok(
+    await store.get('acme'),
+    'provider must stay registered when its refresh token could not be revoked',
+  );
+  assert.equal(
+    await vault.has('oauth/acme'),
+    true,
+    'local token must survive a refused delete so the operator can retry',
   );
 });
 

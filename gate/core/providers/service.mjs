@@ -6,9 +6,10 @@ import { nextAuthState, toSnapshot } from './runtime.mjs';
 import { assertProviderDeletionAllowed } from './dependencies.mjs';
 
 export class ProviderService {
-  constructor({ store, vault, adapters = {}, createAdapter, agents = [] } = {}) {
+  constructor({ store, vault, oauth = null, adapters = {}, createAdapter, agents = [] } = {}) {
     this.store = store;
     this.vault = vault;
+    this.oauth = oauth;
     this.adapters = adapters;
     this.createAdapter = createAdapter;
     this.agents = agents;
@@ -143,6 +144,17 @@ export class ProviderService {
       // the secret survived is the lie, and with the record still in place the
       // operator can retry instead of losing the only surface that can name it.
       const ref = credentialRefFor(record.config);
+      // The vendor's copy goes with the provider. Without this the refresh
+      // token stays valid at the vendor until expiry, and once the record is
+      // gone nothing the Gate holds can name or revoke it. `disconnect` reads
+      // the stored grant, revokes the refresh token remotely and drops the
+      // vault entry, so it runs before the local teardown and its failure
+      // aborts the delete exactly the way the vault's does.
+      if (record.config.registration?.mode === 'oauth' && this.oauth) {
+        await this.oauth.disconnect(id, {
+          oauthProfileId: record.config.registration?.oauthProfileId,
+        });
+      }
       if (ref && this.vault) await this.vault.delete(ref);
       await this.store.delete(id);
       this.forgetAdapter(id);
