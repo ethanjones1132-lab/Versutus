@@ -864,7 +864,10 @@ export function createHermesBackend({
             { timeoutMs: 15_000 },
           );
           if (pin?.code !== 0) {
-            const error = new Error(pin?.stderr || 'failed to pin model');
+            // CLI output can contain inherited credentials, so the
+            // client-facing error stays a fixed message (createBot's
+            // runCreateCommand discards output for the same reason).
+            const error = new Error('failed to pin model');
             error.code = 'bot_update_failed';
             error.status = 502;
             throw error;
@@ -877,7 +880,7 @@ export function createHermesBackend({
             { timeoutMs: 15_000 },
           );
           if (pin?.code !== 0) {
-            const error = new Error(pin?.stderr || 'failed to pin provider');
+            const error = new Error('failed to pin provider');
             error.code = 'bot_update_failed';
             error.status = 502;
             throw error;

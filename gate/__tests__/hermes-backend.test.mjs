@@ -649,6 +649,38 @@ for (const which of ['model', 'provider']) {
   });
 }
 
+test('updateBot refuses a failed model pin without forwarding CLI output', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  const botHome = join(home, 'profiles', 'coder');
+  await mkdir(botHome, { recursive: true });
+  await writeFile(join(botHome, '.env'), 'API_SERVER_KEY=own-key\n');
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642',
+    profilesHome: home,
+    executablePath: 'hermes',
+    runCliImpl: async (_exe, args) =>
+      args.includes('model.default')
+        ? {
+            code: 1,
+            stdout: 'provider credential: test-provider-credential',
+            stderr: 'API_SERVER_KEY=test-listen-key',
+          }
+        : { code: 0, stdout: '', stderr: '' },
+  });
+
+  await assert.rejects(
+    () => hermes.updateBot({ id: 'coder', modelId: 'test-model' }),
+    (error) => {
+      assert.equal(error.code, 'bot_update_failed');
+      assert.equal(error.status, 502);
+      assert.equal(error.message, 'failed to pin model');
+      assert.doesNotMatch(error.stack, /test-provider-credential|test-listen-key/);
+      assert.doesNotMatch(JSON.stringify(error), /test-provider-credential|test-listen-key/);
+      return true;
+    },
+  );
+});
+
 test('updateBot reports bot_update_failed when a terminated pin closes without an exit code', async () => {
   const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
   const botHome = join(home, 'profiles', 'coder');
