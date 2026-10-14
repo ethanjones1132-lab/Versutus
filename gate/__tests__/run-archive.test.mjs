@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -330,6 +330,84 @@ test('a service without an archiveDir stays memory-only', async () => {
       0,
       'no runs directory is ever created',
     );
+  } finally {
+    await cleanup();
+  }
+});
+
+test('a reused run id is refused and the archived history stays', async () => {
+  const archiveDir = await mkdtemp(join(tmpdir(), 'gate-run-archive-dir-'));
+  const { service, cleanup } = await makeArchivedService(archiveDir);
+  try {
+    const handle = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'status',
+      sandbox: 'read_only',
+      input: {},
+      runId: 'run-kept',
+    });
+    const live = [];
+    for await (const event of service.events(handle.runId)) live.push(event);
+    assert.equal(live.at(-1).type, 'run.completed');
+    assert.equal(handle.runId, 'run-kept');
+
+    const archiveFile = join(archiveDir, 'codex-local', 'run-kept.json');
+    const before = await readFile(archiveFile, 'utf8');
+    assert.ok(before.includes('run-kept'), 'the archive recorded this run');
+
+    // Reusing an id must not silently truncate the existing run's history.
+    await assert.rejects(
+      service.startRun({
+        environmentId: 'codex-local',
+        operation: 'status',
+        sandbox: 'read_only',
+        input: {},
+        runId: 'run-kept',
+      }),
+      (error) => error.code === 'run_id_conflict',
+    );
+    assert.equal(await readFile(archiveFile, 'utf8'), before, 'the archive is untouched');
+
+    // Retention can drop the finished run from memory while the file remains:
+    // a reuse must still be refused, or the on-disk history would be truncated.
+    service.runs.delete('run-kept');
+    assert.equal(service.runs.has('run-kept'), false);
+    await assert.rejects(
+      service.startRun({
+        environmentId: 'codex-local',
+        operation: 'status',
+        sandbox: 'read_only',
+        input: {},
+        runId: 'run-kept',
+      }),
+      (error) => error.code === 'run_id_conflict',
+    );
+    assert.equal(await readFile(archiveFile, 'utf8'), before, 'the evicted run stays on disk');
+
+    // A fresh caller-supplied id, and an id the Gate generates, both still work.
+    const fresh = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'status',
+      sandbox: 'read_only',
+      input: {},
+      runId: 'run-fresh',
+    });
+    const freshEvents = [];
+    for await (const event of service.events(fresh.runId)) freshEvents.push(event);
+    assert.equal(fresh.runId, 'run-fresh');
+    assert.equal(freshEvents.at(-1).type, 'run.completed');
+
+    const generated = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'status',
+      sandbox: 'read_only',
+      input: {},
+    });
+    assert.equal(typeof generated.runId, 'string');
+    assert.ok(generated.runId.length > 0);
+    assert.notEqual(generated.runId, 'run-kept');
+    assert.notEqual(generated.runId, 'run-fresh');
+    for await (const event of service.events(generated.runId)) void event;
   } finally {
     await cleanup();
   }

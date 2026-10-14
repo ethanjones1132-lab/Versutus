@@ -379,6 +379,15 @@ export class CliEnvironmentService {
     // is built, while a dead reference can still be named on the stream
     // before anything runs.
     const { credentials, unresolved } = await this.resolveRunCredentials(record);
+    // record() truncates the archive file, and runs.set would hand this id's
+    // bookkeeping to the new run. Refuse an id that already names a run, in
+    // memory or on disk. An id the Gate just generated, or a caller id that
+    // is not there, still starts.
+    if (this.runs.has(runId) || this.archive?.readRun(runId)) {
+      const error = new Error(`run id already exists: ${runId}`);
+      error.code = 'run_id_conflict';
+      throw error;
+    }
     // Every emitted event is mirrored to the disk archive (fire-and-forget —
     // persistence must never break or stall the live run; the write itself is
     // synchronous so file order always equals emit order), so this run stays
