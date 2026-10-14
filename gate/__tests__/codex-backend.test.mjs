@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { keepEventLoopAlive } from './fixtures/keep-event-loop-alive.mjs';
 
 import {
   createCodexBackend,
@@ -220,7 +221,8 @@ test('deltas for another thread are not folded into this turn', async () => {
 // arrived — so a turn slower than three minutes was published to the phone as a
 // complete reply with `finish_reason: stop` while the app-server was still
 // running it, and the model-health table scored the silence as a success.
-test('a turn that never completes is not published as a finished answer', async () => {
+test('a turn that never completes is not published as a finished answer', { timeout: 5_000 }, async (t) => {
+  keepEventLoopAlive(t);
   let emit = () => {};
   const { calls, rpc } = stubRpc({ 'turn/start': () => { setTimeout(() => {
     emit({ method: 'item/agentMessage/delta', params: { threadId: 'th_1', delta: 'half an ans' } });

@@ -17,11 +17,22 @@ jest.mock('@/lib/storage/key-value', () => ({
   },
 }));
 
-import { loadActivityRuns, loadActivityRunsFromStore, loadOfflineQueue } from '@/lib/gateway/session-persistence';
+import { loadActivityRuns, loadActivityRunsFromStore, loadOfflineQueue, loadOfflineQueueFromStore, mergeOfflineQueueItems } from '@/lib/gateway/session-persistence';
+import type { OfflineQueueItem } from '@/lib/gateway/session-persistence';
 
 const refusing = async (): Promise<never> => {
   throw new Error('SQLite disk image is malformed');
 };
+
+function offlineRow(overrides: Partial<OfflineQueueItem> = {}): OfflineQueueItem {
+  return {
+    id: 'q1',
+    text: 'queued words',
+    gatewayId: 'gw',
+    createdAt: 1,
+    ...overrides,
+  };
+}
 
 describe('a store that will not hand the key over', () => {
   let warnSpy: jest.SpyInstance;
@@ -61,5 +72,51 @@ describe('a store that will not hand the key over', () => {
     await expect(loadActivityRuns()).resolves.toEqual([]);
     await expect(loadActivityRunsFromStore()).resolves.toEqual({ read: true, runs: [] });
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  test('the offline queue reports a refused getItem as an unreadable read', async () => {
+    await expect(loadOfflineQueueFromStore()).resolves.toEqual({ read: false, items: [] });
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(String(warnSpy.mock.calls[0]?.[0] ?? '')).toContain('SQLite disk image is malformed');
+  });
+});
+
+describe('a genuine and unreadable offline-queue read', () => {
+  let warnSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    mockGet.mockReset();
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  test('a missing key is a genuine empty queue, not an unreadable one', async () => {
+    mockGet.mockImplementation(async () => null);
+    await expect(loadOfflineQueueFromStore()).resolves.toEqual({ read: true, items: [] });
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  test('malformed or unrecognized persisted JSON is unreadable', async () => {
+    mockGet.mockImplementation(async () => 'not json at all');
+    await expect(loadOfflineQueueFromStore()).resolves.toEqual({ read: false, items: [] });
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('mergeOfflineQueueItems', () => {
+  test('retains disk rows first, appends new in-memory rows, and wins on duplicate ids', () => {
+    const disk = [offlineRow({ id: 'a' }), offlineRow({ id: 'b', text: 'disk b' })];
+    const memory = [
+      offlineRow({ id: 'b', text: 'memory b' }),
+      offlineRow({ id: 'c', text: 'memory c' }),
+    ];
+    expect(mergeOfflineQueueItems(disk, memory)).toEqual([
+      offlineRow({ id: 'a' }),
+      offlineRow({ id: 'b', text: 'memory b' }),
+      offlineRow({ id: 'c', text: 'memory c' }),
+    ]);
   });
 });

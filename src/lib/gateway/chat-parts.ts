@@ -5,17 +5,28 @@
 // the selected model DECLARING image input; with no declaration the attach
 // control stays hidden rather than sending an image a text model will reject.
 
-export type ChatAttachment = {
-  kind: 'image';
-  /** A data: URL (native) or blob: URL (web) the model can fetch. */
-  uri: string;
-  mimeType?: string;
-  name?: string;
-};
+export type ChatAttachment =
+  | {
+      kind: 'image';
+      /** A data: URL (native) or blob: URL (web) the model can fetch. */
+      uri: string;
+      mimeType?: string;
+      name?: string;
+    }
+  | {
+      kind: 'file';
+      /** Local picker URI used for identity/removal; never sent to the Gate. */
+      uri: string;
+      /** Raw base64 required by OpenAI-compatible `file_data` content parts. */
+      fileData: string;
+      mimeType: string;
+      name?: string;
+    };
 
 export type ChatContentPart =
   | { type: 'text'; text: string }
-  | { type: 'image_url'; image_url: { url: string } };
+  | { type: 'image_url'; image_url: { url: string } }
+  | { type: 'file'; file: { filename: string; file_data: string } };
 
 /** One turn's cap, so a paste cannot balloon the request body. */
 export const MAX_CHAT_ATTACHMENTS = 4;
@@ -35,6 +46,7 @@ export const MAX_CHAT_ATTACHMENTS = 4;
 export const MAX_CHAT_ATTACHMENT_CHARS = 8 * 1024 * 1024;
 
 const IMAGE_MIME = /^image\//i;
+const DOCUMENT_MIME = /^(application\/pdf|application\/json|text\/(plain|markdown|csv|xml))$/i;
 
 function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -47,6 +59,11 @@ export function chatAttachmentFromUnknown(value: unknown): ChatAttachment | null
   const uri = text(record.uri);
   if (!uri) return null;
   const mimeType = text(record.mimeType) ?? text(record.mime_type);
+  if (record.kind === 'file') {
+    const fileData = text(record.fileData);
+    if (!fileData || !mimeType || !DOCUMENT_MIME.test(mimeType) || IMAGE_MIME.test(mimeType)) return null;
+    return { kind: 'file', uri, fileData, mimeType, name: text(record.name) ?? text(record.fileName) };
+  }
   if (mimeType && !IMAGE_MIME.test(mimeType)) return null;
   return {
     kind: 'image',
@@ -68,7 +85,10 @@ export type ChatAttachmentPick = {
 
 /** The characters one staged attachment is holding in this process. */
 export function attachmentChars(attachments: ChatAttachment[]): number {
-  return attachments.reduce((total, attachment) => total + attachment.uri.length, 0);
+  return attachments.reduce(
+    (total, attachment) => total + (attachment.kind === 'file' ? attachment.fileData.length : attachment.uri.length),
+    0,
+  );
 }
 
 /**
@@ -120,6 +140,52 @@ export function chatAttachmentsFromPicker(
 }
 
 /**
+ * Map already-read document assets to bounded file attachments. The picker
+ * URI stays local for chip identity; only the raw base64 travels over chat.
+ */
+export function chatFilesFromPicker(
+  assets: unknown,
+  existing: number = 0,
+  spent: number = 0,
+): ChatAttachmentPick {
+  const picked: ChatAttachmentPick = { attachments: [], refused: 0 };
+  if (!Array.isArray(assets)) return picked;
+  const room = Math.max(0, MAX_CHAT_ATTACHMENTS - existing);
+  const seen = new Set<string>();
+  let held = spent;
+  for (const asset of assets) {
+    if (picked.attachments.length >= room) break;
+    const record = asset && typeof asset === 'object' ? (asset as Record<string, unknown>) : {};
+    const uri = text(record.uri);
+    const mimeType = text(record.mimeType) ?? text(record.mime_type);
+    const fileData = text(record.base64) ?? text(record.fileData);
+    if (!uri || !mimeType || !DOCUMENT_MIME.test(mimeType)) {
+      picked.refused += 1;
+      continue;
+    }
+    if (seen.has(uri)) continue;
+    if (!fileData) {
+      picked.refused += 1;
+      continue;
+    }
+    if (held + fileData.length > MAX_CHAT_ATTACHMENT_CHARS) {
+      picked.refused += 1;
+      continue;
+    }
+    seen.add(uri);
+    held += fileData.length;
+    picked.attachments.push({
+      kind: 'file',
+      uri,
+      fileData,
+      mimeType,
+      name: text(record.name) ?? text(record.fileName),
+    });
+  }
+  return picked;
+}
+
+/**
  * The wire content for one message. No attachments keeps the plain string the
  * text-only path has always sent; attachments become parts, text first.
  */
@@ -132,7 +198,11 @@ export function buildChatContent(
   const parts: ChatContentPart[] = [];
   if (trimmed) parts.push({ type: 'text', text: trimmed });
   for (const attachment of attachments) {
-    parts.push({ type: 'image_url', image_url: { url: attachment.uri } });
+    if (attachment.kind === 'file') {
+      parts.push({ type: 'file', file: { filename: attachment.name ?? 'file', file_data: attachment.fileData } });
+    } else {
+      parts.push({ type: 'image_url', image_url: { url: attachment.uri } });
+    }
   }
   return parts;
 }
@@ -150,4 +220,18 @@ export function supportsImageInput(
     ...(Array.isArray(model.input_modalities) ? model.input_modalities : []),
   ].map((value) => String(value).trim().toLowerCase());
   return signals.some((signal) => signal === 'image' || signal === 'vision' || signal === 'input_image');
+}
+
+/** Whether a model explicitly declares file/document input; unknown fails closed. */
+export function supportsFileInput(
+  model: { capabilities?: unknown; input_modalities?: unknown } | null | undefined,
+): boolean {
+  if (!model) return false;
+  const signals = [
+    ...(Array.isArray(model.capabilities) ? model.capabilities : []),
+    ...(Array.isArray(model.input_modalities) ? model.input_modalities : []),
+  ].map((value) => String(value).trim().toLowerCase());
+  return signals.some((signal) =>
+    signal === 'file' || signal === 'document' || signal === 'pdf' || signal === 'input_file' || signal === 'file_input',
+  );
 }

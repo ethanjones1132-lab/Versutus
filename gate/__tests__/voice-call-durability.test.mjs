@@ -237,12 +237,11 @@ test('a reply streams into a call with no phone for 40 s, replays on re-attach, 
   // The phone is back.
   const second = call.openSocket();
   await once(second.ws, 'open');
-  await waitFor(() => shape(second).includes('frame:phase'));
   assert.equal(call.registry.get('vs-1').ended, false, 're-attaching inside the window keeps the call');
 
   // What it missed, in the order it happened: the phase first, then every delta,
   // the turn's own end, the end of the speech, and every audio chunk.
-  assert.deepEqual(shape(second), [
+  const expectedReplay = [
     'frame:ready',
     'frame:phase',
     'frame:phase',
@@ -254,7 +253,9 @@ test('a reply streams into a call with no phone for 40 s, replays on re-attach, 
     'frame:turn',
     'frame:speech',
     'frame:phase',
-  ]);
+  ];
+  await waitFor(() => shape(second).length === expectedReplay.length);
+  assert.deepEqual(shape(second), expectedReplay);
   assert.deepEqual(
     second.frames().filter((frame) => frame.t === 'reply').map((frame) => frame.delta),
     ['Here is the answer. ', 'And the rest of it.'],
@@ -299,11 +300,10 @@ test('a replay log past its bound drops the oldest audio, keeps every control fr
 
   const second = call.openSocket();
   await once(second.ws, 'open');
-  await waitFor(() => shape(second).includes('frame:phase'));
 
   // The head of the reply is what went: its tail is more useful than its start.
   // The deltas, the turn's end and the end of the speech are all still there.
-  assert.deepEqual(shape(second), [
+  const expectedReplay = [
     'frame:ready',
     'frame:phase',
     'frame:phase',
@@ -315,7 +315,9 @@ test('a replay log past its bound drops the oldest audio, keeps every control fr
     'frame:turn',
     'frame:speech',
     'frame:phase',
-  ]);
+  ];
+  await waitFor(() => shape(second).length === expectedReplay.length);
+  assert.deepEqual(shape(second), expectedReplay);
   const gaps = second.frames().filter((frame) => frame.t === 'speech' && frame.state === 'gap');
   assert.equal(gaps.length, 1, 'the gap is named once');
   const gapAt = second.entries.findIndex((entry) => entry.frame?.state === 'gap');

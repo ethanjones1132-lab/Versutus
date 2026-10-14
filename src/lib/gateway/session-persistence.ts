@@ -154,25 +154,60 @@ function isActivityRun(value: unknown): value is ActivityRun {
   );
 }
 
-export async function loadOfflineQueue(): Promise<OfflineQueueItem[]> {
+export type OfflineQueueLoad =
+  | { read: true; items: OfflineQueueItem[] }
+  | { read: false; items: [] };
+
+export async function loadOfflineQueueFromStore(): Promise<OfflineQueueLoad> {
   let raw: string | null;
   try {
     raw = await keyValueStorage.getItem(OFFLINE_QUEUE_KEY);
   } catch (error) {
-    // AsyncStorage can refuse a read (an Android row-size or SQLite fault), and
-    // this load is one of the four in the provider's `Promise.all` — a throw
-    // here fails the whole bootstrap rather than starting with an empty outbox.
+    // AsyncStorage can refuse a read (an Android row-size or SQLite fault). A
+    // refused read is not an empty queue: the caller must not persist this
+    // empty stand-in or it would delete the on-disk outbox.
     console.warn(`[session-persistence] Could not read the offline queue: ${errorText(error)}`);
-    return [];
+    return { read: false, items: [] };
   }
-  if (!raw) return [];
+  if (!raw) return { read: true, items: [] };
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isOfflineQueueItem).map(normalizeOfflineQueueItem);
+    parsed = JSON.parse(raw);
   } catch {
-    return [];
+    return { read: false, items: [] };
   }
+  if (!Array.isArray(parsed)) return { read: false, items: [] };
+  // A queue containing any malformed row is unreadable as a whole, so a
+  // partial filter can never silently drop a row the operator parked.
+  if (parsed.some((item) => !isOfflineQueueItem(item))) {
+    return { read: false, items: [] };
+  }
+  return { read: true, items: parsed.map(normalizeOfflineQueueItem) };
+}
+
+export async function loadOfflineQueue(): Promise<OfflineQueueItem[]> {
+  return (await loadOfflineQueueFromStore()).items;
+}
+
+export function mergeOfflineQueueItems(
+  disk: OfflineQueueItem[],
+  memory: OfflineQueueItem[],
+): OfflineQueueItem[] {
+  const memoryById = new Map<string, OfflineQueueItem>();
+  for (const item of memory) memoryById.set(item.id, item);
+  const seen = new Set<string>();
+  const merged: OfflineQueueItem[] = [];
+  for (const item of disk) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    merged.push(memoryById.get(item.id) ?? item);
+  }
+  for (const item of memory) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    merged.push(item);
+  }
+  return merged;
 }
 
 export async function saveOfflineQueue(items: OfflineQueueItem[]): Promise<void> {

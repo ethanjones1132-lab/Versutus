@@ -1,0 +1,9 @@
+{
+  "platforms": ["android", "apple"],
+  "android": {
+    "modules": ["com.versutus.shortcuts.VersutusShortcutsModule"]
+  },
+  "apple": {
+    "modules": ["VersutusShortcutsModule"]
+  }
+}

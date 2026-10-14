@@ -23,6 +23,7 @@ import type { ConnectionStatus } from '@/lib/gateway/types';
 import type { BotCrestTone } from '@/lib/bot-avatar';
 import { BRAND_TONE } from '@/lib/stage/lamp';
 import { haptics } from '@/lib/haptics';
+import type { ChatAttachment } from '@/lib/gateway/chat-parts';
 import { chatComposerKeyboardOffset } from '@/lib/motion/chat-composer-layout';
 import {
   chatComposerPaletteMaxHeight,
@@ -85,9 +86,13 @@ type ChatComposerProps = {
    * image a text model rejects.
    */
   onAttach?: () => void;
-  /** P1: the images staged for the next send. */
-  attachments?: { uri: string; name?: string }[];
-  /** P1: drop one staged image before sending. */
+  /** P1: camera capture, offered only when the selected model accepts images. */
+  onTakePhoto?: () => void;
+  /** P1: document picker, offered only when the selected model accepts files. */
+  onAttachFile?: () => void;
+  /** P1: bounded attachments staged for the next send. */
+  attachments?: ChatAttachment[];
+  /** P1: drop one staged attachment before sending. */
   onRemoveAttachment?: (uri: string) => void;
   /** The Bot this thread talks to, named in the empty pill ("Message Forge"). */
   recipientName?: string;
@@ -119,6 +124,8 @@ export const ChatComposer = memo(function ChatComposer({
   onStartCall,
   callActive = false,
   onAttach,
+  onTakePhoto,
+  onAttachFile,
   attachments = [],
   onRemoveAttachment,
   recipientName,
@@ -185,6 +192,8 @@ export const ChatComposer = memo(function ChatComposer({
   // control to draw rather than a `+` that opens an empty panel.
   const canOpenMenu = Boolean(
     (onAttach && !callActive && !isStreaming) ||
+      (onTakePhoto && !callActive && !isStreaming) ||
+      (onAttachFile && !callActive && !isStreaming) ||
       (onStartCall && !callActive) ||
       (quickActions.length > 0 && !isStreaming && !draft.trim()) ||
       (dockUtilities.includes('browse-commands') && onBrowseCommands),
@@ -346,6 +355,38 @@ export const ChatComposer = memo(function ChatComposer({
                   <Text variant="callout" style={styles.menuLabel}>
                     Attach an image
                   </Text>
+                </PressableScale>
+              ) : null}
+              {onTakePhoto && !callActive && !isStreaming ? (
+                <PressableScale
+                  style={styles.menuRow}
+                  accessibilityRole="button"
+                  accessibilityLabel="Take a photo"
+                  onPress={async () => {
+                    await haptics.selection();
+                    setMenuOpen(false);
+                    onTakePhoto();
+                  }}>
+                  <View style={[styles.menuTile, { backgroundColor: tokens.backgroundInset }]}>
+                    <Icon name={{ ios: 'camera', android: 'photo_camera', web: 'photo_camera' }} size={15} color="accent" />
+                  </View>
+                  <Text variant="callout" style={styles.menuLabel}>Take a photo</Text>
+                </PressableScale>
+              ) : null}
+              {onAttachFile && !callActive && !isStreaming ? (
+                <PressableScale
+                  style={styles.menuRow}
+                  accessibilityRole="button"
+                  accessibilityLabel="Attach a document"
+                  onPress={async () => {
+                    await haptics.selection();
+                    setMenuOpen(false);
+                    onAttachFile();
+                  }}>
+                  <View style={[styles.menuTile, { backgroundColor: tokens.backgroundInset }]}>
+                    <Icon name={{ ios: 'doc.text', android: 'description', web: 'description' }} size={15} color="accent" />
+                  </View>
+                  <Text variant="callout" style={styles.menuLabel}>Attach a document</Text>
                 </PressableScale>
               ) : null}
               {onStartCall && !callActive ? (
@@ -554,11 +595,16 @@ export const ChatComposer = memo(function ChatComposer({
                 key={attachment.uri}
                 style={[styles.attachmentChip, { backgroundColor: tokens.backgroundRaised }]}
                 accessibilityRole="button"
-                accessibilityLabel={`Remove ${attachment.name ?? 'image'}`}
+                accessibilityLabel={`Remove ${attachment.name ?? (attachment.kind === 'file' ? 'document' : 'image')}`}
                 onPress={() => onRemoveAttachment?.(attachment.uri)}>
-                <Icon name={{ ios: 'photo', android: 'image', web: 'image' }} size={12} color="textSecondary" />
+                <Icon
+                  name={attachment.kind === 'file'
+                    ? { ios: 'doc.text', android: 'description', web: 'description' }
+                    : { ios: 'photo', android: 'image', web: 'image' }}
+                  size={12}
+                  color="textSecondary" />
                 <Text variant="micro" color="secondary" numberOfLines={1} style={styles.attachmentName}>
-                  {attachment.name ?? 'image'}
+                  {attachment.name ?? (attachment.kind === 'file' ? 'Document' : 'image')}
                 </Text>
                 <Icon name={{ ios: 'xmark', android: 'close', web: 'close' }} size={11} color="textTertiary" />
               </PressableScale>

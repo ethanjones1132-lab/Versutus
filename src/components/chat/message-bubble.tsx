@@ -184,13 +184,25 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
           {isUser && (message.attachments?.length ?? 0) > 0 ? (
             <View style={styles.attachments}>
               {message.attachments!.map((attachment) => (
-                <Image
-                  key={attachment.uri}
-                  source={{ uri: attachment.uri }}
-                  style={styles.attachmentImage}
-                  contentFit="cover"
-                  accessibilityLabel={attachment.name ?? 'Attached image'}
-                />
+                attachment.kind === 'file' ? (
+                  <View
+                    key={attachment.uri}
+                    style={[styles.fileAttachment, { backgroundColor: tokens.backgroundRaised }]}
+                    accessibilityLabel={`Attached document ${attachment.name ?? 'Document'}`}>
+                    <Icon name={{ ios: 'doc.text', android: 'description', web: 'description' }} size={16} color="accent" />
+                    <Text variant="caption" color="secondary" numberOfLines={1} style={styles.fileAttachmentName}>
+                      {attachment.name ?? 'Document'}
+                    </Text>
+                  </View>
+                ) : (
+                  <Image
+                    key={attachment.uri}
+                    source={{ uri: attachment.uri }}
+                    style={styles.attachmentImage}
+                    contentFit="cover"
+                    accessibilityLabel={attachment.name ?? 'Attached image'}
+                  />
+                )
               ))}
             </View>
           ) : null}
@@ -316,6 +328,19 @@ const styles = StyleSheet.create({
     width: 148,
     height: 148,
     borderRadius: Radius.lg,
+  },
+  fileAttachment: {
+    minWidth: 148,
+    maxWidth: 240,
+    height: 48,
+    borderRadius: Radius.lg,
+    paddingHorizontal: Spacing.two,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  fileAttachmentName: {
+    flexShrink: 1,
   },
   row: {
     flexDirection: 'row',

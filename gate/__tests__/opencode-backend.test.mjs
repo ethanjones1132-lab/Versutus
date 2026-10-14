@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { keepEventLoopAlive } from './fixtures/keep-event-loop-alive.mjs';
 
 import {
   OPENCODE_FIRST_OUTPUT_IDLE_MS,
@@ -1592,7 +1593,8 @@ test('an upstream failure reported before the send is answered fails with its me
 // The bus is a witness, not the record: a turn can finish while the subscription
 // is still opening, or after it died, and the session's messages are what prove
 // it. The silence bound must ask them before it stops a turn that answered.
-test('a silent bus that already holds this turn\'s finished message answers it', async () => {
+test('a silent bus that already holds this turn\'s finished message answers it', { timeout: 5_000 }, async (t) => {
+  keepEventLoopAlive(t);
   const { backend, calls } = liveBackend({
     'POST /session/ses_abc/prompt_async': { ok: true },
     'GET /session/ses_abc/message': () => [assistantMessage('finished while the bus was quiet')],
