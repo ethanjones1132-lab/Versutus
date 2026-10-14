@@ -247,6 +247,40 @@ test('the archive prunes beyond its cap, oldest first', async () => {
   }
 });
 
+test('a dot-only environment id is rejected and stays inside the archive', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'gate-run-archive-dot-'));
+  const leaked = 'dot-escape-run.json';
+  try {
+    const archive = createRunArchive(dir);
+    for (const environmentId of ['.', '..']) {
+      assert.throws(
+        () => archive.record({
+          runId: 'dot-escape-run',
+          environmentId,
+          operation: 'prompt',
+          startedAt: new Date().toISOString(),
+        }),
+        /invalid environmentId/,
+      );
+    }
+    assert.equal((await readdir(join(dir, '..'))).includes(leaked), false, 'no file was written above the archive');
+    const meta = {
+      runId: 'run.a_b-1',
+      environmentId: 'env.a_b-1',
+      operation: 'prompt',
+      startedAt: new Date().toISOString(),
+    };
+    archive.record(meta);
+    const restored = await archive.load();
+    assert.equal(restored.length, 1, 'a dotted name is still an environment id');
+    assert.equal(restored[0].meta.environmentId, 'env.a_b-1');
+    assert.ok(restored[0].path.startsWith(dir), restored[0].path);
+  } finally {
+    await rm(join(dir, '..', leaked), { force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
 test('hostile environment ids and run ids cannot escape the archive directory', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'gate-run-archive-safe-'));
   try {

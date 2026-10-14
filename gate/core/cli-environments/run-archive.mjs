@@ -73,7 +73,16 @@ export function createRunArchive(dir, { maxRunsPerEnvironment = DEFAULT_MAX_RUNS
   const madeDirs = new Set();
 
   function environmentDir(environmentId) {
-    const path = join(dir, safeSegment(environmentId));
+    const segment = safeSegment(environmentId);
+    // `.` and `..` survive the charset filter and path.join treats them as
+    // navigation, so a dot-only id would write the archive root or its parent.
+    // A dot inside a name (`env.a_b-1`) is still a single segment.
+    if (segment === '.' || segment === '..') {
+      throw new Error(
+        `invalid environmentId: ${JSON.stringify(String(environmentId ?? ''))} is not a path segment`,
+      );
+    }
+    const path = join(dir, segment);
     if (!madeDirs.has(path)) {
       mkdirSync(path, { recursive: true });
       madeDirs.add(path);
