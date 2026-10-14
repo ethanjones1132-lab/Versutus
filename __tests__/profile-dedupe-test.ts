@@ -85,6 +85,28 @@ describe('adding a profile for a gateway that is already saved', () => {
     expect(result.profile.botModels).toEqual({ anvil: 'kilo/glm-5.3' });
   });
 
+  test('a re-add with a new fingerprint takes the incoming trust fields', () => {
+    const saved = profile({
+      id: 'gw', url: 'http://h:8760', tlsFingerprint: 'AA', tlsFingerprintTrusted: true, tlsFingerprintFirstSeenAt: 5,
+    });
+    const incoming = profile({ id: 'gw-new', url: 'http://h:8760', tlsFingerprint: 'BB' });
+    const result = mergeIntoExistingGateway([saved], incoming);
+    expect(result.profile.tlsFingerprint).toBe('BB');
+    expect(result.profile.tlsFingerprintTrusted).toBeUndefined();
+    expect(result.profile.tlsFingerprintFirstSeenAt).toBeUndefined();
+  });
+
+  test('a re-add with the same fingerprint keeps the saved trust', () => {
+    const saved = profile({
+      id: 'gw', url: 'http://h:8760', tlsFingerprint: 'AA', tlsFingerprintTrusted: true, tlsFingerprintFirstSeenAt: 5,
+    });
+    const incoming = profile({ id: 'gw-new', url: 'http://h:8760', tlsFingerprint: 'AA' });
+    const result = mergeIntoExistingGateway([saved], incoming);
+    expect(result.profile.tlsFingerprint).toBe('AA');
+    expect(result.profile.tlsFingerprintTrusted).toBe(true);
+    expect(result.profile.tlsFingerprintFirstSeenAt).toBe(5);
+  });
+
   test('an incoming profile with no token never erases the saved one', () => {
     const saved = profile({ id: 'gw', url: 'http://h:8760', token: 'keep-me' });
     const result = mergeIntoExistingGateway([saved], profile({ id: 'gw-new', url: 'http://h:8760' }));

@@ -155,6 +155,12 @@ export function mergeIntoExistingGateway(
   for (const field of FILLABLE) {
     if (!isEmpty(incoming[field])) writable[field] = incoming[field];
   }
+  // A different fingerprint is a different certificate. Trust belonged to the
+  // previous one, so the incoming trust fields win even when they are empty.
+  if (!isEmpty(incoming.tlsFingerprint) && incoming.tlsFingerprint !== saved.tlsFingerprint) {
+    merged.tlsFingerprintTrusted = incoming.tlsFingerprintTrusted;
+    merged.tlsFingerprintFirstSeenAt = incoming.tlsFingerprintFirstSeenAt;
+  }
   if (isEmpty(saved.name) && !isEmpty(incoming.name)) merged.name = incoming.name;
   return {
     profile: merged,
