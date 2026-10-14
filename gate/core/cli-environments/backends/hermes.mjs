@@ -819,7 +819,10 @@ export function createHermesBackend({
         modelId === null || providerId === null
           || (typeof modelId === 'string' && modelId.trim())
           || (typeof providerId === 'string' && providerId.trim())
-          ? join(botHome, 'config.yaml') : null,
+          // config.yaml also carries the provider API keys, so its rollback
+          // re-create states the same 0600 as the edit write below rather
+          // than the process default a fresh temp file would get.
+          ? { path: join(botHome, 'config.yaml'), mode: 0o600 } : null,
       ].filter(Boolean);
       return withBotEditRollback(botHome, editedPaths, async () => {
         if (typeof description === 'string') {

@@ -20,22 +20,28 @@ const pendingEdits = new Map();
 export async function withBotEditRollback(botHome, paths, edit) {
   const previous = pendingEdits.get(botHome) ?? Promise.resolve();
   const pending = previous.catch(() => {}).then(async () => {
-    const originals = await Promise.all(paths.map(async (path) => {
+    const originals = await Promise.all(paths.map(async (entry) => {
+      // A path may carry the mode its re-create must state: the rename lands a
+      // fresh temp file, so a secret-bearing file restored without one gets the
+      // process default (umask-based) instead of the mode the edit path wrote
+      // it with.
+      const path = typeof entry === 'string' ? entry : entry.path;
+      const mode = typeof entry === 'string' ? undefined : entry.mode;
       try {
-        return { path, bytes: await readFile(path) };
+        return { path, bytes: await readFile(path), mode };
       } catch (error) {
         if (error.code !== 'ENOENT') throw error;
-        return { path, bytes: null };
+        return { path, bytes: null, mode };
       }
     }));
     try {
       return await edit();
     } catch (error) {
-      const restored = await Promise.allSettled(originals.map(async ({ path, bytes }) => {
+      const restored = await Promise.allSettled(originals.map(async ({ path, bytes, mode }) => {
         // Restored the same way the edit wrote it: a temp copy renamed onto the
         // live file. A truncating restore would throw away the very bytes this
         // rollback exists to bring back.
-        if (bytes !== null) await writeFileAtomic(path, bytes);
+        if (bytes !== null) await writeFileAtomic(path, bytes, mode === undefined ? undefined : { mode });
         else await unlink(path).catch((failure) => {
           if (failure.code !== 'ENOENT') throw failure;
         });

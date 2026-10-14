@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import fsPromises, { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -23,6 +24,34 @@ function recordingFetch(responder) {
 function backend(responder) {
   const { calls, fetchImpl } = recordingFetch(responder);
   return { calls, hermes: createHermesBackend({ baseUrl: 'http://h:8642', apiKey: 'k', fetchImpl }) };
+}
+
+/**
+ * Records the options `node:fs/promises` writes are given — their mode. The
+ * Gate's ESM named imports are snapshots of the CommonJS export object, so
+ * patching that object and re-syncing is the only way to watch a write
+ * without touching the code under test.
+ */
+function recordFsWrites(method) {
+  const original = fsPromises[method];
+  const writes = [];
+  fsPromises[method] = async (path, ...rest) => {
+    writes.push({ path: String(path), options: rest.length > 1 ? rest[rest.length - 1] : undefined });
+    return original(path, ...rest);
+  };
+  syncBuiltinESMExports();
+  return {
+    writes,
+    restore() {
+      fsPromises[method] = original;
+      syncBuiltinESMExports();
+    },
+  };
+}
+
+/** The name writeFileAtomic gives the temp sibling it renames over the record. */
+function isTempSiblingOf(recordPath, writtenPath) {
+  return /^\.\d+\.[0-9a-f]{12}\.tmp$/.test(writtenPath.slice(recordPath.length));
 }
 
 test('the fronted read surfaces hit the paths Hermes actually serves', async () => {
@@ -679,6 +708,45 @@ test('updateBot refuses a failed model pin without forwarding CLI output', async
       return true;
     },
   );
+});
+
+test('updateBot rollback re-creates config.yaml with the secret-file mode, not the process default', async () => {
+  // config.yaml carries the provider API keys Hermes put there, and the edit
+  // path writes it at a stated 0600. The rollback re-creates the file through
+  // a fresh temp sibling, so without a stated mode the rename lands the
+  // process default (umask-based, typically 0644) on a secret-bearing file.
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  const botHome = join(home, 'profiles', 'coder');
+  await mkdir(botHome, { recursive: true });
+  await writeFile(join(botHome, '.env'), 'API_SERVER_KEY=own-key\n');
+  await writeFile(join(botHome, 'config.yaml'), 'model:\n  default: old-model\nproviders:\n  saved:\n    api_key: test-provider-credential\n');
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642', profilesHome: home, executablePath: 'hermes',
+    runCliImpl: async () => ({ code: 1, stdout: '', stderr: 'pin refused' }),
+  });
+
+  const recorder = recordFsWrites('writeFile');
+  try {
+    await assert.rejects(
+      () => hermes.updateBot({ id: 'coder', modelId: 'new-model' }),
+      { code: 'bot_update_failed' },
+    );
+  } finally {
+    recorder.restore();
+  }
+
+  assert.equal(
+    await readFile(join(botHome, 'config.yaml'), 'utf8'),
+    'model:\n  default: old-model\nproviders:\n  saved:\n    api_key: test-provider-credential\n',
+  );
+  const restore = recorder.writes.find((write) => isTempSiblingOf(join(botHome, 'config.yaml'), write.path));
+  assert.ok(restore, `config.yaml was not restored through a temp sibling: ${recorder.writes.map((w) => w.path).join(', ')}`);
+  assert.equal(restore.options.mode, 0o600, 'the rollback re-create did not state 0600');
+  // Windows has no POSIX modes, so only the requested mode is checkable there.
+  if (process.platform !== 'win32') {
+    const mode = (await stat(join(botHome, 'config.yaml'))).mode & 0o777;
+    assert.equal(mode, 0o600, `the restored config.yaml on disk is ${mode.toString(8)}`);
+  }
 });
 
 test('updateBot reports bot_update_failed when a terminated pin closes without an exit code', async () => {
