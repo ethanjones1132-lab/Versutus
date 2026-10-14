@@ -629,6 +629,18 @@ async function serviceInstall(args = []) {
     host: hostGiven ? hostResolution.host : undefined,
     port: portGiven ? portResolution.port : undefined,
   });
+  if (args.includes('--dry-run')) {
+    // The Windows counterpart of runLaunchdService's dry run: show the task
+    // and the exact commands before anything is registered. Without this the
+    // flag was silently dropped here and the install really happened.
+    console.log('Dry run: nothing written, nothing registered.');
+    console.log(`Would write ${paths.xml}:`);
+    console.log(definition.xml.trimEnd());
+    console.log('Would run:');
+    console.log(`  schtasks /Create /TN ${TASK_NAME} /XML "${paths.xml}" /F`);
+    console.log(`  schtasks /Run /TN ${TASK_NAME}`);
+    return;
+  }
   mkdirSync(paths.dir, { recursive: true });
   writeTaskFile(definition.xml, paths.xml);
   schtasks(['/Create', '/TN', TASK_NAME, '/XML', paths.xml, '/F']);
@@ -991,7 +1003,8 @@ async function main() {
     console.log('    and (re)loads it (reloads one already loaded): Windows');
     console.log('    carries it in the task\'s `service run` arguments, macOS in');
     console.log('    the plist EnvironmentVariables, so --host 0.0.0.0 keeps');
-    console.log('    tailnet/phone access. --dry-run and --node are macOS-only.');
+    console.log('    tailnet/phone access. install --dry-run names the task and');
+    console.log('    commands it would use and changes nothing; --node is macOS-only.');
     console.log('');
     console.log('  doctor');
     console.log('    Inspect the Gate machine: local listener and every CLI');

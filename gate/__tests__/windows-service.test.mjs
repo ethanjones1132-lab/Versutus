@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -97,6 +97,26 @@ test('a malformed install flag is refused before anything is written', { skip: p
   const { code, stderr } = await runCli(['service', 'install', '--host', 'not-an-ip']);
   assert.equal(code, 1);
   assert.match(stderr, /--host expects an IP address/);
+});
+
+test('a dry-run install writes no task file and names what it would register', { skip: process.platform !== 'win32' }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'gate-service-dry-run-'));
+  try {
+    const { code, stdout, stderr } = await runCli(
+      ['service', 'install', '--dry-run', '--host', '0.0.0.0', '--port', '9500'],
+      { VERSUTUS_GATE_HOME: dir },
+    );
+    assert.equal(code, 0, stderr);
+    assert.match(stdout, /Dry run: nothing written, nothing registered/);
+    const xmlPath = join(dir, 'service', 'VersutusGate.xml');
+    assert.ok(stdout.includes(`Would write ${xmlPath}`), stdout);
+    assert.match(stdout, /service run --host 0\.0\.0\.0 --port 9500/);
+    assert.ok(stdout.includes(`schtasks /Create /TN VersutusGate /XML "${xmlPath}" /F`), stdout);
+    assert.ok(stdout.includes('schtasks /Run /TN VersutusGate'), stdout);
+    assert.equal(existsSync(join(dir, 'service')), false, 'dry run wrote the task file');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('service status probes the port the installed task names', { skip: process.platform !== 'win32' }, async () => {

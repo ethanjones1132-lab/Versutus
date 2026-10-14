@@ -601,7 +601,7 @@ test('Windows keeps the Scheduled Task backend; macOS gets launchd; others are t
   assert.match(task.xml, /--headless .*service run/);
 });
 
-test('CLI: `service install --dry-run` prints a plist on macOS and a clear refusal elsewhere', async () => {
+test('CLI: `service install --dry-run` prints a plist on macOS, the task on Windows, and a clear refusal elsewhere', async () => {
   await withTemp(async (dir) => {
     const home = join(dir, 'home');
     const { code, stdout, stderr } = await new Promise((resolve) => {
@@ -621,7 +621,13 @@ test('CLI: `service install --dry-run` prints a plist on macOS and a clear refus
       assert.ok(stdout.includes(join(home, 'Library', 'LaunchAgents', 'com.versutus.gate.plist')));
       assert.match(stdout, /<key>VERSUTUS_GATE_HOST<\/key>\s*<string>0\.0\.0\.0<\/string>/);
       assert.equal(existsSync(join(home, 'Library')), false, 'dry run wrote nothing');
-    } else if (process.platform !== 'win32') {
+    } else if (process.platform === 'win32') {
+      assert.equal(code, 0, stderr);
+      assert.match(stdout, /Dry run: nothing written, nothing registered/);
+      assert.match(stdout, /service run --host 0\.0\.0\.0/);
+      assert.ok(stdout.includes(join(dir, 'gate-home', 'service', 'VersutusGate.xml')), stdout);
+      assert.equal(existsSync(join(dir, 'gate-home')), false, 'dry run wrote nothing');
+    } else {
       assert.equal(code, 1);
       assert.match(stderr, /not supported on/);
     }
