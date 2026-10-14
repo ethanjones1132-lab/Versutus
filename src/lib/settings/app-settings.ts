@@ -49,20 +49,38 @@ function enqueueSettingsMutation<T>(task: () => Promise<T>): Promise<T> {
   return result;
 }
 
-/** The stored blob merged over the defaults. Throws when the read cannot answer. */
+/** Loose read: a store refusal or corrupt blob is answered with defaults. */
 async function readAppSettings(): Promise<AppSettings> {
-  const raw = await keyValueStorage.getItem(SETTINGS_KEY);
-  if (!raw) return { ...DEFAULT_SETTINGS };
   try {
-    const parsed = JSON.parse(raw) as Partial<AppSettings>;
-    return {
-      ...DEFAULT_SETTINGS,
-      ...parsed,
-      voiceEngine: normalizeVoiceEngine(parsed.voiceEngine),
-    };
+    return await readAppSettingsForWrite();
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
+}
+
+/**
+ * Strict read for the write path: a refused `getItem`, a corrupt blob, or any
+ * non-object payload rejects rather than being silently replaced with defaults,
+ * so a later save cannot overwrite an unreadable blob with defaults nobody chose.
+ */
+export async function readAppSettingsForWrite(): Promise<AppSettings> {
+  const raw = await keyValueStorage.getItem(SETTINGS_KEY);
+  if (!raw) return { ...DEFAULT_SETTINGS };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw error instanceof Error ? error : new Error('Invalid app settings JSON');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Invalid app settings JSON');
+  }
+  const obj = parsed as Partial<AppSettings>;
+  return {
+    ...DEFAULT_SETTINGS,
+    ...obj,
+    voiceEngine: normalizeVoiceEngine(obj.voiceEngine),
+  };
 }
 
 /**
@@ -80,9 +98,7 @@ export async function loadAppSettings(): Promise<AppSettings> {
 
 export async function saveAppSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
   return enqueueSettingsMutation(async () => {
-    // Read through the throwing reader: an unreadable blob must refuse the
-    // write, never be overwritten with defaults nobody chose.
-    const current = await readAppSettings();
+    const current = await readAppSettingsForWrite();
     const next = { ...current, ...patch };
     next.voiceEngine = normalizeVoiceEngine(next.voiceEngine);
     await keyValueStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
