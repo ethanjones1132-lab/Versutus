@@ -41,6 +41,16 @@ export default function AddGatewayScreen() {
   const [accessStatus, setAccessStatus] = useState<AccessRequestResult['status'] | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // A link is untrusted input: any app or web page can open the custom scheme
+  // and name a host of its choice, and Save sends this device's identity (and
+  // whatever token is in the form) to exactly that address. What a link fills
+  // in is a request, not a decision — hold Save until the operator confirms
+  // the address the link asked for, and treat the operator's own edit of the
+  // field as their decision, not the link's.
+  const linkUrl = (firstParam(params.url) ?? '').trim();
+  const [linkAddressConfirmed, setLinkAddressConfirmed] = useState(false);
+  const linkAddressPending = linkUrl.length > 0 && !linkAddressConfirmed && url.trim() === linkUrl;
+
   async function handleSave() {
       setSaving(true);
       setAccessNote(null);
@@ -212,12 +222,34 @@ export default function AddGatewayScreen() {
             />
           ) : null}
 
-          <Button
-            label="Save & connect"
-            onPress={() => void handleSave()}
-            disabled={saving || !url.trim()}
-            busy={saving}
-          />
+          {/* A link names where this device would connect. Save only exists
+              after the operator confirms that address: one tap on an external
+              link must never be the whole decision, and the address is named
+              in full here, with the token a link may have carried. */}
+          {linkAddressPending ? null : (
+            <Button
+              label="Save & connect"
+              onPress={() => void handleSave()}
+              disabled={saving || !url.trim()}
+              busy={saving}
+            />
+          )}
+
+          {linkAddressPending ? (
+            <View style={styles.linkConfirm}>
+              <Text variant="caption" color="secondary">
+                This link asks to connect to {linkUrl}. Save sends this device&apos;s identity,
+                and any token the link carried, to that address. Use this address, or edit
+                the URL above.
+              </Text>
+              <Button
+                label="Use this address"
+                accessibilityHint="Shows Save & connect for the address the link carries"
+                onPress={() => setLinkAddressConfirmed(true)}
+                disabled={saving}
+              />
+            </View>
+          ) : null}
         </Card>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -321,6 +353,9 @@ const styles = StyleSheet.create({
     gap: Spacing.half,
   },
   advanced: {
+    gap: Spacing.two,
+  },
+  linkConfirm: {
     gap: Spacing.two,
   },
 });
