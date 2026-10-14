@@ -53,7 +53,7 @@ function oldestFirst(a, b) {
  * following it fails somewhere else entirely. Returns null for anything that is
  * not a usable port.
  */
-function chatEndpointForPort(value) {
+export function chatEndpointForPort(value) {
   const port = Number(value);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) return null;
   return { chat: `http://127.0.0.1:${port}/v1/chat/completions` };

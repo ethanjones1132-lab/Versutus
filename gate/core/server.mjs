@@ -26,7 +26,7 @@ import { OAuthManager } from './providers/oauth/refresh.mjs';
 import { releaseOAuthProfiles } from './providers/oauth/profiles.mjs';
 import { CliEnvironmentStore } from './cli-environments/store.mjs';
 import { CliAdapterRegistry } from './cli-environments/adapter-registry.mjs';
-import { CliEnvironmentService } from './cli-environments/supervisor.mjs';
+import { CliEnvironmentService, chatEndpointForPort } from './cli-environments/supervisor.mjs';
 import { createEnvironmentRpc, sanitizeEnvironment } from './cli-environments/rpc.mjs';
 import { createApprovalRpc } from './approvals/rpc.mjs';
 import { createBackendManager } from './cli-environments/backend-manager.mjs';
@@ -4576,6 +4576,13 @@ export async function createGate(config = {}) {
         server.listen(port, host, () => {
           const actualPort = server.address().port;
           gateObj.port = actualPort;
+          // The endpoint a run's CLI is told to call back on is only knowable
+          // now: a console-started Gate resolves its own port but never exports
+          // it, and with port 0 only the listener itself knows the real one.
+          // Without this the supervisor has nothing to derive a chat endpoint
+          // from, so those runs left VERSUTUS_GATE_CHAT out while still handing
+          // the CLI an invocation token.
+          environmentService.defaultEndpoints = chatEndpointForPort(actualPort);
           resolve(actualPort);
         });
         // The listener outlives the promise it was made for. Once the Gate is
