@@ -513,6 +513,22 @@ async function handlePair(args) {
   process.exit(1);
 }
 
+/**
+ * What each Windows service subcommand does when it really runs, in the
+ * operator's words. `install` is absent on purpose — it has its own dry run
+ * (serviceInstall below). The rest used to swallow `--dry-run`, so an operator
+ * naming a no-change flag really disabled, stopped or deleted the service.
+ * macOS previews every subcommand (launchd-agent.mjs) and stays untouched.
+ */
+const WINDOWS_SERVICE_EFFECTS = {
+  run: 'start the supervisor that keeps the Gate alive',
+  stop: 'stop the Gate and disable its task',
+  start: 'enable the task and start the Gate',
+  restart: 'ask the supervisor to restart the Gate',
+  uninstall: 'stop the Gate and delete its task',
+  status: 'report on the installed task without changing anything',
+};
+
 async function handleService(args) {
   const sub = args[0];
   // macOS: a per-user LaunchAgent, launchd being the supervisor. The
@@ -530,6 +546,15 @@ async function handleService(args) {
     process.exit(1);
   }
   if (sub === 'install') return serviceInstall(args.slice(1));
+  // A flag that promises "change nothing" must never be dropped where the
+  // command really changes the machine: refuse it by name and let the operator
+  // decide. Only install has a preview on Windows.
+  if (Object.hasOwn(WINDOWS_SERVICE_EFFECTS, sub) && args.includes('--dry-run')) {
+    console.error(
+      `Error: service ${sub} does not support --dry-run on Windows; it would really ${WINDOWS_SERVICE_EFFECTS[sub]}. Re-run without the flag.`,
+    );
+    process.exit(1);
+  }
   if (sub === 'run') return serviceRun(args.slice(1));
   if (sub === 'stop') return serviceStop();
   if (sub === 'start') return serviceStart();
@@ -1004,7 +1029,8 @@ async function main() {
     console.log('    carries it in the task\'s `service run` arguments, macOS in');
     console.log('    the plist EnvironmentVariables, so --host 0.0.0.0 keeps');
     console.log('    tailnet/phone access. install --dry-run names the task and');
-    console.log('    commands it would use and changes nothing; --node is macOS-only.');
+    console.log('    commands it would use and changes nothing (the other Windows');
+    console.log('    subcommands refuse it); --node is macOS-only.');
     console.log('');
     console.log('  doctor');
     console.log('    Inspect the Gate machine: local listener and every CLI');

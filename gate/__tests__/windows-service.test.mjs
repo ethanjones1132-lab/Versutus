@@ -119,6 +119,68 @@ test('a dry-run install writes no task file and names what it would register', {
   }
 });
 
+test('a dry-run stop is refused before the task is disabled or the Gate is stopped', { skip: process.platform !== 'win32' }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'gate-service-dry-run-stop-'));
+  try {
+    const { code, stdout, stderr } = await runCli(['service', 'stop', '--dry-run'], { VERSUTUS_GATE_HOME: dir });
+    assert.equal(code, 1, stdout);
+    assert.match(stderr, /service stop does not support --dry-run/);
+    assert.match(stderr, /stop the Gate and disable its task/);
+    assert.doesNotMatch(`${stdout}\n${stderr}`, /service stopped/);
+    assert.equal(existsSync(join(dir, 'service')), false, 'the refused dry run wrote service state');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a restart with no --dry-run still reaches the supervisor control file', { skip: process.platform !== 'win32' }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'gate-service-restart-'));
+  try {
+    const { code, stdout, stderr } = await runCli(['service', 'restart'], { VERSUTUS_GATE_HOME: dir });
+    assert.equal(code, 0, stderr);
+    assert.match(stdout, /restart requested/);
+    assert.equal(JSON.parse(readFileSync(join(dir, 'service', 'control.json'), 'utf8')).action, 'restart');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('every other Windows service subcommand refuses --dry-run by name', { skip: process.platform !== 'win32' }, async () => {
+  // install has its own preview; these used to drop the flag and run for real:
+  // start enables and runs the task, uninstall deletes it, status probes.
+  const effects = [
+    ['start', /enable the task and start the Gate/],
+    ['restart', /restart the Gate/],
+    ['uninstall', /stop the Gate and delete its task/],
+    ['status', /report on the installed task/],
+  ];
+  for (const [sub, effect] of effects) {
+    const dir = await mkdtemp(join(tmpdir(), `gate-service-dry-run-${sub}-`));
+    try {
+      const { code, stdout, stderr } = await runCli(['service', sub, '--dry-run'], { VERSUTUS_GATE_HOME: dir });
+      assert.equal(code, 1, `${sub} exited ${code}: ${stdout}`);
+      assert.match(stderr, new RegExp(`service ${sub} does not support --dry-run`), sub);
+      assert.match(stderr, effect, sub);
+      assert.equal(existsSync(join(dir, 'service')), false, `${sub} wrote service state before refusing`);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('a dry-run service run is refused before the supervisor starts', { skip: process.platform !== 'win32' }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'gate-service-dry-run-run-'));
+  try {
+    const { code, stdout, stderr } = await runCli(['service', 'run', '--dry-run'], { VERSUTUS_GATE_HOME: dir });
+    assert.equal(code, 1, stdout);
+    assert.match(stderr, /service run does not support --dry-run/);
+    assert.match(stderr, /start the supervisor that keeps the Gate alive/);
+    assert.equal(existsSync(join(dir, 'service')), false, 'the refused dry run started a supervisor');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('service status probes the port the installed task names', { skip: process.platform !== 'win32' }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'gate-service-status-'));
   // The listener stands in for a Gate installed on a named port, and answers
