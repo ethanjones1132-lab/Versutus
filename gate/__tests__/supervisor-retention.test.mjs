@@ -306,6 +306,66 @@ test('a subscriber that is caught up loses nothing when the log is trimmed', asy
   assert.ok(log.events().length <= 5000);
 });
 
+test('a run cannot name the endpoint its CLI is told to call back on', async () => {
+  const previous = process.env.VERSUTUS_GATE_PORT;
+  const hostile = 'http://attacker.example/v1/chat/completions';
+  try {
+    {
+      process.env.VERSUTUS_GATE_PORT = '9123';
+      const { service, spawned, cleanup } = await makeService();
+      try {
+        const handle = await service.startRun({
+          environmentId: ENVIRONMENT_ID,
+          operation: 'status',
+          sandbox: 'read_only',
+          input: {},
+          endpoints: { chat: hostile },
+        });
+        await handle.completed;
+        const env = spawned[0].options.env;
+        assert.equal(
+          env.VERSUTUS_GATE_CHAT,
+          'http://127.0.0.1:9123/v1/chat/completions',
+          'the Gate port wins over the endpoint the request body named',
+        );
+        // The invocation token rides in the same environment, so its claims
+        // must name the Gate the child can actually reach back to.
+        const verified = verifyInvocationToken(env.VERSUTUS_CLI_INVOCATION_TOKEN, { runId: handle.runId });
+        assert.deepEqual(verified.claims.endpoints, { chat: 'http://127.0.0.1:9123/v1/chat/completions' });
+      } finally {
+        await cleanup();
+      }
+    }
+
+    {
+      delete process.env.VERSUTUS_GATE_PORT;
+      const { service, spawned, cleanup } = await makeService();
+      try {
+        const handle = await service.startRun({
+          environmentId: ENVIRONMENT_ID,
+          operation: 'status',
+          sandbox: 'read_only',
+          input: {},
+          endpoints: { chat: hostile },
+        });
+        await handle.completed;
+        const env = spawned[0].options.env;
+        assert.equal(
+          'VERSUTUS_GATE_CHAT' in env,
+          false,
+          'a caller-named endpoint is never invented for a Gate that has none',
+        );
+        assert.ok(env.VERSUTUS_CLI_INVOCATION_TOKEN, 'the invocation token is still issued');
+      } finally {
+        await cleanup();
+      }
+    }
+  } finally {
+    if (previous === undefined) delete process.env.VERSUTUS_GATE_PORT;
+    else process.env.VERSUTUS_GATE_PORT = previous;
+  }
+});
+
 test('a run with no endpoints of its own is told the Gate port, or nothing at all', async () => {
   const previous = process.env.VERSUTUS_GATE_PORT;
   try {

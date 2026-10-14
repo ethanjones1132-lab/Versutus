@@ -47,7 +47,7 @@ function oldestFirst(a, b) {
 }
 
 /**
- * The chat endpoint a run gets when the caller names none. The Gate's own port
+ * The chat endpoint a run gets when the Gate's own port is known. That port
  * is the only one that can work, and a portless `http://127.0.0.1/...` resolves
  * to port 80 — a URL that is silently wrong rather than absent, so a CLI
  * following it fails somewhere else entirely. Returns null for anything that is
@@ -418,7 +418,7 @@ export class CliEnvironmentService {
       runId,
       providerRef: request.providerRef,
       audience: 'versutus-gate',
-      endpoints: this.endpointsFor(request),
+      endpoints: this.endpointsFor(),
       credentials,
     });
     const run = {
@@ -794,14 +794,17 @@ export class CliEnvironmentService {
   }
 
   /**
-   * The endpoints a run is told to route its model call through. Absent ones
-   * are derived from the port the Gate is actually listening on, and when
-   * nothing names one the chat variable is left out entirely: a CLI that finds
-   * no endpoint stops, while one handed a portless URL believes the Gate is on
-   * port 80 and fails somewhere else entirely.
+   * The endpoints a run is told to route its model call through. They come
+   * from the Gate's own configuration, never from the request body: a caller
+   * able to name them could point the CLI's callback — and the invocation
+   * token riding in its environment — at any host. Absent ones are derived
+   * from the port the Gate is actually listening on, and when nothing names
+   * one the chat variable is left out entirely: a CLI that finds no endpoint
+   * stops, while one handed a portless URL believes the Gate is on port 80
+   * and fails somewhere else entirely.
    */
-  endpointsFor(request) {
-    return request.endpoints ?? chatEndpointForPort(process.env.VERSUTUS_GATE_PORT) ?? this.defaultEndpoints ?? undefined;
+  endpointsFor() {
+    return chatEndpointForPort(process.env.VERSUTUS_GATE_PORT) ?? this.defaultEndpoints ?? undefined;
   }
 
   trackLive(run) {
