@@ -826,6 +826,12 @@ async function serviceStop() {
   // The task file names the port this Gate was installed on; the fallback
   // probes are worthless against a hard-coded 8760 when it was not.
   const manifest = serviceManifestUrl(installedServiceListen(paths));
+  // The folder can be gone — a cleaned home, a second VERSUTUS_GATE_HOME —
+  // while the scheduled task outlives it. Recreate it as `service restart`
+  // does, before touching the machine: without the folder the control write
+  // below dies with a raw ENOENT, `/End` and the tree-kill fallback never
+  // run, and the task is left disabled while the Gate keeps answering.
+  mkdirSync(paths.dir, { recursive: true });
   // Disable FIRST: otherwise the 5-minute time trigger revives the
   // supervisor while we are stopping it.
   schtasks(['/Change', '/TN', TASK_NAME, '/DISABLE']);

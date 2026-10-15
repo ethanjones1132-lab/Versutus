@@ -145,6 +145,60 @@ test('a restart with no --dry-run still reaches the supervisor control file', { 
   }
 });
 
+test('a stop against a home with no service folder creates it and runs to the end', { skip: process.platform !== 'win32' }, async () => {
+  // A task can outlive its service folder (a cleaned home, a second
+  // VERSUTUS_GATE_HOME). Before this, `service stop` disabled the task and then
+  // died on the control.json write with a raw ENOENT, so `/End` and the
+  // tree-kill fallback never ran and the task stayed disabled while the Gate
+  // kept answering. The preload shim keeps the test off the machine's real
+  // task, and stands in for the supervisor handshake and the port probe, so
+  // the stop completes without waiting out its 20 s bounds against a live Gate.
+  const dir = await mkdtemp(join(tmpdir(), 'gate-service-stop-'));
+  const shim = join(dir, 'service-stop-shim.cjs');
+  const shimLog = join(dir, 'service-commands.log');
+  await writeFile(
+    shim,
+    [
+      "const childProcess = require('node:child_process');",
+      "const fs = require('node:fs');",
+      'const realExec = childProcess.execFileSync;',
+      'childProcess.execFileSync = function (file, args, options) {',
+      "  if (file === 'schtasks' || file === 'taskkill') {",
+      "    fs.appendFileSync(process.env.GATE_TEST_COMMAND_LOG, file + ' ' + args.join(' ') + '\\n');",
+      "    return '';",
+      '  }',
+      '  return realExec.call(this, file, args, options);',
+      '};',
+      'const realRead = fs.readFileSync;',
+      'fs.readFileSync = function (path, ...rest) {',
+      "  if (typeof path === 'string' && path.endsWith('supervisor.json')) return '{\"status\":\"stopped\"}';",
+      '  return realRead.call(this, path, ...rest);',
+      '};',
+      'const realFetch = globalThis.fetch;',
+      'globalThis.fetch = function (url, init) {',
+      "  if (String(url).includes('/.well-known/gateway.json')) return Promise.reject(new Error('no manifest listener in this test'));",
+      '  return realFetch.call(this, url, init);',
+      '};',
+    ].join('\n'),
+  );
+  try {
+    const { code, stdout, stderr } = await runCli(['service', 'stop'], {
+      VERSUTUS_GATE_HOME: dir,
+      GATE_TEST_COMMAND_LOG: shimLog,
+      NODE_OPTIONS: `--require "${shim.split('\\').join('/')}"`,
+    });
+    assert.equal(code, 0, `${stdout}\n${stderr}`);
+    assert.doesNotMatch(stderr, /Fatal error|ENOENT/);
+    assert.match(stdout, /service stopped/);
+    assert.equal(JSON.parse(readFileSync(join(dir, 'service', 'control.json'), 'utf8')).action, 'stop');
+    const calls = readFileSync(shimLog, 'utf8');
+    assert.match(calls, /\/Change \/TN VersutusGate \/DISABLE/);
+    assert.match(calls, /\/End \/TN VersutusGate/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('every other Windows service subcommand refuses --dry-run by name', { skip: process.platform !== 'win32' }, async () => {
   // install has its own preview; these used to drop the flag and run for real:
   // start enables and runs the task, uninstall deletes it, status probes.
