@@ -122,11 +122,13 @@ async function makeGate({ turns = [], registry, pushFetch, gateOptions, pairedDe
   }), 'utf8');
 
   // A second caller identity, issued before the Gate starts: the device grant
-  // is the only thing that separates one phone's turn from another's.
+  // is the only thing that separates one phone's turn from another's. The
+  // isolation case has the second phone post a turn of its own, so the grant
+  // names chat:send — the scope a turn now needs.
   const deviceTokens = new DeviceTokenStore(join(root, '.device-tokens.json'));
   const paired = {};
   for (const deviceId of pairedDevices) {
-    paired[deviceId] = await deviceTokens.issue(deviceId, { role: 'operator', scopes: ['operator.read'] });
+    paired[deviceId] = await deviceTokens.issue(deviceId, { role: 'operator', scopes: ['operator.read', 'chat:send'] });
   }
 
   const gate = await createGate({

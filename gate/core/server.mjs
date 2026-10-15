@@ -705,6 +705,28 @@ function grantHasScope(scopes, scope) {
 }
 
 /**
+ * What a device grant must name to act, route by route. The shell was the
+ * first route a scope had to decide; every route that spawns or mutates is
+ * listed here with the scope it needs, and one check below refuses a grant
+ * that does not name it with the same envelope. Reads are not listed — they
+ * stay caller-scoped — and the Gate's own token carries no device grant, so
+ * it stays the operator's unrestricted credential.
+ */
+const DEVICE_ACT_SCOPES = [
+  { method: 'GET', path: /^\/v1\/terminal\/stream$/, scope: 'terminal:use', action: 'open a shell' },
+  { method: 'POST', path: /^\/v1\/chat\/completions$/, scope: 'chat:send', action: 'send a chat turn' },
+  { method: 'POST', path: /^\/p\/[^/]+\/v1\/chat\/completions$/, scope: 'chat:send', action: 'send a chat turn' },
+  { method: 'POST', path: /^\/v1\/runs$/, scope: 'runs:start', action: 'start a run' },
+  { method: 'POST', path: /^\/v1\/runs\/[^/]+\/stop$/, scope: 'runs:start', action: 'stop a run' },
+  { method: 'POST', path: /^\/v1\/runs\/[^/]+\/approval$/, scope: 'runs:start', action: 'decide a run approval' },
+  { method: 'POST', path: /^\/v1\/environments\/[^/]+\/runs$/, scope: 'runs:start', action: 'start a run' },
+  { method: 'POST', path: /^\/v1\/environments\/[^/]+\/runs\/[^/]+\/cancel$/, scope: 'runs:start', action: 'cancel a run' },
+  { method: 'POST', path: /^\/v1\/environments\/[^/]+\/runs\/[^/]+\/approve$/, scope: 'runs:start', action: 'decide a run approval' },
+  { method: 'POST', path: /^\/v1\/sessions$/, scope: 'sessions:manage', action: 'create a session' },
+  { method: 'DELETE', path: /^\/v1\/sessions\/[^/]+$/, scope: 'sessions:manage', action: 'delete a session' },
+];
+
+/**
  * A turn this caller cannot see is a 404, never somebody else's turn and never
  * a different status: the routes are scoped by the authenticated device, so
  * "no such turn" is the whole truth about an id that belongs to another phone.
@@ -2490,6 +2512,26 @@ export async function createGate(config = {}) {
 
       // Authenticated endpoints
 
+      // A device grant acts only where its recorded scopes say it may. The
+      // acting routes are listed above; the check is central so a new route
+      // that forgets it is a missing table entry, not a silent hole. The
+      // Gate's own token carries no device grant and stays unrestricted.
+      if (deviceGrant) {
+        const requirement = DEVICE_ACT_SCOPES.find(
+          (rule) => rule.method === method && rule.path.test(pathname),
+        );
+        if (requirement && !grantHasScope(deviceGrant.scopes, requirement.scope)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: {
+              message: `This device was paired without the ${requirement.scope} scope, so it cannot ${requirement.action}.`,
+              code: 'scope_required',
+            },
+          }));
+          return;
+        }
+      }
+
       if (pathname === '/v1/providers' && method === 'GET') {
         let snapshots;
         try {
@@ -3186,20 +3228,8 @@ export async function createGate(config = {}) {
       // dimensions nothing can apply is the dead-config shape this codebase
       // keeps finding. Restore it alongside a real PTY, not before.
       if (pathname === '/v1/terminal/stream' && method === 'GET') {
-        // A shell runs a process on the host, so this is the one route a
-        // device grant's recorded scopes must decide: a token paired without
-        // `terminal:use` is refused rather than handed one. The Gate's own
-        // token carries no device grant and stays unrestricted.
-        if (deviceGrant && !grantHasScope(deviceGrant.scopes, 'terminal:use')) {
-          res.writeHead(403, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            error: {
-              message: 'This device was paired without the terminal:use scope, so it cannot open a shell.',
-              code: 'scope_required',
-            },
-          }));
-          return;
-        }
+        // A shell runs a process on the host, so the scope check above has
+        // already refused a grant paired without `terminal:use`.
         res.writeHead(200, sseHeaders());
         // A shell at an idle prompt says nothing for as long as the user reads
         // it, and the socket is exactly the thing a locked phone loses.
