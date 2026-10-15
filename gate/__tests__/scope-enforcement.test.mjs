@@ -23,6 +23,14 @@ import { validEnvironment } from './fixtures/cli-environment.mjs';
 // RPC method is named in the body rather than the path, so the Gate's own
 // method tables now ask by name too, and the app's DEFAULT_SCOPES names every
 // surface the app carries.
+//
+// The Bot, room and routine routes were the last acting REST surfaces answering
+// that token: a grant paired for the shell alone could create and edit Bots,
+// hand a mention to one, create, rename, leave and disband rooms, send the
+// message that makes every member speak, and create, run, pause and delete
+// routines. Those routes ask for bots:manage and routines:manage now — the two
+// scopes the app's grant already names for its New Agent sheet, group chat and
+// Routines pane.
 
 const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
 const agentKindModulePath = fileURLToPath(new URL('../core/capabilities/agent/kind.mjs', import.meta.url));
@@ -92,6 +100,27 @@ const RPC_ACTIONS = [
   ['approval.deny', { approvalId: 'a1' }, 'runs:start'],
 ];
 
+// Every Bot, room and routine act the REST routes front, with the scope each
+// one now asks for and params the routes could act on. The New Agent sheet
+// (POST/PATCH /v1/bots, handoff), the group panes (create, rename, leave,
+// disband, the message that makes every member speak) and the Routines pane
+// (create, run, pause, resume, delete) are the app's own callers.
+const BOT_AND_ROUTINE_ACTIONS = [
+  ['POST', '/v1/bots', { name: 'researcher' }, 'bots:manage'],
+  ['PATCH', '/v1/bots/researcher', { description: 'Reads the docs' }, 'bots:manage'],
+  ['POST', '/v1/bots/handoff', { fromId: 'researcher', toId: 'writer', text: 'take this' }, 'bots:manage'],
+  ['POST', '/v1/bot-groups', { name: 'crew', memberIds: ['researcher', 'writer'] }, 'bots:manage'],
+  ['PATCH', '/v1/bot-groups/room-1', { name: 'bridge crew' }, 'bots:manage'],
+  ['DELETE', '/v1/bot-groups/room-1', undefined, 'bots:manage'],
+  ['POST', '/v1/bot-groups/room-1/leave', { memberId: 'researcher' }, 'bots:manage'],
+  ['POST', '/v1/bot-groups/room-1/messages', { text: 'status?' }, 'bots:manage'],
+  ['POST', '/v1/jobs', { name: 'Nightly', prompt: 'Do it', schedule: '0 3 * * *' }, 'routines:manage'],
+  ['POST', '/v1/jobs/job-1/run', {}, 'routines:manage'],
+  ['POST', '/v1/jobs/job-1/pause', {}, 'routines:manage'],
+  ['POST', '/v1/jobs/job-1/resume', {}, 'routines:manage'],
+  ['DELETE', '/v1/jobs/job-1', undefined, 'routines:manage'],
+];
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -116,6 +145,20 @@ function stubRegistry(calls) {
     async runJob(id) { calls.push(`runJob:${id}`); return { ok: true }; },
     async stopRun(id) { calls.push(`stopRun:${id}`); },
     async replyApproval(id) { calls.push(`replyApproval:${id}`); },
+    // The Bot, room and routine surfaces the REST routes front.
+    async listBots() { return { object: 'list', data: [{ id: 'researcher' }, { id: 'writer' }, { id: 'editor' }] }; },
+    async getBot({ id }) { calls.push(`getBot:${id}`); return { id, name: id }; },
+    async createBot({ name }) { calls.push(`createBot:${name}`); return { id: name, name }; },
+    async updateBot({ id }) { calls.push(`updateBot:${id}`); return { id, name: id }; },
+    async handoffMention({ toId }) { calls.push(`handoffMention:${toId}`); return { ok: true }; },
+    async createJob({ name }) { calls.push(`createJob:${name}`); return { id: 'job-1', name }; },
+    async listJobs() { return []; },
+    async setJobPaused(id, paused) { calls.push(`setJobPaused:${id}:${paused}`); return { ok: true }; },
+    async removeJob(id) { calls.push(`removeJob:${id}`); },
+    async deliverGroupMessage({ name }) {
+      calls.push(`deliverGroupMessage:${name}`);
+      return { replies: [{ botId: 'researcher', text: 'on it' }] };
+    },
     async abort() {},
     async streamEvents() {},
   };
@@ -366,6 +409,114 @@ test('a grant holding only terminal:use cannot create or delete a session', asyn
   }
 });
 
+test('a grant holding only terminal:use cannot provision Bots or rooms, or run routines', async () => {
+  const { gate, tokens, calls } = await makeGate({ 'phone-narrow': ['terminal:use'] });
+  try {
+    for (const [method, path, body, scope] of BOT_AND_ROUTINE_ACTIONS) {
+      const refused = await call(gate, path, tokens['phone-narrow'], { method, body });
+      assert.equal(refused.status, 403, `${method} ${path} must be refused`);
+      const payload = await refused.json();
+      assert.equal(payload.error.code, 'scope_required', `${method} ${path} must carry the scope refusal`);
+      assert.match(payload.error.message, new RegExp(scope), `${method} ${path} must name ${scope}`);
+    }
+    assert.deepEqual(calls, [], 'no refused Bot, room or routine act reached the backend');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a grant holding bots:manage still keeps Agent and group work', async () => {
+  const { gate, tokens, calls } = await makeGate({ 'phone-bots': ['bots:manage'] });
+  const token = tokens['phone-bots'];
+  try {
+    const created = await call(gate, '/v1/bots', token, {
+      method: 'POST',
+      body: { name: 'researcher' },
+    });
+    assert.equal(created.status, 200, 'the New Agent sheet still creates a Bot');
+    assert.ok(calls.includes('createBot:researcher'), 'the Bot reaches the backend');
+
+    const edited = await call(gate, '/v1/bots/researcher', token, {
+      method: 'PATCH',
+      body: { description: 'Reads the docs' },
+    });
+    assert.equal(edited.status, 200, 'a Bot still takes an edit');
+    assert.ok(calls.includes('updateBot:researcher'));
+
+    const handed = await call(gate, '/v1/bots/handoff', token, {
+      method: 'POST',
+      body: { fromId: 'researcher', toId: 'writer', text: 'take this' },
+    });
+    assert.equal(handed.status, 200, 'a mention still hands work to another Bot');
+    assert.ok(calls.includes('handoffMention:writer'));
+
+    const room = await call(gate, '/v1/bot-groups', token, {
+      method: 'POST',
+      body: { name: 'crew', memberIds: ['researcher', 'writer', 'editor'] },
+    });
+    assert.equal(room.status, 200, 'the group panes still create a room');
+    const groupId = (await room.json()).id;
+
+    const renamed = await call(gate, `/v1/bot-groups/${encodeURIComponent(groupId)}`, token, {
+      method: 'PATCH',
+      body: { name: 'bridge crew' },
+    });
+    assert.equal(renamed.status, 200, 'a room still takes a rename');
+
+    const sent = await call(gate, `/v1/bot-groups/${encodeURIComponent(groupId)}/messages`, token, {
+      method: 'POST',
+      body: { text: 'status?' },
+    });
+    assert.equal(sent.status, 200, 'group chat still makes every member speak');
+    assert.ok(calls.includes('deliverGroupMessage:bridge crew'));
+
+    const left = await call(gate, `/v1/bot-groups/${encodeURIComponent(groupId)}/leave`, token, {
+      method: 'POST',
+      body: { memberId: 'editor' },
+    });
+    assert.equal(left.status, 200, 'a member still leaves a room');
+    assert.deepEqual((await left.json()).memberIds, ['researcher', 'writer']);
+
+    const disbanded = await call(gate, `/v1/bot-groups/${encodeURIComponent(groupId)}`, token, {
+      method: 'DELETE',
+    });
+    assert.equal(disbanded.status, 200, 'a room still disbands');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a grant holding routines:manage still keeps the Routines pane', async () => {
+  const { gate, tokens, calls } = await makeGate({ 'phone-routines': ['routines:manage'] });
+  const token = tokens['phone-routines'];
+  try {
+    const created = await call(gate, '/v1/jobs', token, {
+      method: 'POST',
+      body: { name: 'Nightly', prompt: 'Do it', schedule: '0 3 * * *' },
+    });
+    assert.equal(created.status, 200, 'the Routines pane still creates a routine');
+    const jobId = (await created.json()).id;
+    assert.ok(calls.includes('createJob:Nightly'));
+
+    for (const verb of ['run', 'pause', 'resume']) {
+      const answered = await call(gate, `/v1/jobs/${encodeURIComponent(jobId)}/${verb}`, token, {
+        method: 'POST',
+        body: {},
+      });
+      assert.equal(answered.status, 200, `the Routines pane still ${verb}s a routine`);
+    }
+    assert.ok(calls.includes(`runJob:${jobId}`), 'the run reaches the backend');
+    assert.ok(calls.includes(`setJobPaused:${jobId}:true`), 'the pause reaches the backend');
+    assert.ok(calls.includes(`setJobPaused:${jobId}:false`), 'the resume reaches the backend');
+
+    const removed = await call(gate, `/v1/jobs/${encodeURIComponent(jobId)}`, token, { method: 'DELETE' });
+    assert.equal(removed.status, 200, 'the Routines pane still deletes a routine');
+    assert.ok(calls.includes(`removeJob:${jobId}`));
+  } finally {
+    await gate.close();
+  }
+});
+
 test('a grant holding only terminal:use cannot act through the RPC surface', async () => {
   const { gate, tokens, calls } = await makeGate({ 'phone-narrow': ['terminal:use'] });
   try {
@@ -430,6 +581,13 @@ test('a grant that cannot act still reads', async () => {
     assert.equal((await call(gate, '/v1/models', tokens['phone-narrow'])).status, 200);
     assert.equal((await call(gate, '/v1/environments', tokens['phone-narrow'])).status, 200);
     assert.equal((await call(gate, '/v1/sessions?backendId=stub-local', tokens['phone-narrow'])).status, 200);
+    // The Bot, room and routine reads are not in the acting table either: a
+    // grant that cannot provision a Bot still sees the roster, a room, a
+    // routine and one Bot's own page.
+    assert.equal((await call(gate, '/v1/bots', tokens['phone-narrow'])).status, 200);
+    assert.equal((await call(gate, '/v1/bots/researcher', tokens['phone-narrow'])).status, 200);
+    assert.equal((await call(gate, '/v1/bot-groups', tokens['phone-narrow'])).status, 200);
+    assert.equal((await call(gate, '/v1/jobs', tokens['phone-narrow'])).status, 200);
     // The RPC reads are not in the acting tables either.
     for (const method of ['providers.list', 'environments.list', 'registry.instances.list', 'device.list']) {
       assert.equal((await rpcCall(gate, method, {}, tokens['phone-narrow'])).status, 200, `${method} must keep reading`);
@@ -491,6 +649,20 @@ test("a grant holding the app's DEFAULT_SCOPES keeps every acting route and RPC 
     // The RPC surface asks by method name; the app's grant names those too.
     assert.equal((await rpcCall(gate, 'jobs.run', { jobId: 'job-1' }, token)).status, 200);
     assert.ok(calls.includes('runJob:job-1'), 'the app grant still runs a routine');
+    // The Bot, room and routine REST surfaces the New Agent sheet, group chat
+    // and the Routines pane call.
+    const agent = await call(gate, '/v1/bots', token, { method: 'POST', body: { name: 'researcher' } });
+    assert.equal(agent.status, 200, 'the app grant still creates an Agent');
+    const routine = await call(gate, '/v1/jobs', token, {
+      method: 'POST',
+      body: { name: 'Nightly', prompt: 'Do it', schedule: '0 3 * * *' },
+    });
+    assert.equal(routine.status, 200, 'the app grant still creates a routine');
+    const room = await call(gate, '/v1/bot-groups', token, {
+      method: 'POST',
+      body: { name: 'crew', memberIds: ['researcher', 'writer'] },
+    });
+    assert.equal(room.status, 200, 'the app grant still creates a room');
     const added = await rpcCall(gate, 'registry.instances.create', {
       id: 'rpc-agent',
       kind: 'agent',

@@ -724,6 +724,25 @@ const DEVICE_ACT_SCOPES = [
   { method: 'POST', path: /^\/v1\/environments\/[^/]+\/runs\/[^/]+\/approve$/, scope: 'runs:start', action: 'decide a run approval' },
   { method: 'POST', path: /^\/v1\/sessions$/, scope: 'sessions:manage', action: 'create a session' },
   { method: 'DELETE', path: /^\/v1\/sessions\/[^/]+$/, scope: 'sessions:manage', action: 'delete a session' },
+  // Bots: provisioning, editing, a mention handoff, and every act on a room —
+  // a room's creation, rename, disband, membership and the message that makes
+  // every member speak. The app's New Agent sheet and group panes are those
+  // callers; a Bot's memory travels by RPC method instead (bots.memory.write).
+  { method: 'POST', path: /^\/v1\/bots$/, scope: 'bots:manage', action: 'create a Bot' },
+  { method: 'PATCH', path: /^\/v1\/bots\/[^/]+$/, scope: 'bots:manage', action: 'edit a Bot' },
+  { method: 'POST', path: /^\/v1\/bots\/handoff$/, scope: 'bots:manage', action: 'hand a message to a Bot' },
+  { method: 'POST', path: /^\/v1\/bot-groups$/, scope: 'bots:manage', action: 'create a Bot group' },
+  { method: 'PATCH', path: /^\/v1\/bot-groups\/[^/]+$/, scope: 'bots:manage', action: 'edit a Bot group' },
+  { method: 'DELETE', path: /^\/v1\/bot-groups\/[^/]+$/, scope: 'bots:manage', action: 'disband a Bot group' },
+  { method: 'POST', path: /^\/v1\/bot-groups\/[^/]+\/leave$/, scope: 'bots:manage', action: 'leave a Bot group' },
+  { method: 'POST', path: /^\/v1\/bot-groups\/[^/]+\/messages$/, scope: 'bots:manage', action: 'send a message to a Bot group' },
+  // Routines: the Routines pane speaks these, and the RPC table below asks the
+  // same scope of the same acts by method name.
+  { method: 'POST', path: /^\/v1\/jobs$/, scope: 'routines:manage', action: 'create a routine' },
+  { method: 'POST', path: /^\/v1\/jobs\/[^/]+\/run$/, scope: 'routines:manage', action: 'run a routine' },
+  { method: 'POST', path: /^\/v1\/jobs\/[^/]+\/pause$/, scope: 'routines:manage', action: 'pause a routine' },
+  { method: 'POST', path: /^\/v1\/jobs\/[^/]+\/resume$/, scope: 'routines:manage', action: 'resume a routine' },
+  { method: 'DELETE', path: /^\/v1\/jobs\/[^/]+$/, scope: 'routines:manage', action: 'delete a routine' },
 ];
 
 /**
