@@ -31,6 +31,8 @@ const mockState = {
   history: [] as SessionMessage[],
   /** True models a Gate whose stopRun never answers, so its driver stays unwinding. */
   stopRunHangs: false,
+  /** True models a Gate that refuses the stop with an error. */
+  stopRunRefuses: false,
 };
 
 jest.mock('@/lib/gateway/storage', () => ({
@@ -230,6 +232,9 @@ function mockMakeClient(callbacks: PortalClientCallbacks): FakeClient {
     resolveApproval: async () => undefined,
     stopRun: async (runId: string) => {
       client.stops.push(runId);
+      if (mockState.stopRunRefuses) {
+        throw new Error('the gate refused the stop');
+      }
       if (mockState.stopRunHangs) {
         await new Promise<void>(() => undefined);
       }
@@ -310,6 +315,7 @@ beforeEach(() => {
   mockState.manifests = new Map();
   mockState.history = [];
   mockState.stopRunHangs = false;
+  mockState.stopRunRefuses = false;
   mockClients.length = 0;
   appStateListeners = [];
   observed.gateway = null;
@@ -408,5 +414,29 @@ describe('PROV-1: Stop run stops the run the row names', () => {
     await settle();
 
     expect(mockClients[0].stops).toContain('run-first');
+  });
+
+  test('a stop the Gate refuses leaves the row unconfirmed, not cancelled', async () => {
+    // The fire-and-forget half (serverSideCancelForCommand) swallows the
+    // refusal by design, and stopActivityRun patches the row cancelled on the
+    // spot. The honesty comes from the other half: aborting the driven row's
+    // executeRun driver makes its abort branch re-ask via requestStop, and
+    // that refusal patches the row again as unresolved. Without the re-ask the
+    // optimistic `cancelled` would stand while the Gate kept the work.
+    await mount();
+    await startRun('first');
+    const runId = row('first')!.id;
+    mockState.stopRunRefuses = true;
+
+    await act(async () => {
+      gatewayApi().stopActivityRun(runId);
+    });
+    await settle();
+
+    expect(mockClients[0].stops).toContain('run-first');
+    const stopped = row('first')!;
+    expect(stopped.status).toBe('unresolved');
+    expect(stopped.summary).toMatch(/did not confirm/i);
+    expect(stopped.summary).toMatch(/the gate refused the stop/);
   });
 });
