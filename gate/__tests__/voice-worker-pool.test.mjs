@@ -5,6 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { keepEventLoopAlive } from './fixtures/keep-event-loop-alive.mjs';
 
 import { createVoiceWorkerPool } from '../core/voice/engines/worker-pool.mjs';
 
@@ -227,7 +228,8 @@ test('an idle worker is stopped, and the next lease warms a new one', async () =
   next.release();
 });
 
-test('a worker that never loads is written off with a named error', async () => {
+test('a worker that never loads is written off with a named error', { timeout: 5_000 }, async (t) => {
+  keepEventLoopAlive(t);
   const { pool, children } = harness({ readyTimeoutMs: 20, realTimers: true });
   await assert.rejects(
     () => pool.warm(),

@@ -30,7 +30,8 @@ function muteChild() {
   child.stdin = new EventEmitter();
   child.stdin.write = () => {};
   child.kills = 0;
-  child.kill = () => { child.kills += 1; child.emit('exit', null); };
+  const inFlight = setTimeout(() => {}, 10_000);
+  child.kill = () => { child.kills += 1; clearTimeout(inFlight); child.emit('exit', null); };
   return child;
 }
 

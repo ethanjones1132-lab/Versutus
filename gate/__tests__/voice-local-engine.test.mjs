@@ -7,6 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { keepEventLoopAlive } from './fixtures/keep-event-loop-alive.mjs';
 
 import { LocalEngine } from '../core/voice/engines/local-engine.mjs';
 
@@ -334,7 +335,8 @@ test('a spent restart budget ends the call with a fatal engine_failed', async ()
   assert.equal(errors[0].fatal, true, 'the call ends with a reason instead of sitting deaf');
 });
 
-test('open gives up with a named error when the worker cannot warm in time', async () => {
+test('open gives up with a named error when the worker cannot warm in time', { timeout: 5_000 }, async (t) => {
+  keepEventLoopAlive(t);
   const h = harness({ engineOpenTimeoutMs: 30 });
   await assert.rejects(
     () => h.engine.open({ voiceSessionId: 'vs-1' }),

@@ -11,19 +11,28 @@ export type AppShortcut = {
   url: string;
 };
 
+const SHORT_LABEL_LIMIT = 10;
+const LONG_LABEL_LIMIT = 25;
+
+function clampLabel(value: string, limit: number): string {
+  if (limit <= 0) return '';
+  return [...value].slice(0, limit).join('');
+}
+
 /** `versutus://chat?bot=<id>` — the Bot Chat with the composer focused. */
 export function botChatShortcut(botId: string): AppShortcut {
   const id = botId.trim();
   return {
     id: `bot-${id}`,
-    shortLabel: id,
-    longLabel: `Talk to ${id}`,
+    shortLabel: clampLabel(id, SHORT_LABEL_LIMIT),
+    longLabel: clampLabel(`Talk to ${id}`, LONG_LABEL_LIMIT),
     url: `versutus://chat?bot=${encodeURIComponent(id)}`,
   };
 }
 
 /** The most recent Bots, deduped and trimmed, as launcher shortcuts. */
 export function recentBotShortcuts(botIds: string[], limit = 3): AppShortcut[] {
+  if (limit <= 0) return [];
   const seen = new Set<string>();
   const shortcuts: AppShortcut[] = [];
   for (const botId of botIds) {

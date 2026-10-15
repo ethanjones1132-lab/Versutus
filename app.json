@@ -11,14 +11,18 @@
       "icon": "./assets/expo.icon",
       "infoPlist": {
         "NSFaceIDUsageDescription": "Versutus asks for Face ID to unlock the app when the app lock is on.",
-        "UIBackgroundModes": ["audio"]
-      }
+        "UIBackgroundModes": [
+          "audio"
+        ],
+        "NSSpeechRecognitionUsageDescription": "Versutus uses speech recognition to write down what you say so you can review it before sending, and to understand a hands-free call you start yourself.",
+        "NSMicrophoneUsageDescription": "Versutus uses the microphone to turn what you say into a message draft, and for a hands-free call you start yourself."
+      },
+      "bundleIdentifier": "com.versutus.app"
     },
     "android": {
       "package": "com.versutus.app",
       "googleServicesFile": "./google-services.json",
       "permissions": [
-        "android.permission.RECORD_AUDIO",
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MICROPHONE",
@@ -45,6 +49,7 @@
       "expo-router",
       "./plugins/with-openclaw-discovery.js",
       "./plugins/with-voice-shortcuts.js",
+      "./plugins/with-bot-app-intents.js",
       [
         "expo-build-properties",
         {
@@ -74,6 +79,14 @@
         }
       ],
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Versutus uses your photo library when you choose an image to attach to a message.",
+          "cameraPermission": "Versutus uses the camera only when you choose to take a photo for a message.",
+          "microphonePermission": false
+        }
+      ],
+      [
         "expo-widgets",
         {
           "bundleIdentifier": "com.versutus.app.widgets",
@@ -84,7 +97,10 @@
               "name": "VersutusStatus",
               "displayName": "Status",
               "description": "What Versutus last knew: its connection, the runs in flight and the newest result, stamped with when it wrote them.",
-              "supportedFamilies": ["systemSmall", "systemMedium"]
+              "supportedFamilies": [
+                "systemSmall",
+                "systemMedium"
+              ]
             }
           ]
         }
@@ -93,7 +109,9 @@
         "expo-share-intent",
         {
           "disableIOS": true,
-          "androidIntentFilters": ["text/*"],
+          "androidIntentFilters": [
+            "text/*"
+          ],
           "androidMainActivityAttributes": {
             "android:launchMode": "singleTask"
           }

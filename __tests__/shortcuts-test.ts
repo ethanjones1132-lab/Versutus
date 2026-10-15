@@ -33,6 +33,18 @@ describe('app shortcuts reuse the one link vocabulary', () => {
     expect(shortcuts.every((shortcut) => targetOf(shortcut.url)?.kind === 'chat')).toBe(true);
   });
 
+  test('dynamic shortcut labels fit launcher guidance even for a long Bot id', () => {
+    const shortcut = botChatShortcut('very-long-production-bot-name');
+    expect(Array.from(shortcut.shortLabel).length).toBeLessThanOrEqual(10);
+    expect(Array.from(shortcut.longLabel).length).toBeLessThanOrEqual(25);
+    expect(shortcut.url).toBe('versutus://chat?bot=very-long-production-bot-name');
+  });
+
+  test('a zero or negative launcher limit publishes no shortcuts', () => {
+    expect(recentBotShortcuts(['scout'], 0)).toEqual([]);
+    expect(recentBotShortcuts(['scout'], -1)).toEqual([]);
+  });
+
   test('the static call shortcut folds to the call target', () => {
     expect(CALL_SHORTCUT.url).toBe('versutus://call');
     expect(targetOf(CALL_SHORTCUT.url)).toEqual({ kind: 'call', engine: 'auto', autoStart: false });

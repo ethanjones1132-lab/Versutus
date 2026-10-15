@@ -72,14 +72,14 @@ escalation half that remains.
 
 ---
 
-## 4. Glanceable status — home-screen widget (ANDROID HALF OUTSTANDING)
+## 4. Glanceable status — home-screen widget (ANDROID NATIVE GLANCE SHIPPED)
 
 The iOS half shipped: `src/components/widget/glanceable-widget.tsx` renders the
 snapshot, `src/lib/widget/widget-target.ts` owns `WIDGET_NAME` and the pure
 `glanceableWidgetLines` fold, and the app writes the snapshot on run-state
-change. **The widget cannot be placed on an Android home screen.** Diagnosed
-2026-09-11 — see "Android home-screen widget" in the 2026-09-11 section below,
-which carries the full finding and the approved approach.
+change. The Android half also ships, via the native Glance module in
+`modules/versutus-widget/android` (see "Android home-screen widget" below);
+only real-device placement/update acceptance remains open.
 
 ---
 
@@ -88,12 +88,21 @@ which carries the full finding and the approved approach.
 **Goal.** "Hey Siri, talk to Scout" → Bot Chat, composer focused. Cheapest item
 on the list; compounds with everything above.
 
-**Status (2026-09-23).** The link half shipped: `versutus://chat?bot=<id>`
-opens Bot Chat with the composer focused (`src/lib/gateway/deep-link.ts`,
-`src/lib/gateway/composer-focus.ts`), and the static Android voice-call
-shortcut donates via `plugins/with-voice-shortcuts.js`. What remains is the
-per-Bot donation this item asks for: runtime Android recent-Bot shortcuts and
-the iOS App Intents half (tracked in the sprint backlog).
+**Status (2026-10-13).** Shipped the per-Bot donation: pure shortcut model
+(`src/lib/gateway/shortcuts.ts`: `botChatShortcut`, `recentBotShortcuts`,
+`CALL_SHORTCUT`), serialized local recorder + async native publish
+(`src/lib/gateway/shortcut-donation.ts`), local seam
+(`src/lib/gateway/shortcut-donation-native.ts`) over the Expo local module
+`modules/versutus-shortcuts` (Android runtime `ShortcutManager` dynamic
+shortcuts; iOS module scaffold), integrated into chat send
+(`src/context/gateway-provider.tsx`), with Android labels clamped to 10/25
+chars and zero/negative limits handled. The link half already shipped:
+`versutus://chat?bot=<id>` opens Bot Chat with the composer focused
+(`src/lib/gateway/deep-link.ts`, `src/lib/gateway/composer-focus.ts`), and the
+static Android voice-call shortcut donates via
+`plugins/with-voice-shortcuts.js`. Physical invocation acceptance remains
+device-held (launcher tap / Siri phrase lands on the intended Bot Chat with
+the composer focused).
 
 **Build.**
 
@@ -275,26 +284,63 @@ loop shipped and are in daily use. What remains:
 
 Candidates, not commitments — promote one to a full spec before building.
 
-### P1. Multimodal composer — library images shipped; camera and files remain
+### P0. Offline outbox read failure risks overwrite/loss (highest priority)
+
+The outbox's storage read can fail while a write later succeeds, so the saved
+queue is at risk. This is a verified path risk, not a confirmed loss.
+
+**Evidence.**
+- `src/lib/gateway/session-persistence.ts:157` `loadOfflineQueue()` returns `[]`
+  on a refused `getItem` (and invalid JSON), with no read-status.
+- `src/context/gateway-provider.tsx:3632` bootstrap `Promise.all` loads the queue
+  and stores it at `:3662` (`offlineQueueRef.current = restoredQueue`) with no
+  read-success flag, unlike activity runs (`activityRunsReadRef` at `:3663` /
+  `:1688`, which gates its writer).
+- `src/context/gateway-provider.tsx:1669` `persistOfflineQueue()` always writes
+  `durableQueueRows(offlineQueueRef.current, flushingOwedRef.current ?? [])` via
+  `saveOfflineQueue` — including when the in-memory copy came from a refused
+  read. Flush push-backs, row deletions, and new queued rows all flow through it.
+
+**Risk.** A refused read leaves an empty in-memory queue; the next persist
+(`removeItem` on empty, or a local/owed subset) overwrites the unreadable saved
+queue, so older queued rows are dropped. User messages are not established as
+already lost; this flags the path.
+
+**Fix direction.** Give `loadOfflineQueue` a read-status (like `ActivityRunsLoad`),
+refuse writes until a successful read, and recover+merge the persisted queue
+into the in-memory copy before any `saveOfflineQueue`/flush write.
+
+**Regression acceptance.**
+- Refused read preserves old rows: when storage refuses, bootstrap must not emit
+  `setItem`/`removeItem` for the queue key; the on-disk rows survive.
+- Recover + merge before flush/write: after a refused read, a later successful
+  read merges persisted rows into the in-memory queue before any persistence or
+  flush, so no queued row is dropped or duplicated.
+
+### P1. Multimodal composer — camera and file attach shipped
 
 ChatGPT/Gemini treat attaching an image or PDF as table stakes.
 
-**Shipped.** Image attach from the photo library, capability-gated: the
-`+` menu offers an image only when the selected model declares image/vision
-input (`supportsImageInput`, `src/lib/gateway/chat-parts.ts:144`; offered at
-`src/components/chat/chat-screen.tsx:1357,2968` and drawn in the composer's
-`+` menu at `src/components/chat/chat-composer.tsx:333-350`), and the picked image rides
-the existing chat pipeline as a data-URL content part.
+**Shipped 2026-10-13.** The composer offers library photos and camera capture
+only when `supportsImageInput` sees declared image/vision input; file selection
+uses `supportsFileInput` and requires declared file/document input. Camera and photo permission
+refusals are visible, and both picker paths share the four-item / 8 MiB
+per-turn limit. PDF, JSON, plain text, Markdown, CSV, and XML files are offered
+only when the selected model declares file/document input. Files are copied to
+cache before reading, size-checked before base64 allocation, and sent as raw
+base64 file content parts. The Gate forwards image and file parts only through
+the provider-backed streaming content-parts transport; unsupported transports
+return a named 422 before opening a session, never a successful text-only reply
+that silently drops an attachment.
 
-**Remaining.** Camera capture and non-image document attachments, through the
-same gate and the same content-part path — the attach control must stay
-fail-closed when the model does not advertise the capability. Hook: extend the
-picker (`handleAttach`) and the parts fold. Image *generation* stays out of
-scope — a provider feature, not a client one. Effort: S.
+**Remaining (device acceptance).** Exercise camera permission grant/denial,
+photo capture, document selection, oversized-file refusal, and successful
+provider-backed image and PDF turns on iOS and Android. Image *generation*
+stays out of scope — a provider feature, not a client one.
 
-### D5. Budgets with hard stops — pre-run refusal shipped; approval escalation remains
+### D5. Budgets with hard stops — shipped (pre-run refusal + Run once + fail-closed read)
 
-**State verified 2026-09-23.** The enforcing pre-run check exists:
+**State verified 2026-09-23/2026-10-13.** The enforcing pre-run check exists:
 `checkBotBudget` (`src/lib/gateway/budgets.ts:104`) runs before every run
 started from this app (`src/context/gateway-provider.tsx:2676-2693`) and
 refuses a start when the Bot is over its cap, naming the cap and the overage;
@@ -304,10 +350,24 @@ session-list bound, a different cap. Honest limit: enforcement is
 client-side — it governs runs started from this app, not a server quota; say
 so, don't imply a server quota.
 
-**Remaining.** The original goal also promised escalation — over the cap, open
-an approval rather than only refusing the start. Hook: feed the
-`BudgetVerdict` into the existing approval path; auto-approve never applies.
-Effort: S.
+**Resolved (2026-10-13).** Two halves shipped:
+- Fail-closed read: `checkBotBudget` now returns a `retry` verdict when
+  `readSpend` throws (`src/lib/gateway/budgets.ts`), naming the unconfirmed
+  spend and the retry; `authorizeBudgetRun` never escalates a retry to a
+  confirmation. No run starts until spend can be checked.
+- Pre-run `Run once`: an over-cap verdict carries `decision: 'run-once'`;
+  `runTask` (`src/context/gateway-provider.tsx`) presents a native/web
+  confirmation (`Alert.alert` or `window.confirm`) with an explicit `Run once` choice after
+  `checkBotBudget` returns and before `executeRun`, and before any Activity row
+  is written (the guard precedes the provisional entry). Approval is scoped to
+  that single run; the stored cap is never changed. Pure helpers `evaluateBudget`,
+  `checkBotBudget`, and `authorizeBudgetRun` carry the new decisions and are
+  unit-tested (`__tests__/budgets-test.ts`). The flow stays separate from the
+  Gate in-run approval path: no `runId` is fabricated and nothing is
+  auto-approved.
+
+Honest limit unchanged: enforcement is client-side — it governs runs started
+from this app, not a server quota.
 
 ## What we deliberately do NOT copy
 
@@ -329,80 +389,29 @@ voice (built, physical-device acceptance pending below).
 
 ---
 
-## Android home-screen widget — APPROACH APPROVED (Recommendation A)
+## Android home-screen widget — NATIVE GLANCE SHIPPED (device acceptance open)
 
-**Status.** Diagnosed 2026-09-11. Approach approved; not yet built.
+**Status (2026-10-13).** The Android half ships as a native Glance module in this
+repo, not as an Expo `jetpack-compose` sibling of the iOS view:
 
-**Problem.** The widget cannot be added to an Android home screen. It does not
-appear in the widget picker at all.
+- `modules/versutus-widget/android` — `VersutusStatusReceiver`, `VersutusStatusWidget`,
+  `WidgetPayload` / `WidgetPayloadStore`, `WidgetRefreshWorker`, plus device/payload
+  tests under `android/src/test/java/com/versutus/widget/` (`WidgetPayloadTest`,
+  `WidgetLayoutTest`, `WidgetRefreshPolicyTest`, ...).
+- App side: `src/lib/widget/android-widget-payload.ts` folds `glanceableWidgetLines`
+  into the card payload; `src/lib/widget/widget-device.ts` writes/clears it through
+  the module (queued writes, refusal-safe), and the card keeps its last drawable
+  payload on refusal.
 
-**Root cause — three stacked causes, not one.** Verified against a generated
-prebuild (`android/app/src/main/AndroidManifest.xml` contained **zero**
-`appwidget` receivers, and no `res/xml` or provider class was emitted):
+The old plan to add `src/components/widget/glanceable-widget.android.tsx` against
+`@expo/ui/jetpack-compose`, and the Expo-widget plugin config surgery that came
+with it, is obsolete — do not revive it. `src/lib/widget/widget-target.ts`
+(`WIDGET_NAME`, `glanceableWidgetLines`) remains the single source of content for
+both platforms.
 
-1. **`enableAndroid` defaults to `false`.** In
-   `expo-widgets/plugin/build/withWidgets.js`:
-   `const enableAndroid = props?.enableAndroid ?? false;` — and the plugin entry
-   in `app.json` never sets it. `withAndroidWidgets` is therefore never called,
-   so no receiver, `res/xml`, or provider class is generated and Android has
-   nothing to list.
-2. **No `android` block on the widget config.** The existing entry carries
-   `supportedFamilies: ["systemSmall","systemMedium"]`, which is iOS WidgetKit
-   vocabulary. Android takes a different schema entirely: `minWidth`,
-   `minHeight`, `targetCellWidth`, `targetCellHeight`, `resizeMode`.
-3. **The widget view is SwiftUI.** `glanceable-widget.tsx` imports
-   `@expo/ui/swift-ui` and its modifiers. That cannot render on Android at any
-   config setting.
-
-(1) and (2) are config. (3) is a real, if small, build.
-
-**Why this is cheap: the existing architecture already anticipated it.** The
-data layer is platform-neutral — `src/lib/widget/widget-target.ts` owns
-`WIDGET_NAME` and the pure `glanceableWidgetLines` fold, and the view "draws the
-snapshot and nothing else — no gateway client, no read of its own, no clock of
-its own." Only the rendering is iOS-bound. This is a view port, not a feature.
-
-**Approved approach — A, sibling platform view.**
-
-Add `src/components/widget/glanceable-widget.android.tsx` written against
-`@expo/ui/jetpack-compose`, consuming `glanceableWidgetLines` unchanged. Metro's
-platform resolution selects the right view per platform. Both views stay thin,
-neither platform's primitives leak into the other, and because both consume the
-same fold they cannot drift on *content* — only on layout.
-
-Rejected alternatives, recorded so they are not revisited:
-
-- **B — single view with a `Platform.OS` branch.** Fewer files, but it pulls
-  both UI libraries into a bundle `expo-widgets/metro.config.js` deliberately
-  keeps minimal, and a SwiftUI import on Android is a boot hazard.
-- **C — port to Jetpack Compose only, dropping SwiftUI.** Simplest tree, but
-  discards the working iOS widget. Only sensible if iOS widgets stop being a
-  goal.
-
-**Build.**
-
-1. `app.json` → the `expo-widgets` plugin props gain `enableAndroid: true`.
-2. The `VersutusStatus` widget entry gains an `android` block with sizing and
-   `resizeMode`. Pick cell targets that fit the four lines the fold emits; the
-   small family already drops the newest outcome, so mirror that rule rather
-   than inventing a second one.
-3. Add `glanceable-widget.android.tsx` against `@expo/ui/jetpack-compose`,
-   reusing `glanceableWidgetLines` and `WIDGET_NAME`. Take the system
-   foreground style, not app-palette hex — a widget is drawn over the
-   operator's wallpaper.
-4. Keep the seam: nothing imports the view statically; the first snapshot write
-   is the only caller, so a client without the native side draws nothing rather
-   than dying at boot.
-
-**Constraints.** Re-running `expo prebuild` is required after the config change
-— the manifest receiver is generated, not hand-written. Verified toolchain as of
-2026-09-11: Gradle `assembleRelease` succeeds in ~13 min, producing a
-debug-signed 153 MB universal APK (`com.versutus.app`, targetSdk 36).
-
-**Verify.** Confirm the generated manifest contains an `appwidget` receiver and
-`res/xml` widget info before building. Manual: widget appears in the Android
-picker, places on the home screen, and updates on run-state change. Jest cover
-stays on the fold, which is unchanged.
+**Remaining (device-held).** Real-device placement/update acceptance only: the
+widget appears in the Android picker, places on a home screen, and updates on
+run-state change.
 
 ---
 

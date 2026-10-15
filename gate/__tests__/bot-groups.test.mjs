@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { keepEventLoopAlive } from './fixtures/keep-event-loop-alive.mjs';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -356,7 +357,8 @@ test('one speaker throwing still returns the answers already in', async () => {
   assert.deepEqual(errors, [{ botId: 'b', error: 'offline' }]);
 });
 
-test('a hung speaker times out and the rest of the round still answers', async () => {
+test('a hung speaker times out and the rest of the round still answers', { timeout: 5_000 }, async (t) => {
+  keepEventLoopAlive(t);
   const asked = [];
   const { replies, errors } = await runGroupTurns({
     steps: planGroupRounds({ memberIds: ['a', 'b', 'c'] }),

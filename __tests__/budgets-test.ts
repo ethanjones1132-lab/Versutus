@@ -2,6 +2,7 @@ import { keyValueStorage } from '@/lib/storage/key-value';
 import {
   BUDGETS_STORAGE_KEY,
   applySpendCapInput,
+  authorizeBudgetRun,
   botBudget,
   botSpendFromSessions,
   budgetKey,
@@ -136,7 +137,7 @@ describe('the budget verdict', () => {
     }
   });
 
-  test('checkBotBudget allows when there is no cap, or the spend read is unknown', async () => {
+  test('checkBotBudget allows when there is no cap, and fails closed when spend is unknown', async () => {
     expect(
       await checkBotBudget({
         budgets: {},
@@ -154,8 +155,16 @@ describe('the budget verdict', () => {
         throw new Error('offline');
       },
     });
-    // Unknown is not "over": the read failed, so the run is allowed and the cap is named.
-    expect(unknown.allowed).toBe(true);
+    // Unknown is not evidence that the cap is clear: no run starts until spend can be checked.
+    expect(unknown).toMatchObject({ allowed: false, decision: 'retry', cap: 5 });
+
+    const missing = await checkBotBudget({
+      budgets: { 'gw-1:scout': 5 },
+      gatewayId: 'gw-1',
+      botId: 'scout',
+      readSpend: async () => null,
+    });
+    expect(missing).toMatchObject({ allowed: false, decision: 'retry', cap: 5 });
 
     const over = await checkBotBudget({
       budgets: { 'gw-1:scout': 5 },
@@ -164,6 +173,43 @@ describe('the budget verdict', () => {
       readSpend: async () => 6,
     });
     expect(over.allowed).toBe(false);
+  });
+
+  test('unknown spend fails closed with an actionable retry and never asks for an override', async () => {
+    const verdict = await checkBotBudget({
+      budgets: { 'gw-1:scout': 5 },
+      gatewayId: 'gw-1',
+      botId: 'scout',
+      readSpend: async () => { throw new Error('offline'); },
+    });
+    expect(verdict).toMatchObject({ allowed: false, decision: 'retry', cap: 5 });
+    if (!verdict.allowed) expect(verdict.reason).toMatch(/could not be confirmed.*retry/i);
+    const confirm = jest.fn(async () => true);
+    expect(await authorizeBudgetRun(verdict, confirm)).toMatchObject({ allowed: false });
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  test('an over-cap run proceeds only after a one-time explicit decision', async () => {
+    const verdict = evaluateBudget(5, 6);
+    expect(verdict).toMatchObject({ allowed: false, decision: 'run-once', overBy: 1 });
+    const decline = jest.fn(async () => false);
+    expect(await authorizeBudgetRun(verdict, decline)).toMatchObject({ allowed: false });
+    expect(decline).toHaveBeenCalledTimes(1);
+
+    const approveOnce = jest.fn(async () => true);
+    expect(await authorizeBudgetRun(verdict, approveOnce)).toEqual({ allowed: true });
+    expect(approveOnce).toHaveBeenCalledTimes(1);
+  });
+
+  test('the one-shot confirmation is wired before execution and does not alter the stored cap', () => {
+    const provider = readSource('src', 'context', 'gateway-provider.tsx');
+    const authorize = provider.indexOf('authorizeBudgetRun(');
+    const run = provider.indexOf('executeRun(runCapable');
+    expect(authorize).toBeGreaterThan(-1);
+    expect(run).toBeGreaterThan(authorize);
+    expect(provider).toContain('Alert.alert(');
+    expect(provider).toContain('window.confirm(');
+    expect(provider).toContain("text: 'Run once'");
   });
 });
 

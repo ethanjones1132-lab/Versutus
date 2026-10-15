@@ -56,9 +56,13 @@ async function trackBudgetTimers(fn) {
 /** A fetch that answers nothing, and that reacts to an abort the way fetch does. */
 function neverAnswers() {
   return (url, init) => new Promise((_resolve, reject) => {
-    init?.signal?.addEventListener('abort', () => {
+    const inFlight = setTimeout(() => {}, 5_000);
+    const fail = () => {
+      clearTimeout(inFlight);
       reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
-    });
+    };
+    if (init?.signal?.aborted) fail();
+    else init?.signal?.addEventListener('abort', fail, { once: true });
   });
 }
 
