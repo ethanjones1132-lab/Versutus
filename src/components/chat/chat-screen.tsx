@@ -1,5 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
+import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { type Href, useFocusEffect, useIsFocused, useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, FlatList, Platform, RefreshControl, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
@@ -138,8 +140,12 @@ import { composeRequestApplies, composeRequestHoldCopy } from '@/lib/gateway/com
 import { effectiveModel, resolveSendModel, scopeModelsToBackend, visibleModelRows } from '@/lib/gateway/model-selection';
 import {
   chatAttachmentsFromPicker,
+  chatFilesFromPicker,
   attachmentChars,
   supportsImageInput,
+  supportsFileInput,
+  MAX_CHAT_ATTACHMENTS,
+  MAX_CHAT_ATTACHMENT_CHARS,
   type ChatAttachment,
 } from '@/lib/gateway/chat-parts';
 import { insertMention, mentionPicksAtCaret } from '@/lib/gateway/mentions';
@@ -213,7 +219,7 @@ const AT_TOP_PX = 8;
  * replayed the turn this line already named — and it is the only outcome that
  * says the photos in it travelled. Every other one left them on this phone.
  */
-function turnCarriedPhotos(outcome: SendChatInputOutcome): boolean {
+function turnCarriedAttachments(outcome: SendChatInputOutcome): boolean {
   return outcome === 'sent';
 }
 
@@ -228,15 +234,21 @@ function turnCarriedWords(outcome: SendChatInputOutcome): boolean {
   return outcome !== 'offline' && outcome !== 'busy';
 }
 
-/** Said beside the composer when a send with photos never left the phone. */
+/** Said beside the composer when a send with attachments never left the phone. */
 const ATTACHMENTS_NOT_SENT_COPY =
-  'Those photos did not send. They are back on the composer — send again when the gateway is connected.';
+  'Those attachments did not send. They are back on the composer — send again when the gateway is connected.';
 
 /** Said beside the composer for the pictures a pick was too big to stage. */
 function attachmentRefusedCopy(refused: number): string {
   return refused === 1
     ? 'That photo was too large to add to this message. Send it on its own, or pick a smaller one.'
     : `${refused} photos were too large to add to this message. Send these first, then attach the rest.`;
+}
+
+function fileAttachmentRefusedCopy(refused: number): string {
+  return refused === 1
+    ? 'That document could not be added within this message’s size limit. Try a smaller file.'
+    : `${refused} documents could not be added within this message’s size limit. Try fewer or smaller files.`;
 }
 
 /** Said under the error banner when the clipboard would not take the details. */
@@ -1342,6 +1354,7 @@ export function ChatScreen() {
     return modelCatalog.find((model) => model.id === modelId || model.modelId === modelId);
   }, [activeGateway, selectedBackendId, selectedBotId, modelCatalog]);
   const canAttach = supportsImageInput(selectedModelInfo);
+  const canAttachFile = supportsFileInput(selectedModelInfo);
 
   const handleAttach = useCallback(async () => {
     if (!canAttach) return;
@@ -1376,6 +1389,92 @@ export function ChatScreen() {
     if (picked.refused > 0) setAttachNotice(attachmentRefusedCopy(picked.refused));
     setAttachments((current) => [...current, ...picked.attachments]);
   }, [attachments, canAttach]);
+
+  const handleTakePhoto = useCallback(async () => {
+    if (!canAttach) return;
+    try {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        setAttachNotice(
+          permission.canAskAgain
+            ? 'Camera access was declined. Tap Take a photo again to allow it.'
+            : 'Camera access is off. Enable it in Settings, then try again.',
+        );
+        return;
+      }
+      setAttachNotice(undefined);
+      const result = await ImagePicker.launchCameraAsync({ quality: 0.5, base64: true });
+      if (result.canceled || !result.assets) return;
+      const picked = chatAttachmentsFromPicker(result.assets, attachments.length, attachmentChars(attachments));
+      if (picked.refused > 0) setAttachNotice(attachmentRefusedCopy(picked.refused));
+      setAttachments((current) => [...current, ...picked.attachments]);
+    } catch {
+      setAttachNotice('The camera could not open. Check camera access and try again.');
+    }
+  }, [attachments, canAttach]);
+
+  const handleAttachFile = useCallback(async () => {
+    if (!canAttachFile) return;
+    setAttachNotice(undefined);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/pdf', 'application/json', 'text/plain', 'text/markdown', 'text/csv', 'text/xml'],
+        multiple: true,
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled) return;
+
+      const availableCount = Math.max(0, MAX_CHAT_ATTACHMENTS - attachments.length);
+      const availableChars = Math.max(0, MAX_CHAT_ATTACHMENT_CHARS - attachmentChars(attachments));
+      let remainingChars = availableChars;
+      let refused = Math.max(0, result.assets.length - availableCount);
+      const readable: { uri: string; name: string; mimeType: string; base64: string }[] = [];
+
+      for (const asset of result.assets.slice(0, availableCount)) {
+        try {
+          // Use picker metadata before reading the file into JS. When a picker
+          // omits size, ask the copied cache file; an unknown size is refused
+          // rather than allocating an unbounded base64 string on the phone.
+          let size = asset.size;
+          if (typeof size !== 'number' || !Number.isFinite(size) || size < 0) {
+            const info = await FileSystem.getInfoAsync(asset.uri);
+            size = info.exists && typeof info.size === 'number' ? info.size : undefined;
+          }
+          if (size === undefined) {
+            refused += 1;
+            continue;
+          }
+          const projectedChars = Math.ceil(size / 3) * 4;
+          if (projectedChars > remainingChars) {
+            refused += 1;
+            continue;
+          }
+          const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
+          if (base64.length > remainingChars) {
+            refused += 1;
+            continue;
+          }
+          remainingChars -= base64.length;
+          readable.push({
+            uri: asset.uri,
+            name: asset.name,
+            mimeType: asset.mimeType ?? 'application/octet-stream',
+            base64,
+          });
+        } catch {
+          refused += 1;
+        }
+      }
+
+      const picked = chatFilesFromPicker(readable, attachments.length, attachmentChars(attachments));
+      refused += picked.refused;
+      if (refused > 0) setAttachNotice(fileAttachmentRefusedCopy(refused));
+      setAttachments((current) => [...current, ...picked.attachments]);
+    } catch {
+      setAttachNotice('The document picker could not open. Try again.');
+    }
+  }, [attachments, canAttachFile]);
+
   const handleRemoveAttachment = useCallback((uri: string) => {
     setAttachments((current) => current.filter((attachment) => attachment.uri !== uri));
   }, []);
@@ -1394,7 +1493,7 @@ export function ChatScreen() {
     // pictures with it, and the composer had already let go of them — so they go
     // back on it and the operator is told, rather than the turn reporting success
     // with the images silently missing on the other side.
-    if (files.length > 0 && !turnCarriedPhotos(outcome)) {
+    if (files.length > 0 && !turnCarriedAttachments(outcome)) {
       setAttachments((current) => [...current, ...files]);
       setAttachNotice(ATTACHMENTS_NOT_SENT_COPY);
     }
@@ -3008,6 +3107,8 @@ export function ChatScreen() {
         callActive={handsfreeActive}
         // P1: offered only when the selected model declares image input.
         onAttach={canAttach ? handleAttach : undefined}
+        onTakePhoto={canAttach ? handleTakePhoto : undefined}
+        onAttachFile={canAttachFile ? handleAttachFile : undefined}
         attachments={attachments}
         tone={composerTone}
         onRemoveAttachment={handleRemoveAttachment}

@@ -307,6 +307,7 @@ test('a final heard while the turn is still thinking is folded into that turn', 
   call.advance(2_000);
   engine.emit('final', { text: 'weather in glasgow' });
   await waitUntil(() => attempts.length === 2);
+  await waitUntil(() => ofType(call.frames, 'final').length === 2);
   call.advance(500);
   // The merged final is written to the socket in the same turn that arms the
   // replacement. Under load the assertion used to read the frame list before

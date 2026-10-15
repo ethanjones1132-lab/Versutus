@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, Platform } from 'react-native';
+import { Alert, AppState, Platform } from 'react-native';
 
 import { registerCrestFleet } from '@/lib/bot-avatar';
 import { GatewayDiscoveryScanner, isNativeDiscoveryAvailable } from '@/lib/discovery/scanner';
@@ -16,6 +16,9 @@ import {
 import { abortAndClear } from '@/lib/gateway/abort';
 import { serverSideCancelForCommand } from '@/lib/gateway/cancel';
 import { isAuthRejection, isConnectionError, isUserAbort } from '@/lib/gateway/errors';
+import { keyValueStorage } from '@/lib/storage/key-value';
+import { createBotShortcutRecorder } from '@/lib/gateway/shortcut-donation';
+import { applyRecentBotShortcutsNative } from '@/lib/gateway/shortcut-donation-native';
 import {
   addStreamingPlaceholder,
   addUserMessage,
@@ -161,7 +164,8 @@ import {
   durableQueueRows,
   isRunQueuedRow,
   loadActivityRunsFromStore,
-  loadOfflineQueue,
+  loadOfflineQueueFromStore,
+  mergeOfflineQueueItems,
   resurfaceOfflineQueue,
   saveActivityRuns,
   saveOfflineQueue,
@@ -246,7 +250,7 @@ import {
 import { clearSessionLabelsForGateway } from '@/lib/gateway/session-labels';
 import { clearLastSeen } from '@/lib/home/last-seen';
 import { SESSION_SPEND_LIST_LIMIT } from '@/lib/gateway/session-analytics';
-import { botBudget, botSpendFromSessions, checkBotBudget, loadBudgets } from '@/lib/gateway/budgets';
+import { authorizeBudgetRun, botBudget, botSpendFromSessions, checkBotBudget, loadBudgets } from '@/lib/gateway/budgets';
 import { botOpenFailureKeepsScope } from '@/lib/gateway/bot-open-failure';
 import {
   approvalPolicyDecision,
@@ -1006,6 +1010,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, [activeGateway]);
   const [activeHello, setActiveHello] = useState<GatewayHelloOk | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
+  const recentBotShortcutRecorder = useMemo(
+    () =>
+      createBotShortcutRecorder({
+        storage: keyValueStorage,
+        updateShortcuts: applyRecentBotShortcutsNative,
+      }),
+    [],
+  );
   // Request helpers consult this ref rather than rendered state. `status` is a
   // render value, so a request issued in the same tick as a connection change
   // reads whatever was captured at the last render — which throws "Gateway not
@@ -1373,6 +1385,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    */
   const activityRunsReadRef = useRef(false);
   const activityRunsRef = useRef<ActivityRun[]>([]);
+  /**
+   * Whether the offline queue store was actually read. A refused getItem
+   * restores an empty in-memory queue so bootstrap can settle; persisting that
+   * empty list would delete the on-disk outbox. Stays false until a real read
+   * lands; persist/flush triggers retry the read and merge before writing.
+   */
+  const offlineQueueReadRef = useRef(false);
+  const [offlineQueueReadVersion, setOfflineQueueReadVersion] = useState(0);
   useEffect(() => {
     activityRunsRef.current = activityRuns;
   }, [activityRuns]);
@@ -1669,12 +1689,35 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * unsaved until the next write happened to land.
    */
   const persistOfflineQueue = useCallback(() => {
-    void saveOfflineQueue(durableQueueRows(offlineQueueRef.current, flushingOwedRef.current ?? [])).catch(
-      (error) => {
+    const attempt = async () => {
+      // A refused read leaves an empty in-memory queue: persisting it would
+      // delete the on-disk outbox, so the durable copy waits for a real read.
+      // Subsequent triggers retry the read, and on success the disk rows are
+      // merged with the rows already held in memory — nothing already loaded
+      // or newly queued is discarded.
+      if (!offlineQueueReadRef.current) {
+        try {
+          const load = await loadOfflineQueueFromStore();
+          if (load.read) {
+            offlineQueueReadRef.current = true;
+            offlineQueueRef.current = mergeOfflineQueueItems(load.items, offlineQueueRef.current);
+            setOfflineQueueReadVersion((version) => version + 1);
+          } else {
+            return;
+          }
+        } catch (error) {
+          setLastError(error instanceof Error ? error.message : String(error));
+          return;
+        }
+      }
+      try {
+        await saveOfflineQueue(durableQueueRows(offlineQueueRef.current, flushingOwedRef.current ?? []));
+      } catch (error) {
         setLastError(`Queued messages could not be saved: ${error instanceof Error ? error.message : String(error)}`);
-      },
-    );
-  }, []);
+      }
+    };
+    void attempt();
+  }, [offlineQueueReadVersion]);
 
   /**
    * The roster's one durable writer, deliberately outside every updater: React
@@ -3612,12 +3655,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   const bootstrap = useCallback(async () => {
     try {
-      const [loadedSettings, repairedGateways, restoredQueue, restoredRunsLoad] = await Promise.all([
+      const [loadedSettings, repairedGateways, restoredQueueLoad, restoredRunsLoad] = await Promise.all([
         loadAppSettings(),
         // Saved duplicates of one gateway collapse to the profile that can
         // authenticate before anything connects (profile-dedupe.ts).
         repairDuplicateGateways(),
-        loadOfflineQueue(),
+        loadOfflineQueueFromStore(),
         loadActivityRunsFromStore(),
       ]);
       const loadedGateways = repairedGateways.gateways;
@@ -3647,7 +3690,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
       setSettings(loadedSettings);
       setGateways(roster);
-      offlineQueueRef.current = restoredQueue;
+      offlineQueueRef.current = restoredQueueLoad.items;
+      offlineQueueReadRef.current = restoredQueueLoad.read;
       activityRunsReadRef.current = restoredRunsLoad.read;
       setActivityRuns(restoredRunsLoad.runs);
       // One sweep at mount: a run-progress notice posted by a process that was
@@ -4719,11 +4763,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
       const runCapable = client as unknown as RunCapableClient;
 
-      // D5's hard stop: a Bot over its per-Bot cap does not start a run. The
-      // cap is this device's (key-value storage) and the spend is the read the
-      // Spend surface already folds; a failed read is unknown, not over. A
-      // refused start throws before the provisional Activity entry is written,
-      // so a stopped run leaves no ghost.
+      // D5's pre-run decision: a known over-cap spend requires an explicit
+      // one-run confirmation; unknown spend fails closed with a retry. A
+      // refusal happens before the provisional Activity entry is written, so
+      // a stopped run leaves no ghost.
       const budgetBotId = selectedBotIdRef.current;
       const readSessions = readBotSessionsRef.current;
       if (budgetBotId && canReadBotSessionsRef.current && readSessions) {
@@ -4739,7 +4782,26 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
                 await readSessions(budgetBotId, SESSION_SPEND_LIST_LIMIT),
               ),
           });
-          if (!verdict.allowed) throw new Error(verdict.reason);
+          if (!verdict.allowed) {
+            const decision = await authorizeBudgetRun(verdict, async () => {
+              const prompt = `${verdict.reason}\n\nRun this task once without changing the cap?`;
+              if (Platform.OS === 'web') {
+                return typeof window !== 'undefined' && window.confirm(prompt);
+              }
+              return await new Promise<boolean>((resolve) => {
+                Alert.alert(
+                  'Budget exceeded',
+                  prompt,
+                  [
+                    { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+                    { text: 'Run once', onPress: () => resolve(true) },
+                  ],
+                  { cancelable: true, onDismiss: () => resolve(false) },
+                );
+              });
+            });
+            if (!decision.allowed) throw new Error(verdict.reason);
+          }
         }
       }
 
@@ -5099,6 +5161,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         const outcome = await sendMessage(trimmed, options?.messageId, undefined, options?.attachments, {
           turnId: options?.turnId,
         });
+        const scopedBotId = (options?.botId ?? selectedBotIdRef.current ?? '').trim();
+        if (scopedBotId) void recentBotShortcutRecorder(scopedBotId).catch(() => undefined);
         // A live turn holds the composer lock, so these words never left this
         // phone — and the caller (a notification quick reply, a resume, a
         // retry) reads nothing else off the answer. Parked instead: the durable
@@ -5358,6 +5422,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       status,
       updateLocalMessage,
       queueOfflineInput,
+      recentBotShortcutRecorder,
     ],
   );
 
@@ -7142,9 +7207,29 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // Pre-flight guard: a stale read only pauses a retryable flush.
     // Converting to statusRef or the connection reducer needs live-device
     // verification because it changes when this effect re-runs.
-    if (status !== 'connected' || isSending || isCommandRunning || flushingOfflineRef.current || offlineQueueRef.current.length === 0) {
+    if (status !== 'connected' || isSending || isCommandRunning || flushingOfflineRef.current) {
       return;
     }
+
+    // A refused read must not flush an empty stand-in. Retry the read first;
+    // when it lands, the merged disk rows re-trigger this effect.
+    if (!offlineQueueReadRef.current) {
+      void (async () => {
+        try {
+          const load = await loadOfflineQueueFromStore();
+          if (load.read) {
+            offlineQueueReadRef.current = true;
+            offlineQueueRef.current = mergeOfflineQueueItems(load.items, offlineQueueRef.current);
+            setOfflineQueueReadVersion((version) => version + 1);
+          }
+        } catch (error) {
+          setLastError(error instanceof Error ? error.message : String(error));
+        }
+      })();
+      return;
+    }
+
+    if (offlineQueueRef.current.length === 0) return;
 
     const activeId = activeGatewayRef.current?.id;
     if (!activeId) return;

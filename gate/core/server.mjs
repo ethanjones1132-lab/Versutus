@@ -197,6 +197,27 @@ function lastUserImages(messages = []) {
   return null;
 }
 
+/** File content parts attached to the latest user turn only. */
+function lastUserFiles(messages = []) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== 'user') continue;
+    const files = (Array.isArray(message.content) ? message.content : [])
+      .filter((part) =>
+        part?.type === 'file' &&
+        typeof part.file?.filename === 'string' &&
+        typeof part.file?.file_data === 'string' &&
+        part.file.file_data.length > 0,
+      )
+      .map((part) => ({
+        type: 'file',
+        file: { filename: part.file.filename, file_data: part.file.file_data },
+      }));
+    return files.length > 0 ? files : null;
+  }
+  return null;
+}
+
 /** The frame every attached turn is ended with when the Gate itself goes down. */
 const GATE_RESTART_FRAME = JSON.stringify({
   error: { code: 'gate_restart', message: 'The Gate restarted while this turn was running.' },
@@ -546,7 +567,7 @@ async function bindDurableTurn(res, {
  * meaning of a close, because a turn nobody can name is a turn nobody can find
  * again.
  */
-async function streamBackendTurn(backend, sessionId, { text, model, images }, res, {
+async function streamBackendTurn(backend, sessionId, { text, model, images, files }, res, {
   callerId = 'anonymous',
   turnId = null,
   backendId = null,
@@ -602,7 +623,7 @@ async function streamBackendTurn(backend, sessionId, { text, model, images }, re
 
   let stopped = false;
   try {
-    const { hasContent, report, aborted } = await runBackendTurn(backend, sessionId, { text, model, images }, {
+    const { hasContent, report, aborted } = await runBackendTurn(backend, sessionId, { text, model, images, files }, {
       signal: controller.signal,
       onDelta: collectDelta,
       // Tool frames are progress the Gate can see, so they re-arm the stall
@@ -4276,14 +4297,25 @@ export async function createGate(config = {}) {
           try {
             const text = lastUserText(body.messages);
             const images = lastUserImages(body.messages);
+            const files = lastUserFiles(body.messages);
             // Nothing to ask. Refused here rather than after `createSession`,
             // because every refusal downstream of that leaves a real upstream
             // session and a newest-row entry in the Gate's own session list for a
             // turn that never said anything — the same 400 the sibling `/v1/runs`
             // route answers for an empty prompt.
-            if (!text && !images) {
+            if (!text && !images && !files) {
               res.writeHead(400, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify({ error: { message: 'This chat carries no message content.', code: 'invalid_request' } }));
+              return;
+            }
+            if ((images || files) && (body.stream !== true || backend.supportsContentParts !== true)) {
+              res.writeHead(422, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                error: {
+                  message: 'This backend cannot carry image or file attachments. Choose a provider-backed Hermes model to send them.',
+                  code: 'attachments_unsupported',
+                },
+              }));
               return;
             }
             const model = body.model ? parseQualifiedModel(body.model) : undefined;
@@ -4313,7 +4345,7 @@ export async function createGate(config = {}) {
             }
 
             if (body.stream === true) {
-              const streamed = await streamBackendTurn(backend, sessionId, { text, model, images }, res, {
+              const streamed = await streamBackendTurn(backend, sessionId, { text, model, images, files }, res, {
                 callerId,
                 turnId: namedTurnId,
                 backendId: environmentId ?? null,
@@ -4357,7 +4389,7 @@ export async function createGate(config = {}) {
               return;
             }
 
-            const result = await backend.sendMessage(sessionId, { text, model, images });
+            const result = await backend.sendMessage(sessionId, { text, model, images, files });
             // A turn that failed upstream arrives as a NORMAL completion whose
             // whole assistant text is the error (backendUpstreamRefusal).
             // Answering it 200 would render the error as the Bot's speech;

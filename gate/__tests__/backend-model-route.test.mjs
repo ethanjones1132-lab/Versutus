@@ -1,5 +1,6 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { keepEventLoopAlive } from './fixtures/keep-event-loop-alive.mjs';
 import { mkdir, mkdtemp, rm, copyFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -346,7 +347,8 @@ test('an available row beats an unavailable one, Hermes beats the rest', () => {
   );
 });
 
-test('a catalogue read that hangs is not served, and is not asked again', async () => {
+test('a catalogue read that hangs is not served, and is not asked again', { timeout: 5_000 }, async (t) => {
+  keepEventLoopAlive(t);
   let reads = 0;
   const router = createBackendModelRouter({
     listBackends: async () => [{ id: 'hermes-local', adapterId: 'hermes' }],
@@ -380,7 +382,8 @@ test('a catalogue read that refuses is not served either', async () => {
   assert.equal(CATALOGUE_READ_TIMEOUT_MS, 5_000);
 });
 
-test('a catalogue read that hangs does not hold the slot past its bound', async () => {
+test('a catalogue read that hangs does not hold the slot past its bound', { timeout: 5_000 }, async (t) => {
+  keepEventLoopAlive(t);
   // The slot is only released when the shared read settles. A `listModels` that
   // never settles would otherwise hold it for the life of the process, so every
   // later request joins a read that can only 502 — even after the environment

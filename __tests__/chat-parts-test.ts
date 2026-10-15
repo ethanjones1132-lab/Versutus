@@ -3,6 +3,7 @@ import {
   buildChatContent,
   chatAttachmentFromUnknown,
   chatAttachmentsFromPicker,
+  chatFilesFromPicker,
   MAX_CHAT_ATTACHMENTS,
   MAX_CHAT_ATTACHMENT_CHARS,
   supportsImageInput,
@@ -35,6 +36,14 @@ describe('chatAttachmentFromUnknown', () => {
     expect(chatAttachmentFromUnknown({ uri: 'x', mimeType: 'application/pdf' })).toBeNull();
     expect(chatAttachmentFromUnknown({ mimeType: 'image/png' })).toBeNull();
     expect(chatAttachmentFromUnknown(null)).toBeNull();
+  });
+
+  it('restores a bounded document attachment with its original base64 payload', () => {
+    expect(chatAttachmentFromUnknown({
+      kind: 'file', uri: 'file:///tmp/a.pdf', fileData: 'AQID', mimeType: 'application/pdf', name: 'a.pdf',
+    })).toEqual({
+      kind: 'file', uri: 'file:///tmp/a.pdf', fileData: 'AQID', mimeType: 'application/pdf', name: 'a.pdf',
+    });
   });
 });
 
@@ -268,5 +277,77 @@ describe('a refused export handoff is never a silent no-op', () => {
       'onExport={detailBot && handoffShareReady ? handleExportBot : undefined}',
     );
     expect(screen).toContain('shareRefusalCopy()');
+  });
+});
+
+describe('P1 camera capture rides the existing bounded image path', () => {
+  it('the screen asks for camera permission and renders a denial notice', () => {
+    const screen = readSource(['src', 'components', 'chat', 'chat-screen.tsx']);
+    expect(screen).toMatch(/requestCameraPermissionsAsync/);
+    expect(screen).not.toMatch(/if \(!permission\.granted\) return;/);
+    expect(screen).toMatch(/setAttachNotice\(/);
+  });
+
+  it('camera capture folds through chatAttachmentsFromPicker, honoring the turn budget', () => {
+    const screen = readSource(['src', 'components', 'chat', 'chat-screen.tsx']);
+    expect(screen).toMatch(/launchCameraAsync/);
+    expect(screen).toMatch(/chatAttachmentsFromPicker\(result\.assets/);
+  });
+
+  it('the camera control is gated on the image capability, like the library control', () => {
+    const screen = readSource(['src', 'components', 'chat', 'chat-screen.tsx']);
+    // The same canAttach flag that hides the paperclip for a text model must
+    // also hide camera capture: a model that cannot take an image cannot take
+    // a photo either. `supportsImageInput` is the authority for that flag.
+    expect(screen).toContain('const canAttach = supportsImageInput(selectedModelInfo)');
+    expect(screen).toMatch(/supportsImageInput\(selectedModelInfo\)/);
+  });
+});
+
+describe('P1 non-image documents', () => {
+  it('a non-image file is staged as a file attachment rather than dropped', () => {
+    const { attachments } = chatFilesFromPicker([
+      { uri: 'file:///tmp/a.pdf', mimeType: 'application/pdf', base64: 'AQID', name: 'a.pdf' },
+    ]);
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]).toMatchObject({ kind: 'file', uri: 'file:///tmp/a.pdf', fileData: 'AQID', mimeType: 'application/pdf', name: 'a.pdf' });
+  });
+
+  it('a non-image attachment counts against the turn byte budget and is refused past it', () => {
+    const huge = 'x'.repeat(MAX_CHAT_ATTACHMENT_CHARS + 1);
+    const picked = chatFilesFromPicker([{ uri: 'file:///tmp/large.pdf', mimeType: 'application/pdf', base64: huge }]);
+    expect(picked.attachments).toHaveLength(0);
+    expect(picked.refused).toBe(1);
+  });
+
+  it('serializes a file attachment as an OpenAI Chat Completions file content part', () => {
+    expect(
+      buildChatContent('read it', [
+        { kind: 'file', uri: 'file:///tmp/a.pdf', fileData: 'AA==', mimeType: 'application/pdf', name: 'a.pdf' },
+      ]),
+    ).toEqual([
+      { type: 'text', text: 'read it' },
+      { type: 'file', file: { filename: 'a.pdf', file_data: 'AA==' } },
+    ]);
+  });
+
+  it('supportsFileInput is exported and fails closed like supportsImageInput', () => {
+    // Use a dynamic require so a missing export reads as RED rather than as a
+    // compile-time failure that skips the file.
+    const mod = require('@/lib/gateway/chat-parts');
+    expect(typeof mod.supportsFileInput).toBe('function');
+    expect(mod.supportsFileInput(null)).toBe(false);
+    expect(mod.supportsFileInput({ capabilities: ['text', 'tools'] })).toBe(false);
+    expect(mod.supportsFileInput({ capabilities: 'file' })).toBe(false);
+    expect(mod.supportsFileInput({ capabilities: ['image'] })).toBe(false);
+    expect(mod.supportsFileInput({ capabilities: ['file'] })).toBe(true);
+    expect(mod.supportsFileInput({ capabilities: ['document'] })).toBe(true);
+    expect(mod.supportsFileInput({ capabilities: ['pdf'] })).toBe(true);
+    expect(mod.supportsFileInput({ input_modalities: ['text', 'file'] })).toBe(true);
+  });
+
+  it('the chat screen offers document attach only for a file-capable model', () => {
+    const screen = readSource(['src', 'components', 'chat', 'chat-screen.tsx']);
+    expect(screen).toContain('supportsFileInput(selectedModelInfo)');
   });
 });

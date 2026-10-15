@@ -303,7 +303,11 @@ describe('the Android share entry', () => {
   type AppConfig = {
     expo: {
       plugins: Plugin[];
-      ios: { icon: string; infoPlist: Record<string, string> };
+      ios: {
+        icon: string;
+        bundleIdentifier: string;
+        infoPlist: Record<string, string | string[]>;
+      };
     };
   };
 
@@ -410,10 +414,15 @@ describe('the Android share entry', () => {
     ]);
     expect(expo.ios).toEqual({
       icon: './assets/expo.icon',
+      bundleIdentifier: 'com.versutus.app',
       infoPlist: {
         NSFaceIDUsageDescription:
           'Versutus asks for Face ID to unlock the app when the app lock is on.',
         UIBackgroundModes: ['audio'],
+        NSSpeechRecognitionUsageDescription:
+          'Versutus uses speech recognition to write down what you say so you can review it before sending, and to understand a hands-free call you start yourself.',
+        NSMicrophoneUsageDescription:
+          'Versutus uses the microphone to turn what you say into a message draft, and for a hands-free call you start yourself.',
       },
     });
   });

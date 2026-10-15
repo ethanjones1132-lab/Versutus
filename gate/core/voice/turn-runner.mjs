@@ -242,9 +242,9 @@ function isStreamUnsupported(error) {
  * @param {object} backend A CLI backend (sendMessage/streamEvents, or the
  *   one-call sendMessageStreaming Hermes uses).
  * @param {string} sessionId
- * @param {{ text: string, model?: object, images?: object[] }} input `images`
+ * @param {{ text: string, model?: object, images?: object[], files?: object[] }} input
  *   carries a typed turn's attachments as OpenAI content parts; a backend that
- *   speaks text only ignores the key, one that speaks parts reads them.
+ *   speaks text only ignores the keys, one that speaks parts reads them.
  * @param {{
  *   onDelta?: (text: string) => void,
  *   onToolCall?: (call: { index: number, name?: string, callId?: string }) => void,
@@ -265,7 +265,7 @@ function isStreamUnsupported(error) {
  * @throws {BackendStallError} only when a caller opts in with `stallTimeoutMs`
  *   and the backend then goes silent for that long. It never fires on its own.
  */
-export async function runBackendTurn(backend, sessionId, { text, model, images } = {}, {
+export async function runBackendTurn(backend, sessionId, { text, model, images, files } = {}, {
   onDelta = NOOP,
   onToolCall = NOOP,
   onApproval = NOOP,
@@ -395,7 +395,7 @@ export async function runBackendTurn(backend, sessionId, { text, model, images }
         let upstream = null;
         try {
           upstream = await raceStop(
-            backend.sendMessageStreaming(sessionId, { text, model, images }, controller.signal),
+            backend.sendMessageStreaming(sessionId, { text, model, images, files }, controller.signal),
           );
         } catch (error) {
           upstream = null;
@@ -622,7 +622,7 @@ export async function runBackendTurn(backend, sessionId, { text, model, images }
       // HTTP turn and leaves the agent running. Backends that take no signal
       // ignore the extra key, and their turn is still released by the race.
       const result = await raceStop(backend.sendMessage(
-        sessionId, { text, model, images, signal: controller.signal },
+        sessionId, { text, model, images, files, signal: controller.signal },
         typeof backend.streamEvents === 'function' ? undefined : handleEvent,
       ));
       if (result === ABORTED_OUTCOME) return ABORTED_OUTCOME;

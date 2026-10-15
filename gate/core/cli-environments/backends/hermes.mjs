@@ -214,6 +214,7 @@ export function createHermesBackend({
 
   return {
     kind: 'hermes',
+    supportsContentParts: true,
 
     async listSessions(limit, { timeoutMs } = {}) {
       // Without an explicit limit Hermes serves its own default page, so a
@@ -500,7 +501,7 @@ export function createHermesBackend({
      *
      * Returns the raw Response: the caller owns the framing.
      */
-    async sendMessageStreaming(sessionId, { text, model, images } = {}, signal) {
+    async sendMessageStreaming(sessionId, { text, model, images, files } = {}, signal) {
       const headers = {
         'Content-Type': 'application/json',
         'X-Hermes-Session-Id': sessionId,
@@ -513,8 +514,8 @@ export function createHermesBackend({
       // rather than being flattened into the caption — which had the model
       // answering a picture it was never shown. Text-only turns keep the plain
       // string every backend already handles.
-      const content = images?.length
-        ? [...(text ? [{ type: 'text', text }] : []), ...images]
+      const content = images?.length || files?.length
+        ? [...(text ? [{ type: 'text', text }] : []), ...(images ?? []), ...(files ?? [])]
         : text;
 
       const response = await fetchImpl(`${root}/v1/chat/completions`, {

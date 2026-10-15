@@ -519,7 +519,7 @@ test('chat routed to a backend goes through the CLI, not the provider proxy', as
   }
 });
 
-test('a content-part turn reaches a CLI backend as its text', async () => {
+test('a CLI backend refuses an image it cannot carry instead of silently dropping it', async () => {
   const { gate } = await makeGate();
   try {
     const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
@@ -538,11 +538,8 @@ test('a content-part turn reaches a CLI backend as its text', async () => {
         ],
       }),
     });
-    assert.equal(response.status, 200);
-    const body = await response.json();
-    // The CLI backend speaks text only, so the image part does not travel —
-    // the turn must still reach it as the text part, not crash the route.
-    assert.equal(body.choices[0].message.content, 'echo ping');
+    assert.equal(response.status, 422);
+    assert.equal((await response.json()).error.code, 'attachments_unsupported');
   } finally {
     await gate.close();
   }
@@ -1901,6 +1898,7 @@ function stubStreamingRegistry({ frames, onCall, streamingError } = {}) {
   const createBackend = adapter.createBackend.bind(adapter);
   adapter.createBackend = (...args) => ({
     ...createBackend(...args),
+    supportsContentParts: true,
     async sendMessageStreaming(sessionId, input, signal) {
       onCall?.({ sessionId, input, signal });
       if (streamingError) throw streamingError;
@@ -3680,3 +3678,85 @@ for (const [label, route, operation, fallbackCode, method] of [
   });
 }
 
+
+test('file parts are extracted from only the latest user message', async () => {
+  const seen = [];
+  const registry = stubStreamingRegistry({
+    frames: [delta('ok'), 'data: [DONE]\n\n'],
+    onCall: ({ input }) => seen.push(input),
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    const earlyFile = { type: 'file', file: { filename: 'old.pdf', file_data: 'T0xE' } };
+    const latestFile = { type: 'file', file: { filename: 'new.pdf', file_data: 'TkVX' } };
+
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1', stream: true,
+        messages: [
+          { role: 'user', content: [earlyFile] },
+          { role: 'assistant', content: 'noted' },
+          { role: 'user', content: [{ type: 'text', text: 'read it' }, latestFile] },
+        ],
+      }),
+    });
+    assert.equal(response.status, 200);
+    await response.text();
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].text, 'read it');
+    assert.equal(seen[0].images, null, 'no image part is present');
+    assert.deepEqual(seen[0].files, [latestFile], 'only the latest turn\'s file part travels');
+
+    // A file-only turn is a turn, and it travels with no caption.
+    const uncaptioned = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1', stream: true,
+        messages: [{ role: 'user', content: [latestFile] }],
+      }),
+    });
+    assert.equal(uncaptioned.status, 200);
+    await uncaptioned.text();
+    assert.equal(seen[1].text, '');
+    assert.deepEqual(seen[1].files, [latestFile]);
+
+    // A later turn with no file part inherits nothing from an earlier one.
+    const later = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1', stream: true,
+        messages: [
+          { role: 'user', content: [latestFile] },
+          { role: 'assistant', content: 'ok' },
+          { role: 'user', content: 'and now?' },
+        ],
+      }),
+    });
+    assert.equal(later.status, 200);
+    await later.text();
+    assert.equal(seen[2].text, 'and now?');
+    assert.equal(seen[2].files, null, 'a later turn never inherits an earlier file');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('attachment turns are refused before opening a session on an unsupported backend', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ registry: stubRegistry(calls) });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', stream: true,
+        messages: [{ role: 'user', content: [{ type: 'file', file: { filename: 'report.pdf', file_data: 'AQID' } }] }],
+      }),
+    });
+    assert.equal(response.status, 422);
+    assert.equal((await response.json()).error.code, 'attachments_unsupported');
+    assert.ok(!calls.includes('createSession'), 'an unsupported attachment must not create an orphan session');
+  } finally {
+    await gate.close();
+  }
+});

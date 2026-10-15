@@ -6,9 +6,9 @@
 //
 // The honesty rules are the same as P3's: a cap must be a positive finite
 // number or it is not a cap, a junk store reads as no budgets, and a spend
-// read that FAILS is unknown rather than "over" — the run is allowed and the
-// cap is still named, because refusing a run on a read the device could not
-// make would be pretending to an enforcement the app did not perform.
+// read that FAILS is unknown spend — the run does NOT start (fail-closed) and
+// the reason names the retry, because running anyway would be pretending the
+// cap was clear. The cap is untouched.
 
 import { sessionSpendReadFromUnknown } from '@/lib/gateway/session-analytics';
 import { botSpendRows } from '@/lib/gateway/spend-report';
@@ -90,11 +90,20 @@ export function applySpendCapInput(text: string): SpendCapDraft {
 
 export type BudgetVerdict =
   | { allowed: true; cap?: number; spent?: number }
-  | { allowed: false; cap: number; spent: number; overBy: number; reason: string };
+  | {
+      allowed: false;
+      decision: 'retry' | 'run-once';
+      cap: number;
+      spent?: number;
+      overBy?: number;
+      reason: string;
+    };
 
 /**
  * Decide one run. No cap allows. A spend number that is missing or not
  * finite reads as zero, not as "over". At exactly the cap the run is allowed.
+ * An over-cap verdict is a one-shot `run-once` decision, not a refusal to
+ * ask.
  */
 export function evaluateBudget(
   cap: number | undefined,
@@ -107,6 +116,7 @@ export function evaluateBudget(
   const overBy = spentValue - cap;
   return {
     allowed: false,
+    decision: 'run-once',
     cap,
     spent: spentValue,
     overBy,
@@ -117,9 +127,22 @@ export function evaluateBudget(
   };
 }
 
+function unknownSpendVerdict(cap: number): BudgetVerdict {
+  return {
+    allowed: false,
+    decision: 'retry',
+    cap,
+    spent: undefined,
+    reason:
+      `This Bot's spend could not be confirmed against its ` +
+      `$${cap.toFixed(2)} budget, so the run was not started. Retry once the ` +
+      `spend read succeeds. The cap stands; runs started from this app only.`,
+  };
+}
+
 /**
  * The pre-run guard. `readSpend` fetches the Bot's current spend; an absent
- * cap or a failed read allows the run.
+ * cap allows the run. A failed read fails closed with a retry verdict.
  */
 export async function checkBotBudget({
   budgets,
@@ -138,8 +161,13 @@ export async function checkBotBudget({
   try {
     spent = await readSpend();
   } catch {
-    // Unknown is not over: allow the run, but the cap is still named.
-    return { allowed: true, cap, spent: undefined };
+    // Unknown spend is not evidence of clearance: fail closed and make the
+    // retry actionable. The cap is unchanged; no run starts until spend can
+    // be checked.
+    return unknownSpendVerdict(cap);
+  }
+  if (typeof spent !== 'number' || !Number.isFinite(spent) || spent < 0) {
+    return unknownSpendVerdict(cap);
   }
   return evaluateBudget(cap, spent);
 }
@@ -181,4 +209,21 @@ export async function saveBudgets(budgets: BotBudgets): Promise<void> {
   } catch {
     // best-effort: a cap must never break the surface that set it
   }
+}
+
+/**
+ * The client-side `Run once` decision for an over-cap start. A verdict that is
+ * already allowed (or an unknown-spend retry) is never escalated: a retry asks
+ * the operator to fix the read, not to override the cap. For an over-cap
+ * verdict, `confirm` is the native/web confirmation; its `true` result grants a
+ * single run and never changes the stored cap.
+ */
+export async function authorizeBudgetRun(
+  verdict: BudgetVerdict,
+  confirm: () => Promise<boolean>,
+): Promise<{ allowed: boolean }> {
+  if (verdict.allowed) return { allowed: true };
+  if (verdict.decision === 'retry') return { allowed: false };
+  const approved = await confirm();
+  return { allowed: approved };
 }
