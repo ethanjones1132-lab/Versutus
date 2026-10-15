@@ -103,9 +103,9 @@ export function verifySignedAccessRequest(request, { now = Date.now(), maxSkewMs
   if (!valid) return { ok: false, reason: 'signature does not match the payload' };
 
   // Replay is checked AFTER the crypto: a repeat of a request we already
-  // answered is still a valid signature for that device, and the access
-  // route answers it idempotently. Checking first would skip the crypto and
-  // let a swapped deviceId ride on a used signature.
+  // answered is still a valid signature for that device, so the access route
+  // can tell it to sign again rather than answering "denied". Checking first
+  // would skip the crypto and let a swapped deviceId ride on a used signature.
   if (replayCache?.has(signature)) {
     return { ok: false, reason: 'signature already used (replay)', replay: true };
   }

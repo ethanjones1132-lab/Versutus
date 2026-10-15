@@ -2321,15 +2321,21 @@ export async function createGate(config = {}) {
         );
 
         if (!verification.ok) {
-          // A lost answer on a lossy link is retried with the same signed
-          // body. That is a replay of a request we already accepted, so
-          // answer it the same way again rather than 403 "denied".
+          // The same signed body retried after a lost answer is a replay, and
+          // a body that crossed a plain-HTTP pairing leg (or a log, or a
+          // proxy) is not a secret: answering it with the device token would
+          // hand that token to whoever captured the body. The pending answer
+          // carries no secret and stays idempotent; a grant does, so the
+          // replay is told to sign again — the device holds the key and can.
           if (verification.replay) {
             const existing = await deviceTokens.list();
             const already = existing.find((entry) => entry.deviceId === device.id && !entry.revoked);
             if (already) {
-              res.writeHead(200);
-              res.end(JSON.stringify({ status: 'granted', token: already.token, role: already.role, scopes: already.scopes }));
+              res.writeHead(409);
+              res.end(JSON.stringify({
+                status: 'signature-used',
+                reason: 'This signed request was already answered. Sign a fresh request.',
+              }));
               return;
             }
             const pending = (await pairing.listPending()).find((entry) => entry.deviceId === device.id);

@@ -242,125 +242,185 @@ async function requestCustomAccess(
 
 // ─── Shared signed access POST ────────────────────────────────────
 
+/** One signed POST's verdict: an answer, or the gate asking for a fresh signature. */
+type SignedAccessAttempt =
+  | { kind: 'answer'; result: AccessRequestResult }
+  | { kind: 'signature-used'; reason?: string };
+
 async function postSignedAccessRequest(
   baseUrl: string,
   grantPath: string,
   options: RequestGatewayAccessOptions,
 ): Promise<AccessRequestResult> {
-  const signedAtMs = Date.now();
   const role = options.role ?? 'operator';
   const scopes = options.scopes ?? DEFAULT_SCOPES;
+  const url = `${baseUrl}${grantPath}`;
+  const timeoutMs = options.timeoutMs ?? 10000;
 
-  // Signing needs the phone's ed25519 identity; a load or sign failure is this
-  // phone's problem, not the gateway's verdict. Classify it as its own result
-  // so the manual-add flow renders the humanized identity failure instead of a
-  // warm "denied", and never echo the raw error — a storage or key fault could
-  // name the phone's private key material.
-  let signedDevice: { deviceId: string; publicKeyB64Url: string; signature: string };
-  try {
-    const identity = await loadOrCreateDeviceIdentity();
-    const payload = [
-      'v4',
-      identity.deviceId,
-      CLIENT_ID,
-      role,
-      scopes.join(','),
-      String(signedAtMs),
-    ].join('|');
-    signedDevice = {
-      deviceId: identity.deviceId,
-      publicKeyB64Url: identity.publicKeyB64Url,
-      signature: await signDevicePayload(identity, payload),
-    };
-  } catch (error) {
-    return {
-      status: 'device-identity',
-      reason: isDeviceIdentityError(error) ? error.message : DEVICE_IDENTITY_FAILURE,
-    };
-  }
+  // The same tails the ordinary Gate requests retry over: what this gate
+  // advertised when it was just identified, plus the configured hosts the
+  // adapters install on a profile — all present here before any client or
+  // profile exists. A host lookup miss on the request is retried onto them;
+  // https is never rewritten (withHostLookupRetry keeps an https host).
+  const alternateIpv4 = fallbackIpv4(options);
 
-  try {
-    const url = `${baseUrl}${grantPath}`;
-    const body = JSON.stringify({
-      manifest: GATEWAY_MANIFEST_SPEC,
-      device: {
-        id: signedDevice.deviceId,
-        publicKey: signedDevice.publicKeyB64Url,
-        clientId: CLIENT_ID,
-        clientMode: CLIENT_MODE,
-      },
-      role,
-      scopes,
-      signedAtMs,
-      signature: signedDevice.signature,
-      client: { name: 'Versutus', version: '1.0.0', platform: 'mobile' },
-    });
-    const timeoutMs = options.timeoutMs ?? 10000;
+  const attempt = async (signedAtMs: number): Promise<SignedAccessAttempt> => {
+    // Signing needs the phone's ed25519 identity; a load or sign failure is
+    // this phone's problem, not the gateway's verdict. Classify it as its own
+    // result so the manual-add flow renders the humanized identity failure
+    // instead of a warm "denied", and never echo the raw error — a storage or
+    // key fault could name the phone's private key material.
+    let signedDevice: { deviceId: string; publicKeyB64Url: string; signature: string };
+    try {
+      const identity = await loadOrCreateDeviceIdentity();
+      const payload = [
+        'v4',
+        identity.deviceId,
+        CLIENT_ID,
+        role,
+        scopes.join(','),
+        String(signedAtMs),
+      ].join('|');
+      signedDevice = {
+        deviceId: identity.deviceId,
+        publicKeyB64Url: identity.publicKeyB64Url,
+        signature: await signDevicePayload(identity, payload),
+      };
+    } catch (error) {
+      return {
+        kind: 'answer',
+        result: {
+          status: 'device-identity',
+          reason: isDeviceIdentityError(error) ? error.message : DEVICE_IDENTITY_FAILURE,
+        },
+      };
+    }
 
-    // The same tails the ordinary Gate requests retry over: what this gate
-    // advertised when it was just identified, plus the configured hosts the
-    // adapters install on a profile — all present here before any client or
-    // profile exists. A host lookup miss on the request is retried onto them;
-    // https is never rewritten (withHostLookupRetry keeps an https host). The
-    // body and device identity are identical on every attempt.
-    const alternateIpv4 = fallbackIpv4(options);
+    try {
+      const body = JSON.stringify({
+        manifest: GATEWAY_MANIFEST_SPEC,
+        device: {
+          id: signedDevice.deviceId,
+          publicKey: signedDevice.publicKeyB64Url,
+          clientId: CLIENT_ID,
+          clientMode: CLIENT_MODE,
+        },
+        role,
+        scopes,
+        signedAtMs,
+        signature: signedDevice.signature,
+        client: { name: 'Versutus', version: '1.0.0', platform: 'mobile' },
+      });
 
-    const response = await withHostLookupRetry(url, alternateIpv4, async (candidateUrl) => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        // Awaited, so the timer outlives the request: returning the bare
-        // promise cleared it at once and the access request had no timeout.
-        return await fetch(candidateUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
-          body,
-        });
-      } finally {
-        clearTimeout(timer);
+      // One signed body is identical on every candidate this attempt retries a
+      // lookup miss over; a used-signature answer is what builds a new one.
+      const response = await withHostLookupRetry(url, alternateIpv4, async (candidateUrl) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          // Awaited, so the timer outlives the request: returning the bare
+          // promise cleared it at once and the access request had no timeout.
+          return await fetch(candidateUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body,
+          });
+        } finally {
+          clearTimeout(timer);
+        }
+      });
+
+      if (response.status === 404 || response.status === 405) {
+        return {
+          kind: 'answer',
+          result: {
+            status: 'token-required',
+            hint: 'This gateway does not serve universal access requests. Supply its token.',
+          },
+        };
       }
-    });
 
-    if (response.status === 404 || response.status === 405) {
-      return { status: 'token-required', hint: 'This gateway does not serve universal access requests. Supply its token.' };
+      const parsedBody = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+      const status = typeof parsedBody?.status === 'string' ? parsedBody.status : undefined;
+      // A signature the gate has already answered must not fetch the token a
+      // second time: the signed body is not secret (it crosses plain-HTTP
+      // pairing legs, and lands in logs and proxies), so whoever captured it
+      // could fetch the token too. The phone holds the private key; the
+      // recovery the gate asks for is to sign again.
+      if (response.status === 409 && status === 'signature-used') {
+        return {
+          kind: 'signature-used',
+          reason: typeof parsedBody?.reason === 'string' ? parsedBody.reason : undefined,
+        };
+      }
+      if (response.ok && status === 'granted' && typeof parsedBody?.token === 'string') {
+        return {
+          kind: 'answer',
+          result: {
+            status: 'granted',
+            token: parsedBody.token,
+            role: typeof parsedBody.role === 'string' ? parsedBody.role : undefined,
+            scopes: Array.isArray(parsedBody.scopes) ? parsedBody.scopes.filter((s): s is string => typeof s === 'string') : undefined,
+          },
+        };
+      }
+      if (response.status === 202 || status === 'pending') {
+        const requestId = typeof parsedBody?.requestId === 'string' ? parsedBody.requestId : undefined;
+        return {
+          kind: 'answer',
+          result: {
+            status: 'pending-approval',
+            requestId,
+            hint: pendingApprovalHint(requestId),
+          },
+        };
+      }
+      if (status === 'token-required') {
+        return {
+          kind: 'answer',
+          result: { status: 'token-required', hint: typeof parsedBody?.hint === 'string' ? parsedBody.hint : undefined },
+        };
+      }
+      if (response.status === 403 || status === 'denied') {
+        return {
+          kind: 'answer',
+          result: {
+            status: 'denied',
+            reason: typeof parsedBody?.reason === 'string' ? parsedBody.reason : 'The gateway denied the access request.',
+          },
+        };
+      }
+      return {
+        kind: 'answer',
+        result: { status: 'denied', reason: `Unexpected access response (HTTP ${response.status}).` },
+      };
+    } catch (error) {
+      // Nothing answered: a name that will not resolve, a timeout, a dropped
+      // connection. Every verdict above is a response the gateway actually sent;
+      // this is the absence of one, which is not the same thing as a refusal.
+      return {
+        kind: 'answer',
+        result: {
+          status: 'unreachable',
+          reason: error instanceof Error ? error.message : 'Access request failed.',
+        },
+      };
     }
+  };
 
-    const parsedBody = (await response.json().catch(() => null)) as Record<string, unknown> | null;
-    const status = typeof parsedBody?.status === 'string' ? parsedBody.status : undefined;
-    if (response.ok && status === 'granted' && typeof parsedBody?.token === 'string') {
-      return {
-        status: 'granted',
-        token: parsedBody.token,
-        role: typeof parsedBody.role === 'string' ? parsedBody.role : undefined,
-        scopes: Array.isArray(parsedBody.scopes) ? parsedBody.scopes.filter((s): s is string => typeof s === 'string') : undefined,
-      };
-    }
-    if (response.status === 202 || status === 'pending') {
-      const requestId = typeof parsedBody?.requestId === 'string' ? parsedBody.requestId : undefined;
-      return {
-        status: 'pending-approval',
-        requestId,
-        hint: pendingApprovalHint(requestId),
-      };
-    }
-    if (status === 'token-required') {
-      return { status: 'token-required', hint: typeof parsedBody?.hint === 'string' ? parsedBody.hint : undefined };
-    }
-    if (response.status === 403 || status === 'denied') {
-      return {
-        status: 'denied',
-        reason: typeof parsedBody?.reason === 'string' ? parsedBody.reason : 'The gateway denied the access request.',
-      };
-    }
-    return { status: 'denied', reason: `Unexpected access response (HTTP ${response.status}).` };
-  } catch (error) {
-    // Nothing answered: a name that will not resolve, a timeout, a dropped
-    // connection. Every verdict above is a response the gateway actually sent;
-    // this is the absence of one, which is not the same thing as a refusal.
-    return {
-      status: 'unreachable',
-      reason: error instanceof Error ? error.message : 'Access request failed.',
-    };
-  }
+  const signedAtMs = Date.now();
+  const first = await attempt(signedAtMs);
+  if (first.kind === 'answer') return first.result;
+
+  // Ed25519 is deterministic, so re-signing in the same millisecond would
+  // rebuild the identical signature the gate has already answered; the second
+  // attempt is at least a millisecond later, well inside the gate's skew
+  // allowance.
+  const second = await attempt(Math.max(Date.now(), signedAtMs + 1));
+  if (second.kind === 'answer') return second.result;
+  return {
+    status: 'denied',
+    reason: second.reason ?? 'The gateway already answered this request and refused a fresh signature.',
+  };
 }

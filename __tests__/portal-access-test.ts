@@ -266,6 +266,69 @@ describe('a signed access request retries a lookup miss over the fallback IPv4s'
   });
 });
 
+describe('a signature the gate has already answered is signed again, never replayed', () => {
+  test('the used-signature answer is followed by a fresh signature and the grant', async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    mockSign.mockClear();
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init: unknown) => {
+      recordCall(calls, input, init);
+      if (calls.length === 1) {
+        return Promise.resolve(
+          response({
+            ok: false,
+            status: 409,
+            body: { status: 'signature-used', reason: 'This signed request was already answered.' },
+          }),
+        );
+      }
+      return Promise.resolve(grantedResponse());
+    });
+
+    const result = await requestGatewayAccess({
+      baseUrl: 'http://gate.test',
+      identity: manifestIdentity(),
+    });
+
+    expect(result).toEqual({
+      status: 'granted',
+      token: 'device-token-1',
+      role: 'operator',
+      scopes: ['chat:send', 'runs:start'],
+    });
+    // The identical body is never sent twice: a captured one must not fetch
+    // the token, and Ed25519 is deterministic, so the second request carries a
+    // later signedAtMs — a rebuilt signature, not a replay.
+    expect(calls).toHaveLength(2);
+    const first = calls[0].body as { signedAtMs: number };
+    const second = calls[1].body as { signedAtMs: number };
+    expect(second.signedAtMs).toBeGreaterThan(first.signedAtMs);
+    expect(mockSign).toHaveBeenCalledTimes(2);
+    expect(calls.map((c) => c.url)).toEqual(['http://gate.test/grant', 'http://gate.test/grant']);
+  });
+
+  test('a gate that refuses the fresh signature too is reported as the refusal it is', async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init: unknown) => {
+      recordCall(calls, input, init);
+      return Promise.resolve(
+        response({
+          ok: false,
+          status: 409,
+          body: { status: 'signature-used', reason: 'This signed request was already answered.' },
+        }),
+      );
+    });
+
+    const result = await requestGatewayAccess({
+      baseUrl: 'http://gate.test',
+      identity: manifestIdentity(),
+    });
+
+    expect(result).toEqual({ status: 'denied', reason: 'This signed request was already answered.' });
+    expect(calls).toHaveLength(2);
+  });
+});
+
 describe('a denial or refusal is answered once, never written a second time', () => {
   test('a real 403 denial resolves denied with the gate reason and no second POST', async () => {
     const calls: { url: string; body: unknown }[] = [];

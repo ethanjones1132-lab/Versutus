@@ -22,14 +22,17 @@ async function testSetup() {
 }
 
 function signedAccessBody(overrides = {}) {
-  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  // `keys` lets a test sign twice as the same device — the fresh signature the
+  // Gate asks a replay for — and `signedAtMs` keeps the second one later than
+  // the first, exactly as the phone's re-sign does.
+  const { publicKey, privateKey } = overrides.keys ?? generateKeyPairSync('ed25519');
   const der = publicKey.export({ type: 'spki', format: 'der' });
   const publicKeyB64Url = der.subarray(der.length - 32).toString('base64url');
   const deviceId = overrides.deviceId ?? 'device-test';
   const clientId = 'versutus-mobile';
   const role = 'operator';
   const scopes = ['chat:send'];
-  const signedAtMs = Date.now();
+  const signedAtMs = overrides.signedAtMs ?? Date.now();
   const payload = ['v4', deviceId, clientId, role, scopes.join(','), String(signedAtMs)].join('|');
   const signature = cryptoSign(null, Buffer.from(payload, 'utf8'), privateKey).toString('base64url');
   return {
@@ -91,7 +94,7 @@ test('a malformed Host is answered 400 instead of leaving the socket open', asyn
   }
 });
 
-test('a re-sent signed access request is answered with the token already issued', async () => {
+test('a re-sent signed access request is refused a token and asked to sign again', async () => {
   const root = await testSetup();
   const gate = await createGate({ root, port: 0 });
   try {
@@ -103,12 +106,45 @@ test('a re-sent signed access request is answered with the token already issued'
     const first = await fetch(url, { method: 'POST', headers, body });
     const second = await fetch(url, { method: 'POST', headers, body });
     assert.equal(first.status, 200);
-    assert.equal(second.status, 200);
+    // The signed body is not a secret — it crosses the plain-HTTP pairing legs
+    // and lands in logs and proxies — so replaying the identical request must
+    // not fetch the device's bearer token. The device holds its private key
+    // and can sign a fresh request.
+    assert.equal(second.status, 409);
     const granted = await first.json();
     const replayed = await second.json();
     assert.equal(granted.status, 'granted');
-    assert.equal(replayed.status, 'granted');
-    assert.equal(replayed.token, granted.token);
+    assert.equal(replayed.status, 'signature-used');
+    assert.ok(!('token' in replayed), 'the token must not ride a used signature');
+    assert.ok(!JSON.stringify(replayed).includes(granted.token));
+  } finally {
+    await gate.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a fresh signature from the same device still gets the token already issued', async () => {
+  const root = await testSetup();
+  const gate = await createGate({ root, port: 0 });
+  try {
+    const pairing = new PairingStore(join(root, '.pairing.json'));
+    await pairing.openWindow(60_000);
+    const headers = { 'Content-Type': 'application/json' };
+    const url = `http://127.0.0.1:${gate.port}/.well-known/gateway/access`;
+    const keys = generateKeyPairSync('ed25519');
+    const first = await fetch(url, { method: 'POST', headers, body: JSON.stringify(signedAccessBody({ keys })) });
+    const signedAgain = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(signedAccessBody({ keys, signedAtMs: Date.now() + 1 })),
+    });
+    assert.equal(first.status, 200);
+    assert.equal(signedAgain.status, 200, 're-signing is the recovery the refusal asks for');
+    const granted = await first.json();
+    const reissued = await signedAgain.json();
+    assert.equal(granted.status, 'granted');
+    assert.equal(reissued.status, 'granted');
+    assert.equal(reissued.token, granted.token);
   } finally {
     await gate.close();
     await rm(root, { recursive: true, force: true });
