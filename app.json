@@ -84,7 +84,7 @@
         {
           "photosPermission": "Versutus uses your photo library when you choose an image to attach to a message.",
           "cameraPermission": "Versutus uses the camera only when you choose to take a photo for a message.",
-          "microphonePermission": false
+          "microphonePermission": "Versutus uses the microphone to turn what you say into a message draft, and for a hands-free call you start yourself."
         }
       ],
       [
