@@ -695,6 +695,16 @@ function safeHeaderValue(value) {
 }
 
 /**
+ * Whether a device grant's recorded scopes allow an action. What a token was
+ * issued with is the whole grant — a grant that names no scope is a grant of
+ * nothing — and the Gate issues no wildcard of its own, so a route asks for
+ * its scope by name.
+ */
+function grantHasScope(scopes, scope) {
+  return Array.isArray(scopes) && scopes.includes(scope);
+}
+
+/**
  * A turn this caller cannot see is a 404, never somebody else's turn and never
  * a different status: the routes are scoped by the authenticated device, so
  * "no such turn" is the whole truth about an id that belongs to another phone.
@@ -3176,6 +3186,20 @@ export async function createGate(config = {}) {
       // dimensions nothing can apply is the dead-config shape this codebase
       // keeps finding. Restore it alongside a real PTY, not before.
       if (pathname === '/v1/terminal/stream' && method === 'GET') {
+        // A shell runs a process on the host, so this is the one route a
+        // device grant's recorded scopes must decide: a token paired without
+        // `terminal:use` is refused rather than handed one. The Gate's own
+        // token carries no device grant and stays unrestricted.
+        if (deviceGrant && !grantHasScope(deviceGrant.scopes, 'terminal:use')) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: {
+              message: 'This device was paired without the terminal:use scope, so it cannot open a shell.',
+              code: 'scope_required',
+            },
+          }));
+          return;
+        }
         res.writeHead(200, sseHeaders());
         // A shell at an idle prompt says nothing for as long as the user reads
         // it, and the socket is exactly the thing a locked phone loses.
