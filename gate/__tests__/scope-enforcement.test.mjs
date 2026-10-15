@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createGate } from '../core/server.mjs';
 import { DeviceTokenStore } from '../core/device-tokens.mjs';
+import { validEnvironment } from './fixtures/cli-environment.mjs';
 
 // The shell learned to consult a grant's recorded scopes (`terminal:use`), but
 // every route that spawns or mutates still answered any valid bearer token: a
@@ -15,9 +16,81 @@ import { DeviceTokenStore } from '../core/device-tokens.mjs';
 // for the scope they need by name. Reads stay caller-scoped; the Gate's own
 // token carries no device grant and stays the operator's unrestricted
 // credential.
+//
+// The acting RPC methods answered that token the same way after the routes were
+// gated: a grant paired for the shell alone could still register and delete
+// providers, add environments, run routines and write capability secrets. An
+// RPC method is named in the body rather than the path, so the Gate's own
+// method tables now ask by name too, and the app's DEFAULT_SCOPES names every
+// surface the app carries.
 
 const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
+const agentKindModulePath = fileURLToPath(new URL('../core/capabilities/agent/kind.mjs', import.meta.url));
 const roots = [];
+
+// src/lib/portal/access.ts:90 — the scopes a fresh pairing asks for. Spelled
+// out here as the app sends them: a scope the app stops asking for, or one the
+// Gate starts asking for without the app naming it, fails the last test.
+const APP_DEFAULT_SCOPES = [
+  'chat:send', 'chat:read', 'runs:start', 'runs:read', 'terminal:use', 'sessions:manage',
+  'providers:manage', 'environments:manage', 'routines:manage', 'capabilities:manage',
+  'devices:manage', 'voice:manage', 'bots:manage',
+];
+
+// The registration manifest-provider-merge.test.mjs uses: a complete api_key
+// provider, so a refused call is refused by the scope check and not by schema.
+const PROVIDER_REGISTRATION = {
+  schemaVersion: 2,
+  kind: 'provider',
+  id: 'acme',
+  label: 'Acme',
+  providerType: 'openai',
+  enabled: true,
+  registration: {
+    mode: 'api_key',
+    protocol: 'openai_chat',
+    baseUrl: 'https://api.openai.com/v1',
+    credentialRef: 'provider/acme/api-key',
+  },
+  catalogPolicy: { ttlSeconds: 300, allowLastKnownGood: true },
+  requestPolicy: { timeoutMs: 120000 },
+};
+
+// Every acting method on the Gate's own RPC tables, with params valid enough
+// that the handler (not this list) would have to refuse anything the scope
+// check lets through.
+const RPC_ACTIONS = [
+  ['providers.create', PROVIDER_REGISTRATION, 'providers:manage'],
+  ['providers.update', { id: 'acme', label: 'Renamed' }, 'providers:manage'],
+  ['providers.delete', { id: 'acme' }, 'providers:manage'],
+  ['providers.health.check', { id: 'acme' }, 'providers:manage'],
+  ['providers.catalog.refresh', { id: 'acme' }, 'providers:manage'],
+  ['providers.auth.setApiKey', { id: 'acme', value: 'sk-live-refused' }, 'providers:manage'],
+  ['providers.auth.begin', { id: 'acme' }, 'providers:manage'],
+  ['providers.auth.disconnect', { id: 'acme' }, 'providers:manage'],
+  ['environments.create', validEnvironment({ id: 'rpc-created' }), 'environments:manage'],
+  ['environments.update', { id: 'stub-local', label: 'Renamed' }, 'environments:manage'],
+  ['environments.delete', { id: 'stub-local' }, 'environments:manage'],
+  ['environments.check', { id: 'stub-local' }, 'environments:manage'],
+  ['environments.lifecycle.start', { id: 'stub-local' }, 'environments:manage'],
+  ['environments.lifecycle.stop', { id: 'stub-local' }, 'environments:manage'],
+  ['jobs.create', { name: 'Nightly', prompt: 'Do it', schedule: '0 3 * * *' }, 'routines:manage'],
+  ['jobs.run', { jobId: 'job-1' }, 'routines:manage'],
+  ['jobs.pause', { jobId: 'job-1' }, 'routines:manage'],
+  ['jobs.resume', { jobId: 'job-1' }, 'routines:manage'],
+  ['jobs.remove', { jobId: 'job-1' }, 'routines:manage'],
+  ['registry.instances.create', { id: 'rpc-instance', kind: 'agent', label: 'RPC', config: { endpoint: 'https://agent.example' } }, 'capabilities:manage'],
+  ['registry.instances.update', { id: 'stub-local', label: 'Renamed' }, 'capabilities:manage'],
+  ['registry.instances.delete', { id: 'stub-local' }, 'capabilities:manage'],
+  ['registry.secrets.set', { refName: 'STUB_KEY', value: 'secret-value' }, 'capabilities:manage'],
+  ['device.revoke', { deviceId: 'ghost' }, 'devices:manage'],
+  ['voice.install.start', {}, 'voice:manage'],
+  ['voice.session.start', { thread: { sessionId: 'ses_1' } }, 'voice:manage'],
+  ['voice.session.stop', { voiceSessionId: 'voice-1' }, 'voice:manage'],
+  ['bots.memory.write', { id: 'researcher', name: 'MEMORY.md', text: 'x' }, 'bots:manage'],
+  ['approval.approve', { approvalId: 'a1' }, 'runs:start'],
+  ['approval.deny', { approvalId: 'a1' }, 'runs:start'],
+];
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -40,6 +113,7 @@ function stubRegistry(calls) {
     async listModels() { return []; },
     async startRun() { calls.push('startRun'); return { run_id: 'stub-run-1', status: 'started' }; },
     async getRunStatus() { return { status: 'completed' }; },
+    async runJob(id) { calls.push(`runJob:${id}`); return { ok: true }; },
     async stopRun(id) { calls.push(`stopRun:${id}`); },
     async replyApproval(id) { calls.push(`replyApproval:${id}`); },
     async abort() {},
@@ -72,6 +146,10 @@ async function makeGate(scopesByDevice) {
   const gateHome = join(root, '.gate-home');
   await mkdir(join(root, 'core', 'capabilities', 'provider'), { recursive: true });
   await copyFile(kindModulePath, join(root, 'core', 'capabilities', 'provider', 'kind.mjs'));
+  // The agent kind carries no handlers, but it is a loadable kind, so the
+  // registry can be asked to create (and refuse to create) one.
+  await mkdir(join(root, 'core', 'capabilities', 'agent'), { recursive: true });
+  await copyFile(agentKindModulePath, join(root, 'core', 'capabilities', 'agent', 'kind.mjs'));
   await mkdir(join(gateHome, 'config', 'environments'), { recursive: true });
   await writeFile(join(gateHome, 'config', 'environments', 'stub-local.json'), JSON.stringify({
     schemaVersion: 1,
@@ -119,6 +197,10 @@ function call(gate, path, token, { method = 'GET', body } = {}) {
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
+}
+
+function rpcCall(gate, method, params, token) {
+  return call(gate, '/v1/capabilities/rpc', token, { method: 'POST', body: { method, params } });
 }
 
 test('a grant holding only terminal:use cannot start a run', async () => {
@@ -284,12 +366,74 @@ test('a grant holding only terminal:use cannot create or delete a session', asyn
   }
 });
 
+test('a grant holding only terminal:use cannot act through the RPC surface', async () => {
+  const { gate, tokens, calls } = await makeGate({ 'phone-narrow': ['terminal:use'] });
+  try {
+    for (const [method, params, scope] of RPC_ACTIONS) {
+      const refused = await rpcCall(gate, method, params, tokens['phone-narrow']);
+      assert.equal(refused.status, 403, `${method} must be refused`);
+      const body = await refused.json();
+      assert.equal(body.error.code, 'scope_required', `${method} must carry the scope refusal`);
+      assert.match(body.error.message, new RegExp(scope), `${method} must name ${scope}`);
+    }
+    assert.deepEqual(calls, [], 'no refused RPC method reached the backend');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a grant holding the manage scopes still acts through the RPC surface', async () => {
+  const { gate, tokens, calls } = await makeGate({
+    'phone-manager': ['providers:manage', 'environments:manage', 'routines:manage', 'capabilities:manage'],
+  });
+  const token = tokens['phone-manager'];
+  try {
+    const created = await rpcCall(gate, 'providers.create', PROVIDER_REGISTRATION, token);
+    assert.equal(created.status, 200);
+    const listed = await (await rpcCall(gate, 'providers.list', {}, token)).json();
+    assert.ok(listed.result.providers.some((provider) => provider.id === 'acme'), 'the provider is listed');
+
+    const removed = await rpcCall(gate, 'providers.delete', { id: 'acme' }, token);
+    assert.equal(removed.status, 200);
+    const after = await (await rpcCall(gate, 'providers.list', {}, token)).json();
+    assert.deepEqual(after.result.providers, [], 'the grant holding providers:manage still deletes a provider');
+
+    const ran = await rpcCall(gate, 'jobs.run', { jobId: 'job-1' }, token);
+    assert.equal(ran.status, 200);
+    assert.ok(calls.includes('runJob:job-1'), 'the grant holding routines:manage still runs a routine');
+
+    const deleted = await rpcCall(gate, 'environments.delete', { id: 'stub-local' }, token);
+    assert.equal(deleted.status, 200);
+    const environments = await (await rpcCall(gate, 'environments.list', {}, token)).json();
+    assert.deepEqual(environments.result.environments, [], 'the grant holding environments:manage still removes one');
+
+    const added = await rpcCall(gate, 'registry.instances.create', {
+      id: 'rpc-agent',
+      kind: 'agent',
+      label: 'RPC agent',
+      config: { endpoint: 'https://agent.example' },
+    }, token);
+    assert.equal(added.status, 200);
+    const instances = await (await rpcCall(gate, 'registry.instances.list', {}, token)).json();
+    assert.ok(
+      instances.result.some((instance) => instance.id === 'rpc-agent'),
+      'the grant holding capabilities:manage still adds a capability',
+    );
+  } finally {
+    await gate.close();
+  }
+});
+
 test('a grant that cannot act still reads', async () => {
   const { gate, tokens } = await makeGate({ 'phone-narrow': ['terminal:use'] });
   try {
     assert.equal((await call(gate, '/v1/models', tokens['phone-narrow'])).status, 200);
     assert.equal((await call(gate, '/v1/environments', tokens['phone-narrow'])).status, 200);
     assert.equal((await call(gate, '/v1/sessions?backendId=stub-local', tokens['phone-narrow'])).status, 200);
+    // The RPC reads are not in the acting tables either.
+    for (const method of ['providers.list', 'environments.list', 'registry.instances.list', 'device.list']) {
+      assert.equal((await rpcCall(gate, method, {}, tokens['phone-narrow'])).status, 200, `${method} must keep reading`);
+    }
   } finally {
     await gate.close();
   }
@@ -320,12 +464,8 @@ test("the Gate's own token is not a device grant and keeps acting", async () => 
   }
 });
 
-test("a grant holding the app's DEFAULT_SCOPES keeps every acting route", async () => {
-  // src/lib/portal/access.ts:90 — the scopes a paired phone and
-  // scripts/register-desktop-agent.mjs both ask for.
-  const { gate, tokens } = await makeGate({
-    'phone-default': ['chat:send', 'chat:read', 'runs:start', 'runs:read', 'terminal:use', 'sessions:manage'],
-  });
+test("a grant holding the app's DEFAULT_SCOPES keeps every acting route and RPC method", async () => {
+  const { gate, tokens, calls } = await makeGate({ 'phone-default': APP_DEFAULT_SCOPES });
   const token = tokens['phone-default'];
   try {
     const started = await call(gate, '/v1/runs', token, {
@@ -347,6 +487,21 @@ test("a grant holding the app's DEFAULT_SCOPES keeps every acting route", async 
     assert.equal(created.status, 200);
     const deleted = await call(gate, '/v1/sessions/ses_1?backendId=stub-local', token, { method: 'DELETE' });
     assert.equal(deleted.status, 200);
+
+    // The RPC surface asks by method name; the app's grant names those too.
+    assert.equal((await rpcCall(gate, 'jobs.run', { jobId: 'job-1' }, token)).status, 200);
+    assert.ok(calls.includes('runJob:job-1'), 'the app grant still runs a routine');
+    const added = await rpcCall(gate, 'registry.instances.create', {
+      id: 'rpc-agent',
+      kind: 'agent',
+      label: 'RPC agent',
+      config: { endpoint: 'https://agent.example' },
+    }, token);
+    assert.equal(added.status, 200, 'the app grant still adds a capability');
+    const approval = await rpcCall(gate, 'approval.approve', { approvalId: 'a1' }, token);
+    assert.equal(approval.status, 404, 'the app grant clears the scope check and reaches the approval store');
+    // Last: removing the environment is the one call no later read needs.
+    assert.equal((await rpcCall(gate, 'environments.delete', { id: 'stub-local' }, token)).status, 200);
   } finally {
     await gate.close();
   }

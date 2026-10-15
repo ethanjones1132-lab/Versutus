@@ -727,6 +727,72 @@ const DEVICE_ACT_SCOPES = [
 ];
 
 /**
+ * What a device grant must name to call an RPC method that acts, method by
+ * method. The route table above reads paths, and an RPC method is named in the
+ * POST body instead, so the acting methods are listed here by name and refused
+ * with the same envelope. Reads — list, get, adapters, transcripts — are not
+ * listed and stay caller-scoped, and the Gate's own token carries no device
+ * grant, so it stays the operator's unrestricted credential.
+ *
+ * A Map, not an object: the method comes from the request body, and an object
+ * would answer `constructor` or `toString` from the prototype.
+ */
+const DEVICE_RPC_SCOPES = new Map([
+  // Provider custody: the registration, its credential and its catalog.
+  ['providers.create', { scope: 'providers:manage', action: 'register a provider' }],
+  ['providers.update', { scope: 'providers:manage', action: 'edit a provider' }],
+  ['providers.delete', { scope: 'providers:manage', action: 'delete a provider' }],
+  ['providers.health.check', { scope: 'providers:manage', action: 'check a provider' }],
+  ['providers.catalog.refresh', { scope: 'providers:manage', action: 'refresh a provider catalog' }],
+  ['providers.auth.setApiKey', { scope: 'providers:manage', action: 'write a provider key' }],
+  ['providers.auth.begin', { scope: 'providers:manage', action: 'start a provider sign-in' }],
+  ['providers.auth.disconnect', { scope: 'providers:manage', action: 'disconnect a provider' }],
+  // An environment is a host process: adding, editing, probing and starting one.
+  ['environments.create', { scope: 'environments:manage', action: 'add an environment' }],
+  ['environments.update', { scope: 'environments:manage', action: 'edit an environment' }],
+  ['environments.delete', { scope: 'environments:manage', action: 'remove an environment' }],
+  ['environments.check', { scope: 'environments:manage', action: 'probe an environment' }],
+  ['environments.lifecycle.start', { scope: 'environments:manage', action: 'start an environment' }],
+  ['environments.lifecycle.stop', { scope: 'environments:manage', action: 'stop an environment' }],
+  // Routines: the Routines pane and /cron both speak these.
+  ['jobs.create', { scope: 'routines:manage', action: 'create a routine' }],
+  ['jobs.run', { scope: 'routines:manage', action: 'run a routine' }],
+  ['jobs.pause', { scope: 'routines:manage', action: 'pause a routine' }],
+  ['jobs.resume', { scope: 'routines:manage', action: 'resume a routine' }],
+  ['jobs.remove', { scope: 'routines:manage', action: 'delete a routine' }],
+  // The capability registry and the secrets stored through it.
+  ['registry.instances.create', { scope: 'capabilities:manage', action: 'add a capability' }],
+  ['registry.instances.update', { scope: 'capabilities:manage', action: 'edit a capability' }],
+  ['registry.instances.delete', { scope: 'capabilities:manage', action: 'remove a capability' }],
+  ['registry.secrets.set', { scope: 'capabilities:manage', action: 'write a stored secret' }],
+  // Paired devices, the voice call and a Bot's memory.
+  ['device.revoke', { scope: 'devices:manage', action: 'revoke a paired device' }],
+  ['voice.install.start', { scope: 'voice:manage', action: 'install the voice models' }],
+  ['voice.session.start', { scope: 'voice:manage', action: 'start a voice call' }],
+  ['voice.session.stop', { scope: 'voice:manage', action: 'stop a voice call' }],
+  ['bots.memory.write', { scope: 'bots:manage', action: "write a Bot's memory" }],
+  // Deciding an approval is the act the REST run-approval route already gates
+  // with runs:start, so it asks for the scope the app is paired with.
+  ['approval.approve', { scope: 'runs:start', action: 'decide a run approval' }],
+  ['approval.deny', { scope: 'runs:start', action: 'decide a run approval' }],
+]);
+
+/**
+ * The one refusal a missing scope makes, route and RPC method alike: a client
+ * reads one code and one sentence wherever it acted without the scope the
+ * surface asked for.
+ */
+function writeScopeRefusal(res, requirement) {
+  res.writeHead(403, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    error: {
+      message: `This device was paired without the ${requirement.scope} scope, so it cannot ${requirement.action}.`,
+      code: 'scope_required',
+    },
+  }));
+}
+
+/**
  * A turn this caller cannot see is a 404, never somebody else's turn and never
  * a different status: the routes are scoped by the authenticated device, so
  * "no such turn" is the whole truth about an id that belongs to another phone.
@@ -2521,13 +2587,7 @@ export async function createGate(config = {}) {
           (rule) => rule.method === method && rule.path.test(pathname),
         );
         if (requirement && !grantHasScope(deviceGrant.scopes, requirement.scope)) {
-          res.writeHead(403, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            error: {
-              message: `This device was paired without the ${requirement.scope} scope, so it cannot ${requirement.action}.`,
-              code: 'scope_required',
-            },
-          }));
+          writeScopeRefusal(res, requirement);
           return;
         }
       }
@@ -4492,6 +4552,16 @@ export async function createGate(config = {}) {
         if (typeof rpcMethod !== 'string' || !rpcMethod) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: 'method must be a non-empty string', code: 'invalid_request' } }));
+          return;
+        }
+        // A device grant acts only where its recorded scopes say it may. The
+        // method is in the body rather than the path, so it is matched against
+        // its own table before the handler is even resolved: a refusal never
+        // reaches the work, and a method the Gate cannot classify is not gated
+        // here.
+        const requirement = deviceGrant && DEVICE_RPC_SCOPES.get(rpcMethod);
+        if (requirement && !grantHasScope(deviceGrant.scopes, requirement.scope)) {
+          writeScopeRefusal(res, requirement);
           return;
         }
         const handler = registryMethods[rpcMethod] ?? gatewayMethods[rpcMethod] ?? state.dispatch.get(rpcMethod);

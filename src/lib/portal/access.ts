@@ -87,7 +87,15 @@ export function pendingApprovalHint(requestId?: string): string {
 
 const CLIENT_ID = 'versutus-mobile';
 const CLIENT_MODE = 'ui';
-const DEFAULT_SCOPES = ['chat:send', 'chat:read', 'runs:start', 'runs:read', 'terminal:use', 'sessions:manage'];
+// The scopes a fresh pairing asks for. The Gate asks these by name — acting
+// routes from its DEVICE_ACT_SCOPES table, acting RPC methods from its
+// DEVICE_RPC_SCOPES table — so every surface the app can carry has a scope
+// here: a screen the app draws must be a grant this list names.
+const DEFAULT_SCOPES = [
+  'chat:send', 'chat:read', 'runs:start', 'runs:read', 'terminal:use', 'sessions:manage',
+  'providers:manage', 'environments:manage', 'routines:manage', 'capabilities:manage',
+  'devices:manage', 'voice:manage', 'bots:manage',
+];
 
 export async function requestGatewayAccess(
   options: RequestGatewayAccessOptions,
