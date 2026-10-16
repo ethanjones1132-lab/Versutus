@@ -39,7 +39,7 @@ jest.mock('expo-constants', () => ({
   default: {
     expoConfig: {
       extra: {
-        gatewayHosts: ['gate.test', '192.168.4.30', 'not-an-ip', '100.95.137.83'],
+        gatewayHosts: ['gate.test', '192.168.1.30', 'not-an-ip', '100.101.102.103'],
       },
     },
   },
@@ -62,7 +62,7 @@ function manifestIdentity(overrides: Partial<GatewayIdentity> = {}): GatewayIden
       manifest: 'versutus-gateway/v1',
       kind: 'test',
       auth: { schemes: ['challenge-response'], grantPath: '/grant' },
-      transport: { ipv4: ['100.95.137.83'] },
+      transport: { ipv4: ['100.101.102.103'] },
     },
     auth: { schemes: ['challenge-response'], requiresToken: true, grantPath: '/grant' },
     transportHint: 'http',
@@ -148,7 +148,7 @@ describe('a signed access request retries a lookup miss over the fallback IPv4s'
     });
     expect(calls.map((c) => c.url)).toEqual([
       'http://gate.test/grant',
-      'http://100.95.137.83/grant',
+      'http://100.101.102.103/grant',
     ]);
   });
 
@@ -156,7 +156,7 @@ describe('a signed access request retries a lookup miss over the fallback IPv4s'
     const calls: { url: string; body: unknown }[] = [];
     (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init: unknown) => {
       recordCall(calls, input, init);
-      if (String(input) !== 'http://100.95.137.83/grant') throw lookupMiss();
+      if (String(input) !== 'http://100.101.102.103/grant') throw lookupMiss();
       return Promise.resolve(grantedResponse());
     });
 
@@ -179,8 +179,8 @@ describe('a signed access request retries a lookup miss over the fallback IPv4s'
     // install on a profile.
     expect(calls.map((c) => c.url)).toEqual([
       'http://gate.test/grant',
-      'http://192.168.4.30/grant',
-      'http://100.95.137.83/grant',
+      'http://192.168.1.30/grant',
+      'http://100.101.102.103/grant',
     ]);
   });
 
@@ -216,7 +216,7 @@ describe('a signed access request retries a lookup miss over the fallback IPv4s'
     // path, not a gate that answered to refuse.
     expect(result.status).toBe('unreachable');
     expect(calls.map((c) => c.url)).toEqual(['https://gate.test/grant']);
-    expect(calls.join()).not.toContain('100.95.137.83');
+    expect(calls.join()).not.toContain('100.101.102.103');
     expect(String((result as { reason: string }).reason)).toMatch(/could not look up/i);
   });
 
@@ -502,7 +502,7 @@ describe('the OpenClaw access probe is handed the tailnet fallbacks the POST ret
           manifest: 'versutus-gateway/v1',
           kind: 'openclaw',
           auth: { schemes: ['challenge-response'] },
-          transport: { ipv4: ['100.95.137.83'] },
+          transport: { ipv4: ['100.101.102.103'] },
         },
       }),
     });
@@ -514,7 +514,7 @@ describe('the OpenClaw access probe is handed the tailnet fallbacks the POST ret
       url: 'ws://gate.test/openclaw',
       // The WS dial has no retry seam of its own; the client rotates onto one
       // of these when the hostname misses MagicDNS.
-      alternateIpv4: ['100.95.137.83', '192.168.4.30'],
+      alternateIpv4: ['100.101.102.103', '192.168.1.30'],
     });
   });
 

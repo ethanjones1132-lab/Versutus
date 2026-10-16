@@ -7,7 +7,7 @@ import type { GatewayProfile } from '@/lib/gateway/types';
 // fan-out then went out with no Authorization, and the Gate answered 401.
 
 const GATE_URL = 'http://ethanspc.tail1234.ts.net:8760';
-const TAILNET_IP = '100.95.137.83';
+const TAILNET_IP = '100.101.102.103';
 
 function profile(overrides: Partial<GatewayProfile> & { id: string; url: string }): GatewayProfile {
   return {

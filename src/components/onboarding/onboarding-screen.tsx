@@ -200,7 +200,7 @@ export function OnboardingScreen() {
               <TextField
                 value={pcAddress}
                 onChangeText={setPcAddress}
-                placeholder="ethanspc.tail3a1a8a.ts.net"
+                placeholder="ethanspc.example.ts.net"
                 autoCapitalize="none"
                 autoCorrect={false}
                 validationState={fieldState}

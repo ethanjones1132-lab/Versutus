@@ -32,7 +32,7 @@ const GATE_MANIFEST: GatewayManifest = {
   auth: { schemes: ['bearer'] },
 } as unknown as GatewayManifest;
 
-const gate = createGatewayProfile({ name: 'Atlas', url: 'http://100.95.137.83:8760', token: 't', kind: 'custom' });
+const gate = createGatewayProfile({ name: 'Atlas', url: 'http://100.101.102.103:8760', token: 't', kind: 'custom' });
 
 function identityFrom(manifest: GatewayManifest): GatewayIdentity {
   return {

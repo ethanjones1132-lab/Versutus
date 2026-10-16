@@ -6,7 +6,7 @@
  * in `failed` again looked exactly like the screen before the tap.
  *
  * ONB-2: the address field validated the HOST and stripped the port, so
- * `100.95.137.83:99999` read "ready" and Connect was enabled — for an address
+ * `100.101.102.103:99999` read "ready" and Connect was enabled — for an address
  * `new URL` refuses, which the candidate builder then dropped silently on
  * every wave.
  */
@@ -331,9 +331,9 @@ describe('ONB-1: the failed auto-connect Retry is honest about its own run', () 
 
 describe('ONB-2: a port no socket can be asked for never reads "ready"', () => {
   test.each([
-    ['100.95.137.83:99999', 'above the URL parser ceiling'],
-    ['100.95.137.83:65536', 'one past the ceiling'],
-    ['100.95.137.83:0', 'port zero'],
+    ['100.101.102.103:99999', 'above the URL parser ceiling'],
+    ['100.101.102.103:65536', 'one past the ceiling'],
+    ['100.101.102.103:0', 'port zero'],
   ])('%s is refused before it can be saved (%s)', async (address) => {
     await mount();
     await typeAddress(address);
@@ -343,7 +343,7 @@ describe('ONB-2: a port no socket can be asked for never reads "ready"', () => {
     expect(mockGateway.setupFromPcAddress).not.toHaveBeenCalled();
   });
 
-  test.each(['100.95.137.83:1', '100.95.137.83:65535', '100.95.137.83'])(
+  test.each(['100.101.102.103:1', '100.101.102.103:65535', '100.101.102.103'])(
     '%s stays a usable address',
     async (address) => {
       await mount();

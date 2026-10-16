@@ -14,8 +14,8 @@ const profile = (overrides: Partial<GatewayProfile> & { id: string; url: string 
 
 describe('collapsing saved profiles that point at the same gateway', () => {
   test('two profiles for one URL become one, keeping the one that has the token', () => {
-    const tokenless = profile({ id: 'gw-ethanspc', name: 'Ethanspc', url: 'http://ethanspc.tail3a1a8a.ts.net:8760', kind: 'custom' });
-    const tokened = profile({ id: 'gw-gateway', name: 'Gateway', url: 'http://ethanspc.tail3a1a8a.ts.net:8760/', token: 'secret', kind: 'custom' });
+    const tokenless = profile({ id: 'gw-ethanspc', name: 'Ethanspc', url: 'http://ethanspc.example.ts.net:8760', kind: 'custom' });
+    const tokened = profile({ id: 'gw-gateway', name: 'Gateway', url: 'http://ethanspc.example.ts.net:8760/', token: 'secret', kind: 'custom' });
     const result = collapseDuplicateGateways([tokenless, tokened], 'gw-ethanspc');
     expect(result.gateways).toHaveLength(1);
     expect(result.gateways[0].id).toBe('gw-gateway');

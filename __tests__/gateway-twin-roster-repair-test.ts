@@ -11,7 +11,7 @@ import type { GatewayProfile } from '@/lib/gateway/types';
 // its two rules, on their own.
 
 const GATE_URL = 'http://ethanspc.tail1234.ts.net:8760';
-const TAILNET_IP = '100.95.137.83';
+const TAILNET_IP = '100.101.102.103';
 const TAILNET_URL = `http://${TAILNET_IP}:8760`;
 
 const profile = (overrides: Partial<GatewayProfile> & { id: string; url: string }): GatewayProfile => ({

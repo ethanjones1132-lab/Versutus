@@ -8,7 +8,7 @@ const base: DescribeInput = {
   connectionPhase: 'idle',
   lastError: null,
   deviceId: 'device-1',
-  tailscaleHost: 'https://ethanspc.tail3a1a8a.ts.net',
+  tailscaleHost: 'https://ethanspc.example.ts.net',
   discoveredCount: 0,
 };
 

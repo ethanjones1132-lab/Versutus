@@ -51,13 +51,13 @@ describe('manifest fetch with the ordinary DNS fallback', () => {
 
     const manifest = await fetchGatewayManifestWithLookupRetry(
       'http://gate.test',
-      ['100.95.137.83'],
+      ['100.101.102.103'],
     );
 
     expect(manifest?.kind).toBe('hermes');
     expect(calls).toEqual([
       'http://gate.test/.well-known/gateway.json',
-      'http://100.95.137.83/.well-known/gateway.json',
+      'http://100.101.102.103/.well-known/gateway.json',
     ]);
   });
 
@@ -70,7 +70,7 @@ describe('manifest fetch with the ordinary DNS fallback', () => {
 
     const manifest = await fetchGatewayManifestWithLookupRetry(
       'http://gate.test',
-      ['100.95.137.83'],
+      ['100.101.102.103'],
     );
 
     expect(manifest?.name).toBe('Gate');
@@ -86,7 +86,7 @@ describe('manifest fetch with the ordinary DNS fallback', () => {
 
     const manifest = await fetchGatewayManifestWithLookupRetry(
       'http://gate.test',
-      ['100.95.137.83'],
+      ['100.101.102.103'],
     );
 
     expect(manifest).toBeNull();
@@ -102,7 +102,7 @@ describe('manifest fetch with the ordinary DNS fallback', () => {
 
     const manifest = await fetchGatewayManifestWithLookupRetry(
       'http://gate.test',
-      ['100.95.137.83'],
+      ['100.101.102.103'],
     );
 
     expect(manifest).toBeNull();
@@ -118,12 +118,12 @@ describe('manifest fetch with the ordinary DNS fallback', () => {
 
     const manifest = await fetchGatewayManifestWithLookupRetry(
       'https://gate.test',
-      ['100.95.137.83'],
+      ['100.101.102.103'],
     );
 
     expect(manifest?.kind).toBe('hermes');
     expect(calls).toEqual(['https://gate.test/.well-known/gateway.json']);
-    expect(calls.join()).not.toContain('100.95.137.83');
+    expect(calls.join()).not.toContain('100.101.102.103');
   });
 
   test('an https lookup miss resolves null instead of rewriting onto an IP', async () => {
@@ -135,7 +135,7 @@ describe('manifest fetch with the ordinary DNS fallback', () => {
 
     const manifest = await fetchGatewayManifestWithLookupRetry(
       'https://gate.test',
-      ['100.95.137.83'],
+      ['100.101.102.103'],
     );
 
     expect(manifest).toBeNull();

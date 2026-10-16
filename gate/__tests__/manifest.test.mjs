@@ -29,9 +29,9 @@ test('advertises tailnet IPv4s on transport when given, and omits an empty list'
     name: 'Gate',
     capabilityKinds,
     capabilityInstances,
-    ipv4: ['100.95.137.83', '100.95.137.83'],
+    ipv4: ['100.101.102.103', '100.101.102.103'],
   });
-  assert.deepEqual(withIp.transport, { primary: 'http', ipv4: ['100.95.137.83'] });
+  assert.deepEqual(withIp.transport, { primary: 'http', ipv4: ['100.101.102.103'] });
   const without = buildManifest({ name: 'Gate', capabilityKinds, capabilityInstances });
   assert.equal(without.transport.ipv4, undefined);
 });
@@ -42,10 +42,10 @@ test('publishes only validated tailnet IPv4s, dropping hostnames, LAN IPs, and m
     capabilityKinds,
     capabilityInstances,
     ipv4: [
-      '100.95.137.83',
-      '100.95.137.83',
+      '100.101.102.103',
+      '100.101.102.103',
       'gate.example.ts.net',
-      '192.168.4.30',
+      '192.168.1.30',
       '127.0.0.1',
       '100.64',
       '299.1.1.1',
@@ -55,7 +55,7 @@ test('publishes only validated tailnet IPv4s, dropping hostnames, LAN IPs, and m
       42,
     ],
   });
-  assert.deepEqual(manifest.transport, { primary: 'http', ipv4: ['100.95.137.83', '100.64.0.1'] });
+  assert.deepEqual(manifest.transport, { primary: 'http', ipv4: ['100.101.102.103', '100.64.0.1'] });
 });
 
 test('omits the ipv4 transport key when no entry is a valid tailnet IP', () => {
@@ -63,7 +63,7 @@ test('omits the ipv4 transport key when no entry is a valid tailnet IP', () => {
     name: 'Gate',
     capabilityKinds,
     capabilityInstances,
-    ipv4: ['gate.example.ts.net', '192.168.4.30', ''],
+    ipv4: ['gate.example.ts.net', '192.168.1.30', ''],
   });
   assert.deepEqual(manifest.transport, { primary: 'http' });
   assert.equal(manifest.transport.ipv4, undefined);

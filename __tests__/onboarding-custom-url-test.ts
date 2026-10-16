@@ -69,7 +69,7 @@ describe('onboarding custom gateway URL affordance', () => {
     expect(src).toContain('const result = await setupFromPcAddress(pcAddress, token);');
     expect(src).toContain("if (result.kind === 'connected')");
     expect(src).toContain('disabled={cta.locked || !validation.valid}');
-    expect(src).toContain('placeholder="ethanspc.tail3a1a8a.ts.net"');
+    expect(src).toContain('placeholder="ethanspc.example.ts.net"');
   });
 
   test('the typed-path ErrorCard and wizard Connect CTA are untouched', () => {

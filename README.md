@@ -122,7 +122,14 @@ Point the app at a gateway by saved profile, LAN discovery, or deep link:
 versutus://add?url=https%3A%2F%2Fpc.example.ts.net&token=API_KEY&name=Home%20PC&agentId=main
 ```
 
-Hosts can also be supplied via `EXPO_PUBLIC_HERMES_GATEWAY_HOSTS`, `EXPO_PUBLIC_OPENCLAW_GATEWAY_HOSTS`, or `expo.extra.gatewayHosts` in `app.json`.
+Hosts can also be supplied via the `EXPO_PUBLIC_HERMES_GATEWAY_HOSTS` and
+`EXPO_PUBLIC_OPENCLAW_GATEWAY_HOSTS` environment variables.
+
+The committed `app.json` ships an **empty** `expo.extra.gatewayHosts`. To add
+your own gateway hosts without publishing them, create a `gateway-hosts.local.json`
+at the repo root holding a JSON array (for example
+`["my-pc.example.ts.net", "192.168.1.20"]`). It is gitignored, and
+`app.config.ts` merges it into `expo.extra.gatewayHosts` at build time.
 
 HTTPS/WSS is recommended for anything off-LAN. Cleartext is supported for trusted local networks. Discovery TLS fingerprints are **observed and displayed**, not pin-verified — Expo's fetch does not expose the hook required to pin them, and the UI says "fingerprint seen" rather than implying a guarantee it cannot make.
 

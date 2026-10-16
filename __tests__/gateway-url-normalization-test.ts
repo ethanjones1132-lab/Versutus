@@ -11,14 +11,14 @@ import {
 // artifact can never identify fine and then save wrong.
 describe('normalizeGatewayUrl', () => {
   it('trims paste artifacts around an otherwise correct URL', () => {
-    expect(normalizeGatewayUrl('  http://ethanspc.tail3a1a8a.ts.net:8760 \n')).toBe(
-      'http://ethanspc.tail3a1a8a.ts.net:8760',
+    expect(normalizeGatewayUrl('  http://ethanspc.example.ts.net:8760 \n')).toBe(
+      'http://ethanspc.example.ts.net:8760',
     );
   });
 
   it('repairs a missing scheme onto plain http', () => {
-    expect(normalizeGatewayUrl('mybox.tail3a1a8a.ts.net:8760')).toBe(
-      'http://mybox.tail3a1a8a.ts.net:8760',
+    expect(normalizeGatewayUrl('mybox.example.ts.net:8760')).toBe(
+      'http://mybox.example.ts.net:8760',
     );
   });
 
@@ -30,7 +30,7 @@ describe('normalizeGatewayUrl', () => {
   it('maps ws:// entries onto their http base, dropping the derived path', () => {
     // The screen's own placeholder advertises this form; adapters re-derive
     // the ws:// endpoint via httpToWsBase, so the stored base is http.
-    expect(normalizeGatewayUrl('ws://192.168.4.30:7400/openclaw')).toBe('http://192.168.4.30:7400');
+    expect(normalizeGatewayUrl('ws://192.168.1.30:7400/openclaw')).toBe('http://192.168.1.30:7400');
   });
 
   it('maps wss:// entries onto https', () => {
@@ -38,8 +38,8 @@ describe('normalizeGatewayUrl', () => {
   });
 
   it('defaults a bare host to the Hermes API port', () => {
-    expect(normalizeGatewayUrl('ethanspc.tail3a1a8a.ts.net')).toBe(
-      'http://ethanspc.tail3a1a8a.ts.net:8642',
+    expect(normalizeGatewayUrl('ethanspc.example.ts.net')).toBe(
+      'http://ethanspc.example.ts.net:8642',
     );
   });
 
@@ -62,10 +62,10 @@ describe('normalizeGatewayUrl', () => {
 
   it('is idempotent for every accepted shape', () => {
     const inputs = [
-      'http://ethanspc.tail3a1a8a.ts.net:8760',
+      'http://ethanspc.example.ts.net:8760',
       'https://gate.test',
-      'ws://192.168.4.30:7400/openclaw',
-      'mybox.tail3a1a8a.ts.net:8760',
+      'ws://192.168.1.30:7400/openclaw',
+      'mybox.example.ts.net:8760',
     ];
     for (const input of inputs) {
       expect(normalizeGatewayUrl(normalizeGatewayUrl(input))).toBe(normalizeGatewayUrl(input));
@@ -74,7 +74,7 @@ describe('normalizeGatewayUrl', () => {
 
   it('still accepts canonical tailnet and LAN IPs, bounds included', () => {
     expect(normalizeGatewayUrl('100.64.1.1')).toBe('http://100.64.1.1:8642');
-    expect(normalizeGatewayUrl('http://192.168.4.30:7400')).toBe('http://192.168.4.30:7400');
+    expect(normalizeGatewayUrl('http://192.168.1.30:7400')).toBe('http://192.168.1.30:7400');
     expect(normalizeGatewayUrl('http://0.0.0.0')).toBe('http://0.0.0.0:8642');
     expect(normalizeGatewayUrl('255.255.255.255')).toBe('http://255.255.255.255:8642');
   });
@@ -126,7 +126,7 @@ describe('buildGatewayUrlFromBeacon', () => {
 
 describe('numeric-host validation shared with onboarding', () => {
   it('classifies canonical dotted-quads as plain IPv4', () => {
-    expect(isCanonicalIpv4('192.168.4.30')).toBe(true);
+    expect(isCanonicalIpv4('192.168.1.30')).toBe(true);
     expect(isCanonicalIpv4('100.64.1.1')).toBe(true);
     expect(isCanonicalIpv4('0.0.0.0')).toBe(true);
     expect(isCanonicalIpv4('255.255.255.255')).toBe(true);
@@ -143,7 +143,7 @@ describe('numeric-host validation shared with onboarding', () => {
   });
 
   it('never applies the octet check to real hostnames', () => {
-    expect(hasImpossibleNumericOctets('ethanspc.tail3a1a8a.ts.net')).toBe(false);
+    expect(hasImpossibleNumericOctets('ethanspc.example.ts.net')).toBe(false);
     expect(hasImpossibleNumericOctets('gate.test')).toBe(false);
     expect(hasImpossibleNumericOctets('mybox')).toBe(false);
   });

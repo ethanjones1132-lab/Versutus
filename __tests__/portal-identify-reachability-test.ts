@@ -89,7 +89,7 @@ describe('identifyGateway retries a MagicDNS miss over tailnet IPv4s', () => {
 
     const identity = await identifyGateway({
       baseUrl: 'http://gate.test',
-      alternateIpv4: ['100.95.137.83'],
+      alternateIpv4: ['100.101.102.103'],
     });
 
     expect(identity.kind).toBe('hermes');
@@ -98,7 +98,7 @@ describe('identifyGateway retries a MagicDNS miss over tailnet IPv4s', () => {
     // some other gateway's address.
     expect(calls).toEqual([
       'http://gate.test/.well-known/gateway.json',
-      'http://100.95.137.83/.well-known/gateway.json',
+      'http://100.101.102.103/.well-known/gateway.json',
     ]);
   });
 
@@ -111,7 +111,7 @@ describe('identifyGateway retries a MagicDNS miss over tailnet IPv4s', () => {
 
     const identity = await identifyGateway({
       baseUrl: 'http://gate.test',
-      alternateIpv4: ['100.95.137.83'],
+      alternateIpv4: ['100.101.102.103'],
     });
 
     expect(identity.source).toBe('manifest');
@@ -130,7 +130,7 @@ describe('identifyGateway retries a MagicDNS miss over tailnet IPv4s', () => {
 
     const identity = await identifyGateway({
       baseUrl: 'http://gate.test',
-      alternateIpv4: ['100.95.137.83'],
+      alternateIpv4: ['100.101.102.103'],
     });
 
     expect(identity.kind).toBe('hermes');
@@ -139,9 +139,9 @@ describe('identifyGateway retries a MagicDNS miss over tailnet IPv4s', () => {
     // goes straight to the IPv4; the IPv4 then serves the full Hermes read.
     expect(calls).toEqual([
       'http://gate.test/.well-known/gateway.json',
-      'http://100.95.137.83/.well-known/gateway.json',
-      'http://100.95.137.83/health',
-      'http://100.95.137.83/v1/capabilities',
+      'http://100.101.102.103/.well-known/gateway.json',
+      'http://100.101.102.103/health',
+      'http://100.101.102.103/v1/capabilities',
     ]);
   });
 
@@ -154,12 +154,12 @@ describe('identifyGateway retries a MagicDNS miss over tailnet IPv4s', () => {
 
     const identity = await identifyGateway({
       baseUrl: 'https://gate.test',
-      alternateIpv4: ['100.95.137.83'],
+      alternateIpv4: ['100.101.102.103'],
     });
 
     expect(identity.kind).toBe('unknown');
     expect(calls.every((url) => url.startsWith('https://gate.test'))).toBe(true);
-    expect(calls.join()).not.toContain('100.95.137.83');
+    expect(calls.join()).not.toContain('100.101.102.103');
   });
 
   test('a gate that answers nothing anywhere still resolves to an honest unknown identity', async () => {
@@ -170,7 +170,7 @@ describe('identifyGateway retries a MagicDNS miss over tailnet IPv4s', () => {
 
     const identity = await identifyGateway({
       baseUrl: 'http://gate.test',
-      alternateIpv4: ['100.95.137.83'],
+      alternateIpv4: ['100.101.102.103'],
     });
 
     expect(identity.kind).toBe('unknown');

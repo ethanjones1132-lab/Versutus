@@ -428,6 +428,84 @@ if (!/npm run test:voice-worker/.test(ciForVoice)) {
   pass('voice-worker-in-ci', 'CI runs the worker suite on Python 3.12');
 }
 
+// ---------------------------------------------------------------------------
+// 7. Personal gateway hosts must never be committed.
+//
+//    app.json shipped the author's own tailnet name and LAN IPs in
+//    `expo.extra.gatewayHosts`. The committed default is now an empty list;
+//    personal hosts come from a gitignored `gateway-hosts.local.json` that
+//    `app.config.ts` merges in. A committed config naming a private address
+//    (RFC 1918, Tailscale CGNAT 100.64.0.0/10, or *.ts.net) is exactly the leak
+//    this check exists to stop from returning.
+// ---------------------------------------------------------------------------
+function isPrivateOrTailnetHost(value: string): boolean {
+  const host = value.trim().toLowerCase().replace(/:\d+$/, '');
+  if (!host) return false;
+  if (host.endsWith('.ts.net')) return true;
+  const octets = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!octets) return false;
+  const a = Number(octets[1]);
+  const b = Number(octets[2]);
+  return (
+    a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 100 && b >= 64 && b <= 127)
+  );
+}
+
+const CONFIG_FILES = [
+  'app.json',
+  'app.config.json',
+  'app.config.js',
+  'app.config.ts',
+  'app.config.mjs',
+  'app.config.cjs',
+  'app.config.mts',
+  'app.config.cts',
+];
+
+/** Every literal a committed config would resolve into `gatewayHosts`. */
+function committedGatewayHosts(file: string): string[] {
+  const path = join(root, file);
+  if (!existsSync(path)) return [];
+  const text = readFileSync(path, 'utf8');
+
+  if (file.endsWith('.json')) {
+    try {
+      const parsed = JSON.parse(text) as {
+        expo?: { extra?: { gatewayHosts?: unknown } };
+        extra?: { gatewayHosts?: unknown };
+      };
+      const value = parsed.expo?.extra?.gatewayHosts ?? parsed.extra?.gatewayHosts;
+      return Array.isArray(value) ? value.map((host) => String(host)) : [];
+    } catch {
+      return []; // malformed JSON is Expo's error to report, not this check's
+    }
+  }
+
+  // Dynamic configs: only flag string literals inside a gatewayHosts array.
+  const hosts: string[] = [];
+  for (const list of text.match(/gatewayHosts\s*[:=]\s*\[([^\]]*)\]/g) ?? []) {
+    for (const match of list.matchAll(/['"`]([^'"`]+)['"`]/g)) hosts.push(match[1]);
+  }
+  return hosts;
+}
+
+const leakedHosts = CONFIG_FILES.flatMap((file) =>
+  committedGatewayHosts(file)
+    .filter(isPrivateOrTailnetHost)
+    .map((host) => `${file}: ${host}`),
+);
+if (leakedHosts.length > 0) {
+  fail(
+    'no-personal-gateway-hosts',
+    `committed config names private/tailnet host(s): ${leakedHosts.join('; ')}`,
+  );
+} else {
+  pass('no-personal-gateway-hosts', 'committed config names no private or tailnet gateway host');
+}
+
 console.log('');
 if (failures.length > 0) {
   console.error(`verify-config: ${failures.length} check(s) failed`);

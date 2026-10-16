@@ -318,18 +318,18 @@ describe('HttpTransport', () => {
   });
 
   test('reports the host for operator-facing messages', () => {
-    const transport = new HttpTransport({ baseUrl: 'https://ethanspc.tail3a1a8a.ts.net' });
-    expect(transport.displayHost).toBe('ethanspc.tail3a1a8a.ts.net');
+    const transport = new HttpTransport({ baseUrl: 'https://ethanspc.example.ts.net' });
+    expect(transport.displayHost).toBe('ethanspc.example.ts.net');
   });
 
   test('a MagicDNS miss retries the advertised IPv4 on http', async () => {
     const calls: string[] = [];
     (globalThis as { fetch: unknown }).fetch = jest.fn((url: unknown) => {
       calls.push(String(url));
-      if (String(url).includes('ethanspc.tail3a1a8a.ts.net')) {
+      if (String(url).includes('ethanspc.example.ts.net')) {
         return Promise.reject(
           new Error(
-            'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.tail3a1a8a.ts.net"',
+            'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.example.ts.net"',
           ),
         );
       }
@@ -337,13 +337,13 @@ describe('HttpTransport', () => {
     });
 
     const transport = new HttpTransport({
-      baseUrl: 'http://ethanspc.tail3a1a8a.ts.net:8760',
-      alternateIpv4: ['100.95.137.83'],
+      baseUrl: 'http://ethanspc.example.ts.net:8760',
+      alternateIpv4: ['100.101.102.103'],
     });
     await expect(transport.request('GET', '/v1/runs')).resolves.toEqual({ ok: true });
     expect(calls).toEqual([
-      'http://ethanspc.tail3a1a8a.ts.net:8760/v1/runs',
-      'http://100.95.137.83:8760/v1/runs',
+      'http://ethanspc.example.ts.net:8760/v1/runs',
+      'http://100.101.102.103:8760/v1/runs',
     ]);
   });
 
@@ -353,30 +353,30 @@ describe('HttpTransport', () => {
       calls.push(String(url));
       return Promise.reject(
         new Error(
-          'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.tail3a1a8a.ts.net"',
+          'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.example.ts.net"',
         ),
       );
     });
 
     const transport = new HttpTransport({
-      baseUrl: 'https://ethanspc.tail3a1a8a.ts.net:8760',
-      alternateIpv4: ['100.95.137.83'],
+      baseUrl: 'https://ethanspc.example.ts.net:8760',
+      alternateIpv4: ['100.101.102.103'],
     });
     await expect(transport.request('GET', '/v1/runs')).rejects.toMatchObject({
       name: 'HostLookupError',
     });
-    expect(calls).toEqual(['https://ethanspc.tail3a1a8a.ts.net:8760/v1/runs']);
+    expect(calls).toEqual(['https://ethanspc.example.ts.net:8760/v1/runs']);
   });
 
   test('a lookup failure without an IPv4 fallback is a HostLookupError, not the Java exception', async () => {
     (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
       Promise.reject(
         new Error(
-          'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.tail3a1a8a.ts.net"',
+          'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.example.ts.net"',
         ),
       ),
     );
-    const transport = new HttpTransport({ baseUrl: 'http://ethanspc.tail3a1a8a.ts.net:8760' });
+    const transport = new HttpTransport({ baseUrl: 'http://ethanspc.example.ts.net:8760' });
     await expect(transport.request('GET', '/v1/runs')).rejects.toMatchObject({
       name: 'HostLookupError',
       message: expect.stringMatching(/could not look up your PC's address/i),
@@ -387,8 +387,8 @@ describe('HttpTransport', () => {
     const fetchMock = jest.fn(() => Promise.resolve(jsonResponse({ error: { message: 'Invalid API key' } }, 401)));
     (globalThis as { fetch: unknown }).fetch = fetchMock;
     const transport = new HttpTransport({
-      baseUrl: 'http://ethanspc.tail3a1a8a.ts.net:8760',
-      alternateIpv4: ['100.95.137.83'],
+      baseUrl: 'http://ethanspc.example.ts.net:8760',
+      alternateIpv4: ['100.101.102.103'],
     });
     await expect(transport.request('GET', '/v1/runs')).rejects.toBeInstanceOf(GatewayHttpError);
     expect(fetchMock).toHaveBeenCalledTimes(1);

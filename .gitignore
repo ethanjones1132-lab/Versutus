@@ -40,6 +40,9 @@ yarn-error.*
 # local env files
 .env*.local
 
+# Personal gateway hosts (Tailscale name / LAN IPs) — never commit. See README.
+gateway-hosts.local.json
+
 # typescript
 *.tsbuildinfo
 

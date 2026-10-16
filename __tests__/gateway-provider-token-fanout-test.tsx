@@ -32,7 +32,7 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 jest.mock('expo-constants', () => ({ __esModule: true, default: { expoConfig: { extra: {} } } }));
 
 const GATE_DNS_URL = 'http://ethanspc.tail1234.ts.net:8760';
-const GATE_TAILNET_IP = '100.95.137.83';
+const GATE_TAILNET_IP = '100.101.102.103';
 const GATE_TAILNET_URL = `http://${GATE_TAILNET_IP}:8760`;
 
 const mockState = {

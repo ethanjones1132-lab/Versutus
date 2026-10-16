@@ -13,27 +13,27 @@ import {
 describe('a DNS blip is a lookup failure, not a gateway crash', () => {
   test('matches the Android UnknownHostException the phone actually throws', () => {
     const err = new Error(
-      'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.tail3a1a8a.ts.net"',
+      'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.example.ts.net"',
     );
     expect(isHostLookupFailure(err)).toBe(true);
   });
 
   test('matches getaddrinfo / ENOTFOUND and does not match a refused token', () => {
-    expect(isHostLookupFailure(new Error('getaddrinfo ENOTFOUND ethanspc.tail3a1a8a.ts.net'))).toBe(true);
+    expect(isHostLookupFailure(new Error('getaddrinfo ENOTFOUND ethanspc.example.ts.net'))).toBe(true);
     expect(isHostLookupFailure(new Error('invalid api key'))).toBe(false);
     expect(isHostLookupFailure(new Error('HTTP 500'))).toBe(false);
   });
 
   test('sees a Node fetch wrapper whose cause object carries ENOTFOUND', () => {
     const wrapped = new TypeError('fetch failed', {
-      cause: { code: 'ENOTFOUND', syscall: 'getaddrinfo', hostname: 'ethanspc.tail3a1a8a.ts.net' },
+      cause: { code: 'ENOTFOUND', syscall: 'getaddrinfo', hostname: 'ethanspc.example.ts.net' },
     });
     expect(isHostLookupFailure(wrapped)).toBe(true);
   });
 
   test('walks a nested cause chain to the underlying getaddrinfo message', () => {
     const nested = new TypeError('fetch failed', {
-      cause: new Error('resolveDestination: getaddrinfo ENOTFOUND ethanspc.tail3a1a8a.ts.net', {
+      cause: new Error('resolveDestination: getaddrinfo ENOTFOUND ethanspc.example.ts.net', {
         cause: { code: 'ENOTFOUND', syscall: 'getaddrinfo' },
       }),
     });
@@ -52,41 +52,41 @@ describe('a DNS blip is a lookup failure, not a gateway crash', () => {
   });
 
   test('a webview-facing unknown value still matches by its own text', () => {
-    expect(isHostLookupFailure('getaddrinfo ENOTFOUND ethanspc.tail3a1a8a.ts.net')).toBe(true);
+    expect(isHostLookupFailure('getaddrinfo ENOTFOUND ethanspc.example.ts.net')).toBe(true);
     expect(isHostLookupFailure('invalid api key')).toBe(false);
   });
 });
 
 describe('retrying through an advertised IPv4', () => {
   test('rewrites an http hostname onto the IPv4 and keeps the port', () => {
-    expect(rewriteHttpBaseHost('http://ethanspc.tail3a1a8a.ts.net:8760', '100.95.137.83')).toBe(
-      'http://100.95.137.83:8760',
+    expect(rewriteHttpBaseHost('http://ethanspc.example.ts.net:8760', '100.101.102.103')).toBe(
+      'http://100.101.102.103:8760',
     );
   });
 
   test('refuses to rewrite an https URL onto an IP', () => {
-    expect(rewriteHttpBaseHost('https://ethanspc.tail3a1a8a.ts.net:8760', '100.95.137.83')).toBeNull();
+    expect(rewriteHttpBaseHost('https://ethanspc.example.ts.net:8760', '100.101.102.103')).toBeNull();
   });
 
   test('does not silently turn https into http', () => {
-    const rewritten = rewriteHttpBaseHost('https://ethanspc.tail3a1a8a.ts.net', '100.95.137.83');
+    const rewritten = rewriteHttpBaseHost('https://ethanspc.example.ts.net', '100.101.102.103');
     expect(rewritten).toBeNull();
   });
 
   test('rewrites a full http stream URL onto the IPv4 and keeps the path', () => {
     expect(
       rewriteHttpUrlHost(
-        'http://ethanspc.tail3a1a8a.ts.net:8760/v1/runs/r1/events',
-        '100.95.137.83',
+        'http://ethanspc.example.ts.net:8760/v1/runs/r1/events',
+        '100.101.102.103',
       ),
-    ).toBe('http://100.95.137.83:8760/v1/runs/r1/events');
+    ).toBe('http://100.101.102.103:8760/v1/runs/r1/events');
   });
 
   test('refuses to rewrite an https stream URL onto an IP', () => {
     expect(
       rewriteHttpUrlHost(
-        'https://ethanspc.tail3a1a8a.ts.net:8760/v1/runs/r1/events',
-        '100.95.137.83',
+        'https://ethanspc.example.ts.net:8760/v1/runs/r1/events',
+        '100.101.102.103',
       ),
     ).toBeNull();
   });
@@ -94,27 +94,27 @@ describe('retrying through an advertised IPv4', () => {
   test('advertisedIpv4 keeps unique valid IPv4s and drops hostnames', () => {
     expect(
       advertisedIpv4({
-        advertised: ['100.95.137.83', 'not-an-ip', '100.95.137.83'],
-        configuredHosts: ['ethanspc.tail3a1a8a.ts.net', '192.168.4.30'],
+        advertised: ['100.101.102.103', 'not-an-ip', '100.101.102.103'],
+        configuredHosts: ['ethanspc.example.ts.net', '192.168.1.30'],
       }),
-    ).toEqual(['100.95.137.83', '192.168.4.30']);
+    ).toEqual(['100.101.102.103', '192.168.1.30']);
   });
 
   test('ipv4FromExpoExtra reads extra.gatewayHosts and ignores hostnames', () => {
     expect(
       ipv4FromExpoExtra({
-        gatewayHosts: ['ethanspc.tail3a1a8a.ts.net', '100.95.137.83', '192.168.4.30'],
+        gatewayHosts: ['ethanspc.example.ts.net', '100.101.102.103', '192.168.1.30'],
       }),
-    ).toEqual(['100.95.137.83', '192.168.4.30']);
+    ).toEqual(['100.101.102.103', '192.168.1.30']);
     expect(ipv4FromExpoExtra(undefined)).toEqual([]);
   });
 });
 
 describe('HostLookupError', () => {
   test('names the hostname and never the raw Java exception', () => {
-    const err = new HostLookupError('ethanspc.tail3a1a8a.ts.net');
+    const err = new HostLookupError('ethanspc.example.ts.net');
     expect(err.message).toMatch(/could not look up your PC's address/i);
-    expect(err.message).toContain('ethanspc.tail3a1a8a.ts.net');
+    expect(err.message).toContain('ethanspc.example.ts.net');
     expect(err.message).not.toMatch(/UnknownHostException/);
   });
 });
@@ -126,31 +126,31 @@ describe('withHostLookupRetry failure memory', () => {
     jest.useRealTimers();
   });
 
-  const LOOKUP_MISS = 'fetch failed: getaddrinfo ENOTFOUND ethanspc.tail3a1a8a.ts.net';
-  const REFUSED = 'fetch failed: connect ECONNREFUSED 100.95.137.83:8760';
-  const UNREACHABLE = 'fetch failed: connect EHOSTUNREACH 192.168.4.30:8760';
+  const LOOKUP_MISS = 'fetch failed: getaddrinfo ENOTFOUND ethanspc.example.ts.net';
+  const REFUSED = 'fetch failed: connect ECONNREFUSED 100.101.102.103:8760';
+  const UNREACHABLE = 'fetch failed: connect EHOSTUNREACH 192.168.1.30:8760';
 
   test('after a hostname failure the IPv4 is tried first', async () => {
     const calls: string[] = [];
     const attempt = (url: string) => {
       calls.push(url);
-      if (url.includes('ethanspc.tail3a1a8a.ts.net')) {
+      if (url.includes('ethanspc.example.ts.net')) {
         return Promise.reject(new Error(LOOKUP_MISS));
       }
       return Promise.resolve('ok');
     };
 
     // First call: no memory yet, so the hostname is tried first.
-    await withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt);
+    await withHostLookupRetry('http://ethanspc.example.ts.net:8760/x', ['100.101.102.103'], attempt);
     expect(calls).toEqual([
-      'http://ethanspc.tail3a1a8a.ts.net:8760/x',
-      'http://100.95.137.83:8760/x',
+      'http://ethanspc.example.ts.net:8760/x',
+      'http://100.101.102.103:8760/x',
     ]);
 
     // Second call: within the 2-minute memory, the IPv4 goes first.
     calls.length = 0;
-    await withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt);
-    expect(calls).toEqual(['http://100.95.137.83:8760/x']);
+    await withHostLookupRetry('http://ethanspc.example.ts.net:8760/x', ['100.101.102.103'], attempt);
+    expect(calls).toEqual(['http://100.101.102.103:8760/x']);
   });
 
   test('the IPv4-first memory expires after two minutes', async () => {
@@ -158,31 +158,31 @@ describe('withHostLookupRetry failure memory', () => {
     const calls: string[] = [];
     const attempt = (url: string) => {
       calls.push(url);
-      if (url.includes('ethanspc.tail3a1a8a.ts.net')) {
+      if (url.includes('ethanspc.example.ts.net')) {
         return Promise.reject(new Error(LOOKUP_MISS));
       }
       return Promise.resolve('ok');
     };
 
-    await withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt);
+    await withHostLookupRetry('http://ethanspc.example.ts.net:8760/x', ['100.101.102.103'], attempt);
     expect(calls).toEqual([
-      'http://ethanspc.tail3a1a8a.ts.net:8760/x',
-      'http://100.95.137.83:8760/x',
+      'http://ethanspc.example.ts.net:8760/x',
+      'http://100.101.102.103:8760/x',
     ]);
 
     // Just inside the window: still IPv4 first.
     calls.length = 0;
     await jest.advanceTimersByTimeAsync(119_000);
-    await withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt);
-    expect(calls).toEqual(['http://100.95.137.83:8760/x']);
+    await withHostLookupRetry('http://ethanspc.example.ts.net:8760/x', ['100.101.102.103'], attempt);
+    expect(calls).toEqual(['http://100.101.102.103:8760/x']);
 
     // Past the window: hostname first again.
     calls.length = 0;
     await jest.advanceTimersByTimeAsync(2_000);
-    await withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt);
+    await withHostLookupRetry('http://ethanspc.example.ts.net:8760/x', ['100.101.102.103'], attempt);
     expect(calls).toEqual([
-      'http://ethanspc.tail3a1a8a.ts.net:8760/x',
-      'http://100.95.137.83:8760/x',
+      'http://ethanspc.example.ts.net:8760/x',
+      'http://100.101.102.103:8760/x',
     ]);
   });
 
@@ -191,35 +191,35 @@ describe('withHostLookupRetry failure memory', () => {
     let hostnameHealthy = false;
     const attempt = (url: string) => {
       calls.push(url);
-      const isHostname = url.includes('ethanspc.tail3a1a8a.ts.net');
+      const isHostname = url.includes('ethanspc.example.ts.net');
       if (isHostname && !hostnameHealthy) {
         return Promise.reject(new Error(LOOKUP_MISS));
       }
       if (!isHostname) {
-        return Promise.reject(new Error('fetch failed: getaddrinfo ENOTFOUND 100.95.137.83'));
+        return Promise.reject(new Error('fetch failed: getaddrinfo ENOTFOUND 100.101.102.103'));
       }
       return Promise.resolve('ok');
     };
 
     // Call 1: hostname fails (mark set), IPv4 fails — HostLookupError.
     await expect(
-      withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt),
+      withHostLookupRetry('http://ethanspc.example.ts.net:8760/x', ['100.101.102.103'], attempt),
     ).rejects.toBeInstanceOf(HostLookupError);
 
     // Call 2: hostname healthy. The mark puts the IPv4 first; it fails; the
     // hostname succeeds and clears the mark.
     hostnameHealthy = true;
     calls.length = 0;
-    await withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt);
+    await withHostLookupRetry('http://ethanspc.example.ts.net:8760/x', ['100.101.102.103'], attempt);
     expect(calls).toEqual([
-      'http://100.95.137.83:8760/x',
-      'http://ethanspc.tail3a1a8a.ts.net:8760/x',
+      'http://100.101.102.103:8760/x',
+      'http://ethanspc.example.ts.net:8760/x',
     ]);
 
     // Call 3: mark cleared — hostname first again.
     calls.length = 0;
-    await withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt);
-    expect(calls).toEqual(['http://ethanspc.tail3a1a8a.ts.net:8760/x']);
+    await withHostLookupRetry('http://ethanspc.example.ts.net:8760/x', ['100.101.102.103'], attempt);
+    expect(calls).toEqual(['http://ethanspc.example.ts.net:8760/x']);
   });
 
   test('an advertised IPv4 that is unusable falls back to the hostname it skipped', async () => {
@@ -227,7 +227,7 @@ describe('withHostLookupRetry failure memory', () => {
     let hostnameHealthy = false;
     const attempt = (url: string) => {
       calls.push(url);
-      const isHostname = url.includes('ethanspc.tail3a1a8a.ts.net');
+      const isHostname = url.includes('ethanspc.example.ts.net');
       if (isHostname) {
         return hostnameHealthy
           ? Promise.resolve('from hostname')
@@ -239,7 +239,7 @@ describe('withHostLookupRetry failure memory', () => {
     // A first pass in which every candidate is a DNS miss is what marks the
     // hostname in the first place.
     await expect(
-      withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], () =>
+      withHostLookupRetry('http://ethanspc.example.ts.net:8760/x', ['100.101.102.103'], () =>
         Promise.reject(new Error(LOOKUP_MISS)),
       ),
     ).rejects.toBeInstanceOf(HostLookupError);
@@ -250,23 +250,23 @@ describe('withHostLookupRetry failure memory', () => {
     hostnameHealthy = true;
     calls.length = 0;
     await expect(
-      withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt),
+      withHostLookupRetry('http://ethanspc.example.ts.net:8760/x', ['100.101.102.103'], attempt),
     ).resolves.toBe('from hostname');
     expect(calls).toEqual([
-      'http://100.95.137.83:8760/x',
-      'http://ethanspc.tail3a1a8a.ts.net:8760/x',
+      'http://100.101.102.103:8760/x',
+      'http://ethanspc.example.ts.net:8760/x',
     ]);
 
     // Call 3: mark cleared — hostname first again.
     calls.length = 0;
-    await withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt);
-    expect(calls).toEqual(['http://ethanspc.tail3a1a8a.ts.net:8760/x']);
+    await withHostLookupRetry('http://ethanspc.example.ts.net:8760/x', ['100.101.102.103'], attempt);
+    expect(calls).toEqual(['http://ethanspc.example.ts.net:8760/x']);
     expect(hostLookupFailureCountForTests()).toBe(0);
   });
 
   test('the last error surfaces when no reordered candidate answers', async () => {
     const markFailure = () =>
-      withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', [], () =>
+      withHostLookupRetry('http://ethanspc.example.ts.net:8760/x', [], () =>
         Promise.reject(new Error(LOOKUP_MISS)),
       );
     await expect(markFailure()).rejects.toBeInstanceOf(HostLookupError);
@@ -274,8 +274,8 @@ describe('withHostLookupRetry failure memory', () => {
     const calls: string[] = [];
     const attempt = (url: string) => {
       calls.push(url);
-      if (url.includes('100.95.137.83')) return Promise.reject(new Error(REFUSED));
-      if (url.includes('192.168.4.30')) return Promise.reject(new Error(UNREACHABLE));
+      if (url.includes('100.101.102.103')) return Promise.reject(new Error(REFUSED));
+      if (url.includes('192.168.1.30')) return Promise.reject(new Error(UNREACHABLE));
       return Promise.reject(new Error(LOOKUP_MISS));
     };
 
@@ -283,15 +283,15 @@ describe('withHostLookupRetry failure memory', () => {
     // last candidate has also failed the last error is the honest answer.
     await expect(
       withHostLookupRetry(
-        'http://ethanspc.tail3a1a8a.ts.net:8760/x',
-        ['100.95.137.83', '192.168.4.30'],
+        'http://ethanspc.example.ts.net:8760/x',
+        ['100.101.102.103', '192.168.1.30'],
         attempt,
       ),
     ).rejects.toThrow(UNREACHABLE);
     expect(calls).toEqual([
-      'http://100.95.137.83:8760/x',
-      'http://192.168.4.30:8760/x',
-      'http://ethanspc.tail3a1a8a.ts.net:8760/x',
+      'http://100.101.102.103:8760/x',
+      'http://192.168.1.30:8760/x',
+      'http://ethanspc.example.ts.net:8760/x',
     ]);
   });
 
@@ -305,15 +305,15 @@ describe('withHostLookupRetry failure memory', () => {
     // Hostname first, no memory: the refusal means DNS worked, so the IPv4
     // rewrite is not worth a second round trip and the error stands.
     await expect(
-      withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt),
+      withHostLookupRetry('http://ethanspc.example.ts.net:8760/x', ['100.101.102.103'], attempt),
     ).rejects.toThrow(REFUSED);
-    expect(calls).toEqual(['http://ethanspc.tail3a1a8a.ts.net:8760/x']);
+    expect(calls).toEqual(['http://ethanspc.example.ts.net:8760/x']);
     expect(hostLookupFailureCountForTests()).toBe(0);
   });
 
   test('a rejection the gateway itself made is not retried on the hostname', async () => {
     await expect(
-      withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', [], () =>
+      withHostLookupRetry('http://ethanspc.example.ts.net:8760/x', [], () =>
         Promise.reject(new Error(LOOKUP_MISS)),
       ),
     ).rejects.toBeInstanceOf(HostLookupError);
@@ -327,9 +327,9 @@ describe('withHostLookupRetry failure memory', () => {
     };
 
     await expect(
-      withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt),
+      withHostLookupRetry('http://ethanspc.example.ts.net:8760/x', ['100.101.102.103'], attempt),
     ).rejects.toThrow('Invalid API key');
-    expect(calls).toEqual(['http://100.95.137.83:8760/x']);
+    expect(calls).toEqual(['http://100.101.102.103:8760/x']);
   });
 
   test('marking a host prunes the marks that have expired', async () => {
