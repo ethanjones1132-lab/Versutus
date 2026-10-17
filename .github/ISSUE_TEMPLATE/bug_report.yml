@@ -1,0 +1,122 @@
+name: Bug report
+description: Something in Versutus is broken or not behaving as documented.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug.
+
+        **Do not paste secrets.** Never include pairing tokens, listen keys,
+        provider keys, or a gateway URL that carries credentials. Redact
+        hostnames and IP addresses. Reports that contain secrets will be edited
+        or closed.
+
+        For a security vulnerability, do not use this form — report it privately
+        through the repository's **Security** tab (see `SECURITY.md`).
+
+  - type: input
+    id: app-version
+    attributes:
+      label: App version
+      description: Shown in the app's settings/about, or from `app.json` (for example `1.0.0`).
+      placeholder: "1.0.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Android
+        - iOS
+        - web
+    validations:
+      required: true
+
+  - type: input
+    id: gate-version
+    attributes:
+      label: Gate version
+      description: The Versutus Gate version you are connected to, if applicable. Write "n/a" if you are not using a Gate.
+      placeholder: "1.0.0 / n/a"
+    validations:
+      required: true
+
+  - type: input
+    id: hermes-version
+    attributes:
+      label: Hermes version
+      description: The Hermes Agent version behind the gateway, if applicable. Write "n/a" if you are not using Hermes.
+      placeholder: "Hermes Agent 1.0.0 / n/a"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      description: Which part of the app is affected?
+      options:
+        - Home
+        - Chat
+        - Activity
+        - Tools
+        - Discovery
+        - Identity / pairing
+        - Voice
+        - Versutus Gate
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you do, in order? Include the gateway kind (Hermes / Gate / OpenClaw) and whether a Bot was selected.
+      placeholder: |
+        1. Connect to ...
+        2. Open the Chat tab and select ...
+        3. Send ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What actually happened. Include the exact error text if there is one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots (optional)
+      description: |
+        Anything that helps. Redact tokens, credential-bearing gateway URLs,
+        hostnames, and IP addresses before pasting.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: I have searched existing issues and this is not a duplicate.
+          required: true
+        - label: I have removed all tokens, credential-bearing gateway URLs, hostnames, and IP addresses from this report.
+          required: true

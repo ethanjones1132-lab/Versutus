@@ -1,0 +1,55 @@
+name: Feature request
+description: Suggest a capability or change for Versutus.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Versutus is deliberately scoped — a client for
+        AI agent gateways — so proposals are considered against what a gateway
+        can actually advertise rather than assumed capabilities.
+
+        Check `FUTURE-ITEMS.md` first: some candidates are already tracked with
+        their constraints.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that Versutus makes hard or impossible today? Describe the need, not only the fix.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What you would like to see. Note the surface it belongs to (Home, Chat, Activity, Tools, Discovery, Identity, Voice, Gate) if you know.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches, workarounds, or existing gateways/features that partly cover this.
+    validations:
+      required: false
+
+  - type: input
+    id: gateway-kind
+    attributes:
+      label: Gateway kind
+      description: Which gateway this relates to, if any — Hermes, a Versutus Gate, or OpenClaw. Write "n/a" if it is app-wide.
+      placeholder: "Hermes / Versutus Gate / OpenClaw / n/a"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: I have searched existing issues and `FUTURE-ITEMS.md`, and this is not already tracked.
+          required: true
