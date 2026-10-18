@@ -1,7 +1,7 @@
 import { validateProviderRegistration } from './schema.mjs';
 import { applyCatalogResult, isCatalogFresh, nextBackoff } from './catalog.mjs';
 import { readinessFromAuthAndError } from './health.mjs';
-import { authStateForCode, classifyProviderError, ProviderErrorCodes } from './errors.mjs';
+import { authStateForCode, classifyProviderError, isModelScopedError, ProviderErrorCodes } from './errors.mjs';
 import { nextAuthState, toSnapshot } from './runtime.mjs';
 import { assertProviderDeletionAllowed } from './dependencies.mjs';
 
@@ -239,7 +239,11 @@ export class ProviderService {
         nextState.readiness = { state: 'ready', checkedAt: outcome.at };
         nextState.lastError = undefined;
       }
-    } else {
+    } else if (!isModelScopedError(error)) {
+      // A 404 means the turn named a model this provider does not carry, which
+      // says nothing about whether the provider can serve turns. Only the turn
+      // is stamped (above); auth, readiness and lastError are left alone so the
+      // vendor's "model not found" never becomes the card's verdict.
       const code = classifyProviderError(error);
       nextState.auth = {
         ...(record.state.auth ?? {}),

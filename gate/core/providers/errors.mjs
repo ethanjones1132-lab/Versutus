@@ -45,3 +45,14 @@ export function authStateForCode(code, current = 'ready') {
   if (code === ProviderErrorCodes.entitlement_denied) return 'denied';
   return current;
 }
+
+/**
+ * A refusal that is about the request rather than the provider's ability to
+ * serve a turn: a chat naming a model the provider does not carry comes back
+ * 404. Recording that as a readiness verdict is what pinned a vendor's own
+ * "404 model not found" to the provider card until some later turn happened to
+ * clear it, so a 404 is set aside instead of treated as a provider fault.
+ */
+export function isModelScopedError(error = {}) {
+  return (error.status ?? error.statusCode) === 404;
+}

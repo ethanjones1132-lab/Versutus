@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 
 import { createProfileAdapter, getProfile, releaseProfiles } from '../core/providers/profiles/registry.mjs';
+import { classifyProviderError } from '../core/providers/errors.mjs';
 
 function listen(handler) {
   return new Promise((resolve) => {
@@ -100,7 +101,7 @@ test('profile chat uses the flavor codec plus profile auth headers', async () =>
   assert.equal(result.choices[0].message.content, 'ok');
 });
 
-test('NVIDIA keeps a catalog error so LKG/bootstrap stays visible', async () => {
+test('NVIDIA keeps the vendor status for a catalog refusal, not a timeout label', async () => {
   const { server, baseUrl, origin } = await listen((_req, res) => {
     res.writeHead(404, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: 'no models endpoint' }));
@@ -115,7 +116,68 @@ test('NVIDIA keeps a catalog error so LKG/bootstrap stays visible', async () => 
     allowedOrigins: [origin],
   });
   await assert.rejects(() => adapter.listModels(), (error) => {
-    assert.equal(error.code, 'catalog_timeout');
+    assert.equal(error.status, 404);
+    assert.notEqual(error.code, 'catalog_timeout');
+    return true;
+  });
+});
+
+test('an OpenCode endpoint carries a stable x-opencode-session header', async () => {
+  const sessions = [];
+  const respond = async (_url, init) => {
+    sessions.push(init.headers['x-opencode-session']);
+    return { ok: true, status: 200, json: async () => ({ data: [{ id: 'glm-5' }] }) };
+  };
+  const adapter = createProfileAdapter({
+    profileId: 'openai-compatible',
+    providerId: 'opencode-go',
+    baseUrl: 'https://opencode.ai/zen/go/v1',
+    credential: 'the-key',
+    allowedOrigins: ['https://opencode.ai'],
+    fetchImpl: respond,
+  });
+  const models = await adapter.listModels();
+  assert.deepEqual(models.map((model) => model.id), ['glm-5']);
+  await adapter.chat({ model: 'glm-5', messages: [{ role: 'user', content: 'hi' }] });
+  assert.match(sessions[0], /^ses_[0-9a-f]{32}$/);
+  assert.equal(sessions[0], sessions[1], 'the session id must be stable across a providers calls');
+});
+
+test('an OpenAI-compatible endpoint off OpenCode is sent no session header', async () => {
+  let header = 'unset';
+  const adapter = createProfileAdapter({
+    profileId: 'openai-compatible',
+    providerId: 'vllm',
+    baseUrl: 'https://vllm.example.com/v1',
+    credential: 'the-key',
+    allowedOrigins: ['https://vllm.example.com'],
+    fetchImpl: async (_url, init) => {
+      header = init.headers['x-opencode-session'];
+      return { ok: true, status: 200, json: async () => ({ data: [{ id: 'local-model' }] }) };
+    },
+  });
+  await adapter.listModels();
+  assert.equal(header, undefined);
+});
+
+test('a catalog 401 is a rejected credential, not a timeout', async () => {
+  const adapter = createProfileAdapter({
+    profileId: 'openai-compatible',
+    providerId: 'opencode-zen',
+    baseUrl: 'https://opencode.ai/zen/v1',
+    credential: 'the-key',
+    allowedOrigins: ['https://opencode.ai'],
+    fetchImpl: async () => ({
+      ok: false,
+      status: 401,
+      text: async () => '{"error":"invalid key"}',
+      body: { cancel: async () => {} },
+    }),
+  });
+  await assert.rejects(() => adapter.listModels(), (error) => {
+    assert.equal(error.status, 401);
+    assert.notEqual(error.code, 'catalog_timeout');
+    assert.equal(classifyProviderError(error), 'invalid_credentials');
     return true;
   });
 });

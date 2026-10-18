@@ -181,7 +181,7 @@ test('a large vendor refusal is not fully buffered', async () => {
   );
 });
 
-test('a catalog refusal carries the vendor body too, keeping the nvidia catalog code', async () => {
+test('a catalog refusal carries the vendor body and status, not a timeout label', async () => {
   const adapter = createProfileAdapter({
     profileId: 'nvidia-nim',
     providerId: 'nvidia',
@@ -196,7 +196,8 @@ test('a catalog refusal carries the vendor body too, keeping the nvidia catalog 
   });
 
   await assert.rejects(() => adapter.listModels(), (error) => {
-    assert.equal(error.code, 'catalog_timeout');
+    assert.equal(error.status, 404);
+    assert.notEqual(error.code, 'catalog_timeout');
     assert.match(error.message, /no models endpoint/);
     return true;
   });

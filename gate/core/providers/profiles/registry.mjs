@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+
 import { buildChatRequest as buildOpenAIChat } from '../../../flavors/openai.mjs';
 import { buildChatRequest as buildAnthropicChat } from '../../../flavors/anthropic.mjs';
 import { openaiProfile } from './openai.mjs';
@@ -34,6 +36,10 @@ export function createProfileAdapter({
 }) {
   const profile = getProfile(profileId);
   const origins = allowedOrigins ?? profile.origins;
+  // Minted once per adapter: a profile that needs a per-conversation session
+  // header (OpenCode Go's `x-opencode-session`) gets a stable opaque value for
+  // the life of the registration, so the vendor can pin and cache the traffic.
+  const sessionId = `ses_${randomBytes(16).toString('hex')}`;
 
   return {
     async authenticate() {
@@ -60,7 +66,7 @@ export function createProfileAdapter({
         response = await fetchImpl(url, {
           headers: {
             accept: 'application/json',
-            ...profile.authHeaders(credential),
+            ...profile.authHeaders(credential, { baseUrl, sessionId }),
           },
           signal: bounded.signal,
         });
@@ -68,7 +74,9 @@ export function createProfileAdapter({
           const detail = await vendorDetail(response);
           const error = new Error(`models request failed: ${response.status}${detail}`);
           error.status = response.status;
-          if (profile.keepBootstrapIfEmpty) error.code = 'catalog_timeout';
+          // Not labelled `catalog_timeout`: a 401 or a 5xx is not a timeout, and
+          // the blanket label hid a rejected key behind "degraded/stale" instead
+          // of the "sign in again" a 401 asks for.
           throw error;
         }
         return profile.parseModels(await response.json(), providerId);
@@ -97,7 +105,7 @@ export function createProfileAdapter({
         ...built.init,
         headers: {
           ...built.init.headers,
-          ...profile.authHeaders(credential),
+          ...profile.authHeaders(credential, { baseUrl, sessionId }),
         },
         signal,
       });

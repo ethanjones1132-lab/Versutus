@@ -126,6 +126,22 @@ test('a concurrent 401 then 429 preserves the re-auth need', async () => {
   assert.equal(after.auth.state, 'needs_reauth');
 });
 
+test('a chat 404 for a model the provider does not carry never reaches the card', async () => {
+  const service = await makeService();
+  const missing = new Error('chat failed: 404 - model not found');
+  missing.status = 404;
+  await service.noteChatOutcome('zen', missing);
+
+  const after = (await service.store.get('zen')).state;
+  // The turn is still recorded, but the provider keeps the verdict it earned:
+  // a model this vendor does not carry is not evidence about the provider.
+  assert.equal(after.readiness.state, 'ready');
+  assert.equal(after.readiness.code, undefined);
+  assert.equal(after.auth.state, 'ready');
+  assert.equal(after.lastError, undefined);
+  assert.equal(after.lastChatOutcome.ok, false);
+});
+
 test('a failed outcome never poisons the per-provider queue', async () => {
   const service = await makeService();
   const failure = new Error('chat failed: 401');

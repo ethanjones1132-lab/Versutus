@@ -18,5 +18,4 @@ export const nvidiaNimProfile = {
       available: true,
     }));
   },
-  keepBootstrapIfEmpty: true,
 };
