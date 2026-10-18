@@ -2729,3 +2729,13 @@ Verified against HEAD 732e297 (worktree `rh/20261017-2130-versutus-vs-004-burn-d
 
 No [MED] entry in the range needed a code change: 12 were already fixed upstream (each with a regression test), and 2 remain real but require src/components / src/context edits or a product decision, so they are recorded DEFERRED rather than changed.
 
+## Burn-down batch 2 (rh run)
+
+Verified against HEAD `ed07cc4` (worktree `rh/20261018-1600-versutus-vs-004-batch-2-gateway-d`). All three release-path findings in the `paired-devices.ts ... shortcuts.ts` section were already fixed upstream, each with a regression test; no source change was needed.
+
+| Finding | Status | Code evidence | Regression test |
+|---|---|---|---|
+| [MED][FAILURE] The run driver abandons its event stream at the wall-clock deadline and never aborts it | ALREADY FIXED — `a00e1bf` | `executeRun` skips the stream when the budget is already spent (`runs.ts:457-461`); each attempt owns a `streamAbort` controller that follows the caller signal, guards post-abandon frames (`runs.ts:465-476`), and is aborted plus unlistened in `finally` (`runs.ts:493-498`); a deadline break leaves the run unresolved (`runs.ts:501-504`). | `__tests__/runs-test.ts:378-449`: the abandoned stream's signal is aborted, a late frame is not forwarded, no stream opens with a spent deadline, and a user stop still reports `cancelled`. |
+| [MED][BUG] Any failure text containing "expired" is classified as a task-expiry verdict | ALREADY FIXED — `a00e1bf` | The expiry branch requires a `task`/`job`/`run` noun in the same sentence and excludes a credential word (`run-failures.ts:259-264`), so provider/token expiry falls through to its raw cause. | `__tests__/run-failures-test.ts:66-83`: task/job expiry still yields `expired` / `Task expired`; `OAuth token`, `API key`, `session`, `credentials`, and `refresh token` expiries do not. |
+| [MED][BUG] An HTTP error answer from the gateway is labelled as a connection failure | ALREADY FIXED — `097b50d` | A non-OK response returns `code: 'http-error'` with its status (`probe.ts:77-88`); `categorizeProbeError` names the answered status and gives 401/403 the token verdict before any network wording (`probe.ts:350-358`). | `__tests__/probe-error-category-test.ts:7-44`: mocked fetch answers 503/500/401/403 with no network/Tailscale copy; `:46-77` keeps real connect failures and timeouts in their own categories. |
+
