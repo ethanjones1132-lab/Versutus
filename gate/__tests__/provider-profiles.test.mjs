@@ -143,6 +143,27 @@ test('an OpenCode endpoint carries a stable x-opencode-session header', async ()
   assert.equal(sessions[0], sessions[1], 'the session id must be stable across a providers calls');
 });
 
+test('the session header stays the same across separately built adapters for one provider', async () => {
+  const sessions = [];
+  const build = (providerId) => createProfileAdapter({
+    profileId: 'openai-compatible',
+    providerId,
+    baseUrl: 'https://opencode.ai/zen/go/v1',
+    credential: 'the-key',
+    allowedOrigins: ['https://opencode.ai'],
+    fetchImpl: async (_url, init) => {
+      sessions.push(init.headers['x-opencode-session']);
+      return { ok: true, status: 200, json: async () => ({ data: [{ id: 'glm-5' }] }) };
+    },
+  });
+  // The shipped factory rebuilds the adapter for every operation.
+  await build('opencode-go-stable').listModels();
+  await build('opencode-go-stable').listModels();
+  await build('opencode-go-other').listModels();
+  assert.equal(sessions[0], sessions[1]);
+  assert.notEqual(sessions[0], sessions[2]);
+});
+
 test('an OpenAI-compatible endpoint off OpenCode is sent no session header', async () => {
   let header = 'unset';
   const adapter = createProfileAdapter({

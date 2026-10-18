@@ -25,6 +25,14 @@ export function getProfile(id) {
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const MAX_REQUEST_TIMEOUT_MS = 30_000;
 
+const sessionIds = new Map();
+
+function sessionIdFor(providerId) {
+  const key = String(providerId ?? '');
+  if (!sessionIds.has(key)) sessionIds.set(key, `ses_${randomBytes(16).toString('hex')}`);
+  return sessionIds.get(key);
+}
+
 export function createProfileAdapter({
   profileId,
   providerId,
@@ -36,10 +44,11 @@ export function createProfileAdapter({
 }) {
   const profile = getProfile(profileId);
   const origins = allowedOrigins ?? profile.origins;
-  // Minted once per adapter: a profile that needs a per-conversation session
-  // header (OpenCode Go's `x-opencode-session`) gets a stable opaque value for
-  // the life of the registration, so the vendor can pin and cache the traffic.
-  const sessionId = `ses_${randomBytes(16).toString('hex')}`;
+  // One opaque id per provider for the life of the process. The factory builds
+  // a fresh adapter for every operation, so an id minted per adapter would
+  // change on every call; keying it by provider keeps it stable across a
+  // provider's calls, which is what a vendor's session header asks for.
+  const sessionId = sessionIdFor(providerId);
 
   return {
     async authenticate() {
