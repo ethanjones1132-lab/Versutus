@@ -258,6 +258,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     currentSessionId,
     selectedBotId,
     pendingRunApproval,
+    settings,
     sendChatInput,
     gatewayRequest,
     reloadHistory,
@@ -270,6 +271,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   // the UI thread rather than in React state that redraws the banner per sample.
   const level = useSharedValue(0);
   const [availability, setAvailability] = useState<HandsfreeAvailability | null>(null);
+  const [nativeModuleLoaded, setNativeModuleLoaded] = useState(false);
   const [label, setLabel] = useState<string | undefined>(undefined);
   const [gateBanner, setGateBanner] = useState<GateCallBanner>(INITIAL_GATE_CALL);
   const [gateMode, setGateMode] = useState(false);
@@ -1015,7 +1017,16 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     const probe = async () => {
       for (let attempt = 0; attempt < HANDSFREE_PROBE_RETRIES; attempt += 1) {
         const module = await loadHandsfreeModule();
-        if (cancelled || !module) return;
+        if (cancelled) return;
+        if (!module) {
+          setNativeModuleLoaded(false);
+          setAvailability(null);
+          return;
+        }
+        // Module presence and phone speech availability are separate facts:
+        // Gate transport still needs this module for microphone/media, but it
+        // does not need this phone's recognizer or synthesizer.
+        setNativeModuleLoaded(true);
         try {
           const read = await module.getAvailability();
           if (cancelled) return;
@@ -1429,7 +1440,11 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     session.phase === 'idle' &&
     status === 'connected' &&
     Boolean(activeGateway) &&
-    handsfreeDeviceCanOfferCall(availability);
+    handsfreeDeviceCanOfferCall(
+      availability,
+      nativeModuleLoaded,
+      settings?.voiceEngine === 'phone' ? 'phone' : 'gate',
+    );
 
   const value: HandsfreeVoiceContextValue = {
     phase,

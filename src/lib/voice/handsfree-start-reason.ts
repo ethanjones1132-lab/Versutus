@@ -106,11 +106,28 @@ export type HandsfreeStartDecision =
   | { kind: 'phone' }
   | { kind: 'gate' };
 
-/** The native module answered, so Call can be offered — PC voice does not need on-device speech. */
+/** Whether the selected transport has the device support needed to offer Call. */
 export function handsfreeDeviceCanOfferCall(
   availability: HandsfreeStartAvailability | null,
+): boolean;
+export function handsfreeDeviceCanOfferCall(
+  availability: HandsfreeStartAvailability | null,
+  moduleLoaded: boolean,
+  transport: HandsfreeStartTransport,
+): boolean;
+export function handsfreeDeviceCanOfferCall(
+  availability: HandsfreeStartAvailability | null,
+  moduleLoaded?: boolean,
+  transport?: HandsfreeStartTransport,
 ): boolean {
-  return availability !== null;
+  // Keep the original probe-only call shape for existing consumers: a
+  // successful availability response proves the module answered. The provider
+  // uses the explicit form below so an unreadable phone probe can still offer
+  // a Gate call without mistaking a missing native module for readiness.
+  if (moduleLoaded === undefined || transport === undefined) return availability !== null;
+  if (!moduleLoaded) return false;
+  if (transport === 'gate') return true;
+  return phoneSpeechBlocker(availability) === null;
 }
 
 /** What blocks an on-device (phone-engine) call, or null when speech is ready. */
