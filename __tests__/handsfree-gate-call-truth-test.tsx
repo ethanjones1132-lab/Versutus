@@ -286,6 +286,26 @@ async function startLiveCall(readyFrame: string = ready): Promise<void> {
 }
 
 describe('a Gate call whose link never comes up', () => {
+  test('opens a Gate call when the phone speech-availability probe throws', async () => {
+    // The Gate owns speech recognition and synthesis. A broken phone probe
+    // must not turn this explicitly Gate-routed start into a phone call.
+    mockNative.getAvailability.mockRejectedValueOnce(new Error('speech service unavailable'));
+
+    await startLiveCall();
+
+    expect(mockGateway.gatewayRequest).toHaveBeenCalledWith(
+      'voice.session.start',
+      expect.objectContaining({
+        engine: 'local',
+        thread: { kind: 'bot', sessionId: 'ses_bot', botId: 'hermes' },
+        deviceId: 'phone-abc12345',
+      }),
+    );
+    expect(mockNative.startSession).toHaveBeenCalledTimes(1);
+    expect(mockMediaStarts).toHaveLength(1);
+    expect(latest().phase).toBe('listening');
+  });
+
   test('never paints Listening, and fails the start instead of listening to nothing', async () => {
     // The socket is handed over and answers `true`; the Gate is never on it.
     expect(await startUnprovedCall()).toBe('media-start-failed');
