@@ -244,6 +244,29 @@ describe('one comparison is one round', () => {
     expect(ledger()).toEqual([]);
   });
 
+  test("one Bot's round error stays in that Bot's column, not a screen-level error", async () => {
+    await readyToCompare();
+    state.botGroups.send.mockResolvedValue({
+      replies: [{ botId: 'scout', text: 'here (Scout)' }],
+      errors: [{ botId: 'night', error: 'Night is out of credits' }],
+    });
+    await press('Compare');
+    await flush();
+
+    // The roster order survives a partial failure, and the failure is named
+    // with the Bot's own error rather than the round's.
+    expect(columns().map((column) => [column.botId, column.state])).toEqual([
+      ['scout', 'answered'],
+      ['night', 'failed'],
+    ]);
+    expect(columns()[0]).toMatchObject({ text: 'here (Scout)' });
+    expect(columns()[1]).toMatchObject({ error: 'Night is out of credits' });
+    // Nothing above the columns claims the council itself failed.
+    expect(findAll('ErrorCard' as ElementType)).toHaveLength(0);
+    expect(labels()).toContain('Compare');
+    expect(state.botGroups.deleteGroup).toHaveBeenCalledWith('room-1');
+  });
+
   test('two taps inside one render make one room and one send', async () => {
     await readyToCompare();
     const send = deferred<Round>();
