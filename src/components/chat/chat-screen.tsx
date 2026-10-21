@@ -1621,7 +1621,10 @@ export function ChatScreen() {
     }
     setCallBusy(true);
     setCallError(undefined);
+    // The provider's decision is authoritative; this local expression is only
+    // a fallback for a context that does not carry it.
     const transport = callEngine && callEngine.engine !== 'phone' ? 'gate' : 'phone';
+    const decidedTransport = handsfree.transport ?? transport;
     try {
       const attempt = await handsfree.start({
         gatewayId: activeGateway.id,
@@ -1630,7 +1633,7 @@ export function ChatScreen() {
         botId: surface.kind === 'bot' ? surface.botId : undefined,
         label: callTargetLabel,
         voice: botVoice ?? {},
-        transport,
+        transport: decidedTransport,
         voiceEngine: callPreference,
       });
       if (attempt.result === 'started') {

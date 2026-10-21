@@ -5,7 +5,25 @@
 // Each exit has its own code so a failed start is diagnosable from the sheet,
 // the phone log, and gate.log.
 
+import type { VoiceEnginePreference } from '@/lib/voice/voice-engine-choice';
+
 export type HandsfreeStartTransport = 'phone' | 'gate';
+
+/**
+ * The one transport decision. The stored preference names an engine, but the
+ * resolved choice can still fall back to the phone; the Call offer and the
+ * start path must both follow the resolved engine, never the raw preference.
+ * While the resolved choice is unknown, a non-phone preference stays on the
+ * Gate: that is the only side that can start without this phone's speech.
+ */
+export function handsfreeTransportForCall(
+  engine: string | undefined,
+  preference: VoiceEnginePreference | undefined,
+): HandsfreeStartTransport {
+  if (preference === 'phone') return 'phone';
+  if (engine === 'phone') return 'phone';
+  return 'gate';
+}
 
 /** What `getAvailability` reports, without taking a dependency on the native module. */
 export type HandsfreeStartAvailability = {

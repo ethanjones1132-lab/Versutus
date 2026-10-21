@@ -13,7 +13,7 @@
 // different one is the failure this guards against.
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import type { SharedValue } from 'react-native-reanimated';
 import { useSharedValue } from 'react-native-reanimated';
 
@@ -44,10 +44,12 @@ import {
 import {
   evaluateHandsfreeStart,
   handsfreeDeviceCanOfferCall,
+  handsfreeTransportForCall,
   logHandsfreeStart,
   type GateVoiceGrant,
   type HandsfreeStartAttempt,
   type HandsfreeStartResult,
+  type HandsfreeStartTransport,
 } from '@/lib/voice/handsfree-start-reason';
 import { parseGateFrame, type GateVoiceFrame, type VoicePhase } from '@/lib/voice/voice-stream-protocol';
 import {
@@ -75,6 +77,10 @@ import {
   type HandsfreeStartBlocker,
 } from '@/lib/voice/handsfree-start-policy';
 import { beginHandsfreeCall, endHandsfreeCall, stopSpeech } from '@/lib/voice/speech';
+import {
+  chooseVoiceEngine,
+  type VoiceEngineCapabilities,
+} from '@/lib/voice/voice-engine-choice';
 import { isStartTimeout, startDeadline } from '@/lib/voice/start-deadline';
 import type { HandsfreeAvailability, HandsfreeStartOutcome } from '../../modules/handsfree-voice';
 
@@ -182,6 +188,11 @@ export type HandsfreeVoiceContextValue = {
   engineReason?: string;
   /** Whether `start` can succeed right now. */
   canStart: boolean;
+  /**
+   * The transport `start` will open, decided once from the stored preference
+   * and the Gate's resolved engine. The Call offer and the start path share it.
+   */
+  transport: HandsfreeStartTransport;
   /** What blocks a start right now, or null. */
   startBlocker: HandsfreeStartBlocker | null;
   start: (target: HandsfreeCallTarget) => Promise<HandsfreeStartAttempt>;
@@ -251,6 +262,14 @@ function phaseConfirmsMute(phase: VoicePhase, requested: boolean): boolean {
   return requested ? phase === 'muted' : phase !== 'muted';
 }
 
+/** A capabilities answer only counts when it has the shape `chooseVoiceEngine` reads. */
+function isVoiceEngineCapabilities(value: unknown): value is VoiceEngineCapabilities {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.enabled === 'boolean' && Boolean(record.engines)
+    && typeof record.engines === 'object';
+}
+
 export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode }) {
   const {
     activeGateway,
@@ -272,6 +291,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const level = useSharedValue(0);
   const [availability, setAvailability] = useState<HandsfreeAvailability | null>(null);
   const [nativeModuleLoaded, setNativeModuleLoaded] = useState(false);
+  const [voiceCapabilities, setVoiceCapabilities] = useState<{
+    gatewayId: string;
+    capabilities: VoiceEngineCapabilities;
+  } | null>(null);
   const [label, setLabel] = useState<string | undefined>(undefined);
   const [gateBanner, setGateBanner] = useState<GateCallBanner>(INITIAL_GATE_CALL);
   const [gateMode, setGateMode] = useState(false);
@@ -1048,6 +1071,47 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     };
   }, [status]);
 
+  const gatewayId = activeGateway?.id;
+
+  // Discard an answer when its connection goes away, before children can use it
+  // again on a same-gateway reconnect. The state guard makes this adjustment
+  // run once per stale answer rather than cascading from an effect.
+  if (voiceCapabilities && (status !== 'connected' || voiceCapabilities.gatewayId !== gatewayId || settings?.voiceEngine === 'phone')) {
+    setVoiceCapabilities(null);
+  }
+
+  // Read the Gate's engine readiness while connected. The resolved engine — not
+  // just the stored preference — decides which transport the call will open:
+  // a non-phone preference can still fall back to the phone, and then the offer
+  // must check this phone's speech instead of offering a Gate call.
+  // The answer is tagged with the gateway it came from: a switch must not let
+  // the new gateway inherit the previous one's engine while its own request
+  // is still in flight.
+  useEffect(() => {
+    if (status !== 'connected' || !gatewayId || settings?.voiceEngine === 'phone') return undefined;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const capabilities = await gatewayRequest<VoiceEngineCapabilities>(
+          'voice.capabilities',
+          await pushDeviceParams(),
+        );
+        if (!cancelled) {
+          setVoiceCapabilities(
+            isVoiceEngineCapabilities(capabilities) ? { gatewayId, capabilities } : null,
+          );
+        }
+      } catch {
+        // An older Gate has no voice capabilities; the choice stays unknown
+        // and a non-phone preference keeps the Gate transport it asked for.
+        if (!cancelled) setVoiceCapabilities(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [gatewayId, gatewayRequest, settings?.voiceEngine, status]);
+
   // A call is bound to the gateway, session and Bot it captured: any of them
   // moving ends it before another utterance can be sent into the wrong thread.
   useEffect(() => {
@@ -1434,17 +1498,30 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   // before the phase itself reaches `muted`.
   const muted = phase === 'muted' || (!gateLive && session.muteIntent === true);
   const partial = gateLive ? gateBanner.partial : session.partial;
+  // The one transport decision, shared by the offer below and the start path
+  // the screen hands to `start`. A phone preference is always phone; otherwise
+  // the Gate's resolved engine decides, falling back to phone when it is not
+  // ready. An unknown choice keeps the Gate for a non-phone preference.
+  const callPreference = settings?.voiceEngine ?? 'auto';
+  // A stale answer from a previous gateway (or from before a reconnect) never
+  // decides the transport: only the capabilities of the currently connected
+  // gateway count, and until its own answer lands the choice stays unknown.
+  const currentCapabilities =
+    voiceCapabilities && voiceCapabilities.gatewayId === gatewayId && status === 'connected'
+      ? voiceCapabilities.capabilities
+      : undefined;
+  const gateEngine = currentCapabilities
+    ? chooseVoiceEngine(callPreference, currentCapabilities, Platform.OS).engine
+    : undefined;
+  const resolvedEngine = callPreference === 'phone' ? 'phone' : gateEngine;
+  const transport = handsfreeTransportForCall(resolvedEngine, callPreference);
   // Offered whenever a call could run on this device; what blocks it *right now*
   // is reported separately so the control never flickers with chat activity.
   const canStart =
     session.phase === 'idle' &&
     status === 'connected' &&
     Boolean(activeGateway) &&
-    handsfreeDeviceCanOfferCall(
-      availability,
-      nativeModuleLoaded,
-      settings?.voiceEngine === 'phone' ? 'phone' : 'gate',
-    );
+    handsfreeDeviceCanOfferCall(availability, nativeModuleLoaded, transport);
 
   const value: HandsfreeVoiceContextValue = {
     phase,
@@ -1466,6 +1543,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     engine: engineInfo?.engine,
     engineReason: engineInfo?.reason,
     canStart,
+    transport,
     startBlocker: handsfreeStartBlocker({
       status,
       isSending,
