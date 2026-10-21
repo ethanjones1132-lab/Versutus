@@ -43,7 +43,21 @@ const ATTEMPT_ROUND_TRIP_MS = 1_000;
 
 const BACKOFF_MS = [500, 1_000, 2_000, 4_000, 8_000];
 
-/** The delay before each reconnect attempt, fitted inside the window. */
+/**
+ * The widest gap the loop ever accepts might sit between two attempts: the last
+ * of the backoff steps. A window the Gate advertised longer than the early
+ * backoff covers is filled with repeats of this step rather than one sleep for
+ * everything that is left, so a link restored anywhere in the window is retried
+ * within this much of coming back.
+ */
+export const GATE_RECONNECT_MAX_STEP_MS = BACKOFF_MS[BACKOFF_MS.length - 1];
+
+/**
+ * The delay before each reconnect attempt, fitted inside the window. The five
+ * backoff steps come first; whatever window is left after the safety margin is
+ * fed through `GATE_RECONNECT_MAX_STEP_MS`, so a longer advertised window keeps
+ * an even, capped retry cadence instead of appending one long sleep.
+ */
 export function gateReconnectDelays(windowMs = GATE_RECONNECT_WINDOW_MS): number[] {
   const delays: number[] = [];
   let spent = 0;
@@ -52,10 +66,18 @@ export function gateReconnectDelays(windowMs = GATE_RECONNECT_WINDOW_MS): number
     delays.push(step);
     spent += step;
   }
+  // The rest of the window, fed through the cap: repeats of the widest backoff
+  // step keep trying while the Gate still holds the call, so a link that comes
+  // back late is retried within one step of coming back — and no single wait,
+  // whatever the window, grows past the backoff it continues.
+  let left = windowMs - GATE_RECONNECT_SAFETY_MARGIN_MS - spent;
+  while (left > GATE_RECONNECT_MAX_STEP_MS) {
+    delays.push(GATE_RECONNECT_MAX_STEP_MS);
+    left -= GATE_RECONNECT_MAX_STEP_MS;
+  }
   // One shot for the last moment of the window — landing before it closes, so
   // the attempt is issued rather than slept through.
-  const last = windowMs - GATE_RECONNECT_SAFETY_MARGIN_MS - spent;
-  if (last > 0) delays.push(last);
+  if (left > 0) delays.push(left);
   return delays;
 }
 
