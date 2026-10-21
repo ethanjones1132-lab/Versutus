@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import * as nodeFs from 'node:fs';
 import { readdir as nodeReaddir, rm as nodeRm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 // Durable turns (docs/design/durable-turns.md 3.2). One JSONL file per turn:
 //
@@ -160,8 +160,34 @@ export function createTurnJournal({
   let lastPruneAt = 0;
   let closed = false;
 
-  const callerDir = (callerId) => join(dir, safeSegment(callerId, 'anonymous'));
-  const fileFor = (callerId, turnId) => join(callerDir(callerId), `${safeSegment(turnId)}.jsonl`);
+  /**
+   * The directory a caller id names, or null when it names none of its own.
+   *
+   * `safeSegment` falls back for an id that reduces to nothing (`...`), and that
+   * fallback would be one shared folder every such id calls home. A caller id
+   * may only name a directory it contributes at least one character to;
+   * anything else has no turns rather than someone else's.
+   */
+  const callerDir = (callerId) => {
+    const segment = safeSegment(callerId, '');
+    return segment.length > 0 ? join(dir, segment) : null;
+  };
+  const fileFor = (callerId, turnId) => {
+    const callerPath = callerDir(callerId);
+    return callerPath === null ? null : join(callerPath, `${safeSegment(turnId)}.jsonl`);
+  };
+  /**
+   * Whether a turn read out of a directory is the caller's own.
+   *
+   * A caller id reduces to a path segment, and two ids can reduce to the same
+   * one: `..victim` and `victim` both name `victim`. The meta line is the only
+   * record of who a turn belongs to, so a stored turn is served only to the
+   * caller its meta names - never to whatever id happened to resolve to the
+   * directory it sits in. A meta written before that record existed belongs to
+   * the directory it sits in, the same assumption retention's index makes.
+   */
+  const ownsTurn = (callerId, meta, path) =>
+    (meta?.callerId ?? (path === null ? null : basename(dirname(path)))) === callerId;
   // The assembled reply lives beside the frame log rather than inside it, so the
   // per-turn event cap can drop frames without ever costing the answer (design
   // 3.2: "the assembled final text is kept separately").
@@ -486,6 +512,24 @@ export function createTurnJournal({
     };
   }
 
+  /**
+   * The handle for a turn that cannot name a directory of its own: it keeps the
+   * caller's stream alive and records nothing, because there is no safe place to
+   * record it. Same shape as a live handle, so no caller has to know.
+   */
+  function unwritableHandle() {
+    return {
+      append() {},
+      finish() {},
+      get seq() {
+        return 0;
+      },
+      get text() {
+        return '';
+      },
+    };
+  }
+
 /**
  * Drop finished turns beyond the retention window or the count cap, oldest
  * first, from the index rather than from the disk. A RUNNING turn is never a
@@ -640,6 +684,22 @@ function schedulePrune() {
     begin({ callerId, turnId, sessionId = null, backendId = null, botId = null, model = null } = {}) {
       const key = turnKey(callerId, turnId);
       if (live.has(key)) throw new TurnExistsError(turnId);
+      const path = fileFor(callerId, turnId);
+      if (path === null) {
+        // Nothing safe to name, so nothing to write: a caller id that reduces to
+        // no segment would otherwise journal into the shared fallback folder.
+        log(`turn journal: caller id "${String(callerId)}" names no directory; turn "${String(turnId)}" is not journalled`);
+        return unwritableHandle();
+      }
+      // A turn id is used once per caller, but another caller id can reduce to
+      // this same file name. A turn already stored here that names a different
+      // caller is that caller's turn: writing over it would rewrite its meta and
+      // delete its reply, so this turn is recorded nowhere rather than there.
+      const stored = readMetaLine(path);
+      if (stored && !ownsTurn(callerId, stored, path)) {
+        log(`turn journal: caller id "${String(callerId)}" resolves to another caller's turn "${String(turnId)}"; it is not journalled`);
+        return unwritableHandle();
+      }
       const stamp = now();
       const meta = {
         turnId,
@@ -661,7 +721,7 @@ function schedulePrune() {
         key,
         callerId,
         turnId,
-        path: fileFor(callerId, turnId),
+        path,
         meta,
         events: [],
         pending: [],
@@ -694,16 +754,20 @@ function schedulePrune() {
       // A turn this process is running is authoritative from memory: its meta on
       // disk only moves when the turn does.
       if (entry) return { ...entry.meta, text: entry.text };
-      const read = readTurnFile(fileFor(callerId, turnId));
-      return read ? { ...read.meta, text: read.text } : null;
+      const path = fileFor(callerId, turnId);
+      const read = path === null ? null : readTurnFile(path);
+      // A file another caller's id resolved to is not this caller's turn.
+      return read && ownsTurn(callerId, read.meta, path) ? { ...read.meta, text: read.text } : null;
     },
 
     /** This caller's turns, newest first, optionally filtered by session or status. */
     async list(callerId, { sessionId = null, status = null, limit = 50 } = {}) {
       const rows = [];
+      const callerPath = callerDir(callerId);
+      if (callerPath === null) return [];
       let names = [];
       try {
-        names = await io.readdir(callerDir(callerId));
+        names = await io.readdir(callerPath);
       } catch {
         names = [];
       }
@@ -712,8 +776,11 @@ function schedulePrune() {
         // Meta lines only: a list answers with meta, so reading one turn's whole
         // frame log (up to the cap) to fill in fields the answer drops was the
         // most expensive thing this route could do.
-        const meta = readMetaLine(join(callerDir(callerId), name));
-        if (meta) rows.push(meta);
+        const meta = readMetaLine(join(callerPath, name));
+        // The directory is a reduction of the caller id, and another id can
+        // reduce to it (`..victim` -> `victim`): only a turn whose own meta
+        // names this caller is one of this caller's turns.
+        if (meta && ownsTurn(callerId, meta, join(callerPath, name))) rows.push(meta);
       }
       for (const entry of live.values()) {
         if (entry.callerId !== callerId) continue;
@@ -740,7 +807,11 @@ function schedulePrune() {
      */
     async subscribe(callerId, turnId, after, onEvent) {
       const entry = live.get(turnKey(callerId, turnId));
-      const events = entry ? entry.events : (readTurnFile(fileFor(callerId, turnId))?.events ?? []);
+      const path = entry ? null : fileFor(callerId, turnId);
+      const stored = path === null ? null : readTurnFile(path);
+      // A stored turn this caller's id merely resolved to is not this caller's
+      // turn, so it replays nothing at all.
+      const events = entry ? entry.events : (stored && ownsTurn(callerId, stored.meta, path) ? stored.events : []);
       for (const event of events) {
         if (event.seq > after) safeCall(onEvent, event);
       }
@@ -767,8 +838,8 @@ async cancel(callerId, turnId) {
         return true;
       }
       const path = fileFor(callerId, turnId);
-      const read = readTurnFile(path);
-      if (!read || read.meta.status !== 'running') return false;
+      const read = path === null ? null : readTurnFile(path);
+      if (!read || !ownsTurn(callerId, read.meta, path) || read.meta.status !== 'running') return false;
       const finishedAt = now();
       const meta = {
         ...read.meta,
