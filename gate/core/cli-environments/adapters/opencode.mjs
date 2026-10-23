@@ -6,7 +6,7 @@ export const opencodeAdapter = {
   adapterRevision: '1',
   supportedCliVersions: '1.17.x-1.18.x',
   protocolVersions: { acp: '1', jsonl: '1' },
-  capabilities: ['acp', 'run-json', 'mcp', 'sessions', 'tools', 'models'],
+  capabilities: ['acp', 'run-json', 'mcp', 'sessions', 'tools', 'models', 'bots'],
 
   /**
    * The native server this CLI exposes. `opencode serve` announces its port on

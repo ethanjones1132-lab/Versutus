@@ -709,6 +709,8 @@ export class ManifestClient implements PortalClient {
     description?: string;
     modelId?: string | null;
     providerId?: string | null;
+    /** The environment the Bot is created on, when the Gate serves Bots from several. */
+    backendId?: string;
   }): Promise<PublicBot> {
     const path = this.requireEndpoint('bots');
     return this.rootTransport.request('POST', path, input);

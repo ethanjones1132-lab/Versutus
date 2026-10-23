@@ -1,3 +1,16 @@
+import { mkdir, readFile, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import { writeFileAtomic } from '../../atomic-file.mjs';
+import {
+  flattenModels,
+  isBotAgent,
+  renderAgentFile,
+  resolveModelPin,
+  toPublicAgentBot,
+  validateBotId,
+} from '../opencode-agents.mjs';
+
 /**
  * OpenCode as a chat backend.
  *
@@ -14,6 +27,7 @@ export function toGatewaySession(session) {
     source: 'opencode',
     user_id: null,
     model: session.model?.modelID ?? null,
+    bot: typeof session.agent === 'string' && session.agent ? session.agent : null,
     title: session.title ?? null,
     started_at: session.time?.created ?? Date.now(),
     ended_at: null,
@@ -429,6 +443,15 @@ export function createOpenCodeBackend({
   firstOutputIdleMs = OPENCODE_FIRST_OUTPUT_IDLE_MS,
   idleMs = OPENCODE_IDLE_MS,
   readTimeoutMs = READ_TIMEOUT_MS,
+  // Where agent files live. Left unset it is asked of the server (`GET /path`),
+  // which knows its own config directory whoever started it.
+  agentsDir,
+  // The Gate only ever serves free models here (ADR 0016).
+  freeOnly = true,
+  writeFile = writeFileAtomic,
+  readText = (path) => readFile(path, 'utf8'),
+  removeFile = unlink,
+  ensureDir = (path) => mkdir(path, { recursive: true }),
 } = {}) {
   const root = String(baseUrl).replace(/\/+$/, '');
 
@@ -659,6 +682,63 @@ export function createOpenCodeBackend({
     };
   }
 
+  const fail = (message, code, status) => {
+    const error = new Error(message);
+    error.code = code;
+    error.status = status;
+    return error;
+  };
+
+  async function readModels() {
+    const config = await call('/config/providers');
+    return { rows: flattenModels(config), defaults: config?.default ?? {} };
+  }
+
+  async function assertFreeModel(model) {
+    const { rows } = await readModels();
+    const match = rows.find((row) => row.providerId === model.providerId && row.modelId === model.modelId);
+    if (!match?.free) {
+      throw fail(`model "${model.providerId}/${model.modelId}" is not free; only free models are allowed here`, 'model_not_free', 400);
+    }
+  }
+
+  async function readAgents() {
+    const agents = await call('/agent');
+    return Array.isArray(agents) ? agents : [];
+  }
+
+  async function resolveAgentsDir() {
+    if (agentsDir) return agentsDir;
+    const paths = await call('/path');
+    if (typeof paths?.config !== 'string' || !paths.config) {
+      throw fail('OpenCode did not report its config directory', 'backend_unsupported', 501);
+    }
+    return join(paths.config, 'agents');
+  }
+
+  /**
+   * The server reads agent files once per instance, so a reload is what makes a
+   * write visible. It also drops in-flight work, so refuse while a turn runs
+   * rather than interrupt it.
+   */
+  async function reloadAgents() {
+    const busy = await call('/session/status');
+    if (busy && typeof busy === 'object' && Object.keys(busy).length > 0) {
+      throw fail('OpenCode is running a turn; try again when it finishes', 'backend_busy', 409);
+    }
+    await call('/global/dispose', { method: 'POST' });
+  }
+
+  async function agentFile(id) {
+    const dir = await resolveAgentsDir();
+    return { dir, path: join(dir, `${id}.md`) };
+  }
+
+  async function botAgent(id) {
+    const agent = (await readAgents()).find((entry) => entry.name === id);
+    return isBotAgent(agent) ? agent : null;
+  }
+
   const backend = {
     kind: 'opencode',
 
@@ -667,9 +747,10 @@ export function createOpenCodeBackend({
       return (Array.isArray(sessions) ? sessions : []).map(toGatewaySession);
     },
 
-    async createSession({ title, model } = {}) {
+    async createSession({ title, model, agent } = {}) {
       const body = {};
       if (title) body.title = title;
+      if (agent) body.agent = agent;
       if (model?.providerId) body.model = { providerID: model.providerId, id: model.modelId };
       return toGatewaySession(await call('/session', { method: 'POST', body: JSON.stringify(body) }));
     },
@@ -695,9 +776,13 @@ export function createOpenCodeBackend({
      * rather than with a transport timeout. A 404 is the server saying it
      * predates that route, and the blocking POST still serves it.
      */
-    async sendMessage(sessionId, { text, model, signal } = {}) {
+    async sendMessage(sessionId, { text, model, signal, agent } = {}) {
       const body = { parts: [{ type: 'text', text }] };
-      if (model?.providerId) body.model = { providerID: model.providerId, modelID: model.modelId };
+      if (agent) body.agent = agent;
+      if (model?.providerId) {
+        if (freeOnly && agent) await assertFreeModel(model);
+        body.model = { providerID: model.providerId, modelID: model.modelId };
+      }
       const payload = JSON.stringify(body);
       const session = encodeURIComponent(sessionId);
       // Subscribe first, post second, and record when the send went out: the
@@ -732,22 +817,128 @@ export function createOpenCodeBackend({
       );
     },
 
-    /** Every model the CLI can actually reach, qualified by its own provider. */
+    /**
+     * Every model the CLI can actually reach, qualified by its own provider.
+     * A model the catalog has retired is not offered: the server still lists
+     * it, but the provider no longer answers for it.
+     */
     async listModels() {
       const config = await call('/config/providers');
+      const free = new Map(flattenModels(config).map((row) => [`${row.providerId}/${row.modelId}`, row.free]));
       const models = [];
       for (const provider of config.providers ?? []) {
-        for (const modelId of Object.keys(provider.models ?? {})) {
+        for (const [modelId, model] of Object.entries(provider.models ?? {})) {
+          if (model?.status === 'deprecated') continue;
           models.push({
             id: `${provider.id}/${modelId}`,
             providerId: provider.id,
             modelId,
             label: `${provider.name ?? provider.id} · ${modelId}`,
             available: true,
+            free: free.get(`${provider.id}/${modelId}`) === true,
           });
         }
       }
       return models;
+    },
+
+    // ---- Bots: OpenCode agents (ADR 0016) ------------------------------
+
+    async listBots() {
+      const agents = await readAgents();
+      return { object: 'list', data: agents.filter(isBotAgent).map(toPublicAgentBot) };
+    },
+
+    async getBot({ id } = {}) {
+      const agent = id ? await botAgent(id) : null;
+      if (!agent) throw fail(`unknown bot "${id}"`, 'unknown_bot', 404);
+      return { ...toPublicAgentBot(agent), soul: typeof agent.prompt === 'string' ? agent.prompt : '' };
+    },
+
+    async createBot({ name, soul, description, modelId, providerId } = {}) {
+      const id = validateBotId(name);
+      if (!id) throw fail('invalid bot name', 'invalid_bot_name', 400);
+      // Any agent of that name — built-in, subagent or Bot — would be shadowed
+      // or shadow it, so the name is taken whatever it is.
+      if ((await readAgents()).some((entry) => entry.name === id)) {
+        throw fail(`bot "${id}" already exists`, 'bot_exists', 409);
+      }
+      const { rows, defaults } = await readModels();
+      const pin = resolveModelPin({ providerId, modelId }, rows, { freeOnly, defaults });
+      const { dir, path } = await agentFile(id);
+      await ensureDir(dir);
+      await writeFile(path, renderAgentFile({ description, soul, ...pin }), { encoding: 'utf8' });
+      try {
+        await reloadAgents();
+      } catch (error) {
+        // A Bot that cannot be loaded must not linger as a file that appears
+        // later, at a surprising moment, when something else reloads.
+        await removeFile(path).catch(() => undefined);
+        throw error;
+      }
+      const created = await botAgent(id);
+      if (!created) {
+        await removeFile(path).catch(() => undefined);
+        throw fail('OpenCode did not load the new agent', 'bot_create_failed', 502);
+      }
+      return toPublicAgentBot(created);
+    },
+
+    /** Fields left absent are untouched; a model pin can be replaced, never cleared (null is ignored). */
+    async updateBot({ id, soul, description, modelId, providerId } = {}) {
+      const botId = validateBotId(id);
+      if (!botId) throw fail('invalid bot name', 'invalid_bot_name', 400);
+      const agent = await botAgent(botId);
+      if (!agent) throw fail(`unknown bot "${botId}"`, 'unknown_bot', 404);
+      const { path } = await agentFile(botId);
+      const previous = await readText(path).catch(() => null);
+      if (previous === null) {
+        // Defined in opencode.json, not as a file the Gate can safely rewrite.
+        throw fail(`bot "${botId}" is not defined by an agent file`, 'bot_not_editable', 409);
+      }
+      let pin = { providerId: agent.model?.providerID, modelId: agent.model?.modelID };
+      if (typeof modelId === 'string' && modelId.trim() || typeof providerId === 'string' && providerId.trim()) {
+        const { rows, defaults } = await readModels();
+        pin = resolveModelPin({ providerId, modelId }, rows, { freeOnly, defaults });
+      }
+      // A null pin is the app saying "no change": an OpenCode agent always keeps one.
+      const next = renderAgentFile({
+        description: typeof description === 'string' ? description : agent.description,
+        soul: typeof soul === 'string' ? soul : agent.prompt,
+        ...pin,
+      });
+      await writeFile(path, next, { encoding: 'utf8' });
+      try {
+        await reloadAgents();
+      } catch (error) {
+        await writeFile(path, previous, { encoding: 'utf8' }).catch(() => undefined);
+        throw error;
+      }
+      return toPublicAgentBot((await botAgent(botId)) ?? agent);
+    },
+
+    /**
+     * The backend for one Bot: the same server, with every session it opens
+     * and every turn it sends carrying the agent, and its roster limited to
+     * that agent's own sessions.
+     */
+    async forBot(botId) {
+      const id = validateBotId(botId);
+      if (!id || !(await botAgent(id))) throw fail(`unknown bot "${botId}"`, 'unknown_bot', 404);
+      return {
+        ...backend,
+        bot: id,
+        async listSessions() {
+          return (await backend.listSessions()).filter((session) => session.bot === id);
+        },
+        async createSession(options = {}) {
+          if (freeOnly && options.model?.providerId) await assertFreeModel(options.model);
+          return backend.createSession({ ...options, agent: id });
+        },
+        sendMessage(sessionId, options = {}) {
+          return backend.sendMessage(sessionId, { ...options, agent: id });
+        },
+      };
     },
 
     /** Read the shared bus, exposing its ready point before a turn is sent. */

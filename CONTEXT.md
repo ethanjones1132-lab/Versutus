@@ -13,7 +13,7 @@ The app's stored configuration for a gateway (name, URL, auth token, kind, agent
 _Avoid_: gateway (when meaning the stored config), profile (alone), bot
 
 **Bot**:
-A named, isolated agent with its own soul, provider/model pin, avatar, sessions, memory, skills, and crons. A Bot **is** a Hermes profile (`~/.hermes/profiles/<name>/`); Bot Mode is a UI over that primitive, not a second store. A non-Hermes CLI environment is not a Bot.
+A named, isolated agent with its own soul, provider/model pin, avatar, and sessions. A Bot **is** a Hermes profile (`~/.hermes/profiles/<name>/`) — with its own memory, skills, and crons — or an **OpenCode agent** (an agent file in OpenCode's `agents/` directory, free models only; no memory, skills, or crons, ADR 0016). Bot Mode is a UI over those primitives, not a second store. Codex and Claude Code are not Bots.
 _Avoid_: profile (alone), gateway profile, channel, capability instance, platform adapter, CLI environment (when meaning a Bot)
 
 **Soul**:
@@ -129,7 +129,7 @@ _Avoid_: push (which implies server delivery)
 - A **group** has two to six **Bots**; each member has its own `Group:` **session**
 - Tapping a **Bot** opens its **Bot Chat**; other **sessions** on that Bot can be opened or created from there without replacing Bot Chat
 - A **soul** belongs to exactly one **Bot**
-- A **Bot** lives on one Hermes **CLI environment**; Codex, Claude Code, and OpenCode are not Bots
+- A **Bot** lives on one **CLI environment** — Hermes or OpenCode (ADR 0016); Codex and Claude Code are not Bots
 - Many **Bots** are reached through one **gateway**; a Bot is not its own **gateway profile**
 - A **Bot** is addressed with its own **listen key**; provider credentials stay in the Hermes profile
 - A **command transcript** is keyed by gateway + **session**

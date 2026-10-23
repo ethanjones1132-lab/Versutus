@@ -44,6 +44,7 @@ first** and only spawns when none answers.
 | Approvals | `GET /session/{sessionID}/permission`, `POST /session/{sessionID}/permission/{requestID}/reply` |
 | Providers + models | `GET /config/providers` → `{ providers[], default }` |
 | Credential provisioning | `PUT|DELETE /auth/{providerID}` |
+| Agents (Bots, ADR 0016) | `GET /agent` (custom = `native: false`, `mode: primary`), `GET /path` (`config` dir), `GET /session/status` (busy map), `POST /global/dispose` (reload; agent files are read once per instance) |
 
 `POST /session/{id}/message` blocks until the turn completes and returns the assistant message.
 Use `/event` for live deltas, `prompt_async` if a non-blocking submit is ever needed.

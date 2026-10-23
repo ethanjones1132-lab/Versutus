@@ -1,5 +1,7 @@
 # 0009 — A Bot is a selector on the Hermes backend
 
+> **Amended by [0016](0016-bots-on-opencode.md):** the roster is now merged across environments, and ownership is resolved per Bot (`findBotOwner`). `bot=<id>` is still the selector; it no longer implies Hermes.
+
 A Bot is not a backend and not a nested REST tree. Chat, sessions, and jobs keep `backendId` as the CLI environment (ADR 0003). When the backend is Hermes, an additional `bot=<name>` selects that profile's multiplex prefix and listen key (ADRs 0004–0006). Omitted `bot` is the default profile on the unprefixed listener.
 
 Inventory is a new list (`GET /v1/bots` or equivalent). Conversation routes are not duplicated under `/v1/bots/{name}/…`.

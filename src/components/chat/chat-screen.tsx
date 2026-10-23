@@ -21,6 +21,7 @@ import { CreateGroupSheet } from '@/components/chat/create-group-sheet';
 import { GroupRoomActionSheet } from '@/components/chat/group-room-action-sheet';
 import { GroupRoomView } from '@/components/chat/group-room-view';
 import { NewAgentSheet } from '@/components/chat/new-agent-sheet';
+import { botRuntimes, runtimeForBot } from '@/lib/gateway/bot-runtimes';
 import { RoutinesPane } from '@/components/chat/routines-pane';
 import { SkillsPane } from '@/components/chat/skills-pane';
 import { ThreadSpendGlance } from '@/components/chat/thread-spend-glance';
@@ -1291,6 +1292,14 @@ export function ChatScreen() {
     [modelCatalog, selectedBackendId, threadModel, activeGateway?.modelLocks],
   );
 
+  // Where a Bot can live (ADR 0016). Built from the unscoped catalogue: the
+  // picker above is narrowed to the selected chat backend, but a new Bot's
+  // runtime is its own choice, whatever the thread happens to be on.
+  const botRuntimeOptions = useMemo(
+    () => botRuntimes(backends, modelCatalog as Record<string, unknown>[]),
+    [backends, modelCatalog],
+  );
+
   const modelLabel = threadModel ?? 'Default model';
   // Only the backend actually routing this thread. The `?? backends[0]`
   // fallback that used to be here labelled the chip "Claude Code" whenever the
@@ -2542,6 +2551,7 @@ export function ChatScreen() {
         // turns the bot's model pin from a hand-typed `provider/model-id` into a
         // pick, so a typo can no longer pin a model that does not exist.
         models={modelRows}
+        runtimes={editingBot ? runtimeForBot(botRuntimeOptions, editingBot) : botRuntimeOptions}
         onClose={() => {
           setNewAgentVisible(false);
           setEditingBot(null);

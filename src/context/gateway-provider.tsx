@@ -425,6 +425,7 @@ type GatewayContextValue = {
     description?: string;
     modelId?: string;
     providerId?: string;
+    backendId?: string;
   }) => Promise<PublicBot>;
   /** Edit an existing Bot's soul, description or model pin; null clears a pin — Gate adapters only. */
   updateBot: (input: {
@@ -6880,6 +6881,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     description?: string;
     modelId?: string;
     providerId?: string;
+    backendId?: string;
   }): Promise<PublicBot> => {
     const client = clientRef.current;
     if (!client?.createBot) {

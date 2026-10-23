@@ -3031,6 +3031,136 @@ test('a backend whose capability cannot be read is started and asked, as before'
   }
 });
 
+// ─── Bots on more than one runtime (ADR 0016) ───────────────────────────
+
+/** Hermes-like and OpenCode-like environments, each owning one Bot. */
+function twoRuntimeRegistry(calls) {
+  const plain = stubRegistry(calls).get('stubcli');
+  const runtime = (adapterId, bot, extra = {}) => ({
+    ...plain,
+    adapterId,
+    capabilities: [...plain.capabilities, 'bots'],
+    createBackend(options) {
+      return {
+        ...plain.createBackend(options),
+        kind: adapterId,
+        async listBots() {
+          return { object: 'list', data: [{ id: bot, displayName: bot, routable: true }] };
+        },
+        async getBot({ id }) {
+          if (id !== bot) throw Object.assign(new Error(`unknown bot "${id}"`), { code: 'unknown_bot', status: 404 });
+          return { id, displayName: id, routable: true, soul: `${adapterId} soul` };
+        },
+        async forBot(id) {
+          if (id !== bot) throw Object.assign(new Error(`unknown bot "${id}"`), { code: 'unknown_bot', status: 404 });
+          return { ...this, scopedTo: `${adapterId}:${id}` };
+        },
+        async createBot(input) {
+          calls.push(`createBot:${adapterId}:${input.name}`);
+          return { id: input.name, displayName: input.name, routable: true };
+        },
+        ...extra,
+      };
+    },
+  });
+  const hermes = runtime('hermescli', 'researcher', {
+    async updateBot({ id }) { return { id, displayName: id, routable: true }; },
+  });
+  const opencode = runtime('opencodecli', 'scout');
+  return {
+    get(id) {
+      if (id === 'hermescli') return hermes;
+      if (id === 'opencodecli') return opencode;
+      throw new Error(`unknown CLI adapter "${id}"`);
+    },
+    list() { return [hermes, opencode]; },
+  };
+}
+
+const TWO_RUNTIMES = [
+  { id: 'a-hermes', adapterId: 'hermescli' },
+  { id: 'b-opencode', adapterId: 'opencodecli' },
+];
+
+test('the roster merges every runtime and says where each Bot lives', async () => {
+  const { gate } = await makeGate({ registry: twoRuntimeRegistry([]), environments: TWO_RUNTIMES });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/bots`, { headers: auth(gate) });
+    assert.equal(response.status, 200);
+    const { data } = await response.json();
+    assert.deepEqual(
+      data.map((bot) => [bot.id, bot.backendId, bot.runtime]),
+      [['researcher', 'a-hermes', 'hermescli'], ['scout', 'b-opencode', 'opencodecli']],
+    );
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a Bot is read from the runtime that owns it, not from the first one', async () => {
+  const { gate } = await makeGate({ registry: twoRuntimeRegistry([]), environments: TWO_RUNTIMES });
+  try {
+    const scout = await fetch(`http://127.0.0.1:${gate.port}/v1/bots/scout`, { headers: auth(gate) });
+    assert.equal(scout.status, 200);
+    assert.equal((await scout.json()).soul, 'opencodecli soul');
+    const missing = await fetch(`http://127.0.0.1:${gate.port}/v1/bots/nobody`, { headers: auth(gate) });
+    assert.equal(missing.status, 404);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('an operation the owning runtime lacks is refused by name, not asked of another runtime', async () => {
+  const { gate } = await makeGate({ registry: twoRuntimeRegistry([]), environments: TWO_RUNTIMES });
+  try {
+    const patch = (id) => fetch(`http://127.0.0.1:${gate.port}/v1/bots/${id}`, {
+      method: 'PATCH',
+      headers: { ...auth(gate), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ soul: 'new soul' }),
+    });
+    const refused = await patch('scout');
+    assert.equal(refused.status, 501);
+    assert.equal((await refused.json()).error.code, 'backend_unsupported');
+    assert.equal((await patch('researcher')).status, 200);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a new Bot is created on the runtime the caller names', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: twoRuntimeRegistry(calls), environments: TWO_RUNTIMES });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/bots`, {
+      method: 'POST',
+      headers: { ...auth(gate), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'pathfinder', backendId: 'b-opencode' }),
+    });
+    assert.equal(response.status, 200);
+    assert.ok(calls.includes('createBot:opencodecli:pathfinder'));
+    assert.equal(calls.some((call) => call.startsWith('createBot:hermescli')), false);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a Bot name is one namespace across runtimes', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: twoRuntimeRegistry(calls), environments: TWO_RUNTIMES });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/bots`, {
+      method: 'POST',
+      headers: { ...auth(gate), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Researcher', backendId: 'b-opencode' }),
+    });
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).error.code, 'bot_exists');
+    assert.equal(calls.some((call) => call.startsWith('createBot')), false);
+  } finally {
+    await gate.close();
+  }
+});
+
 // ─── Detachable turns: a phone that locks mid-reply keeps the reply ─────
 // Android suspends (and often kills) an app's socket when the screen locks,
 // which is indistinguishable from the user pressing Stop. Reading it as the

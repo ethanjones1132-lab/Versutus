@@ -1,5 +1,7 @@
 # 0004 — Bots are Hermes profiles
 
+> **Amended by [0016](0016-bots-on-opencode.md):** an OpenCode agent can now also be a Bot. The rest of this record describes Hermes Bots and stands.
+
 Versutus Bots are the Hermes desktop Bot Mode primitive: a Bot **is** a Hermes profile (`~/.hermes/profiles/<name>/`), not a new identity store and not a Discord/Telegram channel. The phone talks to Bots that already exist on the attached Hermes, and may create/edit Bots as Hermes profiles. Codex, Claude Code, and OpenCode stay CLI environment backends; they are not Bots.
 
 This keeps `@mention`, canonical Bot Chat, routines (`[bot:<name>]` crons), soul, and scoped sessions — all of which exist only on Hermes profiles. A future roster row that is backed by a non-Hermes CLI (option B) is allowed later, but must not claim to be a Bot and must not ship in the first cut.

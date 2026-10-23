@@ -1937,13 +1937,41 @@ export async function createGate(config = {}) {
   }
 
   /**
+   * Which attached environment owns a Bot (ADR 0016), or null. Ask each that can
+   * scope to a Bot, in order: `unknown_bot` moves on; any other refusal means the
+   * Bot is known but unhealthy there, so that environment still owns it and the
+   * caller gets its honest refusal instead of a misleading "unknown bot".
+   */
+  async function findBotOwner(botId) {
+    for (const entry of await backendManager.list()) {
+      if (!await backendCanServe(entry, 'forBot')) continue;
+      const candidate = await backendManager.get(entry.id).catch(() => null);
+      if (typeof candidate?.forBot !== 'function') continue;
+      try {
+        await candidate.forBot(botId);
+        return entry.id;
+      } catch (error) {
+        if (error?.code === 'unknown_bot') continue;
+        return entry.id;
+      }
+    }
+    return null;
+  }
+
+  /**
    * The first attached environment that owns Bots, or null.
    *
    * Shared by the resolver below and by the index key a Bot-scoped lookup
    * retires its row under: a Bot names its own environment, so both places need
    * the same answer to the same question and neither may answer it differently.
    */
-  async function environmentWithBots() {
+  async function environmentWithBots(botId) {
+    // Hermes profiles and OpenCode agents share one roster (ADR 0016), so a named
+    // Bot is looked up rather than assumed to live on the first environment.
+    if (botId) {
+      const ownerId = await findBotOwner(botId);
+      if (ownerId) return (await backendManager.list()).find((entry) => entry.id === ownerId) ?? { id: ownerId };
+    }
     for (const entry of await backendManager.list()) {
       if (!await backendCanServe(entry, 'forBot')) continue;
       const candidate = await backendManager.get(entry.id).catch(() => null);
@@ -1974,7 +2002,7 @@ export async function createGate(config = {}) {
    */
   async function resolveConversationScopeOrThrow(backendId, botId) {
     if (botId && !backendId) {
-      const owner = await environmentWithBots();
+      const owner = await environmentWithBots(botId);
       if (owner) {
         return { backend: await forBotOrThrow(await backendManager.get(owner.id), botId), environmentId: owner.id };
       }
@@ -2044,7 +2072,7 @@ export async function createGate(config = {}) {
         // whenever a Bot is selected) names no environment at all. Keying on the
         // raw params would look under `|default`, a window nothing was ever
         // written to, and the stale row would survive the miss that retired it.
-        const environmentId = backendId ?? (botId ? (await environmentWithBots())?.id : undefined);
+        const environmentId = backendId ?? (botId ? (await environmentWithBots(botId))?.id : undefined);
         await sessionListIndex.remove(sessionIndexKey(environmentId, botId), sessionId);
         turnSeqs.delete(sessionId);
       },
@@ -2055,7 +2083,7 @@ export async function createGate(config = {}) {
       // thread sheet. A miss still goes to the backend, so a row the copy has
       // outlived is reported gone rather than answered from here.
       cachedSession: async (backendId, botId, sessionId) => {
-        const environmentId = backendId ?? (botId ? (await environmentWithBots())?.id : undefined);
+        const environmentId = backendId ?? (botId ? (await environmentWithBots(botId))?.id : undefined);
         if (!environmentId) return null;
         const held = await sessionListIndex.get(sessionIndexKey(environmentId, botId));
         return held?.sessions.find((row) => row?.id === sessionId) ?? null;
@@ -2939,8 +2967,78 @@ export async function createGate(config = {}) {
         }));
       }
 
-      async function resolveBackendFor(method) {
-        const explicit = url.searchParams.get('backendId');
+      /** Every Bot-capable environment's roster, rows tagged with where each lives. */
+      async function mergedBotRoster() {
+        const listed = [];
+        let firstError = null;
+        for (const entry of await backendManager.list()) {
+          if (!await backendCanServe(entry, 'listBots')) continue;
+          const backend = await backendManager.get(entry.id).catch((error) => { firstError ??= error; return null; });
+          if (typeof backend?.listBots !== 'function') continue;
+          try {
+            const roster = await backend.listBots();
+            const rows = Array.isArray(roster) ? roster : Array.isArray(roster?.data) ? roster.data : [];
+            listed.push({ id: entry.id, kind: backend.kind ?? entry.adapterId, rows, roster });
+          } catch (error) {
+            firstError ??= error;
+          }
+        }
+        // One environment: nothing to merge and nothing to relabel, so its own
+        // answer goes out verbatim. Nothing listed (an outage) falls through to
+        // the single-backend path, which reports it the way it always has.
+        if (listed.length === 1) return listed[0].roster;
+        if (listed.length === 0) return null;
+        const seen = new Set();
+        const data = [];
+        for (const { id, kind, rows } of listed) {
+          for (const row of rows) {
+            const rowId = String(row?.id ?? '');
+            if (!rowId || seen.has(rowId)) continue;
+            seen.add(rowId);
+            data.push({ ...row, backendId: id, runtime: row.runtime ?? kind });
+          }
+        }
+        return { object: 'list', data };
+      }
+
+      /** The environment that already has a Bot of this name, other than `backend`. */
+      async function botIdOwnedElsewhere(name, backend) {
+        const wanted = typeof name === 'string' ? name.trim().toLowerCase() : '';
+        if (!wanted) return null;
+        for (const entry of await backendManager.list()) {
+          if (!await backendCanServe(entry, 'listBots')) continue;
+          const other = await backendManager.get(entry.id).catch(() => null);
+          if (!other || other === backend || typeof other.listBots !== 'function') continue;
+          try {
+            const roster = await other.listBots();
+            const rows = Array.isArray(roster) ? roster : Array.isArray(roster?.data) ? roster.data : [];
+            if (rows.some((row) => String(row?.id ?? '').toLowerCase() === wanted)) return entry.id;
+          } catch {
+            // an unreachable roster cannot prove a clash; the create proceeds
+          }
+        }
+        return null;
+      }
+
+      async function resolveBackendFor(method, botId) {
+        let explicit = url.searchParams.get('backendId');
+        if (!explicit && botId) {
+          // A named Bot is served by whichever environment owns it. If that
+          // environment does not implement this operation (OpenCode agents have
+          // no memory files), say so rather than asking Hermes about a Bot it
+          // has never heard of.
+          explicit = (await findBotOwner(botId)) ?? null;
+          if (explicit) {
+            const owner = await backendManager.get(explicit).catch(() => null);
+            if (owner && typeof owner[method] !== 'function') {
+              res.writeHead(501, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                error: { message: `Bot "${botId}" does not support this on its runtime`, code: 'backend_unsupported' },
+              }));
+              return null;
+            }
+          }
+        }
         if (explicit) {
           const backend = await resolveBackend(explicit);
           if (!backend) return null;
@@ -2979,6 +3077,7 @@ export async function createGate(config = {}) {
         const explicit = backendId ?? url.searchParams.get('backendId');
         if (botId) {
           let selected = explicit;
+          if (!selected) selected = (await findBotOwner(botId)) ?? undefined;
           if (!selected) {
             for (const entry of await backendManager.list()) {
               if (!await backendCanServe(entry, 'forBot')) continue;
@@ -3469,6 +3568,17 @@ export async function createGate(config = {}) {
       }
 
       if (pathname === '/v1/bots' && method === 'GET') {
+        // No pinned environment: the roster is every environment's Bots in one
+        // list (ADR 0016). A Gate with a single Bot-capable environment answers
+        // exactly as it always did.
+        if (!url.searchParams.get('backendId')) {
+          const merged = await mergedBotRoster();
+          if (merged) {
+            res.writeHead(200);
+            res.end(JSON.stringify(merged));
+            return;
+          }
+        }
         const backend = await resolveBackendFor('listBots');
         if (!backend) return;
         try {
@@ -3490,9 +3600,23 @@ export async function createGate(config = {}) {
 
       if (pathname === '/v1/bots' && method === 'POST') {
         const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
+        // Which environment the new Bot lives on. The query wins, as everywhere
+        // else; the body is the same choice for clients that send JSON only.
+        if (!url.searchParams.get('backendId') && typeof body.backendId === 'string' && body.backendId) {
+          url.searchParams.set('backendId', body.backendId);
+        }
         const backend = await resolveBackendFor('createBot');
         if (!backend) return;
         try {
+          // Bot ids are one namespace across environments: @mention and Bot
+          // Chat address a Bot by id alone, so a second Bot of the same name
+          // on another environment would be unreachable.
+          const taken = await botIdOwnedElsewhere(body.name, backend);
+          if (taken) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: `bot "${String(body.name).trim()}" already exists on ${taken}`, code: 'bot_exists' } }));
+            return;
+          }
           const created = await backend.createBot({
             name: body.name,
             soul: body.soul,
@@ -3516,7 +3640,7 @@ export async function createGate(config = {}) {
       if (botMemoryMatch && method === 'GET') {
         // P2: a Bot's memory read, on demand like its soul. The backend owns
         // which files are memory; the Gate adds no path from the client.
-        const backend = await resolveBackendFor('getBotMemory');
+        const backend = await resolveBackendFor('getBotMemory', decodeURIComponent(botMemoryMatch[1]));
         if (!backend) return;
         try {
           const memory = await backend.getBotMemory({ id: decodeURIComponent(botMemoryMatch[1]) });
@@ -3535,7 +3659,7 @@ export async function createGate(config = {}) {
       if (botMemoryWriteMatch && method === 'PUT') {
         // P2: a confirmed memory edit. The backend enforces the whitelist and
         // an unknown Bot is refused by name.
-        const backend = await resolveBackendFor('setBotMemory');
+        const backend = await resolveBackendFor('setBotMemory', decodeURIComponent(botMemoryWriteMatch[1]));
         if (!backend) return;
         const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         try {
@@ -3561,7 +3685,7 @@ export async function createGate(config = {}) {
         // roster read stays small — a soul can be long and the list is re-read
         // constantly. The backend decides what is public; the listen key never
         // reaches this response.
-        const backend = await resolveBackendFor('getBot');
+        const backend = await resolveBackendFor('getBot', decodeURIComponent(botEditMatch[1]));
         if (!backend) return;
         try {
           const bot = await backend.getBot({ id: decodeURIComponent(botEditMatch[1]) });
@@ -3578,7 +3702,7 @@ export async function createGate(config = {}) {
 
       if (botEditMatch && method === 'PATCH') {
         const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
-        const backend = await resolveBackendFor('updateBot');
+        const backend = await resolveBackendFor('updateBot', decodeURIComponent(botEditMatch[1]));
         if (!backend) return;
         try {
           const updated = await backend.updateBot({

@@ -27,7 +27,26 @@ export type PublicBot = {
   description?: string | null;
   /** Present when the profile carries a model pin; null/absent when unpinned or unknown. */
   model?: BotPinnedModel | null;
+  /**
+   * Which runtime the Bot lives on, reported once the Gate serves Bots from
+   * more than one environment (ADR 0016). Absent on a single-runtime Gate,
+   * where every Bot is a Hermes profile.
+   */
+  runtime?: string | null;
+  /** The environment that owns the Bot — the one a create or edit is aimed at. */
+  backendId?: string | null;
 };
+
+/**
+ * The runtime's name for a roster row, or '' for Hermes and for a Gate that
+ * does not say — Hermes is what a Bot has always been, so it earns no tag.
+ */
+export function botRuntimeLabel(runtime?: string | null): string {
+  const id = runtime?.trim().toLowerCase();
+  if (!id || id === 'hermes' || id.startsWith('hermes')) return '';
+  if (id === 'opencode' || id.startsWith('opencode')) return 'OpenCode';
+  return runtime!.trim();
+}
 
 /**
  * One-line roster subtitle: routing state, plus the pinned default model when
@@ -39,7 +58,9 @@ export function botRowSubtitle(bot: PublicBot): string {
   if (bot.routingIssue === 'default_key_refused') return 'Default listen key refused';
   if (!bot.routable || bot.routingIssue === 'listen_key_missing') return 'No listen key';
   const pin = bot.model?.default ?? null;
-  return pin ? `Bot · ${pin}` : 'Bot';
+  const kind = botRuntimeLabel(bot.runtime);
+  const label = kind ? `${kind} Bot` : 'Bot';
+  return pin ? `${label} · ${pin}` : label;
 }
 
 /**
