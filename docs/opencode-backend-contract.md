@@ -242,3 +242,97 @@ Claude Code exposes no model list. The backend offers the documented aliases —
 `claude --version` prints `2.1.140 (Claude Code)`. `probeVersion` took the last whitespace token and
 read `"Code)"`, marking the environment `incompatible`. It now matches the first semver anywhere in
 the line, which also covers `codex-cli 0.147.0` and bare `1.17.9`.
+
+# OpenCode V2 backend contract
+
+Everything above documents the 1.x wire. OpenCode 2.x (verified live against the desktop-bundled
+`opencode-cli.exe` 2.0.32, 2026-10-21, on scratch databases via `OPENCODE_DB`) changes the wire
+enough to deserve its own section. The Gate classifies the server once (`detectOpenCodeServerMajor`,
+cached for the backend's lifetime) and then speaks the matching dialect; a server that classifies
+as nothing is treated as v1 so its failures stay named HTTP errors.
+
+## Server and auth
+
+- Auth is **always on** and is HTTP Basic `opencode:<password>`: no auth → 401, `Bearer` → 401,
+  `Basic` → 200. `OPENCODE_SERVER_PASSWORD` is honored silently; without it the startup banner
+  prints `server password <pw>`, which the native server recovers and redacts from logs.
+- `GET /api/info` → `{version, pid, urls, paths, capabilities}` — the JSON health probe. The v1
+  health path `GET /session` answers **SPA HTML 200** on v2, so health must require a JSON body,
+  not `response.ok`.
+- `serve --port N` is a wrapper that spawns a child `serve --stdio --port 0`; killing only the
+  parent **orphans** the child. Kill the process tree.
+- Every session-scoped route accepts `?location[directory]=<abs>` to scope by project (verified on
+  create, list, get, message list/get, prompt, wait, interrupt, delete, and `/api/event`). The
+  backend appends it from the record's `workspacePolicy.defaultRoot` on every v2 call.
+
+## Endpoints used (v2)
+
+| Purpose | Route | Notes |
+|---|---|---|
+| Health/info | `GET /api/info` | `{version, …}`; 401 also proves "v2, wrong credentials" |
+| List sessions | `GET /api/session` | `{data: Session.Info[]}` |
+| Create session | `POST /api/session` | `{title?, parentID?, agent?, model?: {id, providerID, variant?}}` → `{data}` |
+| Get / delete | `GET|DELETE /api/session/{id}` | `{data}` / 204 |
+| List messages | `GET /api/session/{id}/message?limit&order&cursor` | `{data: Message[], cursor: {previous, next}}`; opaque base64 cursors, followed to exhaustion |
+| Get message | `GET /api/session/{id}/message/{mid}` | `{data: Message}` |
+| Send message | `POST /api/session/{id}/prompt` | body `{text}` only — `parts[]` → 400 `Missing key at ["text"]` |
+| Switch model | `POST /api/session/{id}/model` | `{model: {id, providerID}}` → 204; the prompt route has no model field |
+| Wait (completion) | `POST /api/experimental/session/{id}/wait` | **204 exactly when the session goes idle** — the authoritative success signal (GET → 404) |
+| Interrupt | `POST /api/session/{id}/interrupt` | `{data: {interrupted: bool}}` |
+| Approvals | `POST /api/session/{id}/permission/{requestID}/reply` | `{reply}` (route from `/openapi.json`; not exercised live) |
+| Models | `GET /api/model` | `{location, data: [{id, modelID, providerID, name, status, enabled, …}]}` — `GET /api/provider` lists only custom providers |
+| Event bus (SSE) | `GET /api/event` | frames `{id, type, data}` |
+
+All v2 responses wrap payloads in `{data: …}`; the backend unwraps. Session ids must be `ses…`-shaped
+or every session-scoped route answers 400 `Invalid session ID`.
+
+## Turn flow (v2)
+
+1. Subscribe to `/api/event` (Basic auth) before sending — same ordering guarantee as v1.
+2. If a model is specified, `POST /api/session/{id}/model`.
+3. `POST /api/session/{id}/prompt` with `{text}`; it returns the enqueued user message.
+4. Arm the wait route: its 204 fires when the session goes idle. **No success-terminal bus frame
+   was observed on 2.0.32** — the wait route plus an `type: 'idle', outcome: 'succeeded'` message
+   written to the message list are the completion signals. (`session.execution.completed|ended` /
+   `session.idle` frames are mapped defensively in case a future build emits them.)
+5. Read the turn back from the message list and verify: an assistant message whose `finish` is
+   `error`, an `error` field, or an idle outcome other than `succeeded` fails the turn with that
+   error. `session.execution.failed` / `session.execution.interrupted` frames fail it from the bus.
+
+## Message shape (v2)
+
+Messages are **projected flat**, not parts-based:
+
+- User: `{id, type: 'user', text, time: {created}}`.
+- Assistant: `{id, type: 'assistant', agent, model: {id, providerID, variant}, content: […],
+  finish, rawFinish, cost, tokens, time: {created, streamed, completed}, error?}`.
+- Tool content part: `{type: 'tool', id: <callID>, name, state: {status: streaming|running|
+  completed|error, input?, content?: [{type:'text',text}], error?}, time: {created, ran, completed}}`.
+- Synthetic: `{type: 'idle', outcome}` is written when the session goes idle.
+- `time.created` is **epoch milliseconds** — the same unit the Gate already uses.
+
+The backend maps these onto the v1 gateway shapes (`toGatewaySessionV2`, `toGatewayMessageV2`).
+
+## Event catalog (v2 → v1 mapping)
+
+Frames are `{id, type, data}`; the translator (`translateV2Event`) maps onto the v1 event
+vocabulary so the entire streaming pipeline (part tracker, role holding, tool coalescing) is
+shared. Text/reasoning stream per `(assistantMessageID, ordinal)` with no part ids of their own;
+the part id is synthesized as `<messageID>:<ordinal>`. Verified catalog:
+
+| v2 event | Maps to |
+|---|---|
+| `session.text.started|delta|ended` | `message.part.updated` (text) / `message.part.delta` field `text` / snapshot |
+| `session.reasoning.started|delta|ended` | same, type `reasoning` |
+| `session.tool.input.started` | tool part, status `pending` |
+| `session.tool.input.ended` (`text` = JSON-string input) | tool part, `running`, parsed `input` |
+| `session.tool.called` | tool part, `running`, `input` |
+| `session.tool.success` | tool part `completed`, output from `content[]` |
+| `session.tool.failed` (presumed from schema) | tool part `error`, `state.error` |
+| `session.step.started` | `message.updated` seeding role `assistant` (the v2 bus sends no role otherwise) |
+| `session.step.ended`, `session.usage.updated` | `message.updated` with `tokens`/`cost` → `usage` |
+| `session.execution.failed` | `session.error` → `run.failed` |
+| `session.execution.interrupted` | `session.error` ("the turn was interrupted") |
+| `session.retry.scheduled` | `session.status` `{type:'retry', message}` — a silence-bound exception, not progress |
+| `session.inbox.enqueued|delivered`, `session.execution.started`, meta events | diagnostic |
+| `session.execution.completed|ended`, `session.idle` | `session.idle` → `run.completed` (defensive; not observed live) |

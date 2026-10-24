@@ -76,7 +76,7 @@ test('environments.adapters.list advertises the CLI adapters, including opencode
       ['claude-code', 'codex', 'hermes', 'opencode'],
     );
     const opencode = adapters.find((adapter) => adapter.adapterId === 'opencode');
-    assert.equal(opencode.supportedCliVersions, '1.17.x-1.18.x');
+    assert.equal(opencode.supportedCliVersions, '1.17.x-2.x');
     assert.deepEqual(opencode.protocols.sort(), ['acp', 'jsonl']);
     assert.ok(opencode.operations.includes('prompt'));
     // startRun/probe are server-side functions, not wire data.

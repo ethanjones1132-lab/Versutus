@@ -85,7 +85,7 @@ export function hermesServerEnvironment({ port, credentials = {}, record } = {})
 export const hermesAdapter = {
   adapterId: 'hermes',
   adapterRevision: '1',
-  supportedCliVersions: '0.18.x-0.20.x',
+  supportedCliVersions: '0.18.x-0.21.x',
   protocolVersions: { acp: '1' },
   // `skills`, `diagnostics`, `cron` and `bots` are fronted by the Gate over
   // this backend's passthroughs. They are declared here because `backendCan(...)`

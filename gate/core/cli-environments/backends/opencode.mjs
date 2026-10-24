@@ -16,8 +16,160 @@ import {
  *
  * OpenCode owns its own sessions, model catalog, tools and approvals; the Gate
  * proxies to them rather than reimplementing any of it. Shapes here are the ones
- * verified live against 1.18.18 — see docs/opencode-backend-contract.md.
+ * verified live against 1.18.18 — see docs/opencode-backend-contract.md — plus a
+ * v2 (2.0.x) codepath branched by the detected server major, verified live
+ * against 2.0.32 (docs/plans/PLAN-backend-outages-2026-10-21.md and
+ * temp/oc-v2-probe-findings.md).
  */
+
+/**
+ * Classify a contacted OpenCode server as major 1 or 2.
+ *
+ * v2 moved the API under /api/* and made auth always-on HTTP Basic; v1 serves
+ * a JSON array at /session (opt-in Bearer). The v1 probe goes first because it
+ * is the cheap answer for an unauthenticated v1 server; a v2 server's SPA
+ * catch-all answers /session with 200 text/html, which fails JSON parsing and
+ * falls through to the v2 probes. A 401 from /api/info identifies v2 as surely
+ * as a 200 — only a v2 server has that route — which keeps classification
+ * working even when the password is missing or wrong.
+ *
+ * Returns null when no probe identifies the server (then the caller's legacy
+ * behavior applies); never throws for transport failures.
+ */
+export async function detectOpenCodeServerMajor({ fetchImpl, baseUrl, password, timeoutMs = 2_000 }) {
+  const root = String(baseUrl).replace(/\/+$/, '');
+  const basic = password
+    ? { Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` }
+    : {};
+  const bearer = password ? { Authorization: `Bearer ${password}` } : {};
+  const probes = [
+    { major: 1, path: '/session', headers: bearer },
+    { major: 2, path: '/api/info', headers: basic },
+    { major: 1, path: '/session', headers: {} },
+    { major: 2, path: '/api/info', headers: {} },
+  ];
+  for (const probe of probes) {
+    try {
+      const response = await fetchImpl(`${root}${probe.path}`, {
+        headers: probe.headers,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (probe.major === 2 && response?.status === 401) return 2;
+      if (!response?.ok) continue;
+      const parsed = JSON.parse(await response.text());
+      if (probe.major === 2 && typeof parsed?.version === 'string') return 2;
+      if (probe.major === 1 && Array.isArray(parsed)) return 1;
+    } catch {
+      // try the next probe
+    }
+  }
+  return null;
+}
+
+/** v2 servers always-on Basic auth: user `opencode`, server-set password. */
+function v2AuthHeaders(password) {
+  return password
+    ? { Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` }
+    : {};
+}
+
+/** Translate an OpenCode 2.x session into the shape the app already parses. */
+export function toGatewaySessionV2(session) {
+  const tokens = session.tokens ?? {};
+  return {
+    id: session.id,
+    source: 'opencode',
+    user_id: null,
+    model: session.model?.id ?? session.model?.modelID ?? null,
+    title: session.title ?? null,
+    started_at: session.time?.created ?? Date.now(),
+    ended_at: null,
+    end_reason: session.outcome ?? null,
+    message_count: 0,
+    tool_call_count: 0,
+    input_tokens: tokens.input ?? 0,
+    output_tokens: tokens.output ?? 0,
+    cache_read_tokens: tokens.cache?.read ?? 0,
+    cache_write_tokens: tokens.cache?.write ?? 0,
+    reasoning_tokens: tokens.reasoning ?? 0,
+    estimated_cost_usd: typeof session.cost === 'number' ? session.cost : null,
+    actual_cost_usd: null,
+    api_call_count: 0,
+    parent_session_id: session.parentID ?? null,
+    last_active: session.time?.updated ?? session.time?.created ?? Date.now(),
+    preview: session.title ?? null,
+    has_system_prompt: false,
+    has_model_config: Boolean(session.model),
+  };
+}
+
+/** Flatten an OpenCode 2.x message (user or assistant). */
+export function toGatewayMessageV2(message) {
+  const contentParts = Array.isArray(message.content) ? message.content : [];
+  const content = contentParts
+    .filter((part) => part.type === 'text' && typeof part.text === 'string')
+    .map((part) => ({ type: 'text', text: part.text }));
+  // The list projection carries a user turn's text as a top-level `text`
+  // string, not as a content part (verified live on 2.0.32).
+  if (content.length === 0 && typeof message.text === 'string' && message.text) {
+    content.push({ type: 'text', text: message.text });
+  }
+  const toolCalls = contentParts
+    .filter((part) => part.type === 'tool')
+    .map((part) => ({ name: part.name, status: mapToolStatus(part.state?.status), id: part.id }));
+  return {
+    id: message.id,
+    role: message.type === 'user' ? 'user' : 'assistant',
+    content,
+    timestamp: message.time?.created,
+    ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+  };
+}
+
+function toolContentText(content) {
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join('\n');
+  return text || undefined;
+}
+
+/**
+ * Reshape a v2 single-message GET into the v1 recovery envelope
+ * (`{info, parts}`) the stream metadata path already validates and tracks.
+ * Tool parts carry `tool`/`callID` the way v1 named them.
+ */
+function toV1MessageEnvelope(message, sessionId) {
+  if (!message || typeof message !== 'object') return message;
+  if (message.info || message.parts) return message;
+  const content = Array.isArray(message.content) ? message.content : [];
+  return {
+    info: { id: message.id, sessionID: sessionId, role: message.type },
+    parts: content.map((part, index) => part?.type === 'tool'
+      ? {
+          id: part.id,
+          type: 'tool',
+          tool: part.name,
+          callID: part.id,
+          sessionID: sessionId,
+          messageID: message.id,
+          state: {
+            status: part.state?.status,
+            input: part.state?.input,
+            output: toolContentText(part.state?.content),
+            error: part.state?.error,
+          },
+        }
+      : {
+          id: `${message.id}:${index}`,
+          type: part?.type,
+          text: part?.text,
+          sessionID: sessionId,
+          messageID: message.id,
+        }),
+  };
+}
 
 /** Translate an OpenCode session into the shape the app already parses. */
 export function toGatewaySession(session) {
@@ -122,6 +274,50 @@ function thisTurnAssistantMessage(messages, sentAt) {
     if (typeof created === 'number' && created >= sentAt - TURN_START_SLOP_MS) return list[index];
   }
   return null;
+}
+
+/**
+ * The v2 message projection names the role `type` and stamps `time.created`
+ * in epoch milliseconds (verified live on 2.0.32), so the same slop-based
+ * ownership test applies. A tool-using turn materializes SEVERAL assistant
+ * messages — step artifacts with empty content can be the newest — so the
+ * scan prefers the newest assistant that actually carries text and only
+ * falls back to the newest matching one when no candidate has any.
+ */
+function thisTurnAssistantMessageV2(messages, sentAt) {
+  const list = Array.isArray(messages) ? messages : [];
+  let newest = null;
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    if (list[index]?.type !== 'assistant') continue;
+    const created = list[index]?.time?.created;
+    if (typeof created !== 'number' || created < sentAt - TURN_START_SLOP_MS) continue;
+    if (!newest) newest = list[index];
+    const hasText = (Array.isArray(list[index]?.content) ? list[index].content : []).some(
+      (part) => part?.type === 'text' && typeof part.text === 'string' && part.text.length > 0,
+    );
+    if (hasText) return list[index];
+  }
+  return newest;
+}
+
+/**
+ * Turn a finished v2 assistant message into what the caller asked for.
+ *
+ * v2 folds upstream failures into `error` (a StructuredError) or a `finish`
+ * of `'error'`, and the synthetic `idle` message that ends every turn carries
+ * the overall `outcome` — trust any of them as failure, like v1's
+ * `info.error`, never as an answer.
+ */
+function turnResultV2(message, idleOutcome) {
+  const upstream = message?.error
+    ?? (message?.finish === 'error' ? { message: 'the turn failed upstream' } : null)
+    ?? (idleOutcome && idleOutcome !== 'succeeded' ? { message: `the session went idle with outcome "${idleOutcome}"` } : null);
+  if (upstream) {
+    throw new Error(`opencode: ${errorText(upstream.message) || upstream.type || 'the turn failed upstream'}`);
+  }
+  if (!message) return { message: null, text: '' };
+  const mapped = toGatewayMessageV2(message);
+  return { message: mapped, text: mapped.content.map((part) => part.text).join('') };
 }
 
 /** How a model is named in a failure the operator reads on their phone. */
@@ -433,11 +629,113 @@ function frame(type, payload) {
   return { type, payload };
 }
 
+/**
+ * Map an OpenCode 2.x SSE frame ({id, type, data}) onto the v1-shaped event
+ * vocabulary that normalizeOpenCodeEvent already understands, so the entire
+ * streaming pipeline (part tracker, role holding, tool coalescing, terminal
+ * reconciliation) is shared between majors. Catalog verified live against
+ * 2.0.32 — see temp/oc-v2-probe-findings.md.
+ *
+ * v2 streams text/reasoning per (assistantMessageID, ordinal) with no part
+ * ids of their own, so a part id is synthesized as `<messageID>:<ordinal>`;
+ * `session.step.started` is translated to a role-carrying `message.updated`
+ * so the answer's deltas are never held waiting for a role the v2 bus does
+ * not send. Events with no translation pass through as diagnostics (with
+ * their sessionID, so the bus scoping filter still applies).
+ */
+export function translateV2Event(frameEvent) {
+  if (!frameEvent || typeof frameEvent.type !== 'string') return null;
+  const data = frameEvent.data && typeof frameEvent.data === 'object' ? frameEvent.data : {};
+  const sessionID = sessionToken(data.sessionID);
+  const messageID = sessionToken(data.assistantMessageID);
+  const partId = (ordinal) => (messageID ? `${messageID}:${typeof ordinal === 'number' ? ordinal : 0}` : null);
+  const partUpdated = (part) => ({ type: 'message.part.updated', properties: { sessionID, part } });
+  const toolPart = (state) => ({
+    id: data.id,
+    type: 'tool',
+    tool: data.name,
+    callID: data.id,
+    sessionID,
+    messageID,
+    state,
+  });
+  const passThrough = () => ({ type: frameEvent.type, properties: { ...data } });
+
+  switch (frameEvent.type) {
+    case 'session.text.started':
+      return messageID
+        ? partUpdated({ id: partId(data.ordinal), type: 'text', text: '', sessionID, messageID })
+        : passThrough();
+    case 'session.text.delta':
+      return messageID
+        ? { type: 'message.part.delta', properties: { sessionID, messageID, partID: partId(data.ordinal), field: 'text', delta: data.delta } }
+        : passThrough();
+    case 'session.text.ended':
+      return messageID
+        ? partUpdated({ id: partId(data.ordinal), type: 'text', text: data.text, sessionID, messageID })
+        : passThrough();
+    case 'session.reasoning.started':
+      return messageID
+        ? partUpdated({ id: partId(data.ordinal), type: 'reasoning', text: '', sessionID, messageID })
+        : passThrough();
+    case 'session.reasoning.delta':
+      return messageID
+        ? { type: 'message.part.delta', properties: { sessionID, messageID, partID: partId(data.ordinal), field: 'reasoning', delta: data.delta } }
+        : passThrough();
+    case 'session.reasoning.ended':
+      return messageID
+        ? partUpdated({ id: partId(data.ordinal), type: 'reasoning', text: data.text, sessionID, messageID })
+        : passThrough();
+    case 'session.tool.input.started':
+      return partUpdated(toolPart({ status: 'pending' }));
+    case 'session.tool.input.ended': {
+      let input;
+      try {
+        input = JSON.parse(data.text);
+      } catch {
+        input = undefined;
+      }
+      return partUpdated(toolPart({ status: 'running', input }));
+    }
+    case 'session.tool.called':
+      return partUpdated(toolPart({ status: 'running', input: data.input }));
+    case 'session.tool.success':
+      return partUpdated(toolPart({ status: 'completed', output: toolContentText(data.content) }));
+    case 'session.tool.failed':
+      return partUpdated(toolPart({ status: 'error', output: toolContentText(data.content), error: data.error }));
+    case 'session.step.started':
+      // Seeds the role of the step's assistant message before its parts
+      // stream; normalize drops it to a diagnostic (no tokens yet).
+      return { type: 'message.updated', properties: { sessionID, info: { id: messageID, sessionID, role: 'assistant' } } };
+    case 'session.step.ended':
+    case 'session.usage.updated':
+      return { type: 'message.updated', properties: { sessionID, info: { id: messageID, sessionID, role: 'assistant', tokens: data.tokens, cost: data.cost } } };
+    case 'session.execution.failed':
+      return { type: 'session.error', properties: { sessionID, error: data.error } };
+    case 'session.execution.interrupted':
+      return { type: 'session.error', properties: { sessionID, error: { message: 'the turn was interrupted' } } };
+    case 'session.execution.completed':
+    case 'session.execution.ended':
+    case 'session.idle':
+      // Defensive: no success-terminal bus frame was observed on 2.0.32 —
+      // the experimental wait route is the authoritative completion signal —
+      // but map these if a future build emits them.
+      return { type: 'session.idle', properties: { sessionID } };
+    case 'session.retry.scheduled':
+      return { type: 'session.status', properties: { sessionID, type: 'retry', message: errorText(data.error), attempt: data.attempt } };
+    default:
+      return passThrough();
+  }
+}
+
 /** Build a backend bound to a running OpenCode server. */
 export function createOpenCodeBackend({
   baseUrl,
   fetchImpl = fetch,
   password,
+  // The workspace directory every v2 session-scoped call is location-scoped
+  // to (`?location[directory]=…`); v1 ignores it.
+  directory = null,
   // The silence bounds are injectable so a test proves the failure without
   // waiting one out; production takes the exported defaults.
   firstOutputIdleMs = OPENCODE_FIRST_OUTPUT_IDLE_MS,
@@ -454,6 +752,61 @@ export function createOpenCodeBackend({
   ensureDir = (path) => mkdir(path, { recursive: true }),
 } = {}) {
   const root = String(baseUrl).replace(/\/+$/, '');
+  const workspace = typeof directory === 'string' && directory ? directory : null;
+
+  /**
+   * The detected server major, cached for the backend's lifetime. A server
+   * that classifies as nothing (not reachable, or not an OpenCode server) is
+   * treated as v1: the legacy routes then fail with named HTTP errors instead
+   * of a classification error that would hide them.
+   */
+  let profilePromise = null;
+  function serverProfile() {
+    if (!profilePromise) {
+      // Bounded: a server that accepts connections but never answers a probe
+      // must not hold every read hostage — the legacy path then fails with the
+      // read ceiling's own named timeout instead of a classification stall.
+      const ceilingMs = Math.min(Math.max(readTimeoutMs * 2, 1_000), 2_500);
+      profilePromise = Promise.race([
+        detectOpenCodeServerMajor({ fetchImpl, baseUrl: root, password }),
+        new Promise((resolve) => setTimeout(() => resolve(null), ceilingMs)),
+      ]).then((major) => ({ major: major ?? 1 }));
+      profilePromise.catch(() => undefined);
+    }
+    return profilePromise;
+  }
+
+  /** The v2 location scope, or '' when no workspace directory is configured. */
+  const locationQuery = () => (workspace ? `?location[directory]=${encodeURIComponent(workspace)}` : '');
+  /** A v2 query string combining the location scope with extra params. */
+  const v2Query = (extra = '') => {
+    if (!extra) return locationQuery();
+    return `${locationQuery()}&${extra}`;
+  };
+
+  /**
+   * One paginated read of every message of a v2 session, following
+   * `cursor.next` until exhausted — the single shared reader for listMessages,
+   * turn read-backs and stream metadata lookups.
+   */
+  async function readMessagesV2(sessionId, signal) {
+    const messages = [];
+    let cursor = null;
+    while (true) {
+      const page = await call(
+        `/api/session/${encodeURIComponent(sessionId)}/message${v2Query(cursor ? `cursor=${encodeURIComponent(cursor)}` : '')}`,
+        signal ? { signal } : {},
+        readTimeoutMs,
+        2,
+        false,
+      );
+      const data = Array.isArray(page?.data) ? page.data : [];
+      messages.push(...data);
+      const next = page && typeof page === 'object' ? page.cursor?.next : null;
+      if (!next) return messages;
+      cursor = next;
+    }
+  }
 
   /**
    * One route read, under a ceiling this backend owns.
@@ -463,11 +816,21 @@ export function createOpenCodeBackend({
    * read) keeps it, because those bounds are tighter and mean something specific
    * to the turn. The turn-bearing blocking route is given `idleMs` instead: it
    * answers only when the whole turn is done, so it is a turn, not a read.
+   *
+   * `major` selects the wire protocol: v2 (2.0.x) authenticates with HTTP Basic
+   * `opencode:<password>` (always on — Bearer gets a 401) and wraps every
+   * payload in `{data: …}`; v1 is opt-in Bearer with bare payloads. `unwrap`
+   * is false for the paginated message list, whose `cursor` rides next to
+   * `data` and must survive the read.
    */
-  async function call(path, init = {}, timeoutMs = readTimeoutMs) {
+  async function call(path, init = {}, timeoutMs = readTimeoutMs, major = 1, unwrap = true) {
     const headers = { ...(init.headers ?? {}) };
     if (init.body) headers['Content-Type'] = 'application/json';
-    if (password) headers.Authorization = `Bearer ${password}`;
+    if (password) {
+      headers.Authorization = major >= 2
+        ? `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`
+        : `Bearer ${password}`;
+    }
     const bounded = !init.signal && Number.isFinite(timeoutMs) && timeoutMs > 0;
     const response = await fetchImpl(`${root}${path}`, {
       ...init,
@@ -513,16 +876,24 @@ export function createOpenCodeBackend({
     if (response.status === 204 || response.status === 205) return null;
     const text = await response.text();
     if (!text.trim()) return null;
-    return JSON.parse(text);
+    const parsed = JSON.parse(text);
+    // v2 wraps every payload in {data: …}; v1 returns it bare.
+    if (major >= 2 && unwrap && parsed && typeof parsed === 'object' && 'data' in parsed) {
+      return parsed.data;
+    }
+    return parsed;
   }
 
   /** Best-effort stop of a turn the server is still running, and bounded. */
-  async function stopTurn(sessionId) {
+  async function stopTurn(sessionId, major = 1) {
+    const path = major >= 2
+      ? `/api/session/${encodeURIComponent(sessionId)}/interrupt${locationQuery()}`
+      : `/session/${encodeURIComponent(sessionId)}/abort`;
     const controller = new AbortController();
     let timer;
     try {
       await Promise.race([
-        call(`/session/${encodeURIComponent(sessionId)}/abort`, { method: 'POST', signal: controller.signal })
+        call(path, { method: 'POST', signal: controller.signal }, readTimeoutMs, major)
           .catch(() => undefined),
         new Promise((resolve) => { timer = setTimeout(resolve, TURN_STOP_TIMEOUT_MS); }),
       ]);
@@ -533,11 +904,13 @@ export function createOpenCodeBackend({
   }
 
   /** The session's messages, read back once and bounded. */
-  async function readTurnMessages(sessionId) {
+  async function readTurnMessages(sessionId, major = 1) {
     const controller = new AbortController();
     try {
       return await boundedValue(
-        call(`/session/${encodeURIComponent(sessionId)}/message`, { signal: controller.signal }),
+        major >= 2
+          ? readMessagesV2(sessionId, controller.signal)
+          : call(`/session/${encodeURIComponent(sessionId)}/message`, { signal: controller.signal }),
         TURN_MESSAGES_TIMEOUT_MS,
       );
     } finally {
@@ -555,8 +928,14 @@ export function createOpenCodeBackend({
    * ended it. The wait then sees silence for a turn that is over, stops a turn
    * that is done and reports "<model> did not answer" for an answer that was
    * already in the session. Hence the subscribe-then-send order.
+   *
+   * `major` selects the wire routes (v2 aborts via /interrupt and reads
+   * messages paginated) and `watchIdle` lets the v2 send path feed the
+   * experimental wait route in as an extra settle source: 2.0.x was verified
+   * to emit no success-terminal bus frame, so the wait route's 204 is the
+   * authoritative "session went idle" signal there.
    */
-  function openTurnBus(sessionId, model, signal) {
+  function openTurnBus(sessionId, model, signal, major = 1) {
     const controller = new AbortController();
     const runningTools = new Set();
     let startedOutput = false;
@@ -564,6 +943,7 @@ export function createOpenCodeBackend({
     let feedDead = false;
     let timer = null;
     let settled = false;
+    let idleController = null;
     let resolveOutcome;
     const outcome = new Promise((resolve) => { resolveOutcome = resolve; });
     const bound = () => (startedOutput ? idleMs : firstOutputIdleMs);
@@ -572,6 +952,11 @@ export function createOpenCodeBackend({
       settled = true;
       clearTimeout(timer);
       timer = null;
+      try {
+        idleController?.abort();
+      } catch {
+        /* the wait fetch is best-effort */
+      }
       resolveOutcome(value);
     };
     // Silence is measured from the last sign of life, never from the send.
@@ -636,7 +1021,13 @@ export function createOpenCodeBackend({
       try {
         const settledOutcome = await outcome;
         if (settledOutcome.kind === 'idle') {
-          const messages = await call(`/session/${encodeURIComponent(sessionId)}/message`);
+          const messages = major >= 2
+            ? await readMessagesV2(sessionId)
+            : await call(`/session/${encodeURIComponent(sessionId)}/message`);
+          if (major >= 2) {
+            const idle = [...(Array.isArray(messages) ? messages : [])].reverse().find((m) => m?.type === 'idle');
+            return turnResultV2(thisTurnAssistantMessageV2(messages, sentAt), idle?.outcome);
+          }
           return turnResult(thisTurnAssistantMessage(messages, sentAt));
         }
         if (settledOutcome.kind === 'failed') {
@@ -647,12 +1038,18 @@ export function createOpenCodeBackend({
           // subscription was still opening (or after it died) emitted the frame
           // that ended it to nobody. Ask the session whether this turn finished
           // before stopping it and calling it silent.
-          const finished = thisTurnAssistantMessage(await readTurnMessages(sessionId), sentAt);
-          if (finished?.info?.time?.completed) return turnResult(finished);
+          const readBack = await readTurnMessages(sessionId, major);
+          if (major >= 2) {
+            const finished = thisTurnAssistantMessageV2(readBack, sentAt);
+            if (finished?.time?.completed) return turnResultV2(finished);
+          } else {
+            const finished = thisTurnAssistantMessage(readBack, sentAt);
+            if (finished?.info?.time?.completed) return turnResult(finished);
+          }
         }
         // Give up on a turn nobody is answering for, and stop the server's turn
         // before saying so: the next attempt would otherwise fight this one.
-        await stopTurn(sessionId);
+        await stopTurn(sessionId, major);
         if (settledOutcome.kind === 'aborted') throw new Error('opencode: the turn was aborted');
         throw new Error(silentTurnReason(model, settledOutcome.boundMs, retryNote));
       } finally {
@@ -679,6 +1076,20 @@ export function createOpenCodeBackend({
       ready: boundedValue(subscription?.ready, BUS_READY_TIMEOUT_MS),
       wait: awaitTurnOnBus,
       close,
+      /**
+       * v2 only: feed the experimental wait route in as an extra settle
+       * source. Its 204 means the session went idle — the completion signal
+       * the 2.0.x bus was verified not to emit. Its failure is not turn
+       * state; the silence bounds still apply. Aborted when the turn
+       * settles so a slow wait fetch cannot outlive its turn.
+       */
+      watchIdle: (promise, controller) => {
+        idleController = controller;
+        Promise.resolve(promise).then(
+          () => finish({ kind: 'idle' }),
+          () => arm(),
+        );
+      },
     };
   }
 
@@ -739,15 +1150,76 @@ export function createOpenCodeBackend({
     return isBotAgent(agent) ? agent : null;
   }
 
+  /**
+   * The v2 turn: prompt, then let the experimental wait route declare the
+   * turn done. The prompt route takes `{text}` only — the model is a session
+   * property, switched explicitly — and there is deliberately no fallback to
+   * the v1 blocking POST /message: on v2 that route does not exist, and a
+   * "fallback" would only double-submit a turn the server may already be
+   * running.
+   */
+  async function sendMessageV2(sessionId, { text, model, signal } = {}) {
+    const session = encodeURIComponent(sessionId);
+    const turn = openTurnBus(sessionId, model, signal, 2);
+    await turn.ready;
+    const sentAt = Date.now();
+    try {
+      if (model?.providerId && model?.modelId) {
+        await call(
+          `/api/session/${session}/model${locationQuery()}`,
+          { method: 'POST', body: JSON.stringify({ model: { providerID: model.providerId, id: model.modelId } }) },
+          readTimeoutMs,
+          2,
+        );
+      }
+      await call(
+        `/api/session/${session}/prompt${locationQuery()}`,
+        { method: 'POST', body: JSON.stringify({ text }) },
+        readTimeoutMs,
+        2,
+      );
+    } catch (error) {
+      turn.close();
+      throw error;
+    }
+    // The wait route answers 204 exactly when the session goes idle — the
+    // completion signal the 2.0.x bus does not emit. Bounded by the turn's
+    // own life: settled or closed turns abort it.
+    const idleController = new AbortController();
+    turn.watchIdle(
+      call(
+        `/api/experimental/session/${session}/wait${locationQuery()}`,
+        { method: 'POST', signal: idleController.signal },
+        0,
+        2,
+      ),
+      idleController,
+    );
+    return turn.wait(sentAt);
+  }
+
   const backend = {
     kind: 'opencode',
 
     async listSessions() {
+      const { major } = await serverProfile();
+      if (major >= 2) {
+        const payload = await call(`/api/session${locationQuery()}`, {}, readTimeoutMs, 2);
+        return (Array.isArray(payload) ? payload : []).map(toGatewaySessionV2);
+      }
       const sessions = await call('/session');
       return (Array.isArray(sessions) ? sessions : []).map(toGatewaySession);
     },
 
     async createSession({ title, model, agent } = {}) {
+      const { major } = await serverProfile();
+      if (major >= 2) {
+        const body = {};
+        if (title) body.title = title;
+        if (model?.providerId) body.model = { providerID: model.providerId, id: model.modelId };
+        const payload = await call(`/api/session${locationQuery()}`, { method: 'POST', body: JSON.stringify(body) }, readTimeoutMs, 2);
+        return toGatewaySessionV2(payload);
+      }
       const body = {};
       if (title) body.title = title;
       if (agent) body.agent = agent;
@@ -756,10 +1228,21 @@ export function createOpenCodeBackend({
     },
 
     async deleteSession(sessionId) {
+      const { major } = await serverProfile();
+      if (major >= 2) {
+        await call(`/api/session/${encodeURIComponent(sessionId)}${locationQuery()}`, { method: 'DELETE' }, readTimeoutMs, 2);
+        return;
+      }
       await call(`/session/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
     },
 
     async listMessages(sessionId, limit) {
+      const { major } = await serverProfile();
+      if (major >= 2) {
+        const messages = await readMessagesV2(sessionId);
+        const mapped = messages.map(toGatewayMessageV2);
+        return typeof limit === 'number' ? mapped.slice(-limit) : mapped;
+      }
       const messages = await call(`/session/${encodeURIComponent(sessionId)}/message`);
       const mapped = (Array.isArray(messages) ? messages : []).map(toGatewayMessage);
       return typeof limit === 'number' ? mapped.slice(-limit) : mapped;
@@ -777,6 +1260,8 @@ export function createOpenCodeBackend({
      * predates that route, and the blocking POST still serves it.
      */
     async sendMessage(sessionId, { text, model, signal, agent } = {}) {
+      const { major } = await serverProfile();
+      if (major >= 2) return sendMessageV2(sessionId, { text, model, signal });
       const body = { parts: [{ type: 'text', text }] };
       if (agent) body.agent = agent;
       if (model?.providerId) {
@@ -788,7 +1273,7 @@ export function createOpenCodeBackend({
       // Subscribe first, post second, and record when the send went out: the
       // session's messages are read back against this mark, so the previous
       // turn's answer can never be passed off as this one's.
-      const turn = openTurnBus(sessionId, model, signal);
+      const turn = openTurnBus(sessionId, model, signal, 1);
       await turn.ready;
       const sentAt = Date.now();
       try {
@@ -807,10 +1292,25 @@ export function createOpenCodeBackend({
     },
 
     async abort(sessionId) {
+      const { major } = await serverProfile();
+      if (major >= 2) {
+        await call(`/api/session/${encodeURIComponent(sessionId)}/interrupt${locationQuery()}`, { method: 'POST' }, readTimeoutMs, 2);
+        return;
+      }
       await call(`/session/${encodeURIComponent(sessionId)}/abort`, { method: 'POST' });
     },
 
     async replyApproval(sessionId, requestId, reply) {
+      const { major } = await serverProfile();
+      if (major >= 2) {
+        await call(
+          `/api/session/${encodeURIComponent(sessionId)}/permission/${encodeURIComponent(requestId)}/reply${locationQuery()}`,
+          { method: 'POST', body: JSON.stringify({ reply }) },
+          readTimeoutMs,
+          2,
+        );
+        return;
+      }
       await call(
         `/session/${encodeURIComponent(sessionId)}/permission/${encodeURIComponent(requestId)}/reply`,
         { method: 'POST', body: JSON.stringify({ reply }) },
@@ -823,6 +1323,19 @@ export function createOpenCodeBackend({
      * it, but the provider no longer answers for it.
      */
     async listModels() {
+      const { major } = await serverProfile();
+      if (major >= 2) {
+        // v2's GET /api/provider lists only custom providers; the merged
+        // catalog (built-ins included) lives on GET /api/model.
+        const payload = await call(`/api/model${locationQuery()}`, {}, readTimeoutMs, 2);
+        return (Array.isArray(payload) ? payload : []).map((model) => ({
+          id: `${model.providerID}/${model.modelID ?? model.id}`,
+          providerId: model.providerID,
+          modelId: model.modelID ?? model.id,
+          label: model.name ?? `${model.providerID}/${model.modelID ?? model.id}`,
+          available: model.enabled !== false && model.status !== 'disabled',
+        }));
+      }
       const config = await call('/config/providers');
       const free = new Map(flattenModels(config).map((row) => [`${row.providerId}/${row.modelId}`, row.free]));
       const models = [];
@@ -956,6 +1469,10 @@ export function createOpenCodeBackend({
         let reader;
         let finished = false;
         let removeAbortListener;
+        // Classification first: v2 frames arrive as {id,type,data} and must be
+        // translated before any scoping; failure falls back to the legacy v1
+        // wire (the legacy tests' stubs answer neither probe).
+        const { major } = await serverProfile();
         const metadataLookups = new Map();
         const requestedLookups = new Set();
         const lookupControllers = new Set();
@@ -965,10 +1482,15 @@ export function createOpenCodeBackend({
         // a setup failure before those exist still run a safe cleanup.
         let cleanupStreamState = () => {};
         try {
-          const response = await fetchImpl(`${root}/event`, {
-            signal,
-            headers: password ? { Authorization: `Bearer ${password}` } : {},
-          });
+          const response = await fetchImpl(
+            major >= 2 ? `${root}/api/event${locationQuery()}` : `${root}/event`,
+            {
+              signal,
+              headers: major >= 2
+                ? v2AuthHeaders(password)
+                : (password ? { Authorization: `Bearer ${password}` } : {}),
+            },
+          );
           if (!response.ok) throw new Error(`OpenCode event stream refused: HTTP ${response.status}`);
           reader = response.body?.getReader();
           if (!reader) throw new Error('OpenCode event stream has no body');
@@ -1162,11 +1684,24 @@ export function createOpenCodeBackend({
                   timer = setTimeout(() => reject(new Error('metadata lookup timed out')), METADATA_LOOKUP_TIMEOUT_MS);
                   lookupTimers.add(timer);
                 });
-                const message = await Promise.race([
-                  call(
-                    `/session/${encodeURIComponent(sessionId)}/message/${encodeURIComponent(messageId)}`,
-                    { signal: controller.signal },
-                  ),
+                let message = await Promise.race([
+                  major >= 2
+                    ? (async () => {
+                        // v2 single-message get: unwrap {data}, then reshape
+                        // the message into the v1 envelope ({info, parts})
+                        // the checks and tracker below already speak.
+                        const raw = await call(
+                          `/api/session/${encodeURIComponent(sessionId)}/message/${encodeURIComponent(messageId)}${locationQuery()}`,
+                          { signal: controller.signal },
+                          readTimeoutMs,
+                          2,
+                        );
+                        return toV1MessageEnvelope(raw, sessionId);
+                      })()
+                    : call(
+                        `/session/${encodeURIComponent(sessionId)}/message/${encodeURIComponent(messageId)}`,
+                        { signal: controller.signal },
+                      ),
                   timeout,
                 ]);
                 if (finished || signal?.aborted) return;
@@ -1321,6 +1856,13 @@ export function createOpenCodeBackend({
                 parsed = JSON.parse(line.slice(6));
               } catch {
                 continue;
+              }
+              // v2 wire: every frame is {id,type,data} — translate to the v1
+              // event vocabulary before scoping; frames the translator maps
+              // away (inbox bookkeeping, redundant usage) return null.
+              if (major >= 2) {
+                parsed = translateV2Event(parsed);
+                if (!parsed) continue;
               }
               // The bus is global; a session's stream must not leak other
               // sessions. Scoping happens here, ahead of every cache the event

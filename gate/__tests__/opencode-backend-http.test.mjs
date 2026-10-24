@@ -217,8 +217,9 @@ test('a server that predates the async prompt still answers through the blocking
   const result = await backend.sendMessage(SESSION_ID, { text: 'say hi', model: MODEL });
 
   assert.equal(result.text, 'the answer');
+  // Classification probes (GET /session, GET /api/info) are not session calls.
   assert.deepEqual(
-    state.requests.filter((request) => !request.path.includes('/event')).map((r) => `${r.method} ${r.path}`),
+    state.requests.filter((request) => !request.path.includes('/event') && request.path.startsWith(`/session/${SESSION_ID}`)).map((r) => `${r.method} ${r.path}`),
     [`POST /session/${SESSION_ID}/prompt_async`, `POST /session/${SESSION_ID}/message`],
   );
 });

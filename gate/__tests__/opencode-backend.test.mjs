@@ -990,23 +990,34 @@ test('the event stream exposes when its feed is ready', async () => {
   let closeStream;
   const backend = createOpenCodeBackend({
     baseUrl: 'http://127.0.0.1:4096',
-    fetchImpl: () => new Promise((resolve) => {
-      releaseFetch = () => resolve({
-        ok: true,
-        body: new ReadableStream({ start(controller) { closeStream = () => controller.close(); } }),
-      });
-    }),
+    // Wire classification probes non-event routes first; answer those the way
+    // a real server answers an unknown route so the pending release below is
+    // reserved for the event feed itself.
+    fetchImpl: (url) => (String(url).endsWith('/event')
+      ? new Promise((resolve) => {
+          releaseFetch = () => resolve({
+            ok: true,
+            body: new ReadableStream({ start(controller) { closeStream = () => controller.close(); } }),
+          });
+        })
+      : Promise.resolve({ ok: false, status: 404, text: async () => '' })),
   });
   const controller = new AbortController();
   const stream = backend.streamEvents('ses_abc', () => {}, controller.signal);
+  // Classification probes run before the feed's GET; release only once the
+  // feed fetch itself has been initiated.
+  const releaseWhenAttached = async () => {
+    while (typeof releaseFetch !== 'function') await new Promise((resolve) => setTimeout(resolve, 1));
+    releaseFetch();
+  };
   try {
     assert.equal(typeof stream.ready?.then, 'function');
-    releaseFetch();
+    await releaseWhenAttached();
     await stream.ready;
   } finally {
     controller.abort();
     closeStream?.();
-    releaseFetch();
+    if (typeof releaseFetch === 'function') releaseFetch();
     await stream;
   }
 });
@@ -1203,10 +1214,12 @@ test('the backend lists, creates and deletes sessions over the native API', asyn
 
   const created = await backend.createSession({ title: 'New' });
   assert.equal(created.id, 'ses_abc');
-  assert.deepEqual(calls[1], { path: '/session', method: 'POST', body: { title: 'New' } });
+  // Wire-classification probes may precede the calls under test; assert on
+  // the CRUD calls themselves.
+  assert.deepEqual(calls.find((call) => call.method === 'POST'), { path: '/session', method: 'POST', body: { title: 'New' } });
 
   await backend.deleteSession('ses_abc');
-  assert.equal(calls[2].method, 'DELETE');
+  assert.equal(calls.find((call) => call.method === 'DELETE')?.method, 'DELETE');
 });
 
 test('models come from the native provider catalog', async () => {
@@ -1634,7 +1647,8 @@ test('a server without the async prompt falls back to the blocking send', async 
   assert.equal(result.text, 'contract ok');
   // 404 on the async route, then the send this Gate has always made. The bus
   // subscription is opened first, and this server has no bus at all.
-  const sent = calls.filter((call) => call.path !== '/event');
+  // Classification probes and the bus GET are not session calls.
+  const sent = calls.filter((call) => call.path.startsWith('/session/ses_abc'));
   assert.deepEqual(sent.map((call) => call.path), ['/session/ses_abc/prompt_async', '/session/ses_abc/message']);
   assert.deepEqual(sent[1].body, {
     model: { providerID: 'opencode', modelID: 'longcat-2.5-preview-free' },
@@ -1646,15 +1660,16 @@ test('abort cancels the active turn', async () => {
   const { calls, fetchImpl } = stubFetch({ 'POST /session/ses_abc/abort': { ok: true } });
   const backend = createOpenCodeBackend({ baseUrl: 'http://127.0.0.1:4096', fetchImpl });
   await backend.abort('ses_abc');
-  assert.equal(calls[0].path, '/session/ses_abc/abort');
+  assert.equal(calls.find((call) => call.method === 'POST')?.path, '/session/ses_abc/abort');
 });
 
 test('an approval reply reaches the session permission route', async () => {
   const { calls, fetchImpl } = stubFetch({ 'POST /session/ses_abc/permission/perm_1/reply': { ok: true } });
   const backend = createOpenCodeBackend({ baseUrl: 'http://127.0.0.1:4096', fetchImpl });
   await backend.replyApproval('ses_abc', 'perm_1', 'approve');
-  assert.equal(calls[0].path, '/session/ses_abc/permission/perm_1/reply');
-  assert.equal(calls[0].body.reply, 'approve');
+  const reply = calls.find((call) => call.method === 'POST');
+  assert.equal(reply?.path, '/session/ses_abc/permission/perm_1/reply');
+  assert.equal(reply?.body.reply, 'approve');
 });
 
 // ─── guarded-server credentials ──────────────────────────────────────
