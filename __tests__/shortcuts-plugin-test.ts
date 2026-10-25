@@ -26,6 +26,15 @@ describe('the static Android shortcut', () => {
     expect(xml).not.toContain('android:targetClass="com.versutus.app.CallActivity"');
   });
 
+  test('the static resource names no Bot — a launcher entry must not pin one', () => {
+    const xml = plugin.buildShortcutsXml();
+    // Dynamic per-Bot shortcuts are donated at runtime; the checked-in resource
+    // may only carry the call entry, so a build cannot ship a placeholder Bot.
+    expect(xml).not.toContain('{bot}');
+    expect(xml).not.toContain('chat?bot=');
+    expect(xml).not.toContain('Talk to a Bot');
+  });
+
   test('labels are string resources, the only form aapt links for a shortcut', () => {
     const xml = plugin.buildShortcutsXml();
     expect(xml).toContain('android:shortcutShortLabel="@string/voice_call_shortcut_short_label"');

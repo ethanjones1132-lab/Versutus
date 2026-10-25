@@ -19,6 +19,8 @@ export async function applyRecentBotShortcutsNative(
   const module = await loadShortcutModule(load);
   if (!module) return false;
   try {
+    // An empty list is still sent: Android's `setDynamicShortcuts([])` is how a
+    // gateway's shortcuts are removed, so this must not short-circuit.
     return (await module.setShortcuts(shortcuts)) === true;
   } catch {
     return false;

@@ -15,6 +15,7 @@ describe('app shortcuts reuse the one link vocabulary', () => {
     const shortcut = botChatShortcut('scout');
     expect(shortcut).toEqual({
       id: 'bot-scout',
+      botId: 'scout',
       shortLabel: 'scout',
       longLabel: 'Talk to scout',
       url: 'versutus://chat?bot=scout',
@@ -30,6 +31,8 @@ describe('app shortcuts reuse the one link vocabulary', () => {
   test('recent Bots are trimmed, deduped and capped at three', () => {
     const shortcuts = recentBotShortcuts([' a ', 'b', 'a', '', 'c', 'd']);
     expect(shortcuts.map((shortcut) => shortcut.id)).toEqual(['bot-a', 'bot-b', 'bot-c']);
+    // The real Bot id rides the payload, not just the label or the URL.
+    expect(shortcuts.map((shortcut) => shortcut.botId)).toEqual(['a', 'b', 'c']);
     expect(shortcuts.every((shortcut) => targetOf(shortcut.url)?.kind === 'chat')).toBe(true);
   });
 

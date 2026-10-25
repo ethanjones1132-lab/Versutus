@@ -445,6 +445,9 @@ describe('the profile-delete path', () => {
     const src = readSource('src', 'context', 'gateway-provider.tsx');
     expect(src).toContain('clearTranscriptsForGateway(removedId)');
     expect(src).toContain('clearSessionLabelsForGateway(removedId)');
+    // The launcher recents are keyed by the same gateway id, so a deleted
+    // profile must not leave its Bots on the home screen.
+    expect(src).toContain('clearRecentBotShortcutsForGateway(removedId)');
   });
 });
 
@@ -452,12 +455,13 @@ describe('the child-profile sync path', () => {
   // A child profile retired by a manifest sync is a real, connectable gateway,
   // so its labels outlive it the same way a deleted profile's would. Both sync
   // call sites hand what they retired to the one helper, which clears the same
-  // two stores the delete path clears.
+  // stores the delete path clears.
   test('a retired child profile drops its labels where it drops its transcript', () => {
     const src = readSource('src', 'context', 'gateway-provider.tsx');
     expect(src.match(/clearRetiredGatewayStores\(retirement\.removedIds\)/g)).toHaveLength(2);
     expect(src).toContain('clearTranscriptsForGateway(id)');
     expect(src).toContain('clearSessionLabelsForGateway(id)');
+    expect(src).toContain('clearRecentBotShortcutsForGateway(id)');
     // A sync that retired nothing is not a store call at all.
     expect(src).toContain('if (ids.length === 0) return;');
   });
@@ -597,7 +601,18 @@ describe('the child-profile sync path', () => {
     // it, and the swallow-all `.catch` would hide that: the session would stay
     // up on a profile the roster no longer holds. Every store is therefore
     // cleared best-effort, so the retire behind them always runs.
-    expect(helper.match(/Promise\.allSettled\(ids\.map\(/g)).toHaveLength(3);
+    expect(helper.match(/Promise\.allSettled\(ids\.map\(/g)).toHaveLength(4);
+    // Naming all four stores keeps the shortcut cleanup from being dropped in a
+    // later edit: the transcript, labels, cache and donated recent Bots each
+    // settle on their own, so one refusal cannot skip the other three.
+    for (const store of [
+      'clearTranscriptsForGateway',
+      'clearSessionLabelsForGateway',
+      'clearCachedForGateway',
+      'clearRecentBotShortcutsForGateway',
+    ]) {
+      expect(helper).toContain(`Promise.allSettled(ids.map((id) => ${store}(id)))`);
+    }
     expect(helper).not.toContain('Promise.all(ids.map(');
   });
 });

@@ -6,6 +6,8 @@
 /** What a launcher or Siri donation needs to name one shortcut. */
 export type AppShortcut = {
   id: string;
+  /** The real Bot this shortcut opens. The static call shortcut names none. */
+  botId?: string;
   shortLabel: string;
   longLabel: string;
   url: string;
@@ -24,6 +26,7 @@ export function botChatShortcut(botId: string): AppShortcut {
   const id = botId.trim();
   return {
     id: `bot-${id}`,
+    botId: id,
     shortLabel: clampLabel(id, SHORT_LABEL_LIMIT),
     longLabel: clampLabel(`Talk to ${id}`, LONG_LABEL_LIMIT),
     url: `versutus://chat?bot=${encodeURIComponent(id)}`,

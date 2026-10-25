@@ -17,7 +17,10 @@ import { abortAndClear } from '@/lib/gateway/abort';
 import { serverSideCancelForCommand } from '@/lib/gateway/cancel';
 import { isAuthRejection, isConnectionError, isUserAbort } from '@/lib/gateway/errors';
 import { keyValueStorage } from '@/lib/storage/key-value';
-import { createBotShortcutRecorder } from '@/lib/gateway/shortcut-donation';
+import {
+  clearRecentBotShortcutsForGateway,
+  createBotShortcutRecorder,
+} from '@/lib/gateway/shortcut-donation';
 import { applyRecentBotShortcutsNative } from '@/lib/gateway/shortcut-donation-native';
 import {
   addStreamingPlaceholder,
@@ -998,12 +1001,13 @@ function isGatewayAuthFailure(error: unknown): boolean {
 /**
  * Retire the device stores keyed by a gateway id. A child profile retired by a
  * manifest sync (`syncChildProfiles` at both of its call sites) is a real,
- * connectable gateway — its transcript and session labels are keyed by that id
- * and would outlive the profile forever, exactly as a deleted profile's would.
- * These are the same three stores the delete path clears (`deleteGateway`): the
- * transcripts, the labels, and the last-known-good cache a screen paints from
- * before the network answers. A sync that retired nothing is not a store call
- * at all.
+ * connectable gateway — its transcript, session labels, last-known-good cache
+ * and donated launcher recents are keyed by that id and would outlive the
+ * profile forever, exactly as a deleted profile's would. These are the same
+ * four stores the delete path clears (`deleteGateway`): the transcripts, the
+ * labels, the cache a screen paints from before the network answers, and the
+ * recent-Bot shortcuts on the launcher. A sync that retired nothing is not a
+ * store call at all.
  */
 async function clearRetiredGatewayStores(ids: readonly string[]): Promise<void> {
   if (ids.length === 0) return;
@@ -1016,6 +1020,7 @@ async function clearRetiredGatewayStores(ids: readonly string[]): Promise<void> 
   await Promise.allSettled(ids.map((id) => clearTranscriptsForGateway(id)));
   await Promise.allSettled(ids.map((id) => clearSessionLabelsForGateway(id)));
   await Promise.allSettled(ids.map((id) => clearCachedForGateway(id)));
+  await Promise.allSettled(ids.map((id) => clearRecentBotShortcutsForGateway(id)));
 }
 
 export function GatewayProvider({ children }: { children: React.ReactNode }) {
@@ -1754,6 +1759,21 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setLastError(`Activity could not be saved: ${error instanceof Error ? error.message : String(error)}`);
     });
   }, [activityRuns, isBootstrapped]);
+
+  /**
+   * A launcher shortcut is a bare `versutus://chat?bot=…`, so it has no gateway
+   * of its own. Keep the published set on the active gateway's partition: after
+   * bootstrap and on every gateway move, republish that gateway's recents (or
+   * the empty set when there is none) so a Bot from another Gate is never
+   * donated as if it belonged to this one. The recorder's queue orders this
+   * behind any register or retirement clear already in flight.
+   */
+  useEffect(() => {
+    if (!isBootstrapped) return;
+    void recentBotShortcutRecorder
+      .refresh(activeGateway?.id ?? null)
+      .catch(() => undefined);
+  }, [activeGateway?.id, isBootstrapped, recentBotShortcutRecorder]);
 
   const patchActivityRuns = useCallback((updater: (prev: ActivityRun[]) => ActivityRun[]) => {
     setActivityRuns(updater);
@@ -4194,22 +4214,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // Transcripts are keyed by gateway id and outlive the profile otherwise.
     // The cascade can take child profiles with it, so clear everything that
     // disappeared rather than only the id we were handed. A session's labels
-    // are keyed by the same gateway id and outlive it the same way, and so is
-    // the last-known-good roster/session/model/history cache.
+    // are keyed by the same gateway id and outlive it the same way, and so are
+    // the last-known-good roster/session/model/history cache and the recent-Bot
+    // shortcuts a deleted gateway donated to the launcher.
     const removedIds = new Set<string>([id]);
     for (const gateway of before) {
       if (!next.some((remaining) => remaining.id === gateway.id)) removedIds.add(gateway.id);
     }
     // Every store clear here is best-effort tidying, and one refusing store must
-    // not skip the other three — or, worse, every teardown statement below,
+    // not skip the other four — or, worse, every teardown statement below,
     // which left the profile the operator had just deleted still wired up as
     // the active gateway (client pinned, session live) while the dashboard
-    // reported the delete as failed. One batch, not four sequential round trips
+    // reported the delete as failed. One batch, not five sequential round trips
     // through the same store, and a refusal settles rather than throws.
     await Promise.allSettled([
       Promise.all([...removedIds].map((removedId) => clearTranscriptsForGateway(removedId))),
       Promise.all([...removedIds].map((removedId) => clearSessionLabelsForGateway(removedId))),
       Promise.all([...removedIds].map((removedId) => clearCachedForGateway(removedId))),
+      Promise.all([...removedIds].map((removedId) => clearRecentBotShortcutsForGateway(removedId))),
       Promise.all([...removedIds].map((removedId) => clearLastSeen(removedId))),
     ]);
 
@@ -5216,8 +5238,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         const outcome = await sendMessage(trimmed, options?.messageId, undefined, options?.attachments, {
           turnId: options?.turnId,
         });
+        const scopedGatewayId = (activeGateway?.id ?? '').trim();
         const scopedBotId = (options?.botId ?? selectedBotIdRef.current ?? '').trim();
-        if (scopedBotId) void recentBotShortcutRecorder(scopedBotId).catch(() => undefined);
+        if (scopedGatewayId && scopedBotId) {
+          void recentBotShortcutRecorder
+            .register(scopedGatewayId, scopedBotId)
+            .catch(() => undefined);
+        }
         // A live turn holds the composer lock, so these words never left this
         // phone — and the caller (a notification quick reply, a resume, a
         // retry) reads nothing else off the answer. Parked instead: the durable
