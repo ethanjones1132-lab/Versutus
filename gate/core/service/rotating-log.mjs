@@ -1,6 +1,24 @@
 import { appendFileSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
+export const TOKEN_REDACTED_LINE = 'Token: [redacted]';
+export const TOKEN_REDACTION_ENV = 'VERSUTUS_GATE_REDACT_TOKEN';
+
+const REDACTED_TOKEN_VALUE = TOKEN_REDACTED_LINE.slice('Token: '.length);
+const REDACTION_DISABLED_VALUES = new Set(['', '0', 'false', 'no']);
+
+/** Whether the caller requested redaction for the bootstrap-token line. */
+export function tokenRedactionRequested(env = process.env) {
+  const value = env?.[TOKEN_REDACTION_ENV];
+  if (value == null || value === false || value === 0) return false;
+  return !REDACTION_DISABLED_VALUES.has(String(value).trim().toLowerCase());
+}
+
+/** Format the CLI's bootstrap-token line for the current process environment. */
+export function bootstrapTokenLine(token, env = process.env) {
+  return tokenRedactionRequested(env) ? TOKEN_REDACTED_LINE : `Token: ${token}`;
+}
+
 /**
  * The supervisor's log: synchronous appends to `<dir>/gate.log`, rotated at
  * 10 MB keeping 5 generations (`gate.log.1…5`). Synchronous on purpose — the
@@ -87,5 +105,5 @@ export class RotatingLog {
 
 /** A `Token:` value is redacted wherever it appears in the line, not only at its start. */
 function redact(line) {
-  return line.replace(/(Token:\s*)\S+/g, '$1[redacted]');
+  return line.replace(/(Token:\s*)\S+/g, `$1${REDACTED_TOKEN_VALUE}`);
 }

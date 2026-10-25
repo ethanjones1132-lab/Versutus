@@ -16,7 +16,7 @@ import { CliAdapterRegistry } from './core/cli-environments/adapter-registry.mjs
 import { TASK_NAME, buildTaskDefinition, taskRunArgs, writeTaskFile } from './core/service/windows-task.mjs';
 import { runLaunchdService, serviceBackendFor, unsupportedServiceMessage } from './core/service/launchd-agent.mjs';
 import { acquireInstanceLock } from './core/service/instance-lock.mjs';
-import { RotatingLog } from './core/service/rotating-log.mjs';
+import { bootstrapTokenLine, RotatingLog } from './core/service/rotating-log.mjs';
 import { Supervisor } from './core/service/supervisor.mjs';
 import { installProcessGuards } from './core/process-guards.mjs';
 import { doctor } from './core/service/doctor.mjs';
@@ -423,7 +423,7 @@ async function handleStart(args = []) {
       gateHome,
     });
 
-    console.log(`Token: ${gate.token}`);
+    console.log(bootstrapTokenLine(gate.token));
     console.log(`Listening on ${host.includes(':') ? `[${host}]` : host}:${gate.port}`);
     if (isLoopbackHost(host)) {
       console.log('  loopback only: expose it with Tailscale Serve, or set VERSUTUS_GATE_HOST=0.0.0.0 (or --host) to accept tailnet/LAN connections directly');

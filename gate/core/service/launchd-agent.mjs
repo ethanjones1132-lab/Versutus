@@ -4,6 +4,7 @@ import { posix } from 'node:path';
 
 import { resolveStartHost, resolveStartPort } from '../cli-helpers.mjs';
 import { resolveGateHome } from '../paths.mjs';
+import { TOKEN_REDACTION_ENV } from './rotating-log.mjs';
 
 /**
  * macOS counterpart of windows-task.mjs: the Gate as a per-user LaunchAgent.
@@ -89,6 +90,7 @@ export function buildLaunchAgent({
   const environment = {
     HOME: home,
     PATH: path || defaultLaunchdPath({ nodeExe, home }),
+    [TOKEN_REDACTION_ENV]: '1',
   };
   if (gateHome) environment.VERSUTUS_GATE_HOME = gateHome;
   if (host) environment.VERSUTUS_GATE_HOST = host;
