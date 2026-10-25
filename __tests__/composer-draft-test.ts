@@ -4,9 +4,11 @@ import {
   composerDraftKey,
   composerDraftThread,
   loadComposerDraft,
+  loadComposerDraftStrict,
   readComposerDraft,
   recoveryStorageKey,
   saveComposerDraft,
+  saveComposerDraftStrict,
   spokenDraftHold,
   spokenDraftText,
   type ComposerDraftThread,
@@ -318,6 +320,60 @@ describe('loadComposerDraft / saveComposerDraft', () => {
   test('a refused read does not throw — a missing draft is empty', async () => {
     mockGet.mockRejectedValue(new Error('disk full'));
     await expect(loadComposerDraft(bot('researcher'))).resolves.toBe('');
+  });
+});
+
+// The typing path above stays best-effort; recovery promotion needs to know
+// whether the store actually answered, so the same bytes are read and written
+// through helpers that report the refusal instead of swallowing it.
+describe('loadComposerDraftStrict / saveComposerDraftStrict', () => {
+  const backing = new Map<string, string>();
+
+  beforeEach(() => {
+    backing.clear();
+    mockGet.mockReset().mockImplementation(async (key: string) => backing.get(key) ?? null);
+    mockSet.mockReset().mockImplementation(async (key: string, value: string) => {
+      backing.set(key, value);
+    });
+    mockRemove.mockReset().mockImplementation(async (key: string) => {
+      backing.delete(key);
+    });
+  });
+
+  test('a confirmed save reports ok and the same bytes read back', async () => {
+    const thread = bot('researcher');
+    expect(await saveComposerDraftStrict(thread, 'look at the logs')).toBe(true);
+    expect(await loadComposerDraftStrict(thread)).toEqual({ ok: true, text: 'look at the logs' });
+    expect(backing.get(`composer-draft:${composerDraftKey(thread)}`)).toBe(
+      JSON.stringify('look at the logs'),
+    );
+  });
+
+  test('a thread with no stored draft is an empty read, not a refusal', async () => {
+    expect(await loadComposerDraftStrict(bot('researcher'))).toEqual({ ok: true, text: '' });
+  });
+
+  test('a refused read is a refusal, so an unreadable draft is never called empty', async () => {
+    mockGet.mockRejectedValue(new Error('disk full'));
+    expect(await loadComposerDraftStrict(bot('researcher'))).toEqual({ ok: false });
+  });
+
+  test('a corrupt stored draft is a refusal rather than empty text', async () => {
+    const thread = bot('researcher');
+    await saveComposerDraftStrict(thread, 'look at the logs');
+    backing.set(`composer-draft:${composerDraftKey(thread)}`, '{not-json');
+    expect(await loadComposerDraftStrict(thread)).toEqual({ ok: false });
+  });
+
+  test('a refused write reports the refusal', async () => {
+    mockSet.mockRejectedValue(new Error('disk full'));
+    expect(await saveComposerDraftStrict(bot('researcher'), 'look at the logs')).toBe(false);
+  });
+
+  test('the best-effort writer still resolves and the strict reader still sees the bytes', async () => {
+    const thread = bot('researcher');
+    await expect(saveComposerDraft(thread, 'look at the logs')).resolves.toBeUndefined();
+    expect(await loadComposerDraftStrict(thread)).toEqual({ ok: true, text: 'look at the logs' });
   });
 });
 

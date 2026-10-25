@@ -205,3 +205,98 @@ describe('promoteHandsfreeRecovery', () => {
     expect(await loadComposerDraft(coder)).toBe('ship the patch');
   });
 });
+
+// The recovery is the only surviving copy of the spoken words, so a promotion
+// that could not read or could not write must leave both copies in place: the
+// recovery record AND the typed draft the operator already had.
+describe('promoteHandsfreeRecovery when storage refuses', () => {
+  const SPEECH = 'and the disk';
+  const TYPED = 'check the logs';
+
+  function draftBytesKey(thread: ComposerDraftThread): string {
+    return `composer-draft:${composerDraftKey(thread)}`;
+  }
+
+  async function seed(thread: ComposerDraftThread): Promise<string> {
+    await saveComposerDraft(thread, TYPED);
+    await saveHandsfreeRecovery(thread, SPEECH);
+    mockSet.mockClear();
+    mockRemove.mockClear();
+    return draftBytesKey(thread);
+  }
+
+  test('a refused recovery read promotes nothing and clears nothing', async () => {
+    const thread = bot();
+    const draftKey = await seed(thread);
+    mockGet.mockRejectedValue(new Error('disk full'));
+
+    expect(await promoteHandsfreeRecovery(thread)).toBeUndefined();
+    // Both durable records are still exactly what was stored.
+    expect(backing.get(recoveryStorageKey(thread))).toBe(JSON.stringify(SPEECH));
+    expect(backing.get(draftKey)).toBe(JSON.stringify(TYPED));
+    expect(mockSet).not.toHaveBeenCalled();
+    expect(mockRemove).not.toHaveBeenCalled();
+  });
+
+  test('a refused typed-draft read does not overwrite the typed draft with the recovery', async () => {
+    const thread = bot();
+    const draftKey = await seed(thread);
+    // Only the typed-draft read is refused; the recovery read still works, so
+    // the promotion reaches the point where it would have merged onto ''.
+    mockGet.mockImplementation(async (key: string) => {
+      if (key === draftKey) throw new Error('disk full');
+      return backing.get(key) ?? null;
+    });
+
+    expect(await promoteHandsfreeRecovery(thread)).toBeUndefined();
+    expect(backing.get(draftKey)).toBe(JSON.stringify(TYPED));
+    expect(backing.get(recoveryStorageKey(thread))).toBe(JSON.stringify(SPEECH));
+    expect(mockSet).not.toHaveBeenCalled();
+    expect(mockRemove).not.toHaveBeenCalled();
+  });
+
+  test('a corrupt stored draft is a refusal, not an empty draft', async () => {
+    const thread = bot();
+    const draftKey = await seed(thread);
+    backing.set(draftKey, '{not-json');
+
+    expect(await promoteHandsfreeRecovery(thread)).toBeUndefined();
+    // The unreadable bytes are left for a later repair, and the speech survives.
+    expect(backing.get(draftKey)).toBe('{not-json');
+    expect(backing.get(recoveryStorageKey(thread))).toBe(JSON.stringify(SPEECH));
+    expect(mockSet).not.toHaveBeenCalled();
+    expect(mockRemove).not.toHaveBeenCalled();
+  });
+
+  test('a refused merged write keeps the recovery — the words were never durable', async () => {
+    const thread = bot();
+    const draftKey = await seed(thread);
+    mockSet.mockImplementation(async (key: string, value: string) => {
+      if (key === draftKey) throw new Error('disk full');
+      backing.set(key, value);
+    });
+
+    expect(await promoteHandsfreeRecovery(thread)).toBeUndefined();
+    expect(backing.get(draftKey)).toBe(JSON.stringify(TYPED));
+    expect(backing.get(recoveryStorageKey(thread))).toBe(JSON.stringify(SPEECH));
+    expect(mockRemove).not.toHaveBeenCalled();
+  });
+
+  test('a confirmed promotion writes the merged bytes and only then clears the recovery', async () => {
+    const thread = bot();
+    const draftKey = await seed(thread);
+    const setCalls = mockSet.mock.invocationCallOrder.length;
+    const removeCalls = mockRemove.mock.invocationCallOrder.length;
+
+    expect(await promoteHandsfreeRecovery(thread)).toBe(`${TYPED} ${SPEECH}`);
+    // Durability is asserted on the bytes the store holds, not only the return.
+    expect(backing.get(draftKey)).toBe(JSON.stringify(`${TYPED} ${SPEECH}`));
+    expect(backing.has(recoveryStorageKey(thread))).toBe(false);
+    // The clear follows the write: recovery is never dropped first.
+    expect(mockSet.mock.invocationCallOrder.length).toBeGreaterThan(setCalls);
+    expect(mockRemove.mock.invocationCallOrder.length).toBeGreaterThan(removeCalls);
+    expect(mockRemove.mock.invocationCallOrder[removeCalls]).toBeGreaterThan(
+      mockSet.mock.invocationCallOrder[setCalls],
+    );
+  });
+});

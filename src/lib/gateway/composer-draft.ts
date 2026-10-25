@@ -130,26 +130,58 @@ export function recoveryStorageKey(thread: ComposerDraftThread): string {
   return `handsfree-recovery:${composerDraftKey(thread)}`;
 }
 
-export async function loadComposerDraft(thread: ComposerDraftThread): Promise<string> {
+/**
+ * A draft read that says whether it happened. The typing path does not need
+ * this distinction — an unreadable draft is an empty composer, which still
+ * lets the operator type — but recovery does: an unreadable draft is not an
+ * empty one, and treating it as empty would replace words the operator typed.
+ */
+export type ComposerDraftRead =
+  | { ok: true; text: string }
+  | { ok: false };
+
+/** The typed draft, or a refusal when the store could not be read. */
+export async function loadComposerDraftStrict(
+  thread: ComposerDraftThread,
+): Promise<ComposerDraftRead> {
   try {
     const raw = await keyValueStorage.getItem(storageKey(thread));
-    if (!raw) return '';
+    if (!raw) return { ok: true, text: '' };
     const parsed: unknown = JSON.parse(raw);
-    return typeof parsed === 'string' ? parsed : '';
+    return typeof parsed === 'string' ? { ok: true, text: parsed } : { ok: false };
   } catch {
-    return '';
+    return { ok: false };
   }
 }
 
-export async function saveComposerDraft(thread: ComposerDraftThread, text: string): Promise<void> {
+/**
+ * A draft write that resolves true only after the store confirmed it. The
+ * typing path discards that answer; a recovery promotion must not, because the
+ * spoken words are cleared once the merged draft is believed durable.
+ */
+export async function saveComposerDraftStrict(
+  thread: ComposerDraftThread,
+  text: string,
+): Promise<boolean> {
   try {
     const key = storageKey(thread);
     if (!text) {
       await keyValueStorage.removeItem(key);
-      return;
+      return true;
     }
     await keyValueStorage.setItem(key, JSON.stringify(text));
+    return true;
   } catch {
-    // best-effort: drafts must never break typing
+    return false;
   }
+}
+
+export async function loadComposerDraft(thread: ComposerDraftThread): Promise<string> {
+  const read = await loadComposerDraftStrict(thread);
+  return read.ok ? read.text : '';
+}
+
+export async function saveComposerDraft(thread: ComposerDraftThread, text: string): Promise<void> {
+  // best-effort: drafts must never break typing
+  await saveComposerDraftStrict(thread, text);
 }

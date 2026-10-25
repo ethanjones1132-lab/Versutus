@@ -14,9 +14,9 @@
 // left byte-for-byte alone.
 
 import {
-  loadComposerDraft,
+  loadComposerDraftStrict,
   recoveryStorageKey,
-  saveComposerDraft,
+  saveComposerDraftStrict,
   spokenDraftText,
   type ComposerDraftThread,
 } from '@/lib/gateway/composer-draft';
@@ -73,15 +73,28 @@ export function mergeHandsfreeRecovery(typed: string, recovery: string): string 
  * joins the recovered words onto it with the hold's own rule, saves the result
  * and clears the recovery. Nothing is written when there is no recovery, so an
  * untouched draft stays exactly as it was.
+ *
+ * The recovery is the only surviving copy of the spoken words, so every step
+ * here is strict: an unreadable typed draft is not an empty one, and the
+ * recovery is cleared only after the merged write was confirmed. On any
+ * refusal the recovery and the stored draft are both left where they were, and
+ * the caller gets `undefined` because no promotion happened.
  */
 export async function promoteHandsfreeRecovery(
   thread: ComposerDraftThread,
 ): Promise<string | undefined> {
   const recovery = await loadHandsfreeRecovery(thread);
   if (!recovery) return undefined;
-  const typed = await loadComposerDraft(thread);
-  const merged = mergeHandsfreeRecovery(typed, recovery);
-  await saveComposerDraft(thread, merged);
+  const draft = await loadComposerDraftStrict(thread);
+  // Refuse rather than merge onto a draft we could not read: the typed words
+  // would be lost, and the recovered words would land as if the composer had
+  // been empty.
+  if (!draft.ok) return undefined;
+  const merged = mergeHandsfreeRecovery(draft.text, recovery);
+  const saved = await saveComposerDraftStrict(thread, merged);
+  // The merged words are not durable, so the recovery is still the only copy
+  // of the speech. Keep it, and let a later terminal path try again.
+  if (!saved) return undefined;
   await clearHandsfreeRecovery(thread);
   return merged;
 }
