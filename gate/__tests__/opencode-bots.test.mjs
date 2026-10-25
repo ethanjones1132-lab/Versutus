@@ -42,7 +42,17 @@ const PROVIDERS = {
  */
 function fakeServer({ agents = [BUILTIN, SCOUT], busy = {}, loadsNew = true } = {}) {
   const calls = [];
+  // The fake treats the agents directory as POSIX, whatever the host OS joins
+  // paths with, so the assertions below can stay plain POSIX paths.
+  const norm = (path) => String(path).replaceAll('\\', '/');
   const files = new Map();
+  const fileStore = {
+    get size() { return files.size; },
+    get: (path) => files.get(norm(path)),
+    set: (path, data) => { files.set(norm(path), data); return fileStore; },
+    has: (path) => files.has(norm(path)),
+    delete: (path) => files.delete(norm(path)),
+  };
   let live = [...agents];
   let pending = [];
   const fetchImpl = async (url, init = {}) => {
@@ -75,8 +85,9 @@ function fakeServer({ agents = [BUILTIN, SCOUT], busy = {}, loadsNew = true } = 
   const io = {
     ensureDir: async () => {},
     writeFile: async (path, data) => {
-      files.set(path, data);
-      const name = path.replace(/^.*\//, '').replace(/\.md$/, '');
+      const key = norm(path);
+      files.set(key, data);
+      const name = key.replace(/^.*\//, '').replace(/\.md$/, '');
       const prior = live.find((agent) => agent.name === name);
       if (prior) {
         live = live.filter((agent) => agent !== prior);
@@ -95,12 +106,12 @@ function fakeServer({ agents = [BUILTIN, SCOUT], busy = {}, loadsNew = true } = 
       }
     },
     readText: async (path) => {
-      if (!files.has(path)) throw new Error('ENOENT');
-      return files.get(path);
+      if (!files.has(norm(path))) throw new Error('ENOENT');
+      return files.get(norm(path));
     },
-    removeFile: async (path) => { files.delete(path); },
+    removeFile: async (path) => { files.delete(norm(path)); },
   };
-  return { calls, files, fetchImpl, io };
+  return { calls, files: fileStore, fetchImpl, io };
 }
 
 function backendFor(server, options = {}) {
