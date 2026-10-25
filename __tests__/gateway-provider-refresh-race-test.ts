@@ -83,7 +83,9 @@ describe('capability and manifest refresh is scoped to the Gateway that started 
     expect(refresh).toContain('const retirement = await syncChildProfiles(activeGateway, manifestProviders(manifest));');
     expect(refresh).toContain('teardownRetiredActiveGateway(retirement.removedIds, retirement.gateways);');
     expect(refresh).toContain('setGateways(retirement.gateways);');
-    expect(refresh).toMatch(/if \(!isCurrent\(\)\) return \w+;\s*setCapabilityCheckedAt\(Date\.now\(\)\);/);
+    // The stamp is written by a refresh that read something; a refresh whose
+    // reads were refused answers `false` and leaves the last stamp alone.
+    expect(refresh).toMatch(/if \(!isCurrent\(\)\) return \w+;\s*(?:\/\/[^\n]*\n\s*)*if \(landed\) setCapabilityCheckedAt\(Date\.now\(\)\);/);
     expect(refresh.match(/setActiveManifest\(/g)).toHaveLength(1);
   });
 

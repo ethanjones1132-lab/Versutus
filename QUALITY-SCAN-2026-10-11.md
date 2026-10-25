@@ -2751,3 +2751,49 @@ Verified against HEAD `7d2ed20` (worktree `rh/20261018-1915-versutus-vs-004-batc
 
 No [MED] entry in the batch needed a code change: all three were already fixed upstream with regression tests, so no product fixes were made and nothing was deferred.
 
+## Burn-down batch 6 (rh run)
+
+Verified against HEAD `e1a778d` (worktree `rh/20261025-0715-versutus-vs-004-quality-scan-batc`), working down from line 440. The MED entries in `paired-devices.ts ... shortcuts.ts` (lines 440-518) were already closed by batches 2 and 3, so this batch started at the `slash-commands.ts` section. Every MED entry between lines 519 and 706 is also already fixed upstream and pinned by a regression test; the first still-real MEDs are in the `gateway-provider.tsx` sections, and six of them are fixed here. Nothing in the range needed a product call.
+
+### Already fixed upstream (confirmed, no source change)
+
+| Scan | Finding | Code evidence | Regression test |
+|---|---|---|---|
+| 521 | `/device revoke <id>` never forwards the device id | The revoke branch rejects a missing id with usage and forwards `{ deviceId }` as the registry params override (`slash-commands.ts:1686-1695`). | `device-revoke-shadow-test.ts`, `paired-devices-revoke-test.ts:203-209` |
+| 527 | `/device revoke` judged by the `/device` info entry | `commandIdForInput` matches the longest registered slash across the full input, so `device-revoke` wins over the shorter `/device` row (`slash-commands.ts:700-723`). | `device-revoke-shadow-test.ts:71`, `palette-recents-honesty-test.ts:14-60` |
+| 533 | Workflows whose names contain spaces cannot be run | The run path resolves the longest stored name the argument text opens with and passes the remainder as input (`findWorkflowInvocation`, `workflow-model.ts:114-138`; `slash-commands.ts:890-905`). | `slash-commands-test.ts:750-764` (`/workflow Morning Brief hello`) |
+| 539 | A workflow step that never resolved is counted as a success | `outcome.unresolved` stops the step list before the failure test and skips the tally (`slash-commands.ts:912-922`). | `slash-commands-test.ts:666` (`status is unknown (poll timed out)`) |
+| 545 | Failed cron runs render as "completed" | `describeCronRun` reads the Gate's `error` field and prints `failed` (`slash-commands.ts:2391-2395`). | `slash-cron-actions-test.ts:67-94` |
+| 551 | `/cron`, `/env` and `/config rollback` writes skip confirmation | `LOCAL_DANGER_SLASHES` gives `jobs.*`, `environments.lifecycle.*` and `config.rollback` write/destructive danger entries (`command-match.ts:28-40`). | `command-match-test.ts:33-109` |
+| 557 | `/workflow new` / `rename` / `delete` reports success when the save failed | `saveWorkflows` rejects (`workflows.ts:60-66`) and `commit` answers `Could not save workflows: <reason>` (`slash-commands.ts:979-988`). | `slash-commands-test.ts:907-916`, `workflows-test.ts` |
+| 607 | Failed or unparsable workflow read is saved back as the whole store | `readWorkflowsForWrite` reports a refused/unparsable/non-list store instead of reading it as none (`workflows.ts:30-58`). | `workflows-test.ts:101-118` |
+| 613 | Corrupt-gateways rescue ring fills with duplicates of one blob | `preserveCorruptGateways` skips the write when the newest slot already holds the same raw blob (`storage.ts:86-103`). | `gateway-storage-corrupt-test.ts:150-178` |
+| 619 | `http://host:80` is silently rewritten to port 8642 | The port is read from the typed authority, so an explicit default port is kept (`url.ts:89-98`). | `gateway-url-normalization-test.ts:48-54, :114` |
+| 625 | Failed debounced transcript writes are dropped | `enqueueWrite` records a refusal in `failedWrites` and `flushTranscripts` writes it again from the held copy (`transcript.ts:104-161, :183-208`). | `transcript-write-behind-test.ts` |
+| 631 | Deleting a session or gateway can resurrect its transcript from a queued write | Both delete paths run `forgetKey` inside the key's queue, so a queued mutation cannot re-hold the key after the removal (`transcript.ts:356-410`). | `transcript-remove-test.ts`, `transcript-cleanup-test.ts`, `provider-delete-cascade-test.tsx:392` |
+| 637 | Duplicate workflow names are accepted, and the second can never be run | `createWorkflow` refuses a name another workflow already holds (trimmed, case-insensitive), and the slash path says so (`workflow-model.ts:71-94`; `slash-commands.ts:997-999`). | `slash-commands-test.ts:929-946`, `workflows-test.ts` |
+| 663 | Showcase group mutators return the first group for every group | `rename`, `leave` and `addMembers` resolve their own group with `showcaseRoom(groupId)` and fold only that record (`demo-gateway-provider.tsx:245-261`). | `demo-gateway-groups-test.tsx` |
+| 669 | `skillsReadFromUnknown` reports an array of unparseable entries as an empty successful read | A non-empty array with no parsed entry is `{ ok: false }`, and `applySkillsRead` keeps the last good list marked stale (`skills.ts:59-77`). | `skills-test.ts:52-74` |
+
+### Fixed in this batch
+
+All six changes are in `src/context/gateway-provider.tsx`. The new regression suite is `__tests__/gateway-provider-failure-honesty-test.ts`; every case there reads the provider source and fails on the pre-fix shape.
+
+| Scan | Finding | Fix | Regression test |
+|---|---|---|---|
+| 707 | Confirmation preview shows "(unset)" as the current value when `config.get` fails | A refused read now sets `currentKnown = false` and the diff's before cell is the distinct `CONFIG_BEFORE_UNREADABLE` copy, with the sheet summary saying the current values could not be read (`gateway-provider.tsx:845-896`). A key the config genuinely lacks still reads "(unset)", so the existing behaviour is kept. | `gateway-provider-failure-honesty-test.ts`: "a config.get that was refused is unknown, not unset" |
+| 713 | Re-attach ladder gives up after one failed getTurn read | A rejected `getTurn` is treated as an unknown answer and re-arms the next (capped) ladder window; only a resolved turn or a confirmed 404 stands the follow down (`gateway-provider.tsx:2583-2602`), and `scheduleTurnReattach` joins the callback deps. | same file: "the re-attach ladder survives a failed journal read" |
+| 719 | connectGateway switches the displayed profile before a storage write that can throw | Both active-id writes are caught and reported through `setLastError`; the live re-entry branch still returns and the main branch still reaches `attachClient`, so the header and `clientRef` cannot disagree (`gateway-provider.tsx:3406-3434`). | same file: "connectGateway connects even when the active-gateway pin is refused" |
+| 757 | Capability refresh stamps "checked just now" even when the reads failed | `setCapabilityCheckedAt` now runs only when `landed` is still true (`gateway-provider.tsx:6274-6278`), so a refused capability read or a missing manifest leaves the last stamp alone. | same file: "refreshCapabilities only claims a check that actually read something" |
+| 763 | refreshCapabilities ignores a false health result | The `healthCheck()` answer is kept and a falsy result marks the refresh as not landed (`gateway-provider.tsx:6219-6228`), matching the AppState handler's own `if (!health)` rule. | same file (health case), plus the updated `gateway-refresh-abort-test.ts:78-81` |
+| 769 | deleteGateway awaits `saveActiveGatewayId(null)` without a catch, so a refusal skips the resume path and rejects after teardown | The write is caught and named like `disconnectGateway` does (`gateway-provider.tsx:4253-4260`), so the auto-connect resume and the connection-phase update still run. | same file: "deleteGateway still resumes when the active-gateway pin is refused" |
+
+Two existing assertions pinned the exact pre-fix shapes these fixes replace and were updated to assert the corrected shape without dropping their intent: `gateway-provider-refresh-race-test.ts:86-88` (the stamp is now conditional on `landed`) and `gateway-refresh-abort-test.ts:78-81` (the health answer is now kept and used). No assertion was deleted or loosened elsewhere.
+
+### Not reached in this batch
+
+The six-fix cap was met at scan line 769. The remaining MEDs in the `gateway-provider.tsx` sections — the outbox flush's render-time scope closure (scan 775), the per-delta command-transcript write and provider re-render (781), and the composer lock that lasts through the Bot-handoff phase (787) — are still open, together with every MED below line 792. None of them was changed or judged here.
+
+
+### Sol landing review: follow cancellation
+The rejected-getTurn retry now checks a separate follow epoch advanced by stopTurnFollow. A pending refusal after Stop or a same-client thread switch cannot resurrect polling. Behavioral provider tests cover both late-refusal edges and a current follow that retries successfully after one transient refusal; the epoch repair is checked with those tests failing before it and passing after it.

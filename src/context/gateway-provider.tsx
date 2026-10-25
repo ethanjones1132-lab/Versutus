@@ -842,7 +842,16 @@ function safeStringify(value: unknown): string {
   }
 }
 
-async function buildActionPreview(
+/**
+ * The "before" cell for a `/config patch` key whose current value could not be
+ * read. `safeStringify(undefined)` already says "(unset)" for a key the config
+ * genuinely does not hold; a refused `config.get` is a different fact — the
+ * value is unknown — and a sheet that shows "(unset)" for every key asks the
+ * operator to confirm the write on a false basis.
+ */
+export const CONFIG_BEFORE_UNREADABLE = '(current value could not be read)';
+
+export async function buildActionPreview(
   input: string,
   command: { label: string; danger?: string } | null,
   label: string,
@@ -863,19 +872,26 @@ async function buildActionPreview(
     if (patch) {
       const keys = Object.keys(patch);
       let current: Record<string, unknown> | null = null;
+      let currentKnown = true;
       try {
         current = await gatewayRequest<Record<string, unknown>>('config.get', {});
       } catch {
         current = null;
+        // The read was refused, so nothing is known about the current values.
+        currentKnown = false;
       }
       const diff = keys.map((key) => ({
         label: key,
-        before: safeStringify(lookupPath(current, key)),
+        before: currentKnown ? safeStringify(lookupPath(current, key)) : CONFIG_BEFORE_UNREADABLE,
         after: safeStringify(patch[key]),
       }));
+      const count = `${keys.length} config ${keys.length === 1 ? 'key' : 'keys'}`;
       return {
         ...base,
-        summary: `This will write ${keys.length} config ${keys.length === 1 ? 'key' : 'keys'} to the gateway.`,
+        // The sheet says the before column is unknown rather than claiming it.
+        summary: currentKnown
+          ? `This will write ${count} to the gateway.`
+          : `This will write ${count} to the gateway. The current values could not be read, so the before column is unknown.`,
         diff,
       };
     }
@@ -1606,6 +1622,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const turnSeqRef = useRef(new Map<string, number>());
   const turnControllersRef = useRef(new Map<string, AbortController>());
   const turnTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  // In-flight journal reads must stand down with the follow, even on the same client.
+  const turnFollowEpochRef = useRef(0);
   /**
    * How many re-attach attempts each turn has already spent — the ladder's
    * counter, kept here rather than in the timer entry because that entry is
@@ -2295,6 +2313,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * `renderedSeqs` is where that is decided.
    */
   const stopTurnFollow = useCallback(() => {
+    turnFollowEpochRef.current += 1;
     for (const timer of turnTimersRef.current.values()) clearTimeout(timer);
     turnTimersRef.current.clear();
     // The ladder's counter belongs to the follow it was counting: standing that
@@ -2569,7 +2588,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const client = turnClientOf(clientRef.current);
       if (!client?.getTurn) return;
       const generation = clientGenerationRef.current;
-      const turn = await client.getTurn(turnId).catch(() => null);
+      const followEpoch = turnFollowEpochRef.current;
+      // A rejected read means the journal could not be asked — the state of the
+      // turn is unknown, not "no turn". The ladder exists for a dropped
+      // connection, and this is the read most likely to fail during one, so it
+      // re-arms the next window instead of ending the follow. Only a resolved
+      // answer (a turn, or a confirmed 404) may settle or stand down.
+      const read = await client.getTurn(turnId).then(
+        (value) => ({ ok: true as const, turn: value }),
+        () => ({ ok: false as const, turn: null }),
+      );
+      // Stop and thread changes do not replace the client. They invalidate this
+      // read separately so a late refusal cannot resurrect its retry ladder.
+      if (turnFollowEpochRef.current !== followEpoch) return;
+      if (!read.ok) {
+        if (clientGenerationRef.current === generation) scheduleTurnReattach(turnId);
+        return;
+      }
+      const turn = read.turn;
       if (!turn || clientGenerationRef.current !== generation) return;
       const action = decideTurnResume({
         turn,
@@ -2593,7 +2629,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         void settleTurn(action.turnId, action.settlement);
       }
     },
-    [attachTurn, localTurnIds, renderedSeqs, settleTurn],
+    [attachTurn, localTurnIds, renderedSeqs, scheduleTurnReattach, settleTurn],
   );
   useEffect(() => {
     scheduleTurnReattachRef.current = scheduleTurnReattach;
@@ -3371,7 +3407,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           live.connectionStatus === 'reconnecting')
       ) {
         if (activeGatewayRef.current !== gateway) setActiveGateway(gateway);
-        await saveActiveGatewayId(gateway.id);
+        // A refused pin write must not reject the connect: the client below is
+        // already live for this gateway, and the stored id is memory of the
+        // choice rather than part of making it.
+        await saveActiveGatewayId(gateway.id).catch((error) => {
+          setLastError(`Could not save the active gateway: ${error instanceof Error ? error.message : String(error)}`);
+        });
         return;
       }
       setActiveGateway(gateway);
@@ -3390,7 +3431,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // which resets the selector then puts this pin back so the first
       // history load still resumes.
       sessionIdRef.current = gateway.sessionId;
-      await saveActiveGatewayId(gateway.id);
+      // The pin is written before attachClient so a cold start resumes this
+      // thread, but a store that refuses the write must not stop the attach:
+      // that would leave the header naming this gateway while every request
+      // still went through the previous client. Report it and connect anyway.
+      await saveActiveGatewayId(gateway.id).catch((error) => {
+        setLastError(`Could not save the active gateway: ${error instanceof Error ? error.message : String(error)}`);
+      });
       await attachClient(gateway);
     },
     [attachClient],
@@ -4210,7 +4257,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setLiveCapabilities(null);
       applyStatus('disconnected');
       setMessages([]);
-      await saveActiveGatewayId(null);
+      // The profile is already gone, so a refused pin write must not reject the
+      // delete or skip the resume below: report it and carry on to the next
+      // gateway exactly as `disconnectGateway` does for the same write.
+      await saveActiveGatewayId(null).catch((error) => {
+        setLastError(
+          `Could not clear the active gateway: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
       if (settings.autoConnect && next.length > 0) {
         applyConnectionPhase('searching');
         setProbeMessage('Searching for another gateway…');
@@ -6173,8 +6227,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // `raceAbort` stops this refresh waiting on a read the transport owns
         // but cannot cancel, so a superseded refresh stands down here rather
         // than running health and the catalog out to their timeouts.
-        await raceAbort(client.healthCheck(), abort.signal);
+        const health = await raceAbort(client.healthCheck(), abort.signal);
         if (!isCurrent()) return landed;
+        // A dead `/health` is a failed refresh even when the catalog answers:
+        // the AppState handler treats the same falsy answer as a check that did
+        // not pass, and the stamp must not claim otherwise.
+        if (!health) landed = false;
         // Awaited rather than left in flight: a refresh that reports on its own
         // reads cannot report on one it has not waited for, and a refused
         // catalog is exactly the case the answer exists for. The reads it
@@ -6221,7 +6279,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         landed = false;
       }
       if (!isCurrent()) return landed;
-      setCapabilityCheckedAt(Date.now());
+      // Only a refresh that read something may stamp "checked just now": a
+      // refused capability read, a dead /health or a manifest that never came
+      // back must not make the card claim fresh data.
+      if (landed) setCapabilityCheckedAt(Date.now());
     } catch {
       // Recorded, not rethrown: the answers already landed stay landed, and
       // every existing caller ignores the value and keeps working.

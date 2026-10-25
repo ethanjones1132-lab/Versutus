@@ -1531,3 +1531,69 @@ describe('a live send that drops mid-reply re-attaches without showing its reply
     expect(chatApi().messages.filter((message) => message.turnId === turnId)).toHaveLength(1);
   });
 });
+
+describe('journal reads that finish after their follow was stopped', () => {
+  beforeEach(() => {
+    stageActive({ id: 'alpha', url: 'http://alpha.test:8642' });
+  });
+
+  test.each(['Stop', 'thread switch'] as const)(
+    'a late rejected read cannot re-arm polling after %s',
+    async (edge) => {
+      await mount();
+      stageTurn('turn-pending-read', [{ seq: 1, text: 'the old reply' }]);
+      mockState.blindDrops['turn-pending-read'] = 1;
+      let rejectRead: (error: Error) => void = () => {
+        throw new Error('the journal read has not started');
+      };
+      const readTurn = jest.fn(async (turnId: string): Promise<TurnMeta | null> =>
+        mockState.turns[turnId] ?? null,
+      );
+      readTurn.mockImplementationOnce(() => new Promise<TurnMeta | null>((_resolve, reject) => {
+        rejectRead = reject;
+      }));
+      liveClient().getTurn = readTurn;
+      await emitAppState('background');
+      await emitAppState('active');
+      await settleStream();
+      await settle(1, 1_000);
+      expect(readTurn).toHaveBeenCalledTimes(1);
+      expect(mockClients[0].turnStreams).toHaveLength(1);
+
+      await act(async () => {
+        if (edge === 'Stop') await gatewayApi().stopStreaming();
+        else await gatewayApi().selectSession('other-session');
+      });
+      await act(async () => {
+        rejectRead(connectionError());
+      });
+      await settle(3, 30_000);
+      await settleStream();
+
+      expect(readTurn).toHaveBeenCalledTimes(1);
+      expect(mockClients[0].turnStreams).toHaveLength(1);
+      expect(chatApi().isSending).toBe(false);
+    },
+  );
+
+  test('a transient rejected read still retries while its follow is current', async () => {
+    await mount();
+    stageTurn('turn-recoverable-read', [{ seq: 1, text: 'recovered reply' }]);
+    mockState.blindDrops['turn-recoverable-read'] = 1;
+    const readTurn = jest.fn(async (turnId: string): Promise<TurnMeta | null> =>
+      mockState.turns[turnId] ?? null,
+    );
+    readTurn.mockRejectedValueOnce(connectionError());
+    liveClient().getTurn = readTurn;
+    await emitAppState('background');
+    await emitAppState('active');
+    await settleStream();
+    await settle(1, 1_000);
+    expect(readTurn).toHaveBeenCalledTimes(1);
+    await settle(1, 2_000);
+    await settleStream();
+    expect(readTurn).toHaveBeenCalledTimes(2);
+    expect(bubbleByTurn('turn-recoverable-read')?.text).toBe('recovered reply');
+    expect(bubbleByTurn('turn-recoverable-read')?.streaming).toBe(false);
+  });
+});

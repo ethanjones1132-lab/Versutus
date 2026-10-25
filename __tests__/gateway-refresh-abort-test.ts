@@ -75,7 +75,10 @@ describe('CAPS-1: the refresh wires the generation abort into every stage', () =
   test('the refresh captures the generation abort controller', () => {
     const refresh = refreshBody();
     expect(refresh).toContain('const abort = clientGenerationAbortRef.current;');
-    expect(refresh).toContain('await raceAbort(client.healthCheck(), abort.signal);');
+    // The health answer is kept, because a dead /health is a refresh that did
+    // not land even when the catalog answers.
+    expect(refresh).toContain('const health = await raceAbort(client.healthCheck(), abort.signal);');
+    expect(refresh).toContain('if (!health) landed = false;');
     expect(refresh).toContain('await raceAbort(client.getCapabilities(), abort.signal)');
     expect(refresh).toContain('abort.signal,');
   });
