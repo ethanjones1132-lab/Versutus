@@ -17,6 +17,10 @@ import { createTurnJournal } from '../core/turns/turn-journal.mjs';
 const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
 const roots = [];
 
+// The tests that walk a bound on a mock clock still need a real timer for the
+// waits: the socket is real, so its frames arrive on real I/O, not the mock's.
+const realSetTimeout = globalThis.setTimeout;
+
 afterEach(async () => {
   await Promise.all([...new Set(roots.splice(0))].map((root) => rm(root, {
     recursive: true, force: true, maxRetries: 5, retryDelay: 20,
@@ -193,12 +197,24 @@ const until = async (predicate, ms = 3000) => {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     if (await predicate()) return true;
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => realSetTimeout(resolve, 5));
   }
   return false;
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Walk a mock clock forward in small steps, letting the real socket and the
+ * Gate's own I/O run between them. A bound armed halfway through the advance
+ * can therefore fire before the activity that would have kept it off.
+ */
+async function advanceClock(t, totalMs, stepMs = 20) {
+  for (let elapsed = 0; elapsed < totalMs; elapsed += stepMs) {
+    t.mock.timers.tick(Math.min(stepMs, totalMs - elapsed));
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
 
 /**
  * The `data:` payloads of an SSE body, in order.
@@ -480,13 +496,22 @@ function toolTurnRegistry(turns, feeds) {
   return { get: () => adapter, list: () => [adapter] };
 }
 
-test('a tool that keeps reporting after the phone left holds the stall watchdog off', async () => {
+test('a tool that keeps reporting after the phone left holds the stall watchdog off', async (t) => {
   const turns = [];
   const feeds = [];
   const gate = await makeGate({
     registry: toolTurnRegistry(turns, feeds),
     gateOptions: { detachedStallMs: 120, detachedTurnMaxMs: 30_000 },
   });
+
+  // The watchdog is a `setTimeout`, so the mock clock is what proves how long
+  // the turn really went: a real sleep that overran the bound would abort a turn
+  // whose tool was reporting the whole time, which is the machine's load and not
+  // the product's behaviour. Enabled after the Gate's on-disk setup, whose
+  // writes retry on real timers; the watchdog is armed when the phone leaves.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let mocked = true;
+
   const controller = new AbortController();
   try {
     const pending = streamingTurn(gate.gate, { turnId: TURN_ID, controller });
@@ -498,13 +523,19 @@ test('a tool that keeps reporting after the phone left holds the stall watchdog 
     // the timer already counting down.
     controller.abort();
     await pending.catch(() => undefined);
+    // Let the Gate observe the close before the tool exists: the watchdog is
+    // armed at the detach, and the first tool frame has to re-arm that timer.
+    await new Promise((resolve) => setImmediate(resolve));
     feeds[0]({ type: 'tool.started', payload: { name: 'bash', callId: 'call-1' } });
 
-    // Well past the stall bound, with the model saying no text at all: a turn
-    // running a long tool and reporting it is working, not hanging.
+    // Ten steps of 60ms take the turn 600ms past the detach — five times the
+    // bound — with the model saying no text at all: a turn running a long tool
+    // and reporting it is working, not hanging. Each step's timer is the one the
+    // previous progress re-armed; a tool frame that does not re-arm it is read
+    // as a stall exactly where the fixed sleeps used to race it.
     for (let tick = 0; tick < 10; tick += 1) {
       feeds[0]({ type: 'tool.progress', payload: { callId: 'call-1', text: `step ${tick} ` } });
-      await sleep(60);
+      await advanceClock(t, 60);
       assert.equal(
         turns[0].signal?.aborted,
         false,
@@ -512,12 +543,18 @@ test('a tool that keeps reporting after the phone left holds the stall watchdog 
       );
     }
 
+    // The bound has done its work; the real timers go back before the turn is
+    // allowed to finish, so its own writes retry on a clock that moves.
+    t.mock.timers.reset();
+    mocked = false;
+
     turns[0].resolve(answer('done after the tool'));
     assert.ok(
       await until(async () => (await turnMeta(gate, TURN_ID)).body.status === 'done'),
       'a turn that was holding a tool still finished',
     );
   } finally {
+    if (mocked) t.mock.timers.reset();
     await gate.close();
   }
 });

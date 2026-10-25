@@ -20,6 +20,10 @@ import { CredentialVault } from '../core/credentials/vault.mjs';
 const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
 const roots = [];
 
+// The tests that walk a bound on a mock clock still need a real timer for the
+// waits: the socket is real, so its frames arrive on real I/O, not the mock's.
+const realSetTimeout = globalThis.setTimeout;
+
 afterEach(async () => {
   await Promise.all([...new Set(roots.splice(0))].map((root) => rm(root, {
     recursive: true, force: true, maxRetries: 5, retryDelay: 20,
@@ -55,31 +59,42 @@ async function startSilentVendor() {
 }
 
 /**
- * A vendor that streams steadily but slowly: each chunk arrives well inside the
- * idle bound, while the total runtime exceeds it several times over. It must
- * never be cut off for being slow, only for falling silent.
+ * A vendor the test feeds by hand, one chunk at a time.
+ *
+ * A stream that is slow but steady must never be cut off for being slow. The
+ * test decides when each chunk lands, so the gap between chunks is simulated on
+ * a mock clock instead of depending on how quickly this machine happens to run
+ * a timer.
  */
-async function startSlowVendor({ intervalMs, chunks }) {
-  const server = createServer((_req, res) => {
+async function startSlowVendor() {
+  let response = null;
+  let openedResolve;
+  const opened = new Promise((resolve) => { openedResolve = resolve; });
+  const server = createServer((req, res) => {
+    // Anything but the chat call (a catalogue probe, say) is answered plainly;
+    // only the turn's own stream is the vendor under test.
+    if (!req.url?.endsWith('/chat/completions')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ data: [] }));
+      return;
+    }
+    response = res;
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-    let index = 0;
-    const timer = setInterval(() => {
-      if (index >= chunks.length || res.writableEnded) {
-        clearInterval(timer);
-        if (!res.writableEnded) {
-          res.write('data: [DONE]\n\n');
-          res.end();
-        }
-        return;
-      }
-      res.write(sseDelta(chunks[index]));
-      index += 1;
-    }, intervalMs);
-    res.on('close', () => clearInterval(timer));
+    openedResolve();
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   return {
     baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
+    opened,
+    write: (text) => {
+      if (!response || response.writableEnded) throw new Error('the vendor stream is not open');
+      response.write(sseDelta(text));
+    },
+    end: () => {
+      if (!response || response.writableEnded) return;
+      response.write('data: [DONE]\n\n');
+      response.end();
+    },
     close: async () => {
       server.closeAllConnections?.();
       await new Promise((resolve) => server.close(resolve));
@@ -178,10 +193,22 @@ const until = async (predicate, ms = 5000) => {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     if (await predicate()) return true;
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => realSetTimeout(resolve, 10));
   }
   return false;
 };
+
+/**
+ * Walk a mock clock forward in small steps, letting the real HTTP exchange
+ * deliver each frame between them. The relay's idle bound is a `setTimeout`, so
+ * it moves with the mock; the vendor's socket stays real.
+ */
+async function advanceClock(t, totalMs, stepMs = 25) {
+  for (let elapsed = 0; elapsed < totalMs; elapsed += stepMs) {
+    t.mock.timers.tick(Math.min(stepMs, totalMs - elapsed));
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
 
 test('a durable turn whose vendor goes silent after the first chunk ends failed, and its replay carries the error frame', { timeout: 15_000 }, async () => {
   const vendor = await startSilentVendor();
@@ -224,14 +251,22 @@ test('a durable turn whose vendor goes silent after the first chunk ends failed,
   }
 });
 
-test('a durable turn whose vendor streams slowly but steadily is not cut off by the idle bound', { timeout: 15_000 }, async () => {
-  // Each chunk arrives at 100ms; the idle bound is 300ms, so the gaps are all
-  // inside it while the total (1000ms) exceeds it more than three times. A
-  // bound that measured total length would cut this off; a silence bound must
-  // let the whole reply through.
+test('a durable turn whose vendor streams slowly but steadily is not cut off by the idle bound', { timeout: 15_000 }, async (t) => {
+  // Each chunk lands 200ms of simulated time after the one before it: inside
+  // the 300ms silence bound, while the reply as a whole takes 2000ms — more
+  // than six times the bound. A bound that measured total length would cut
+  // this off; a silence bound must let the whole reply through.
   const chunks = ['the ', 'whole ', 'answer ', 'in ', 'many ', 'slow ', 'pieces ', 'arrives ', 'whole ', 'intact'];
-  const vendor = await startSlowVendor({ intervalMs: 100, chunks });
+  const vendor = await startSlowVendor();
   const harness = await makeIdleGate(vendor.baseUrl, { timeoutMs: 300 });
+
+  // The relay's idle bound is walked on a mock clock, not on this machine's
+  // timers: a loaded box must not turn a chunk that was sent inside the bound
+  // into a silence past it. Enabled after the Gate's own on-disk setup, whose
+  // writes retry on real timers; the bound under test is armed by the turn.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let mocked = true;
+
   const controller = new AbortController();
   try {
     const pending = streamingTurn(harness, { turnId: TURN_ID, controller });
@@ -242,6 +277,23 @@ test('a durable turn whose vendor streams slowly but steadily is not cut off by 
     );
     controller.abort();
     await pending.catch(() => undefined);
+    await vendor.opened;
+
+    for (let index = 0; index < chunks.length; index += 1) {
+      const expected = chunks.slice(0, index + 1).join('');
+      vendor.write(chunks[index]);
+      assert.ok(
+        await until(async () => (await turnMeta(harness, TURN_ID)).body.text === expected),
+        `chunk ${index} must reach the journal before the next silence is measured`,
+      );
+      await advanceClock(t, 200);
+    }
+    // The idle bound has done its job: put the real timers back before the turn
+    // concludes, so the Gate's own outcome write (which retries a Windows
+    // sharing violation on a timer) is not left on a clock that no longer moves.
+    t.mock.timers.reset();
+    mocked = false;
+    vendor.end();
 
     assert.ok(
       await until(async () => (await turnMeta(harness, TURN_ID)).body.status === 'done', 10_000),
@@ -251,6 +303,7 @@ test('a durable turn whose vendor streams slowly but steadily is not cut off by 
     assert.equal(body.status, 'done');
     assert.equal(body.text, chunks.join(''));
   } finally {
+    if (mocked) t.mock.timers.reset();
     await harness.close();
     await vendor.close();
   }

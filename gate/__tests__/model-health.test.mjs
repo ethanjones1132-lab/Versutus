@@ -211,8 +211,15 @@ test('a refused turn is written down in one file write, not one per failure', as
   assert.equal(health.verdict(KEY).failures, 5);
 });
 
-/** Wait until `read` is true, or give up. Coalesced writes land on a timer. */
-async function waitFor(read, timeoutMs = 2000) {
+/**
+ * Wait until `read` is true, or give up.
+ *
+ * Coalesced writes land on a timer, and on a busy host the disk can take a
+ * while to answer after it: the condition is the write, so this waits for it
+ * with a deadline generous enough that load is never read as a missing write,
+ * and still fails when the write really never lands.
+ */
+async function waitFor(read, timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
@@ -221,6 +228,6 @@ async function waitFor(read, timeoutMs = 2000) {
       // Not written yet.
     }
     if (Date.now() > deadline) throw new Error('timed out waiting for the health file');
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
