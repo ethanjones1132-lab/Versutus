@@ -171,6 +171,24 @@ cd android && ./gradlew.bat assembleRelease --no-daemon
 # -> android/app/build/outputs/apk/release/app-release.apk
 ```
 
+### Production AAB with EAS (Play Store open testing)
+
+The Play Store open-testing track ships an Android App Bundle, not an APK. The
+`production` profile in `eas.json` is configured for that: its
+`android.buildType` is `app-bundle`.
+
+```bash
+eas build -p android --profile production
+# -> .aab artifact, the format Play open testing requires
+```
+
+Submitting to Google Play is a **separate ship step** — it is not performed by
+config or this document. `submit.production` is deliberately staged so a routine
+submission can never roll a build straight out to production: it pins
+`android.track` to `internal` and `android.releaseStatus` to `draft`. An upload
+lands as a draft on the internal testing track; a human promotes it in the Play
+Console when a real release is intended.
+
 ---
 
 ## Verification

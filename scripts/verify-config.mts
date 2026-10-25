@@ -506,6 +506,66 @@ if (leakedHosts.length > 0) {
   pass('no-personal-gateway-hosts', 'committed config names no private or tailnet gateway host');
 }
 
+// ---------------------------------------------------------------------------
+// 8. The production EAS profile must build an App Bundle and a submit that
+//    cannot roll a build straight to production.
+//
+//    Play open testing ships the AAB: `build.production.android.buildType` must
+//    be `app-bundle`. And `submit.production` must not default a later
+//    `eas submit` to the production track — that would publish a build to real
+//    users the first time someone ships. Pinning track `internal` and
+//    releaseStatus `draft` makes a Play submission a staging upload that a
+//    human promotes deliberately.
+// ---------------------------------------------------------------------------
+type EasJson = {
+  build?: Record<string, { android?: { buildType?: string } }>;
+  submit?: Record<string, { android?: { track?: string; releaseStatus?: string } }>;
+};
+
+let eas: EasJson | undefined;
+const easPath = join(root, 'eas.json');
+if (!existsSync(easPath)) {
+  fail('eas-production-play-guard', 'eas.json is missing');
+} else {
+  try {
+    eas = JSON.parse(readFileSync(easPath, 'utf8')) as EasJson;
+  } catch {
+    fail('eas-production-play-guard', 'eas.json is not valid JSON');
+  }
+}
+
+if (eas) {
+  const prodBuildType = eas.build?.production?.android?.buildType;
+  if (prodBuildType === 'app-bundle') {
+    pass('eas-production-build-type', 'build.production builds an Android App Bundle');
+  } else {
+    fail(
+      'eas-production-build-type',
+      `build.production.android.buildType is ${JSON.stringify(prodBuildType)}, not "app-bundle"`,
+    );
+  }
+
+  const prodTrack = eas.submit?.production?.android?.track;
+  if (prodTrack === 'internal') {
+    pass('eas-submit-play-track', 'submit.production uploads to the internal track, never production');
+  } else {
+    fail(
+      'eas-submit-play-track',
+      `submit.production.android.track is ${JSON.stringify(prodTrack)}, not "internal" — a production track would roll a submit straight out`,
+    );
+  }
+
+  const prodReleaseStatus = eas.submit?.production?.android?.releaseStatus;
+  if (prodReleaseStatus === 'draft') {
+    pass('eas-submit-release-status', 'submit.production leaves the upload as a draft for deliberate promotion');
+  } else {
+    fail(
+      'eas-submit-release-status',
+      `submit.production.android.releaseStatus is ${JSON.stringify(prodReleaseStatus)}, not "draft"`,
+    );
+  }
+}
+
 console.log('');
 if (failures.length > 0) {
   console.error(`verify-config: ${failures.length} check(s) failed`);
