@@ -13,7 +13,10 @@ export type JsonTreeNode =
   | { kind: 'array'; children: JsonTreeNode[]; preview: string };
 
 export function jsonTreeNode(value: unknown): JsonTreeNode {
-  if (value === null || value === undefined || value === '') {
+  // Only absent values render as `null`. An empty string is a real string
+  // value that arrives routinely in command results (`"stderr": ""`), so it
+  // must keep its quotes rather than borrow the null rendering.
+  if (value === null || value === undefined) {
     return { kind: 'primitive', value: 'null', primitive: 'null' };
   }
   if (typeof value === 'string') {

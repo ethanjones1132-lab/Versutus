@@ -35,6 +35,50 @@ describe('jsonTreeNode', () => {
     expect(jsonTreeNode({}).kind === 'object').toBe(true);
     expect(jsonTreeNode([]).kind === 'array').toBe(true);
   });
+
+  test('an empty string keeps its string type and quotes', () => {
+    expect(jsonTreeNode('')).toEqual({ kind: 'primitive', value: '""', primitive: 'string' });
+  });
+
+  test('an empty string is not confused with null or undefined', () => {
+    const empty = jsonTreeNode('');
+    const nul = jsonTreeNode(null);
+    const undef = jsonTreeNode(undefined);
+    if (empty.kind !== 'primitive') throw new Error('expected primitive');
+    expect(empty.value).toBe('""');
+    expect(empty.primitive).toBe('string');
+    expect(nul).toEqual({ kind: 'primitive', value: 'null', primitive: 'null' });
+    expect(undef).toEqual({ kind: 'primitive', value: 'null', primitive: 'null' });
+    expect(empty).not.toEqual(nul);
+  });
+
+  test('falsy non-string values keep their own primitives', () => {
+    expect(jsonTreeNode(false)).toEqual({ kind: 'primitive', value: 'false', primitive: 'boolean' });
+    expect(jsonTreeNode(0)).toEqual({ kind: 'primitive', value: '0', primitive: 'number' });
+    expect(jsonTreeNode(-0)).toEqual({ kind: 'primitive', value: '0', primitive: 'number' });
+    expect(jsonTreeNode(Number.NaN)).toEqual({ kind: 'primitive', value: 'null', primitive: 'null' });
+  });
+
+  test('empty strings survive inside nested objects', () => {
+    const node = jsonTreeNode({ stdout: 'ok', stderr: '' });
+    expect(node.kind).toBe('object');
+    if (node.kind !== 'object') return;
+    expect(node.entries.map((entry) => entry.key)).toEqual(['stdout', 'stderr']);
+    expect(node.entries[1].node).toEqual({ kind: 'primitive', value: '""', primitive: 'string' });
+    expect(node.preview).toBe('2 keys');
+  });
+
+  test('empty strings survive inside nested arrays, including deep nesting', () => {
+    const node = jsonTreeNode({ args: ['', 'x', { tail: '' }] });
+    if (node.kind !== 'object') throw new Error('expected object');
+    const args = node.entries[0].node;
+    if (args.kind !== 'array') throw new Error('expected array');
+    expect(args.children[0]).toEqual({ kind: 'primitive', value: '""', primitive: 'string' });
+    expect(args.children[1]).toEqual({ kind: 'primitive', value: '"x"', primitive: 'string' });
+    const tail = args.children[2];
+    if (tail.kind !== 'object') throw new Error('expected object');
+    expect(tail.entries[0].node).toEqual({ kind: 'primitive', value: '""', primitive: 'string' });
+  });
 });
 
 describe('tryParseJson', () => {
@@ -107,5 +151,28 @@ describe('describeCommandResult', () => {
       value: { ok: true },
       signal: { failed: false },
     });
+  });
+
+  test('keeps an empty command field as an empty string, not null', () => {
+    const model = describeCommandResult('{"stdout":"ok","stderr":"","exitCode":0}');
+    expect(model.kind).toBe('json');
+    if (model.kind !== 'json') return;
+    expect(model.value).toEqual({ stdout: 'ok', stderr: '', exitCode: 0 });
+    expect(model.signal).toEqual({ failed: false });
+    const node = jsonTreeNode(model.value);
+    expect(node.kind).toBe('object');
+    if (node.kind !== 'object') return;
+    expect(node.entries.map((entry) => entry.key)).toEqual(['stdout', 'stderr', 'exitCode']);
+    expect(node.entries[1].node).toEqual({ kind: 'primitive', value: '""', primitive: 'string' });
+    expect(node.entries[2].node).toEqual({ kind: 'primitive', value: '0', primitive: 'number' });
+  });
+
+  test('a JSON document that is a bare empty string stays a string value', () => {
+    expect(describeCommandResult('""')).toEqual({
+      kind: 'json',
+      value: '',
+      signal: { failed: false },
+    });
+    expect(jsonTreeNode('')).toEqual({ kind: 'primitive', value: '""', primitive: 'string' });
   });
 });
