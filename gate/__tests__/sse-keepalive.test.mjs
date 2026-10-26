@@ -51,6 +51,12 @@ class FakeRes extends EventEmitter {
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Polls until `done()` is true or `limitMs` passes; a loaded box delays timers, it must not fail the test. */
+async function until(done, limitMs = 5000) {
+  const deadline = Date.now() + limitMs;
+  while (!done() && Date.now() < deadline) await wait(5);
+}
+
 test('sseHeaders carries the streaming contract and the heartbeat cadence', () => {
   assert.deepEqual(sseHeaders(), {
     'Content-Type': 'text/event-stream',
@@ -66,7 +72,7 @@ test('sseHeaders carries the streaming contract and the heartbeat cadence', () =
 test('a silent response is written comment frames, and nothing once it ends', async () => {
   const res = new FakeRes();
   const stop = startSseKeepalive(res, { intervalMs: 5 });
-  await wait(40);
+  await until(() => res.writes.length >= 2);
   assert.ok(res.writes.length >= 2, `expected repeated keepalives, got ${res.writes.length}`);
   assert.deepEqual([...new Set(res.writes)], [': keepalive\n\n']);
 
@@ -86,7 +92,7 @@ test('a write that never drains is a dead peer: the response is destroyed', asyn
   const res = new FakeRes();
   res.writeOk = false;
   startSseKeepalive(res, { intervalMs: 10, drainTimeoutMs: 30 });
-  await wait(80);
+  await until(() => res.destroyed);
   assert.equal(res.destroyed, true, 'a half-open socket must not keep the stream open');
 });
 
