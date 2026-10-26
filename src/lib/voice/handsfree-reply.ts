@@ -19,6 +19,9 @@
 // thread that also dispatches the native level events. The cursor also carries
 // a digest of the text the scan settled, so resuming does not cost the check
 // that the reply is still append-only — a position alone cannot prove that.
+// A sentence terminator that still ends the buffer is not the end of a
+// sentence: `Version 3.` may be on its way to `Version 3.14`. The scan holds
+// the run, and the next delta or the finish decides whether it ends anything.
 
 import type { ChatMessage } from '@/lib/gateway/types';
 import { speechChunks } from '@/lib/voice/speech-chunks';
@@ -94,12 +97,23 @@ function prefixHash(text: string, length: number): number {
  * delta picks up where the last one stopped.
  */
 export type HandsfreeSpeechCursor = {
-  /** How far into the reply the scan has read; everything before it is settled. */
+  /**
+   * How far into the reply the scan has read, which is also what the digest
+   * covers. Everything before `boundary` is settled; the characters between it
+   * and here have been read, but none of them ends a completed sentence yet.
+   */
   index: number;
   /** The longest completed-sentence prefix found so far. */
   boundary: number;
   /** Digest of `fullText.slice(0, index)` as of that scan. */
   hash: number;
+  /**
+   * Where a run of terminators that ends a still-streaming text begins. Such a
+   * run is not a sentence end yet — `Version 3.` may be on its way to
+   * `Version 3.14` — so the next scan re-examines it from here, once a delta
+   * has put something after it. A finished reply never holds one.
+   */
+  held?: number;
 };
 
 type SpeechScan = {
@@ -109,6 +123,20 @@ type SpeechScan = {
   cursor: HandsfreeSpeechCursor;
 };
 
+type SpeechScanOptions = {
+  /** A cursor from an earlier scan of the same, still-appending reply. */
+  cursor?: HandsfreeSpeechCursor;
+  /**
+   * Whether the text may still grow. A terminator that ends a text which may
+   * still grow is ambiguous — `Version 3.` may yet become `Version 3.14` — so
+   * it is held instead of accepted as a sentence end, and the next scan
+   * resolves it once a delta or the finish puts something after it.
+   */
+  streaming?: boolean;
+  /** Told how many characters this scan had to read. */
+  onExamine?: (chars: number) => void;
+};
+
 /**
  * The longest prefix of a streaming reply that ends on a completed sentence
  * (including the whitespace after it) or a line break. Only then is it safe to
@@ -116,37 +144,59 @@ type SpeechScan = {
  * the Bot did not write. Mirrors `speechChunks`'s own terminator rule so the
  * two agree about what a sentence is.
  *
+ * A terminator with nothing after it is only the end of a sentence when the
+ * text is finished. While the reply is still streaming the same character may
+ * be the dot of `3.14`, so it is held: the scan stops in front of the run, the
+ * digest still covers it, and the next delta re-reads it from there. The
+ * utterance is then spoken once, after the character that resolves it arrives.
+ *
  * Given a cursor from an earlier scan of the same, still-appending reply it
  * resumes there instead of walking the settled prefix again; a cursor that does
  * not fit this text is ignored and the scan starts over.
  */
-function scanCompletedSentences(
-  text: string,
-  cursor?: HandsfreeSpeechCursor,
-  onExamine?: (chars: number) => void,
-): SpeechScan {
-  const resume = cursor && cursor.index <= text.length && cursor.boundary <= cursor.index;
-  let boundary = resume ? cursor.boundary : 0;
-  let index = resume ? cursor.index : 0;
-  const settled = index;
-  // A resumed scan takes the digest the caller proved; a fresh walk starts from
-  // the basis. Either way it only moves forward beside the scan, so extending it
-  // costs the characters this delta added and never a re-read of the prefix.
-  let hash = resume ? cursor.hash : HASH_BASIS;
-  let folded = settled;
+function scanCompletedSentences(text: string, options: SpeechScanOptions = {}): SpeechScan {
+  const candidate = options.cursor;
+  // A cursor only resumes a text that still extends what it read: a shorter
+  // text, a boundary past its own read, or a held run outside it starts over.
+  const fits =
+    candidate !== undefined &&
+    candidate.index <= text.length &&
+    candidate.boundary <= candidate.index &&
+    (candidate.held === undefined ||
+      (candidate.held >= candidate.boundary && candidate.held <= candidate.index));
+  const cursor = fits ? candidate : undefined;
+
+  let boundary = cursor ? cursor.boundary : 0;
+  // The digest covers everything read so far, a held run included: a rewrite of
+  // those characters is a mutation like any other, not a fresh sentence. A
+  // resumed scan takes the digest the caller proved; a fresh walk starts from
+  // the basis. Either way it only moves forward, so extending it costs the
+  // characters this delta added and never a re-read of the prefix.
+  let read = cursor ? cursor.index : 0;
+  let hash = cursor ? cursor.hash : HASH_BASIS;
+  // Resume on the held run rather than after it, so the delta that put
+  // something after `3.` resolves the same character the last scan refused.
+  let index = cursor ? (cursor.held ?? read) : 0;
+  const start = index;
+  let held: number | undefined;
 
   while (index < text.length) {
-    while (folded < index) {
-      hash = foldHash(hash, text.charCodeAt(folded));
-      folded += 1;
-    }
     const char = text[index];
 
     if (TERMINATORS.includes(char)) {
       let last = index;
       while (last + 1 < text.length && TERMINATORS.includes(text[last + 1])) last += 1;
       const next = text[last + 1];
-      if (next !== undefined && !isWhitespace(next)) {
+      if (next === undefined) {
+        // The text ends inside the run. A finished reply ends its sentence on
+        // it; a streaming one cannot tell `3.` from the start of `3.14` yet,
+        // so the run is held for the next delta or the finish to settle.
+        if (options.streaming) held = index;
+        else boundary = last + 1;
+        index = last + 1;
+        continue;
+      }
+      if (!isWhitespace(next)) {
         // Inside something rather than the end of it (`3.14`, `v1.2.0`).
         index = last + 1;
         continue;
@@ -168,21 +218,30 @@ function scanCompletedSentences(
 
     index += 1;
   }
-  while (folded < index) {
-    hash = foldHash(hash, text.charCodeAt(folded));
-    folded += 1;
+
+  while (read < text.length) {
+    hash = foldHash(hash, text.charCodeAt(read));
+    read += 1;
   }
 
-  onExamine?.(index - settled);
-  return { window: text.slice(0, boundary), cursor: { index, boundary, hash } };
+  // The held run is read again next delta, so it counts as read again here.
+  options.onExamine?.(text.length - start);
+  const scanCursor: HandsfreeSpeechCursor = { index: read, boundary, hash };
+  if (held !== undefined) scanCursor.held = held;
+  return { window: text.slice(0, boundary), cursor: scanCursor };
 }
 
 /**
- * The longest prefix of a streaming reply that ends on a completed sentence.
- * The whole-reply scan; the incremental plan below resumes this one.
+ * The longest prefix of a reply that ends on a completed sentence. The
+ * whole-reply scan; the incremental plan below resumes this one.
+ *
+ * `streaming` says the text may still grow, so a terminator that ends it is
+ * held rather than accepted (`Version 3.` is not yet a sentence when `14 is
+ * out.` may follow). Without it the text is read as finished, and a trailing
+ * terminator is the end of the sentence it closes.
  */
-export function completedSentenceText(text: string): string {
-  return scanCompletedSentences(text).window;
+export function completedSentenceText(text: string, options?: { streaming?: boolean }): string {
+  return scanCompletedSentences(text, { streaming: options?.streaming === true }).window;
 }
 
 export type HandsfreeSpeechPlan = {
@@ -198,9 +257,11 @@ export type HandsfreeSpeechPlan = {
 
 /**
  * What of a reply is safe to speak right now. A completed reply is spoken in
- * full; a streaming one only up to its last completed sentence. After a
- * mutation the plan is empty and names the mutation, and the provider waits for
- * the message to finish before speaking the rest.
+ * full; a streaming one only up to its last completed sentence, which a
+ * terminator that still ends the buffer does not count as — see
+ * `completedSentenceText`. After a mutation the plan is empty and names the
+ * mutation, and the provider waits for the message to finish before speaking
+ * the rest.
  *
  * `cursor` is the previous plan's scan position and the digest of the text it
  * settled. Handing it in keeps the work proportional to the delta rather than to
@@ -246,8 +307,12 @@ export function planHandsfreeSpeech(input: {
   let window: string;
   let nextCursor: HandsfreeSpeechCursor | undefined;
   if (input.streaming) {
-    const scan = scanCompletedSentences(input.fullText, cursor, (chars) => {
-      examined += chars;
+    const scan = scanCompletedSentences(input.fullText, {
+      cursor,
+      streaming: true,
+      onExamine: (chars) => {
+        examined += chars;
+      },
     });
     window = scan.window;
     nextCursor = scan.cursor;

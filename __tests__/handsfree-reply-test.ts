@@ -5,6 +5,7 @@ import {
   isFailedReply,
   planHandsfreeSpeech,
   replyPrefixIntact,
+  type HandsfreeSpeechCursor,
 } from '@/lib/voice/handsfree-reply';
 
 function message(partial: Partial<ChatMessage> & { id: string; role: ChatMessage['role'] }): ChatMessage {
@@ -114,6 +115,30 @@ describe('completedSentenceText', () => {
     expect(completedSentenceText('pi is 3.14')).toBe('');
     expect(completedSentenceText('pi is 3.14. Next')).toBe('pi is 3.14. ');
   });
+
+  test('a terminator that ends a streaming text is held rather than accepted', () => {
+    // The dot of `Version 3.` is the same character as the dot of `3.14`, so a
+    // text that may still grow cannot call it a sentence end: `3.` would be
+    // spoken, and the `14 is out.` that followed would never correct it.
+    expect(completedSentenceText('Version 3.', { streaming: true })).toBe('');
+    expect(completedSentenceText('Version 3.14', { streaming: true })).toBe('');
+    expect(completedSentenceText('Version 3.14 is out.', { streaming: true })).toBe('');
+    // The held run is only the last one: the sentence before it stays complete.
+    expect(completedSentenceText('Wait... is that right?', { streaming: true })).toBe('Wait... ');
+    // A following whitespace resolves it, and the sentence is complete again.
+    expect(completedSentenceText('Version 3.14 is out. ', { streaming: true })).toBe(
+      'Version 3.14 is out. ',
+    );
+    expect(completedSentenceText('Hello. Wor', { streaming: true })).toBe('Hello. ');
+    // A finished text keeps the old answer: the terminator closes the sentence.
+    expect(completedSentenceText('Version 3.')).toBe('Version 3.');
+    expect(completedSentenceText('Wait... is that right?')).toBe('Wait... is that right?');
+  });
+
+  test('a line break still ends a sentence at the end of a streaming text', () => {
+    // A line break cannot be the inside of a number, so it is never held.
+    expect(completedSentenceText('first line\n', { streaming: true })).toBe('first line\n');
+  });
 });
 
 describe('planHandsfreeSpeech', () => {
@@ -140,9 +165,21 @@ describe('planHandsfreeSpeech', () => {
       fullText: 'One. Two. Three.',
       streaming: true,
       spoken: first.spoken,
+      cursor: first.cursor,
     });
-    expect(second.chunks).toEqual(['Three.']);
-    expect(second.spoken).toBe('One. Two. Three.');
+    // `Three.` ends the buffer while the reply may still grow, so its dot is
+    // held rather than spoken early — it is delayed, never lost.
+    expect(second.chunks).toEqual([]);
+    expect(second.spoken).toBe('One. Two. ');
+    const finished = planHandsfreeSpeech({
+      ...base,
+      fullText: 'One. Two. Three.',
+      streaming: false,
+      spoken: second.spoken,
+      cursor: second.cursor,
+    });
+    expect(finished.chunks).toEqual(['Three.']);
+    expect(finished.spoken).toBe('One. Two. Three.');
   });
 
   test('the platform bound cuts long completed text into chunks', () => {
@@ -195,5 +232,104 @@ describe('planHandsfreeSpeech', () => {
     });
     expect(plan.chunks).toEqual([]);
     expect(plan.spoken).toBe('Hello. ');
+  });
+});
+
+// The shipped defect: `Version 3.` arrived as its own delta, the scan called its
+// dot a sentence end, and the synthesizer said "Version three" — then the next
+// delta's "14 is out" was a second utterance, with the cursor already past the
+// dot. The dot of `3.` and the dot of `3.14` are the same character, so neither
+// path may spend it until something after it decides which one it is.
+describe('planHandsfreeSpeech — a streaming terminator at the end of the buffer', () => {
+  const base = { spoken: '', maxLength: 1000, waitForCompletion: false };
+  const FULL = 'Version 3.14 is out.';
+
+  test('without a cursor, "3." is not spoken and the finished reply is said once', () => {
+    const early = planHandsfreeSpeech({ ...base, fullText: 'Version 3.', streaming: true });
+    // The defect spoke `Version 3.` here.
+    expect(early.chunks).toEqual([]);
+    expect(early.spoken).toBe('');
+
+    const later = planHandsfreeSpeech({
+      ...base,
+      fullText: 'Version 3.14 is out.',
+      streaming: true,
+      spoken: early.spoken,
+    });
+    // The dot is still inside a number, so it is not a boundary either.
+    expect(later.chunks).toEqual([]);
+    expect(later.spoken).toBe('');
+
+    const finished = planHandsfreeSpeech({
+      ...base,
+      fullText: FULL,
+      streaming: false,
+      spoken: later.spoken,
+    });
+    expect(finished.chunks).toEqual([FULL]);
+    expect(finished.spoken).toBe(FULL);
+    // Nothing was said twice: one chunk carries the whole sentence.
+    expect(finished.chunks.join('')).toBe(FULL);
+  });
+
+  test('with a cursor, every delta of "3.14" holds the dot and says it exactly once', () => {
+    let spoken = '';
+    let cursor: HandsfreeSpeechCursor | undefined;
+    const said: string[] = [];
+    for (let end = 1; end <= FULL.length; end += 1) {
+      const fullText = FULL.slice(0, end);
+      const streaming = end < FULL.length;
+      const plan = planHandsfreeSpeech({
+        ...base,
+        fullText,
+        streaming,
+        spoken,
+        cursor,
+      });
+      expect(plan.mutated).toBe(false);
+      // The cursor read the whole delta even when it would not spend the dot,
+      // so the next delta resumes after it instead of re-reading the reply.
+      if (streaming) expect(plan.cursor?.index).toBe(fullText.length);
+      said.push(...plan.chunks);
+      spoken = plan.spoken;
+      cursor = plan.cursor;
+      // At no cut is `Version 3.` a spoken sentence, and `3.14` is never cut.
+      for (const chunk of plan.chunks) expect(chunk).not.toBe('Version 3.');
+      expect(plan.spoken === '' || FULL.startsWith(plan.spoken)).toBe(true);
+    }
+    expect(said.join('')).toBe(FULL);
+    // One utterance, never a piece of one: `3.` was not said on its own.
+    expect(said).toEqual([FULL]);
+  });
+
+  test('the held dot is spent as soon as the delta after it is whitespace', () => {
+    const held = planHandsfreeSpeech({ ...base, fullText: 'Hello. Two.', streaming: true });
+    // `Two.` ends the buffer, so its dot is held; `Hello. ` is not the buffer's
+    // end and is spoken as usual.
+    expect(held.chunks).toEqual(['Hello. ']);
+    expect(held.spoken).toBe('Hello. ');
+    const resolved = planHandsfreeSpeech({
+      ...base,
+      fullText: 'Hello. Two. Three.',
+      streaming: true,
+      spoken: held.spoken,
+      cursor: held.cursor,
+    });
+    expect(resolved.chunks).toEqual(['Two. ']);
+    expect(resolved.spoken).toBe('Hello. Two. ');
+  });
+
+  test('a held run is re-examined, so replaying the same delta says nothing twice', () => {
+    const first = planHandsfreeSpeech({ ...base, fullText: 'Version 3.', streaming: true });
+    const replay = planHandsfreeSpeech({
+      ...base,
+      fullText: 'Version 3.',
+      streaming: true,
+      spoken: first.spoken,
+      cursor: first.cursor,
+    });
+    expect(replay.chunks).toEqual([]);
+    expect(replay.spoken).toBe('');
+    expect(replay.cursor).toEqual(first.cursor);
   });
 });

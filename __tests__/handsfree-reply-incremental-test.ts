@@ -27,7 +27,10 @@ type PlanInput = {
 /**
  * The pre-change planner, kept verbatim as the reference every incremental
  * answer is compared against: `replyPrefixIntact` over the whole spoken prefix,
- * then a full scan of the whole reply, on every delta.
+ * then a full scan of the whole reply, on every delta. The full scan is the same
+ * one the module makes without a cursor, so it is asked in its streaming form
+ * while the reply may still grow — the comparison here is between resuming and
+ * re-reading, never between two ideas of where a sentence ends.
  */
 function referencePlan(input: PlanInput): HandsfreeSpeechPlan {
   if (!replyPrefixIntact(input.spoken, input.fullText)) {
@@ -36,7 +39,9 @@ function referencePlan(input: PlanInput): HandsfreeSpeechPlan {
   if (input.waitForCompletion && input.streaming) {
     return { chunks: [], spoken: input.spoken, mutated: false };
   }
-  const window = input.streaming ? completedSentenceText(input.fullText) : input.fullText;
+  const window = input.streaming
+    ? completedSentenceText(input.fullText, { streaming: true })
+    : input.fullText;
   if (window.length <= input.spoken.length) {
     return { chunks: [], spoken: input.spoken, mutated: false };
   }
@@ -484,5 +489,160 @@ describe('planHandsfreeSpeech — the work is proportional to the reply', () => 
     }
 
     expect(examined).toBeGreaterThan(reply.length * 50);
+  });
+});
+
+// The dot of `3.` and the dot of `3.14` are one character. A scan that spends it
+// at the end of a buffer has already spoken "Version three" by the time the
+// `14` arrives, and the cursor is past it, so nothing can correct the mistake.
+// The scan now holds a terminator that ends a streaming text and resumes from
+// it, which puts one new demand on the cursor: its position may sit on text the
+// scan has not spent, while the sentence before that text stays settled.
+describe('planHandsfreeSpeech — a terminator that ends a streaming buffer is held', () => {
+  const FULL = 'Version 3.14 is out.';
+
+  /** Plans the reply one `step` characters at a time and says what was spoken. */
+  function stream(
+    text: string,
+    step: number,
+  ): { said: string[]; windows: string[]; examined: number } {
+    let spoken = '';
+    let cursor: HandsfreeSpeechCursor | undefined;
+    let examined = 0;
+    const said: string[] = [];
+    const windows: string[] = [];
+    const planAt = (end: number) =>
+      planHandsfreeSpeech({
+        fullText: text.slice(0, end),
+        streaming: end < text.length,
+        spoken,
+        maxLength: 400,
+        waitForCompletion: false,
+        cursor,
+        onExamine: (chars) => {
+          examined += chars;
+        },
+      });
+
+    for (let end = Math.min(step, text.length); end <= text.length; end += step) {
+      const streaming = end < text.length;
+      const plan = planAt(end);
+      expect(plan.mutated).toBe(false);
+      said.push(...plan.chunks);
+      if (streaming) windows.push(plan.spoken);
+      spoken = plan.spoken;
+      cursor = plan.cursor;
+    }
+    if ((text.length - Math.min(step, text.length)) % step !== 0) {
+      const plan = planAt(text.length);
+      expect(plan.mutated).toBe(false);
+      said.push(...plan.chunks);
+    }
+    return { said, windows, examined };
+  }
+
+  test('a decimal phrase cut at every point is said once, and never as "3."', () => {
+    for (let step = 1; step <= FULL.length; step += 1) {
+      const { said, windows } = stream(FULL, step);
+      expect(said.join('')).toBe(FULL);
+      expect(said).toEqual([FULL]);
+      // The shipped defect spoke `Version 3.` — a streaming window can only end
+      // on whitespace (or a line break, which this sentence has none of).
+      for (const window of windows) {
+        expect(window === '' || /\s$/.test(window)).toBe(true);
+      }
+    }
+  });
+
+  test('the cursor keeps the sentence before the held run and resumes on it', () => {
+    const first = planHandsfreeSpeech({
+      fullText: 'One. ',
+      streaming: true,
+      spoken: '',
+      maxLength: 400,
+      waitForCompletion: false,
+    });
+    expect(first.chunks).toEqual(['One. ']);
+
+    const held = planHandsfreeSpeech({
+      fullText: 'One. Two.',
+      streaming: true,
+      spoken: first.spoken,
+      maxLength: 400,
+      waitForCompletion: false,
+      cursor: first.cursor,
+    });
+    // The second sentence's dot ends the buffer, so nothing new is spent yet.
+    expect(held.chunks).toEqual([]);
+    expect(held.spoken).toBe('One. ');
+    // The whole delta was read, held run included: the next one resumes here.
+    expect(held.cursor?.index).toBe('One. Two.'.length);
+    expect(held.cursor?.held).toBe('One. Two.'.length - 1);
+    expect(held.cursor?.boundary).toBe('One. '.length);
+
+    const resolved = planHandsfreeSpeech({
+      fullText: 'One. Two. Three.',
+      streaming: true,
+      spoken: held.spoken,
+      maxLength: 400,
+      waitForCompletion: false,
+      cursor: held.cursor,
+    });
+    // The held dot is re-examined, resolved by the space after it, and the
+    // earlier sentence is not said again.
+    expect(resolved.chunks).toEqual(['Two. ']);
+    expect(resolved.spoken).toBe('One. Two. ');
+    expect(resolved.cursor?.boundary).toBe('One. Two. '.length);
+    // The last dot of that delta ends the buffer now, so it is held in turn.
+    expect(resolved.cursor?.held).toBe('One. Two. Three.'.length - 1);
+  });
+
+  test('a rewrite of a held run is caught by the digest that covers it', () => {
+    const held = planHandsfreeSpeech({
+      fullText: 'Version 3.',
+      streaming: true,
+      spoken: '',
+      maxLength: 400,
+      waitForCompletion: false,
+    });
+    expect(held.cursor?.held).toBe('Version 3.'.length - 1);
+    const plan = planHandsfreeSpeech({
+      fullText: 'Version 4.',
+      streaming: true,
+      spoken: held.spoken,
+      maxLength: 400,
+      waitForCompletion: false,
+      cursor: held.cursor,
+    });
+    expect(plan.mutated).toBe(true);
+    expect(plan.chunks).toEqual([]);
+  });
+
+  test('replaying a delta says nothing twice and costs only the held run', () => {
+    const held = planHandsfreeSpeech({
+      fullText: 'Version 3.',
+      streaming: true,
+      spoken: '',
+      maxLength: 400,
+      waitForCompletion: false,
+      onExamine: () => {},
+    });
+    let examined = 0;
+    const replay = planHandsfreeSpeech({
+      fullText: 'Version 3.',
+      streaming: true,
+      spoken: held.spoken,
+      maxLength: 400,
+      waitForCompletion: false,
+      cursor: held.cursor,
+      onExamine: (chars) => {
+        examined += chars;
+      },
+    });
+    expect(replay.chunks).toEqual([]);
+    expect(replay.spoken).toBe('');
+    expect(replay.cursor).toEqual(held.cursor);
+    // One re-read of the held run, not the reply.
+    expect(examined).toBe(1);
   });
 });
