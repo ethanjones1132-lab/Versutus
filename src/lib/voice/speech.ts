@@ -25,8 +25,14 @@ export type ReplyVoice = {
 
 type SpeechOptions = NonNullable<Parameters<SpeechEngine['speak']>[1]>;
 
+/** One queued chunk together with the voice options it must be read in. */
+type QueuedChunk = {
+  text: string;
+  voice: ReplyVoice;
+};
+
 /** The chunks still to be spoken, oldest first. */
-let pending: string[] = [];
+let pending: QueuedChunk[] = [];
 
 /**
  * The run that owns `pending`. A stop bumps it, so a callback the platform
@@ -76,15 +82,18 @@ function speechOptions(voice: ReplyVoice, onEnd: () => void): SpeechOptions {
  * was handed to the platform, so a first chunk the platform refused can be
  * told from one it took.
  */
-function advance(engine: SpeechEngine, owner: number, voice: ReplyVoice): boolean {
+function advance(engine: SpeechEngine, owner: number): boolean {
   if (owner !== run) return false;
   const next = pending.shift();
   if (next === undefined) {
     speaking = false;
     return false;
   }
+  // The voice travels with the chunk it belongs to, so a reply queued behind
+  // another reply is read in its own voice rather than the one that started
+  // the run. `next.voice` is already a snapshot taken at enqueue time.
   try {
-    engine.speak(next, speechOptions(voice, () => advance(engine, owner, voice)));
+    engine.speak(next.text, speechOptions(next.voice, () => advance(engine, owner)));
     return true;
   } catch {
     // A platform that refused this chunk is not asked for the rest of it, and
@@ -150,10 +159,14 @@ export async function speakReply(text: string, voice: ReplyVoice = {}): Promise<
   const chunks = speechChunks(text, engine.maxSpeechInputLength);
   if (!chunks.length) return false;
 
-  pending.push(...chunks);
+  // Snapshot the voice options at enqueue time, so a caller mutating the
+  // original `voice` afterwards cannot change how these chunks are read, and
+  // so each chunk carries the voice of the reply that owns it.
+  const voiceSnapshot: ReplyVoice = { ...voice };
+  pending.push(...chunks.map((chunk) => ({ text: chunk, voice: { ...voiceSnapshot } })));
   if (speaking) return true;
   speaking = true;
-  return advance(engine, run, voice);
+  return advance(engine, run);
 }
 
 /**

@@ -266,6 +266,49 @@ describe('reading a reply', () => {
     ]);
   });
 
+  test('a reply queued behind another keeps the voice it was queued with', async () => {
+    const engine = fakeEngine({ bound: 20 });
+    mockLoad.mockResolvedValue(engine);
+
+    // Two replies, each with its own options. Bot B arrives while Bot A is
+    // still being read, which is the case that used to speak B in A's voice.
+    const botA = { voiceIdentifier: 'voice.bot-a', rate: 0.8, pitch: 0.9 };
+    const botB = { voiceIdentifier: 'voice.bot-b', rate: 1.2, pitch: 1.3 };
+    await speakReply('First sentence. Second sentence. Third.', botA);
+    await expect(speakReply('Another reply. And its rest.', botB)).resolves.toBe(true);
+
+    // The caller may reuse or edit the objects after enqueue. The chunks
+    // already queued have to keep the options they were given.
+    botA.voiceIdentifier = 'mutated.a';
+    botA.rate = 2;
+    botB.voiceIdentifier = 'mutated.b';
+    botB.pitch = 0.1;
+
+    engine.finish();
+    engine.finish();
+    engine.finish();
+    engine.finish();
+
+    expect(engine.spoken).toEqual([
+      'First sentence. ',
+      'Second sentence. ',
+      'Third.',
+      'Another reply. ',
+      'And its rest.',
+    ]);
+    const heard = [0, 1, 2, 3, 4].map((call) => engine.optionsFor(call));
+    for (const call of [0, 1, 2]) {
+      expect(heard[call]).toEqual(
+        expect.objectContaining({ voice: 'voice.bot-a', rate: 0.8, pitch: 0.9 }),
+      );
+    }
+    for (const call of [3, 4]) {
+      expect(heard[call]).toEqual(
+        expect.objectContaining({ voice: 'voice.bot-b', rate: 1.2, pitch: 1.3 }),
+      );
+    }
+  });
+
   test('a platform that refuses the first chunk answers false', async () => {
     const engine = fakeEngine({ bound: 20 });
     engine.speak.mockImplementation(() => {
