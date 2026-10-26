@@ -255,6 +255,15 @@ type SignedAccessAttempt =
   | { kind: 'answer'; result: AccessRequestResult }
   | { kind: 'signature-used'; reason?: string };
 
+/**
+ * The one deadline an attempt runs under: signing is already done, but the
+ * signed POST, the lookup retries over the tailnet addresses and the response
+ * body all share it. A gateway that sends headers and then stalls the body is
+ * a dead path, not an answer — the same "unreachable" verdict a dial that never
+ * connected gets.
+ */
+const ACCESS_REQUEST_TIMEOUT_REASON = 'The access request timed out before the gateway answered.';
+
 async function postSignedAccessRequest(
   baseUrl: string,
   grantPath: string,
@@ -304,6 +313,20 @@ async function postSignedAccessRequest(
       };
     }
 
+    // One deadline for the whole attempt, armed before the POST and disarmed
+    // only once the body has been read or the attempt has failed. Clearing it
+    // when fetch resolved (headers arrived) left `response.json()` unbounded: a
+    // gateway that sends headers and then stalls the body kept the add/pair
+    // sheet in its saving state until the operator left the screen.
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error(ACCESS_REQUEST_TIMEOUT_REASON));
+      }, timeoutMs);
+    });
+
     try {
       const body = JSON.stringify({
         manifest: GATEWAY_MANIFEST_SPEC,
@@ -321,23 +344,35 @@ async function postSignedAccessRequest(
       });
 
       // One signed body is identical on every candidate this attempt retries a
-      // lookup miss over; a used-signature answer is what builds a new one.
-      const response = await withHostLookupRetry(url, alternateIpv4, async (candidateUrl) => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
-        try {
-          // Awaited, so the timer outlives the request: returning the bare
-          // promise cleared it at once and the access request had no timeout.
-          return await fetch(candidateUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            signal: controller.signal,
-            body,
-          });
-        } finally {
-          clearTimeout(timer);
-        }
-      });
+      // lookup miss over; a used-signature answer is what builds a new one. The
+      // body is read inside the raced work, so a transport that resolves
+      // headers and never settles its body loses to the deadline instead of
+      // hanging the request; a parse failure that is not the abort still reads
+      // as "no verdict in the body", exactly as before. A 404/405 is answered by
+      // the status line alone — as before, its body is never read.
+      const answered = await Promise.race([
+        (async () => {
+          const response = await withHostLookupRetry(url, alternateIpv4, async (candidateUrl) => {
+            return await fetch(candidateUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              signal: controller.signal,
+              body,
+            });
+          }, controller.signal);
+          if (response.status === 404 || response.status === 405) {
+            return { response, parsedBody: null as Record<string, unknown> | null };
+          }
+          const parsedBody = (await response.json().catch((error: unknown) => {
+            if (controller.signal.aborted) throw error;
+            return null;
+          })) as Record<string, unknown> | null;
+          return { response, parsedBody };
+        })(),
+        deadline,
+      ]);
+
+      const { response, parsedBody } = answered;
 
       if (response.status === 404 || response.status === 405) {
         return {
@@ -349,7 +384,6 @@ async function postSignedAccessRequest(
         };
       }
 
-      const parsedBody = (await response.json().catch(() => null)) as Record<string, unknown> | null;
       const status = typeof parsedBody?.status === 'string' ? parsedBody.status : undefined;
       // A signature the gate has already answered must not fetch the token a
       // second time: the signed body is not secret (it crosses plain-HTTP
@@ -414,6 +448,10 @@ async function postSignedAccessRequest(
           reason: error instanceof Error ? error.message : 'Access request failed.',
         },
       };
+    } finally {
+      // Every terminal path disarms the deadline: a body read that finished in
+      // time, a verdict, a refusal, or the deadline itself.
+      if (timer !== undefined) clearTimeout(timer);
     }
   };
 
