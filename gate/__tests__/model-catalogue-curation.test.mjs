@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createGate } from '../core/server.mjs';
+import { catalogueBoundTimers } from '../core/backend-model-route.mjs';
 
 // 2026-10-01, live host: `GET /v1/models?backendId=hermes-local` answered 759
 // rows from 13 providers, 172 KB, 2.7-3.9 s EVERY time — `/api/model/options`
@@ -692,22 +693,61 @@ test('a catalogue read that never answers does not poison the next request', asy
   // that never answers therefore held it for the life of the process: every
   // later request joined that read and 502'd, even after the environment
   // recovered and would have answered the next read.
-  const { gate, calls } = await makeGate({
-    gateOptions: { catalogueResponseTimeoutMs: 50 },
-    catalogue: 'hang-once',
-  });
+  //
+  // The deadline is this test's to fire. It is a race against wall clock, and a
+  // healthy read that loses it under load answers 502 exactly like a held slot
+  // does — which made this test fail for a reason it does not mean. So the
+  // bound is expired here, once the hung read has been seen to start, and the
+  // recovery read is never in a race with a real millisecond at all.
+  const clock = manualTimers();
+  const realTimers = {
+    setTimeout: catalogueBoundTimers.setTimeout,
+    clearTimeout: catalogueBoundTimers.clearTimeout,
+  };
+  catalogueBoundTimers.setTimeout = clock.timers.setTimeout;
+  catalogueBoundTimers.clearTimeout = clock.timers.clearTimeout;
+  let gate;
   try {
-    const first = await fetch(`${base(gate)}/v1/models?backendId=hermes-local`, { headers: auth(gate) });
-    assert.equal(first.status, 502);
-    assert.equal((await first.json()).error.code, 'backend_error');
+    const made = await makeGate({
+      gateOptions: { catalogueResponseTimeoutMs: 50 },
+      catalogue: 'hang-once',
+    });
+    gate = made.gate;
+    const { calls } = made;
+
+    const first = fetch(`${base(gate)}/v1/models?backendId=hermes-local`, { headers: auth(gate) });
+    // The hung read is in flight, on its bound, before the bound is expired:
+    // nothing in this test depends on how long the machine takes to get here.
+    await waitFor(() => catalogueReads(calls) === 1);
+    assert.equal(clock.expire(), 1, 'the cold read was waiting on its bound');
+    const response = await first;
+    assert.equal(response.status, 502);
+    assert.equal((await response.json()).error.code, 'backend_error');
 
     // The environment is healthy again. The bound released the slot, so this
     // is a fresh read rather than a join on the one that never answered.
-    const rows = await readCatalogue(gate);
-    assert.equal(rows.size, 6);
-    assert.equal(catalogueReads(calls), 2);
+    const recovery = readCatalogue(gate);
+    // The recovery read's own deadline is on this clock too, so a slot that was
+    // NOT released would park the request forever. Expiring that deadline after
+    // a generous wait turns that into the failed 200 assertion below instead of
+    // a hung test.
+    const rescue = setTimeout(() => clock.expire(), 5_000);
+    rescue.unref?.();
+    try {
+      const rows = await recovery;
+      assert.equal(rows.size, 6);
+      assert.equal(catalogueReads(calls), 2);
+      assert.equal(clock.pending(), 0, 'the answered read cleared its deadline');
+    } finally {
+      clearTimeout(rescue);
+    }
   } finally {
-    await gate.close();
+    // A deadline still waiting here is one no request will ever settle; firing
+    // it keeps a failed test a failure rather than a hung `close()`.
+    clock.expire();
+    catalogueBoundTimers.setTimeout = realTimers.setTimeout;
+    catalogueBoundTimers.clearTimeout = realTimers.clearTimeout;
+    await gate?.close();
   }
 });
 
@@ -737,4 +777,47 @@ async function waitFor(read, timeoutMs = 5_000) {
     if (Date.now() > deadline) throw new Error('timed out waiting for the turn to be in flight');
     await sleep(10);
   }
+}
+
+/**
+ * Catalogue deadlines a test expires itself.
+ *
+ * The bound in `backend-model-route.mjs` is a race against wall clock, and on a
+ * machine busy with the rest of the suite a healthy read can lose a short race
+ * it wins instantly when idle. That loss is answered exactly like a slot that
+ * was never released, so the test that asks "does a read that never answers
+ * release the slot?" owns the deadline: it expires the bound once it has
+ * watched the hung read start, and lets no real millisecond decide. The
+ * deadline itself — a cold read is waited for, not answered at once — is still
+ * proved in real milliseconds by "a slow catalogue read is waited for, not
+ * answered as empty".
+ */
+function manualTimers() {
+  const pending = new Set();
+  let nextId = 1;
+  return {
+    timers: {
+      // The bound arms one deadline per caller. The handle is opaque and only
+      // ever handed back to `clearTimeout`.
+      setTimeout(callback) {
+        const handle = { id: nextId, callback };
+        nextId += 1;
+        handle.unref = () => handle;
+        pending.add(handle);
+        return handle;
+      },
+      clearTimeout(handle) {
+        pending.delete(handle);
+      },
+    },
+    /** Expire every deadline still waiting, and say how many were waiting. */
+    expire() {
+      const due = [...pending];
+      pending.clear();
+      for (const handle of due) handle.callback();
+      return due.length;
+    },
+    /** How many deadlines the catalogue still holds. */
+    pending: () => pending.size,
+  };
 }

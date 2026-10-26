@@ -92,19 +92,37 @@ export function pickBackendForModel(backends, catalogues, qualified) {
 }
 
 /**
+ * The clock a catalogue deadline is measured on.
+ *
+ * A bound is a race against wall-clock time, which is the one thing a test
+ * cannot take from a machine busy with the rest of the suite: a healthy read
+ * that loses a short race is indistinguishable from a slot that was never
+ * released. These two functions are `setTimeout` and `clearTimeout` — the
+ * production behavior, unchanged — and `createBackendModelRouter` reads the
+ * methods at call time, so a test can take the deadline over (see
+ * `__tests__/model-catalogue-curation.test.mjs`). Nothing else belongs here:
+ * the deadline is the whole seam.
+ */
+export const catalogueBoundTimers = {
+  setTimeout: (callback, ms) => setTimeout(callback, ms),
+  clearTimeout: (handle) => clearTimeout(handle),
+};
+
+/**
  * One catalogue read, given up on after `timeoutMs`.
  *
  * The same bound every waiter applies, as a helper: a read that never settles
  * has to become the same answer as one that refused, or it holds whatever slot
- * it was filed in for the life of the process.
+ * it was filed in for the life of the process. The deadline itself is measured
+ * on `timers`, and the timer is cleared as the read settles either way.
  */
-function bounded(read, timeoutMs) {
+function bounded(read, timeoutMs, timers = catalogueBoundTimers) {
   let timer;
   const bound = new Promise((resolve) => {
-    timer = setTimeout(() => resolve({ ok: false, models: [] }), timeoutMs);
+    timer = timers.setTimeout(() => resolve({ ok: false, models: [] }), timeoutMs);
     timer.unref?.();
   });
-  return Promise.race([read, bound]).finally(() => clearTimeout(timer));
+  return Promise.race([read, bound]).finally(() => timers.clearTimeout(timer));
 }
 
 /**
@@ -121,6 +139,9 @@ export function createBackendModelRouter({
   staleMs = CATALOGUE_STALE_MS,
   readTimeoutMs = CATALOGUE_READ_TIMEOUT_MS,
   responseTimeoutMs = CATALOGUE_RESPONSE_TIMEOUT_MS,
+  // The clock the two bounds are measured on. Real timers unless a test hands
+  // over its own, so a router built with no options behaves exactly as before.
+  timers = catalogueBoundTimers,
 } = {}) {
   // backendId -> { at, models }. A copy only: a read that failed is never filed
   // here as an answer. Survives an environment leaving, which is why an id
@@ -246,7 +267,7 @@ export function createBackendModelRouter({
    */
   function readCatalogue(entry, timeoutMs) {
     const existing = inflight.get(entry.id);
-    if (existing) return bounded(existing, timeoutMs);
+    if (existing) return bounded(existing, timeoutMs, timers);
     // `Promise.resolve().then(...)` so a `listModels` that THROWS is the same
     // answer as one that refuses: the catalogue is read for many environments
     // at once, and one that will not start must not blank the rest.
@@ -256,7 +277,7 @@ export function createBackendModelRouter({
       (models) => ({ ok: true, models: Array.isArray(models) ? models : [] }),
       () => ({ ok: false, models: [] }),
     );
-    const read = bounded(live, timeoutMs);
+    const read = bounded(live, timeoutMs, timers);
     inflight.set(entry.id, read);
     // Releasing on settle — including when the bound is what settled it — is
     // what lets the next request start a fresh read instead of joining a read
