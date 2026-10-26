@@ -191,6 +191,42 @@ describe('a batch decision keeps the list on screen and moves through it', () =>
     expect(mockStatesSeen).not.toContain('loading');
   });
 
+  it('every per-row decision is disabled under a batch, and enabled once it settles', async () => {
+    await mount();
+
+    // Two buttons per row, eight rows.
+    const perRowButtons = () =>
+      (renderer?.root.findAllByType(BUTTON) ?? []).filter(
+        (node) => node.props.label === 'Approve' || node.props.label === 'Deny',
+      );
+    expect(perRowButtons()).toHaveLength(16);
+    expect(perRowButtons().every((node) => node.props.disabled === false)).toBe(true);
+
+    await press('Deny all');
+    // `decideAll` walks a captured id list, so a row it has not reached yet is
+    // still on screen. Tapping it would race the loop and be refused by the
+    // Gate, reporting a failure for a decision the operator did make.
+    expect(perRowButtons()).toHaveLength(16);
+    expect(perRowButtons().every((node) => node.props.disabled === true)).toBe(true);
+
+    for (let index = 0; index < 8; index += 1) await settleOne();
+
+    expect(perRowButtons()).toHaveLength(16);
+    expect(perRowButtons().every((node) => node.props.disabled === false)).toBe(true);
+  });
+
+  it('a single row busy still disables only that row', async () => {
+    mockState.approvalBusy = 'a1';
+    await mount();
+
+    const perRowButtons = (renderer?.root.findAllByType(BUTTON) ?? []).filter(
+      (node) => node.props.label === 'Approve' || node.props.label === 'Deny',
+    );
+    // Row a1 is the first pair (Deny then Approve); the rest stay decidable.
+    expect(perRowButtons.slice(0, 2).every((node) => node.props.disabled === true)).toBe(true);
+    expect(perRowButtons.slice(2).every((node) => node.props.disabled === false)).toBe(true);
+  });
+
   it('the progress line says how far the batch has got', async () => {
     await mount();
 

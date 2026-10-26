@@ -163,10 +163,16 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
 
   // An idle filter field leaves the sorted list byte-identical (the fold answers
   // the same array for an empty query); a query narrows `sorted` itself, so the
-  // owner grouping and every row below read one narrowed list.
+  // owner grouping and every row below read one narrowed list. The narrowing
+  // obeys the SAME `jobs.length > 3` gate as the field below: once the list
+  // shrinks under the field, the filter must stop hiding rows nobody can see a
+  // way to un-filter.
   const base = sortCronJobs(jobs);
+  const titleFilterShown = jobs.length > 3;
   const sorted =
-    titleFilter.trim().length > 0 ? filterCronJobsByTitle(base, titleFilter) : base;
+    titleFilterShown && titleFilter.trim().length > 0
+      ? filterCronJobsByTitle(base, titleFilter)
+      : base;
   const live = runningCount(jobs);
 
   return (
@@ -220,7 +226,7 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
         const rows: ReactNode[] = [];
         // The filter field rides the group render so an idle field changes
         // nothing below: the empty query answers the list the section holds.
-        if (jobs.length > 3) {
+        if (titleFilterShown) {
           rows.push(
             <View key="cron-filter" style={styles.gap}>
               <TextField

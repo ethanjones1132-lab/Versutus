@@ -200,14 +200,14 @@ export function ApprovalInbox() {
                   size="sm"
                   variant="secondary"
                   onPress={() => void decide(row.approvalId, 'deny')}
-                  disabled={approvalBusy === row.approvalId}
+                  disabled={batchBusy || approvalBusy === row.approvalId}
                   style={styles.action}
                 />
                 <Button
                   label="Approve"
                   size="sm"
                   onPress={() => void decide(row.approvalId, 'approve')}
-                  disabled={approvalBusy === row.approvalId}
+                  disabled={batchBusy || approvalBusy === row.approvalId}
                   style={styles.action}
                 />
               </View>
