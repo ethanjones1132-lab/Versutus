@@ -1,17 +1,16 @@
-import { ansiPlainText } from '@/lib/terminal/ansi';
+import { ansiPlainText, ansiPlainTextUpTo } from '@/lib/terminal/ansi';
 
 export type TerminalLine = {
   id: number;
   text: string;
 };
 
-// Strip CSI/ANSI control sequences from a string. Used for the accessibility
-// label of a rendered line and for prompt detection; the visible renderer
-// parses the full ANSI so colours survive (see `parseAnsiText`).
-const ANSI_PATTERN = /\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\)|[@-_])/g;
-
+// Strip ANSI/ECMA-48 control sequences from a string, keeping the visible
+// text. This shares the renderer's parser so copy, accessibility labels and
+// prompt detection agree with the pane about what a control sequence is (SGR,
+// other CSI, two-byte escapes, OSC titles through BEL or ST).
 export function stripAnsi(text: string): string {
-  return text.replace(ANSI_PATTERN, '');
+  return ansiPlainText(text);
 }
 
 // A single rendered line is bounded so a minified bundle or a giant JSON blob
@@ -97,10 +96,16 @@ export function terminalLinesFromText(text: string): TerminalLine[] {
 // A line that reads like a shell/CLI prompt gets the signature accent treatment
 // so the user can find where the previous command was entered at a glance.
 
+// The visible part of a prompt is short; escape sequences are invisible and
+// must not count, so the cap applies after trimming rather than to raw length.
+const MAX_PROMPT_LENGTH = 96;
+
 /** True when a line's visible content looks like a shell/CLI prompt. */
 export function isPromptLine(text: string): boolean {
-  const visible = ansiPlainText(text).trim();
-  if (visible.length === 0 || visible.length > 96) return false;
+  // Bounded scan first: a long visible line is rejected without parsing it in
+  // full, while a short prompt wrapped in a long title sequence still matches.
+  const visible = ansiPlainTextUpTo(text, MAX_PROMPT_LENGTH);
+  if (visible === null || visible.length === 0) return false;
   const match = /([$#>%])[ ]*$/.exec(visible);
   if (!match) return false;
   const stem = visible.slice(0, match.index).trimEnd();
