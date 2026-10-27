@@ -76,7 +76,7 @@ function hermesRows() {
  * decides: `replies[modelId]` is the whole assistant text, `'park'` never
  * answers (so the test can cancel it) and a thrown value is a refusal.
  */
-function hermesRegistry(calls, replies = {}, { catalogue } = {}) {
+function hermesRegistry(calls, replies = {}, { catalogue, reads = { answered: 0 } } = {}) {
   const adapter = {
     adapterId: 'hermes',
     adapterRevision: '1',
@@ -86,6 +86,20 @@ function hermesRegistry(calls, replies = {}, { catalogue } = {}) {
     server: { defaultPort: 1, healthPath: '/', args: () => [], portFromOutput: () => null },
     async probe() { return { state: 'ready', cliVersion: '1.0.0', protocol: 'acp' }; },
     createBackend() {
+      // `catalogue` overrides what `/api/model/options` does, so a test can
+      // make the read refuse, throw, or hang without rebuilding the adapter.
+      const readModels = async () => {
+        calls.push('listModels');
+        if (catalogue === 'hang') return new Promise(() => {});
+        // The read that never answered, then a healthy environment: the shape
+        // the shared-slot bound exists for.
+        if (catalogue === 'hang-once') {
+          if (calls.filter((call) => call === 'listModels').length === 1) return new Promise(() => {});
+          return hermesRows();
+        }
+        if (catalogue === 'refuse') throw new Error('hermes: /api/model/options refused');
+        return hermesRows();
+      };
       return {
         async listSessions() { return [SESSION]; },
         async createSession(input) {
@@ -106,19 +120,14 @@ function hermesRegistry(calls, replies = {}, { catalogue } = {}) {
           const text = typeof reply === 'string' ? reply : `answered ${input?.model?.modelId ?? 'on the host default'}`;
           return { text, message: { id: 'm', role: 'assistant', content: [{ type: 'text', text }] } };
         },
-        // `catalogue` overrides what `/api/model/options` does, so a test can
-        // make the read refuse, throw, or hang without rebuilding the adapter.
         async listModels() {
-          calls.push('listModels');
-          if (catalogue === 'hang') return new Promise(() => {});
-          // The read that never answered, then a healthy environment: the shape
-          // the shared-slot bound exists for.
-          if (catalogue === 'hang-once') {
-            if (calls.filter((call) => call === 'listModels').length === 1) return new Promise(() => {});
-            return hermesRows();
-          }
-          if (catalogue === 'refuse') throw new Error('hermes: /api/model/options refused');
-          return hermesRows();
+          const models = await readModels();
+          // The test's own barrier for "the environment has answered", which is
+          // the moment the Gate can file the copy. Counted with the rows in
+          // hand rather than when the read was asked for, so a test can wait
+          // for the copy to land instead of guessing at a sleep.
+          reads.answered += 1;
+          return models;
         },
         async abort() {},
         async replyApproval() {},
@@ -133,6 +142,9 @@ function hermesRegistry(calls, replies = {}, { catalogue } = {}) {
 }
 
 async function makeGate({ calls = [], replies, gateOptions = {}, catalogue, provider } = {}) {
+  // How many catalogue reads the environment has ANSWERED (see hermesRegistry):
+  // the barrier a test waits on when it needs the Gate to have filed a copy.
+  const reads = { answered: 0 };
   const root = await mkdtemp(join(tmpdir(), 'gate-catalogue-'));
   roots.push(root);
   const gateHome = join(root, '.gate-home');
@@ -169,7 +181,7 @@ async function makeGate({ calls = [], replies, gateOptions = {}, catalogue, prov
     root,
     port: 0,
     gateHome,
-    environmentRegistry: hermesRegistry(calls, replies, { catalogue }),
+    environmentRegistry: hermesRegistry(calls, replies, { catalogue, reads }),
     backendServerFactory: () => ({
       ensureRunning: async () => ({ baseUrl: 'http://127.0.0.1:1', attached: true }),
       stop: async () => {},
@@ -179,7 +191,7 @@ async function makeGate({ calls = [], replies, gateOptions = {}, catalogue, prov
     // stale-while-refresh answer fire in milliseconds.
     ...gateOptions,
   });
-  return { gate, calls };
+  return { gate, calls, reads };
 }
 
 const auth = (gate) => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` });
@@ -244,12 +256,25 @@ test('a second catalogue read inside the window does not ask the environment aga
 });
 
 test('a stale copy is answered at once and refreshed once behind the request', async () => {
-  const { gate, calls } = await makeGate({ gateOptions: { catalogueTtlMs: 200, catalogueStaleMs: 5_000 } });
+  // The copy's age is the injected cache clock's to decide. This test used to
+  // age it with a real `sleep(300)` and then assert freshness from a real
+  // `sleep(50)`, which assumed the machine spends less than the 200 ms TTL
+  // between those two points. On a host busy with the rest of the suite it did
+  // not: the refreshed copy arrived already past its window, so the next read
+  // refreshed a third time and the freshness assertion failed for a reason it
+  // does not mean. Age is now explicit, and never moves while a read is in
+  // flight.
+  const clock = catalogueClock();
+  const { gate, calls, reads } = await makeGate({
+    gateOptions: { catalogueTtlMs: 200, catalogueStaleMs: 5_000, catalogueNow: clock.now },
+  });
   try {
     await readCatalogue(gate);
     assert.equal(catalogueReads(calls), 1);
 
-    await sleep(300);
+    // Older than the TTL and far inside the stale window: answered from the
+    // copy, and one read goes out behind the request.
+    clock.advance(300);
     const started = Date.now();
     const rows = await readCatalogue(gate);
     const answeredIn = Date.now() - started;
@@ -258,12 +283,55 @@ test('a stale copy is answered at once and refreshed once behind the request', a
     assert.equal(rows.size, 6);
     assert.ok(answeredIn < 500, `answered in ${answeredIn}ms`);
     // ...and exactly one refresh ran behind it, however many readers arrive.
-    // The wait is shorter than the TTL above so the freshly refreshed copy is
-    // still within its fresh window when the next read arrives.
-    await sleep(50);
-    assert.equal(catalogueReads(calls), 2);
+    // The barrier is the environment having ANSWERED the refresh, not a sleep:
+    // the clock does not move while it lands, so the refreshed copy is fresh
+    // whenever it gets here and the next read is answered from it.
+    await waitFor(() => reads.answered >= 2);
     await readCatalogue(gate);
     assert.equal(catalogueReads(calls), 2, 'the refreshed copy is fresh again');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('catalogue age is the injected clock\'s, so a busy host cannot age a copy', async () => {
+  // The regression control for that seam: `createGate` forwards `catalogueNow`
+  // into the router's `now`, which is the only clock cache age is read on.
+  // Both halves fail if the forwarding is reverted — the real delay below then
+  // ages the copy past its window, and the injected advance no longer does.
+  const clock = catalogueClock();
+  const { gate, calls, reads } = await makeGate({
+    gateOptions: { catalogueTtlMs: 200, catalogueStaleMs: 5_000, catalogueNow: clock.now },
+  });
+  try {
+    await readCatalogue(gate);
+    assert.equal(catalogueReads(calls), 1);
+
+    // Far longer than the 200 ms window on the host's clock, and no time at all
+    // on the cache's: a scheduler delay cannot spend a copy's fresh window.
+    await sleep(350);
+    const rows = await readCatalogue(gate);
+    assert.equal(rows.size, 6);
+    // A host-clock age starts a refresh behind the response. That read is
+    // counted on a later turn, so the assertion has to wait for it. Injected
+    // age does not start one, and the count stays put.
+    assert.equal(await countMoved(calls, reads), false, 'a busy host did not age the copy');
+
+    // The seam is a cache AGE, not a cache that never expires: the same clock
+    // moved past the window is what expires the copy, and the next read asks
+    // the environment again.
+    clock.advance(300);
+    await readCatalogue(gate);
+    await waitFor(() => reads.answered >= 2);
+    assert.equal(catalogueReads(calls), 2, 'the expired copy was refreshed');
+
+    // And the clock still has to move before anything else is read: a real
+    // delay longer than the window costs no read, because the copy the refresh
+    // left behind is stamped on the injected clock. Same turn-wait as above,
+    // so a host-clock refresh cannot land after the assertion.
+    await sleep(350);
+    await readCatalogue(gate);
+    assert.equal(await countMoved(calls, reads), false, 'the refreshed copy aged only on the injected clock');
   } finally {
     await gate.close();
   }
@@ -769,6 +837,25 @@ test('concurrent cold catalogue reads share one live read', async () => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * The catalogue cache's age, as a test sets it.
+ *
+ * The two cache windows in `backend-model-route.mjs` are measured on a clock,
+ * and a test that shrinks them to milliseconds cannot leave "how old is the copy
+ * now" to whatever the host spends between two requests: a machine busy with the
+ * rest of the suite spent a refreshed copy's whole 200 ms window in a 50 ms
+ * sleep, and the freshness assertion failed for a reason it does not mean.
+ * `createGate` forwards this clock into the router's `now`, so age moves only
+ * when a test moves it. Only differences matter, so the start is arbitrary.
+ */
+function catalogueClock(start = 1_000) {
+  let at = start;
+  return {
+    now: () => at,
+    advance(ms) { at += ms; },
+  };
+}
+
 /** Wait until `read` is true, or give up. */
 async function waitFor(read, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs;
@@ -777,6 +864,25 @@ async function waitFor(read, timeoutMs = 5_000) {
     if (Date.now() > deadline) throw new Error('timed out waiting for the turn to be in flight');
     await sleep(10);
   }
+}
+
+/**
+ * Whether another catalogue read was counted during a short quiet window.
+ *
+ * A copy that is stale on the host clock is refreshed behind the response, and
+ * that `listModels` is counted on a later turn. Checking the count in the same
+ * turn as the response misses it, so a host-clock refresh looks like it never
+ * happened. A window that stays still means no refresh was started.
+ */
+async function countMoved(calls, reads, quietMs = 80) {
+  const readsBefore = catalogueReads(calls);
+  const answeredBefore = reads.answered;
+  const deadline = Date.now() + quietMs;
+  while (Date.now() < deadline) {
+    if (catalogueReads(calls) !== readsBefore || reads.answered !== answeredBefore) return true;
+    await sleep(5);
+  }
+  return catalogueReads(calls) !== readsBefore || reads.answered !== answeredBefore;
 }
 
 /**

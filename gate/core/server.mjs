@@ -1509,6 +1509,12 @@ export async function createGate(config = {}) {
     // minute for the live one.
     catalogueTtlMs = CATALOGUE_TTL_MS,
     catalogueStaleMs = CATALOGUE_STALE_MS,
+    // The clock those two windows are measured on — cache AGE, not a deadline.
+    // A test that shrinks the windows has to be able to say when a copy has
+    // aged, or the age it tests is whatever the host's scheduler happened to
+    // spend between two requests. Forwarded to the router's existing `now`
+    // option; `Date.now` unless a caller hands over another clock.
+    catalogueNow = Date.now,
     // The bound on a `/v1/models` cold read, separate from the routing lookup's
     // 5 s because one Hermes `/api/model/options` measures 3.9 s on the live
     // host. Injected with the two windows above for the same reason.
@@ -1690,6 +1696,10 @@ export async function createGate(config = {}) {
     },
     ttlMs: catalogueTtlMs,
     staleMs: catalogueStaleMs,
+    // Cache age is read on this clock only; the read deadlines race real
+    // timers (`catalogueBoundTimers`), because those are two different
+    // controls. This is the router's own `now`, left at its `Date.now` default.
+    now: catalogueNow,
     responseTimeoutMs: catalogueResponseTimeoutMs,
   });
 
