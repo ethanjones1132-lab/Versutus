@@ -10,6 +10,7 @@ import { createServer } from 'node:http';
 import { createGate } from '../core/server.mjs';
 import {
   CATALOGUE_READ_TIMEOUT_MS,
+  CATALOGUE_RESPONSE_TIMEOUT_MS,
   createBackendModelRouter,
   pickBackendForModel,
   qualifiedModelId,
@@ -518,3 +519,238 @@ test('an entry that brings its own read is read through it and cached under its 
   assert.deepEqual(environment.get('hermes-local'), [{ id: 'kilo/env-model' }]);
   assert.equal(environmentReads, 1);
 });
+
+// ─── Whose deadline is it? ───
+//
+// The single-flight slot is shared by two callers with very different reasons
+// to wait: a routing lookup that may only spend 5 s on an environment before it
+// answers 404, and a `/v1/models` response entitled to a minute for the live
+// host's 3.9 s `/api/model/options`. The slot used to file the STARTER's bounded
+// promise, so the routing lookup's 5 s became the picker's deadline too: the
+// picker joined that promise and inherited a failure it had 55 s left to wait
+// out. These four tests hold the deadline to the waiter that armed it — and
+// hold the read to being shared by all of them — on a clock the test fires
+// itself, so no wall-clock race decides what they mean.
+
+test('a picker entitled to a minute does not inherit the routing read\'s five seconds', { timeout: 10_000 }, async (t) => {
+  keepEventLoopAlive(t);
+  const clock = manualClock();
+  const read = deferred();
+  let reads = 0;
+  const router = createBackendModelRouter({
+    listBackends: async () => [{ id: 'hermes-local', adapterId: 'hermes' }],
+    listModels: () => { reads += 1; return read.promise; },
+    readTimeoutMs: 5_000,
+    responseTimeoutMs: 60_000,
+    timers: clock.timers,
+  });
+
+  // A cold turn arrives first, so the read is started on the routing deadline.
+  const routing = router.backendFor('kilo/kilo-auto/free', 'kilo');
+  await tick();
+  assert.equal(reads, 1, 'the routing lookup started a read');
+
+  // The picker opens while that read is still in flight. It joins the same
+  // read and is entitled to wait the full minute for it.
+  let pickerSettled = false;
+  const picker = router.cataloguesFor([{ id: 'hermes-local' }]).then((rows) => {
+    pickerSettled = true;
+    return rows;
+  });
+  await tick();
+  assert.equal(reads, 1, 'the picker joined the live read instead of starting another');
+
+  // Only the routing deadline fires; the picker's is still 55 s away.
+  assert.equal(clock.fire(5_000), 1, 'the routing lookup was the one waiting on 5 s');
+  await tick();
+  assert.equal(await routing, null, 'the routing lookup gave up at its own deadline');
+  assert.equal(pickerSettled, false, 'the picker kept waiting on its own deadline');
+
+  // The read landing late still reaches the picker.
+  const rows = [{ id: 'kilo/kilo-auto/free', available: true }];
+  read.resolve(rows);
+  assert.deepEqual((await picker).get('hermes-local'), rows);
+  assert.equal(pickerSettled, true);
+  assert.equal(reads, 1, 'one live read served both deadlines');
+  assert.equal(clock.pending(), 0, 'no deadline was left armed');
+});
+
+test('a five-second waiter still fails at five seconds when it joins a minute-long read', { timeout: 10_000 }, async (t) => {
+  keepEventLoopAlive(t);
+  const clock = manualClock();
+  const read = deferred();
+  let reads = 0;
+  const router = createBackendModelRouter({
+    listBackends: async () => [{ id: 'hermes-local', adapterId: 'hermes' }],
+    listModels: () => { reads += 1; return read.promise; },
+    readTimeoutMs: 5_000,
+    responseTimeoutMs: 60_000,
+    timers: clock.timers,
+  });
+
+  // The picker starts the read on the long bound; the turn joins it and must
+  // still answer 404 of its own accord after its own 5 s.
+  let pickerSettled = false;
+  const picker = router.cataloguesFor([{ id: 'hermes-local' }]).then((rows) => {
+    pickerSettled = true;
+    return rows;
+  });
+  await tick();
+  const routing = router.backendFor('kilo/kilo-auto/free', 'kilo');
+  await tick();
+  assert.equal(reads, 1, 'the turn joined the picker\'s read');
+
+  assert.equal(clock.fire(5_000), 1, 'the joining turn armed its own 5 s deadline');
+  await tick();
+  assert.equal(await routing, null, 'the turn refused the model at its own deadline');
+  assert.equal(pickerSettled, false, 'the picker was not cut short by the turn');
+
+  const rows = [{ id: 'kilo/kilo-auto/free', available: true }];
+  read.resolve(rows);
+  assert.deepEqual((await picker).get('hermes-local'), rows);
+  assert.equal(reads, 1, 'one live read served both deadlines');
+  assert.equal(clock.pending(), 0, 'no deadline was left armed');
+});
+
+test('every waiter on one cold read shares the one live read', { timeout: 10_000 }, async (t) => {
+  keepEventLoopAlive(t);
+  const clock = manualClock();
+  const read = deferred();
+  let reads = 0;
+  const router = createBackendModelRouter({
+    listBackends: async () => [{ id: 'hermes-local', adapterId: 'hermes' }],
+    listModels: () => { reads += 1; return read.promise; },
+    readTimeoutMs: 5_000,
+    responseTimeoutMs: 60_000,
+    timers: clock.timers,
+  });
+
+  // A burst of picker opens and one turn, all arriving on the cold read.
+  const routing = router.backendFor('kilo/kilo-auto/free', 'kilo');
+  const pickers = Array.from({ length: 4 }, () => router.cataloguesFor([{ id: 'hermes-local' }]));
+  await tick();
+  assert.equal(reads, 1, 'five waiters cost one read');
+
+  // The turn's deadline expiring does not disturb any picker.
+  assert.equal(clock.fire(5_000), 1);
+  await tick();
+  assert.equal(await routing, null);
+
+  const rows = [{ id: 'kilo/kilo-auto/free', available: true }];
+  read.resolve(rows);
+  for (const picker of pickers) assert.deepEqual((await picker).get('hermes-local'), rows);
+  assert.equal(reads, 1, 'still one live read after the burst');
+  assert.equal(clock.pending(), 0, 'every picker cleared its deadline');
+});
+
+test('the in-flight slot is cleared when the shared read settles', async () => {
+  // A slot filed on the settled read would answer the next caller with the
+  // previous generation without asking the environment at all.
+  let reads = 0;
+  const router = createBackendModelRouter({
+    listBackends: async () => [],
+    listModels: async () => {
+      reads += 1;
+      return [{ id: `kilo/gen-${reads}` }];
+    },
+  });
+
+  assert.deepEqual((await router.cataloguesFor([{ id: 'hermes-local' }])).get('hermes-local'), [{ id: 'kilo/gen-1' }]);
+  // The roster moved, so the copy is dropped and nothing can be answered from
+  // the cache: what comes back proves whether a slot outlived the read.
+  router.forget();
+  assert.deepEqual((await router.cataloguesFor([{ id: 'hermes-local' }])).get('hermes-local'), [{ id: 'kilo/gen-2' }]);
+  assert.equal(reads, 2, 'the second read was fresh, not a join on the settled one');
+});
+
+test('the in-flight slot is cleared when every waiter gives up on a read that never answers', { timeout: 10_000 }, async (t) => {
+  keepEventLoopAlive(t);
+  // A read that never settles is held by its waiters, not by the process: once
+  // the last one gives up on its own deadline the slot has to go, or the next
+  // request joins a read nobody is waiting for and 502s forever.
+  const clock = manualClock();
+  const read = deferred();
+  let reads = 0;
+  const router = createBackendModelRouter({
+    listBackends: async () => [{ id: 'hermes-local', adapterId: 'hermes' }],
+    listModels: () => { reads += 1; return read.promise; },
+    readTimeoutMs: 5_000,
+    responseTimeoutMs: 60_000,
+    timers: clock.timers,
+  });
+
+  const routing = router.backendFor('kilo/kilo-auto/free', 'kilo');
+  await tick();
+  const picker = router.cataloguesFor([{ id: 'hermes-local' }]);
+  await tick();
+  assert.equal(reads, 1);
+
+  assert.equal(clock.fire(5_000), 1);
+  await tick();
+  assert.equal(await routing, null, 'the routing lookup left first');
+  // The picker is still holding the slot, and is on its own 60 s deadline.
+  assert.equal(clock.fire(60_000), 1, 'the picker\'s own deadline was the only one left');
+  assert.deepEqual(await picker, new Map(), 'the hung read is reported as the failure it is');
+  assert.equal(clock.pending(), 0);
+
+  // Both waiters are gone, so this is a fresh read rather than a join.
+  const recovered = router.cataloguesFor([{ id: 'hermes-local' }]);
+  await tick();
+  assert.equal(reads, 2, 'the slot was released once every waiter had left');
+  const rows = [{ id: 'kilo/kilo-auto/free', available: true }];
+  read.resolve(rows);
+  assert.deepEqual((await recovered).get('hermes-local'), rows);
+});
+
+test('the production deadlines are the minute and the five seconds', () => {
+  assert.equal(CATALOGUE_READ_TIMEOUT_MS, 5_000);
+  assert.equal(CATALOGUE_RESPONSE_TIMEOUT_MS, 60_000);
+});
+
+/**
+ * Catalogue deadlines a test fires itself, and knows the length of.
+ *
+ * The bug these tests pin down is a deadline OWNERSHIP question, so the test
+ * has to be the one that says whose deadline fires and when. The clock records
+ * the bound each waiter asked for, which also makes "one 5 s waiter and one
+ * 60 s waiter" observable rather than inferred.
+ */
+function manualClock() {
+  const pending = new Set();
+  let nextId = 1;
+  return {
+    timers: {
+      setTimeout(callback, ms) {
+        const handle = { id: nextId, ms, callback };
+        nextId += 1;
+        handle.unref = () => handle;
+        pending.add(handle);
+        return handle;
+      },
+      clearTimeout(handle) {
+        pending.delete(handle);
+      },
+    },
+    /** Fire only the deadlines armed for `ms`, and say how many fired. */
+    fire(ms) {
+      const due = [...pending].filter((handle) => handle.ms === ms);
+      for (const handle of due) {
+        pending.delete(handle);
+        handle.callback();
+      }
+      return due.length;
+    },
+    /** How many deadlines the catalogue still holds. */
+    pending: () => pending.size,
+  };
+}
+
+/** A read the test answers, so no millisecond decides anything. */
+function deferred() {
+  let resolve;
+  const promise = new Promise((settle) => { resolve = settle; });
+  return { promise, resolve };
+}
+
+/** Let every promise chain the catalogue set off run to where it is waiting. */
+const tick = () => new Promise((resolve) => setImmediate(resolve));

@@ -147,10 +147,12 @@ export function createBackendModelRouter({
   // here as an answer. Survives an environment leaving, which is why an id
   // nobody lists is simply never read again.
   const cache = new Map();
-  // backendId -> the read in flight for it right now. One live read per
-  // environment however many callers find nothing to answer from: a burst of
-  // picker opens, or a cold `backendFor` and a cold `/v1/models` at the same
-  // moment, costs one read between them.
+  // backendId -> { live, waiters }: the read in flight for it right now, and
+  // how many callers are still waiting on it. One live read per environment
+  // however many callers find nothing to answer from: a burst of picker opens,
+  // or a cold `backendFor` and a cold `/v1/models` at the same moment, costs one
+  // read between them. The deadline lives with each waiter, not with this slot
+  // (see `readCatalogue`).
   const inflight = new Map();
   // backendId -> when a ROUTING read last came back unusable. Routing asks on
   // every turn, so it needs to remember; a catalogue response deliberately does
@@ -256,34 +258,50 @@ export function createBackendModelRouter({
 
   /**
    * One read, shared by every caller that arrives while it runs, and each
-   * caller's own bound on how long it waits for it.
+   * caller's OWN deadline on how long it waits for it.
    *
-   * A caller that STARTS the read also bounds it: the shared promise is the
-   * live read raced against this caller's own bound, so a `listModels` that
-   * never settles ends the shared read instead of holding the slot for the life
-   * of the process. A caller that JOINS an existing read still applies its own
-   * bound on top, which is why a routing lookup that gives up after 5 s does
-   * not hand its timeout to a `/v1/models` request entitled to wait a minute.
+   * The slot holds the live read itself — never one caller's bounded view of
+   * it. Filing the bounded promise (what this did before) made the deadline a
+   * property of whoever STARTED the read: a routing lookup that gave up after
+   * 5 s settled the shared promise as a failure, so a `/v1/models` request that
+   * arrived a moment later, entitled to wait a minute, joined that promise and
+   * inherited the 5 s failure 55 s early. Each waiter now races the one live
+   * read against its own bound, so a shorter deadline fails at its own deadline
+   * while a longer one keeps waiting for the same result.
+   *
+   * The read remains single-flight: waiters see one `listModels` call, not one
+   * each. Releasing the slot takes two forms, both finite: the live read
+   * settling (the next request starts fresh rather than joining an answer), and
+   * the last waiter leaving (a `listModels` that never settles must not hold
+   * the slot for the life of the process just because every caller gave up).
    */
   function readCatalogue(entry, timeoutMs) {
-    const existing = inflight.get(entry.id);
-    if (existing) return bounded(existing, timeoutMs, timers);
-    // `Promise.resolve().then(...)` so a `listModels` that THROWS is the same
-    // answer as one that refuses: the catalogue is read for many environments
-    // at once, and one that will not start must not blank the rest.
-    // An entry may bring its own read (a Bot's catalogue, read through the
-    // Bot's backend); an environment-roster entry is read by `listModels`.
-    const live = Promise.resolve().then(() => (typeof entry.read === 'function' ? entry.read() : listModels(entry))).then(
-      (models) => ({ ok: true, models: Array.isArray(models) ? models : [] }),
-      () => ({ ok: false, models: [] }),
-    );
-    const read = bounded(live, timeoutMs, timers);
-    inflight.set(entry.id, read);
-    // Releasing on settle — including when the bound is what settled it — is
-    // what lets the next request start a fresh read instead of joining a read
-    // that will never answer.
-    read.then(() => { if (inflight.get(entry.id) === read) inflight.delete(entry.id); });
-    return read;
+    let slot = inflight.get(entry.id);
+    if (!slot) {
+      // `Promise.resolve().then(...)` so a `listModels` that THROWS is the same
+      // answer as one that refuses: the catalogue is read for many environments
+      // at once, and one that will not start must not blank the rest.
+      // An entry may bring its own read (a Bot's catalogue, read through the
+      // Bot's backend); an environment-roster entry is read by `listModels`.
+      const live = Promise.resolve().then(() => (typeof entry.read === 'function' ? entry.read() : listModels(entry))).then(
+        (models) => ({ ok: true, models: Array.isArray(models) ? models : [] }),
+        () => ({ ok: false, models: [] }),
+      );
+      slot = { live, waiters: 0 };
+      inflight.set(entry.id, slot);
+      // Settled — answered or refused — so nothing joins it again.
+      live.then(() => { if (inflight.get(entry.id) === slot) inflight.delete(entry.id); });
+    }
+    slot.waiters += 1;
+    const waiter = bounded(slot.live, timeoutMs, timers);
+    waiter.then(() => {
+      slot.waiters -= 1;
+      // Every waiter has stopped waiting, so the slot is holding a read nobody
+      // can be answered from. Guarded by identity: the slot may already have
+      // been released on settle and replaced by a newer read.
+      if (slot.waiters <= 0 && inflight.get(entry.id) === slot) inflight.delete(entry.id);
+    });
+    return waiter;
   }
 
   /** Drop a cached catalogue, for a caller that knows the roster moved. */
