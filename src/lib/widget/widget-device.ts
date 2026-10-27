@@ -115,14 +115,20 @@ export function clearWidgetSnapshot(
 }
 
 /**
- * Run one widget write on the same serialising queue the app's snapshots use.
- * A headless companion push builds and writes its payload inside the queued job,
- * so its native hop and its read-modify-write of the merge base are ordered with
- * the app's own writes rather than left to race them.
+ * Run one companion push on the same serialising queue the app's snapshots use.
+ * A headless push builds and writes its payload inside the queued job, so its
+ * native hop and its read-modify-write of the merge base are ordered with the
+ * app's own writes rather than left to race them.
+ *
+ * A push is its own kind because it carries a PARTIAL delta — one work line, one
+ * approval count — and the Gate never sends it again. An app snapshot can replace
+ * a queued snapshot because the newer one says everything the older one did, but
+ * a push says only its own fact: coalescing it away (with another push or with a
+ * snapshot) would lose the fact it alone carried.
  */
-export function enqueueWidgetWrite(run: () => Promise<boolean>): Promise<boolean> {
+export function enqueueWidgetPush(run: () => Promise<boolean>): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
-    enqueueWidgetJob({ kind: 'write', run, resolve });
+    enqueueWidgetJob({ kind: 'push', run, resolve });
   });
 }
 
@@ -157,10 +163,13 @@ type WidgetJob = {
   run: () => Promise<boolean>;
   resolve: (accepted: boolean) => void;
   /**
-   * A clear is never coalesced away: dropping it would leave the very card it
-   * was called to retire standing on the home screen.
+   * Only two app snapshots coalesce, because the newer one carries everything
+   * the older one did. A clear is never coalesced away — dropping it would leave
+   * the very card it was called to retire standing on the home screen — and a
+   * push is never coalesced at all: it carries a partial delta the Gate will not
+   * send again.
    */
-  kind: 'write' | 'clear';
+  kind: 'write' | 'push' | 'clear';
 };
 
 const widgetJobs: WidgetJob[] = [];

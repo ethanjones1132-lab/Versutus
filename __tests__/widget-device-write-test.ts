@@ -14,6 +14,7 @@ import { androidWidgetPayload } from '@/lib/widget/android-widget-payload';
 import { keyValueStorage } from '@/lib/storage/key-value';
 import {
   clearWidgetSnapshot,
+  enqueueWidgetPush,
   readLastWidgetPayload,
   WIDGET_LAST_PAYLOAD_KEY,
   writeWidgetSnapshot,
@@ -199,6 +200,156 @@ describe('clearWidgetSnapshot', () => {
     };
 
     await expect(clearWidgetSnapshot(absent)).resolves.toBeUndefined();
+    expect(await readLastWidgetPayload()).toBeNull();
+  });
+});
+
+describe('a companion push keeps its own place in the queue', () => {
+  /** A promise plus the two handles that park it and release it again. */
+  function barrier(): { wait: Promise<void>; open: () => void } {
+    let open: () => void = () => undefined;
+    const wait = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return { wait, open };
+  }
+
+  test('snapshot, push and snapshot reach the card in that order', async () => {
+    const entered = barrier();
+    const release = barrier();
+    const order: string[] = [];
+    const setPayload = jest.fn(async (json: string) => {
+      const { writtenAt } = JSON.parse(json) as { writtenAt: number };
+      if (writtenAt === NOW) {
+        entered.open();
+        await release.wait;
+      }
+      order.push(`snapshot:${writtenAt}`);
+      return true;
+    });
+    const loadAndroid = async () => fakeModule(setPayload);
+
+    const first = writeWidgetSnapshot(snapshot({ writtenAt: NOW }), undefined, loadAndroid);
+    await entered.wait;
+    const push = enqueueWidgetPush(async () => {
+      order.push('push');
+      return true;
+    });
+    const third = writeWidgetSnapshot(snapshot({ writtenAt: NOW + 1000 }), undefined, loadAndroid);
+    release.open();
+
+    await expect(first).resolves.toBe(true);
+    await expect(push).resolves.toBe(true);
+    await expect(third).resolves.toBe(true);
+
+    // The snapshot behind the push does not coalesce it away, and the push does
+    // not push the snapshot out. A push carries a partial delta the Gate never
+    // resends, so dropping either one loses a fact the card can never recover.
+    expect(order).toEqual([`snapshot:${NOW}`, 'push', `snapshot:${NOW + 1000}`]);
+  });
+
+  test('snapshot, snapshot and push reach the card in that order', async () => {
+    const entered = barrier();
+    const release = barrier();
+    const order: string[] = [];
+    const setPayload = jest.fn(async (json: string) => {
+      const { writtenAt } = JSON.parse(json) as { writtenAt: number };
+      if (writtenAt === NOW) {
+        entered.open();
+        await release.wait;
+      }
+      order.push(`snapshot:${writtenAt}`);
+      return true;
+    });
+    const loadAndroid = async () => fakeModule(setPayload);
+
+    const first = writeWidgetSnapshot(snapshot({ writtenAt: NOW }), undefined, loadAndroid);
+    await entered.wait;
+    const second = writeWidgetSnapshot(snapshot({ writtenAt: NOW + 1000 }), undefined, loadAndroid);
+    const push = enqueueWidgetPush(async () => {
+      order.push('push');
+      return true;
+    });
+    release.open();
+
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(true);
+    await expect(push).resolves.toBe(true);
+
+    // A queued push used to be enqueued as a snapshot and so evicted the queued
+    // snapshot instead of waiting behind it.
+    expect(order).toEqual([`snapshot:${NOW}`, `snapshot:${NOW + 1000}`, 'push']);
+  });
+
+  test('two queued pushes both run, neither replacing the other', async () => {
+    const entered = barrier();
+    const release = barrier();
+    const order: string[] = [];
+    const setPayload = jest.fn(async (json: string) => {
+      const { writtenAt } = JSON.parse(json) as { writtenAt: number };
+      if (writtenAt === NOW) {
+        entered.open();
+        await release.wait;
+      }
+      order.push(`snapshot:${writtenAt}`);
+      return true;
+    });
+    const loadAndroid = async () => fakeModule(setPayload);
+
+    const first = writeWidgetSnapshot(snapshot({ writtenAt: NOW }), undefined, loadAndroid);
+    await entered.wait;
+    const work = enqueueWidgetPush(async () => {
+      order.push('push:work');
+      return true;
+    });
+    const approvals = enqueueWidgetPush(async () => {
+      order.push('push:approvals');
+      return true;
+    });
+    release.open();
+
+    await expect(first).resolves.toBe(true);
+    await expect(work).resolves.toBe(true);
+    await expect(approvals).resolves.toBe(true);
+
+    expect(order).toEqual([`snapshot:${NOW}`, 'push:work', 'push:approvals']);
+  });
+
+  test('a clear waits for the push ahead of it and still retires the card', async () => {
+    await keyValueStorage.setItem(WIDGET_LAST_PAYLOAD_KEY, JSON.stringify({ v: 3 }));
+    const entered = barrier();
+    const release = barrier();
+    const order: string[] = [];
+    const loadAndroid = async () =>
+      ({
+        setPayload: jest.fn(async (json: string) => {
+          const { writtenAt } = JSON.parse(json) as { writtenAt: number };
+          if (writtenAt === NOW) {
+            entered.open();
+            await release.wait;
+          }
+          order.push(`snapshot:${writtenAt}`);
+          return true;
+        }),
+        clearPayload: jest.fn(async () => {
+          order.push('clear');
+        }),
+      }) as unknown as AndroidWidgetModule;
+
+    const first = writeWidgetSnapshot(snapshot({ writtenAt: NOW }), undefined, loadAndroid);
+    await entered.wait;
+    const push = enqueueWidgetPush(async () => {
+      order.push('push');
+      return true;
+    });
+    const cleared = clearWidgetSnapshot(loadAndroid);
+    release.open();
+
+    await Promise.all([first, push, cleared]);
+
+    // The clear is last: a payload written after it would describe a gateway the
+    // app has already forgotten, and the merge base goes with the card.
+    expect(order).toEqual([`snapshot:${NOW}`, 'push', 'clear']);
     expect(await readLastWidgetPayload()).toBeNull();
   });
 });

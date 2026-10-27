@@ -363,3 +363,193 @@ describe('a companion message merges onto the payload the app last wrote', () =>
     );
   });
 });
+
+// A companion push carries one fact, and the Gate never sends it again. Two
+// pushes queued behind a write are two deltas, not two versions of one snapshot:
+// the later one cannot stand in for the earlier one.
+describe('a queued push is a delta of its own', () => {
+  beforeEach(async () => {
+    await keyValueStorage.removeItem(WIDGET_LAST_PAYLOAD_KEY);
+    await keyValueStorage.removeItem(WIDGET_RESULT_HIDDEN_STORAGE_KEY);
+  });
+
+  /** A promise plus the two handles that park it and release it again. */
+  function barrier(): { wait: Promise<void>; open: () => void } {
+    let open: () => void = () => undefined;
+    const wait = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return { wait, open };
+  }
+
+  test('two queued partial pushes behind an in-flight snapshot both run and both reach the card', async () => {
+    jest.replaceProperty(Platform, 'OS', 'android');
+    await seedLast(APP_WRITE);
+    const entered = barrier();
+    const release = barrier();
+    const writes: Record<string, unknown>[] = [];
+    const setPayload = jest.fn(async (json: string) => {
+      const payload = JSON.parse(json) as Record<string, unknown>;
+      if (payload.writtenAt === NOW + 1000) {
+        entered.open();
+        await release.wait;
+      }
+      writes.push(payload);
+      return true;
+    });
+    const load = async () => ({ setPayload, clearPayload: jest.fn() }) as never;
+    const snapshot: GlanceableSnapshot = {
+      status: 'connected',
+      runsInFlight: 0,
+      runs: [{ title: 'Bake bread', state: 'Running' }],
+      approvalsPending: 0,
+      writtenAt: NOW + 1000,
+    };
+
+    const appWrite = writeWidgetSnapshot(snapshot, undefined, load as never);
+    await entered.wait;
+    const workPush = handleWidgetPush(
+      { widget: { v: 2, work: '2 runs in flight', writtenAt: NOW + 2000 } },
+      load,
+    );
+    const approvalPush = handleWidgetPush(
+      { widget: { v: 2, approvalsPending: 3, writtenAt: NOW + 3000 } },
+      load,
+    );
+    release.open();
+
+    await expect(appWrite).resolves.toBe(true);
+    await expect(workPush).resolves.toBe(true);
+    await expect(approvalPush).resolves.toBe(true);
+
+    expect(writes).toHaveLength(3);
+    // The work delta lands on the snapshot the app just wrote.
+    expect(writes[1]).toMatchObject({
+      work: '2 runs in flight',
+      approvalsPending: 0,
+      runs: snapshot.runs,
+    });
+    // The approval delta omits the work line, so it keeps the one the push ahead
+    // of it contributed: whichever delta is dropped here is gone for good.
+    expect(writes[2]).toMatchObject({
+      work: '2 runs in flight',
+      approvalsPending: 3,
+      runs: snapshot.runs,
+    });
+    expect(JSON.parse((await keyValueStorage.getItem(WIDGET_LAST_PAYLOAD_KEY)) ?? 'null')).toEqual(
+      writes[2],
+    );
+  });
+
+  test('a push between two snapshots writes before the later snapshot and merges onto the first', async () => {
+    jest.replaceProperty(Platform, 'OS', 'android');
+    const entered = barrier();
+    const release = barrier();
+    const writes: Record<string, unknown>[] = [];
+    const setPayload = jest.fn(async (json: string) => {
+      const payload = JSON.parse(json) as Record<string, unknown>;
+      if (payload.writtenAt === NOW + 1000) {
+        entered.open();
+        await release.wait;
+      }
+      writes.push(payload);
+      return true;
+    });
+    const load = async () => ({ setPayload, clearPayload: jest.fn() }) as never;
+    const first: GlanceableSnapshot = {
+      status: 'connected',
+      runsInFlight: 0,
+      runs: [{ title: 'Bake bread', state: 'Running' }],
+      approvalsPending: 0,
+      writtenAt: NOW + 1000,
+    };
+    const secondSnapshot: GlanceableSnapshot = {
+      status: 'connected',
+      runsInFlight: 1,
+      runs: [{ title: 'Sweep the floor', state: 'Running' }],
+      approvalsPending: 0,
+      writtenAt: NOW + 3000,
+    };
+
+    const firstWrite = writeWidgetSnapshot(first, undefined, load as never);
+    await entered.wait;
+    const push = handleWidgetPush(
+      { widget: { ...COMPANION, work: '2 runs in flight', writtenAt: NOW + 2000 } },
+      load,
+    );
+    const lastWrite = writeWidgetSnapshot(secondSnapshot, undefined, load as never);
+    release.open();
+
+    await expect(firstWrite).resolves.toBe(true);
+    await expect(push).resolves.toBe(true);
+    await expect(lastWrite).resolves.toBe(true);
+
+    expect(writes).toHaveLength(3);
+    // The push waited its turn and folded onto the snapshot in flight, not onto
+    // the older stored base; the snapshot queued behind it kept its own place.
+    expect(writes[1]).toMatchObject({
+      work: '2 runs in flight',
+      runs: first.runs,
+      writtenAt: NOW + 2000,
+    });
+    expect(writes[2].writtenAt).toBe(NOW + 3000);
+    expect(JSON.parse((await keyValueStorage.getItem(WIDGET_LAST_PAYLOAD_KEY)) ?? 'null')).toEqual(
+      writes[2],
+    );
+  });
+
+  test('a push that omits result keeps the last judged result on the card', async () => {
+    await seedLast(APP_WRITE);
+    const setPayload = jest.fn(async () => true);
+    const load = async () => ({ setPayload, clearPayload: jest.fn() }) as never;
+
+    await expect(handleWidgetPush({ widget: COMPANION }, load)).resolves.toBe(true);
+
+    const merged = writtenPayload(setPayload);
+    expect(merged.result).toBe(APP_WRITE.result);
+    expect(JSON.parse((await keyValueStorage.getItem(WIDGET_LAST_PAYLOAD_KEY)) ?? 'null')).toEqual(
+      merged,
+    );
+  });
+
+  test('a push that carries a result replaces the last one', async () => {
+    await seedLast(APP_WRITE);
+    const setPayload = jest.fn(async () => true);
+    const load = async () => ({ setPayload, clearPayload: jest.fn() }) as never;
+
+    await expect(
+      handleWidgetPush({ widget: { ...COMPANION, result: 'Nightly sweep finished' } }, load),
+    ).resolves.toBe(true);
+
+    expect(writtenPayload(setPayload).result).toBe('Nightly sweep finished');
+  });
+
+  test('a stale push never replaces the result it is too old to speak for', () => {
+    const merged = mergeWidgetPushPayload(
+      { ...COMPANION, result: 'Stale result', writtenAt: NOW - 60_000 },
+      APP_WRITE,
+      false,
+      NOW,
+    );
+
+    expect(merged).toMatchObject({
+      result: APP_WRITE.result,
+      work: APP_WRITE.work,
+      writtenAt: APP_WRITE.writtenAt,
+    });
+  });
+
+  test('the hide switch keeps a preserved result off the card', async () => {
+    await seedLast(APP_WRITE);
+    await keyValueStorage.setItem(WIDGET_RESULT_HIDDEN_STORAGE_KEY, 'true');
+    const setPayload = jest.fn(async () => true);
+    const load = async () => ({ setPayload, clearPayload: jest.fn() }) as never;
+
+    await expect(handleWidgetPush({ widget: COMPANION }, load)).resolves.toBe(true);
+
+    const merged = writtenPayload(setPayload);
+    expect(merged.result).toBeUndefined();
+    expect(merged.redact).toBe(true);
+    expect(merged.bots).toBeUndefined();
+  });
+});

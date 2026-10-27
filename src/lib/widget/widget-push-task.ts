@@ -29,7 +29,7 @@ import {
   androidWidgetStatusWord,
 } from '@/lib/widget/android-widget-payload';
 import {
-  enqueueWidgetWrite,
+  enqueueWidgetPush,
   loadAndroidWidgetModule,
   readLastWidgetPayload,
   saveLastWidgetPayload,
@@ -98,8 +98,9 @@ function lastStamp(last: VersutusWidgetPayload | null, now: number): number | un
  * Replaced: the work line, the approval count and the stamp the message carries
  * — but only when the message is not older than the app's last write, and only
  * when its stamp is one this phone can trust.
- * The result is the message's alone, and only while the device has not asked for
- * it to stay off the card.
+ * A key the message omits falls back to the last write, the result included: a
+ * work-only push must not wipe the last judged result off the card. The result
+ * is the message's own while the device has not asked for it to stay off.
  *
  * `connected` is never taken from the message. The previous answer is kept only
  * while it is still true of this phone — a write younger than the gate's own
@@ -128,7 +129,7 @@ export function mergeWidgetPushPayload(
   const work = (stale ? undefined : pushedText(claim.work)) ?? last?.work;
   const approvalsPending =
     (stale ? undefined : pushedCount(claim.approvalsPending)) ?? last?.approvalsPending ?? 0;
-  const result = stale ? last?.result : pushedText(claim.result);
+  const result = (stale ? undefined : pushedText(claim.result)) ?? last?.result;
   const writtenAt = (stale ? undefined : pushedAt) ?? previousAt ?? 0;
   const redact = hidden || last?.redact === true;
   // How long this phone's last app write still speaks for it. `previousAt` is
@@ -165,12 +166,15 @@ export async function handleWidgetPush(
   data: unknown,
   load: () => Promise<AndroidWidgetModule | null> = loadAndroidWidgetModule,
 ): Promise<boolean> {
-  const pushed = widgetPushPayload(data);
-  if (!pushed) return false;
   // Through the same queue the app's snapshots use: the push's native hop must
-  // not overtake (or be overtaken by) a snapshot write, and the merge base is
-  // read and rewritten inside the queued job rather than beside it.
-  return enqueueWidgetWrite(async () => {
+  // not overtake (or be overtaken by) a snapshot write. The message's own keys,
+  // the merge base and the privacy switch are all read inside the queued job, so
+  // the payload folds onto what the card actually holds rather than beside it.
+  // The push's own kind keeps this partial delta from being coalesced away by
+  // anything queued behind it.
+  return enqueueWidgetPush(async () => {
+    const pushed = widgetPushPayload(data);
+    if (!pushed) return false;
     try {
       const module = await load();
       if (!module) return false;
