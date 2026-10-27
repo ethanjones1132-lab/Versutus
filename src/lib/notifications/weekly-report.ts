@@ -10,6 +10,14 @@
 // fires at its scheduled time whether or not the gateway ran. Nothing here is
 // push: the schedule is the device's own. Its one payload marker is the kind
 // that routes a tap to the scorecard surface (tap-route.ts).
+//
+// Bookkeeping rule (QUALITY-SCAN 2026-10-11, scan985–989): an identifier is
+// forgotten only once the phone confirms that notice is not live any more, or
+// once a later opt-out retires it. So an attempt records its own notice's id
+// BEFORE anything that can fail, rolls back only what it created, leaves the
+// held notice held, and keeps the identity of any notice it could not cancel.
+// The primary mapping stays the bare single id older builds wrote; every other
+// live notice is named in this module's own pending list.
 
 import * as Notifications from 'expo-notifications';
 
@@ -26,6 +34,19 @@ import {
   type WeeklyReportOptInState,
   type WeeklyReportRefusal,
 } from './weekly-report-schedule';
+
+/**
+ * Storage key holding the identifiers this module must not forget beyond the
+ * primary mapping: a replacement the phone refused to cancel, a notice a
+ * failed attempt could not undo, and — while an attempt is in flight — the
+ * notice that attempt is replacing. A JSON array of identifiers, written only
+ * by `weekly-report.ts`.
+ *
+ * It is a separate key on purpose. `WEEKLY_REPORT_NOTICE_KEY` stays the bare
+ * single id it has always been, so a device whose state an older build wrote
+ * still reads — the pending list is simply absent there.
+ */
+export const WEEKLY_REPORT_PENDING_NOTICE_KEY = 'versutus:weekly-report-notification-pending';
 
 /**
  * The opt-in state this device holds: the stored flag, absent meaning off.
@@ -64,35 +85,118 @@ export async function readWeeklyReportOptIn(): Promise<WeeklyReportOptInState> {
 }
 
 /**
- * The identifier of the notice this device holds, or null. A locked store
- * reads as none, which is the same landing as a device that never opted in.
+ * The identifier of the notice the mapping holds, or null, and whether the
+ * store actually answered. The two are kept apart because they lead to
+ * opposite decisions: an absent mapping may be removed, while an unreadable
+ * one may name a live notice and must be left exactly where it is.
  */
-async function knownNoticeId(): Promise<string | null> {
+async function readPrimaryNoticeId(): Promise<{ id: string | null; readable: boolean }> {
   try {
-    return await keyValueStorage.getItem(WEEKLY_REPORT_NOTICE_KEY);
+    return { id: await keyValueStorage.getItem(WEEKLY_REPORT_NOTICE_KEY), readable: true };
   } catch {
-    return null;
+    return { id: null, readable: false };
   }
 }
 
 /**
- * Retire the held notice — the OS schedule and the persisted identifier —
- * best-effort: a vanished schedule or a locked store must never block the
- * opt-out the operator asked for.
+ * The identifiers named in the pending list, and whether that record may be
+ * replaced. `replaceable` is false only when the READ itself failed, because
+ * the key may then name notices this call never saw; overwriting it would
+ * forget them. A value that is absent, corrupt or not an array names nothing
+ * recoverable, so the next write repairs it.
  */
-async function cancelHeldNotice(): Promise<void> {
-  const held = await knownNoticeId();
-  if (held) {
-    try {
-      await Notifications.cancelScheduledNotificationAsync(held);
-    } catch {
-      // best-effort
-    }
-  }
+async function readPendingNoticeIds(): Promise<{ ids: string[]; replaceable: boolean }> {
+  let raw: string | null = null;
   try {
-    await keyValueStorage.removeItem(WEEKLY_REPORT_NOTICE_KEY);
+    raw = await keyValueStorage.getItem(WEEKLY_REPORT_PENDING_NOTICE_KEY);
   } catch {
-    // best-effort: a stale mapping only costs a harmless extra cancel next time
+    return { ids: [], replaceable: false };
+  }
+  if (!raw) return { ids: [], replaceable: true };
+
+  let parsed: unknown = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    // Content this module never wrote names nothing it can recover, so a later
+    // write may replace it; leaving it would block every later toggle.
+    return { ids: [], replaceable: true };
+  }
+  if (!Array.isArray(parsed)) return { ids: [], replaceable: true };
+
+  const identifiers: string[] = [];
+  for (const value of parsed as unknown[]) {
+    if (typeof value === 'string' && value.length > 0) identifiers.push(value);
+  }
+  return { ids: identifiers, replaceable: true };
+}
+
+/**
+ * Identifiers the store would not accept while the notice was live, kept for
+ * this process only. The pending list is the durable record; this is the last
+ * resort for a locked store, so an opt-out in the same session can still
+ * retire a notice no key could name. Nothing enters it unless both the list
+ * write and the cancellation were refused.
+ */
+const untrackedNoticeIds = new Set<string>();
+
+/** One identifier per notice, in the order first seen. */
+function uniqueNoticeIds(identifiers: Array<string | null>): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const identifier of identifiers) {
+    if (!identifier || seen.has(identifier)) continue;
+    seen.add(identifier);
+    unique.push(identifier);
+  }
+  return unique;
+}
+
+/**
+ * Every notice this module knows may be live: the primary mapping plus the
+ * pending list plus this process's untracked survivors.
+ */
+function trackedNoticeIds(primaryId: string | null, pendingIds: string[]): string[] {
+  return uniqueNoticeIds([primaryId, ...pendingIds, ...untrackedNoticeIds]);
+}
+
+/**
+ * Persist the pending identifiers, and say whether the store took them.
+ * Best-effort by design — a locked store must not block the toggle — but the
+ * caller has to know whether it can rely on this record, because that is what
+ * decides whether a notice may be kept or must be undone.
+ */
+async function storePendingNoticeIds(identifiers: string[]): Promise<boolean> {
+  const unique = uniqueNoticeIds(identifiers);
+  try {
+    if (unique.length === 0) {
+      await keyValueStorage.removeItem(WEEKLY_REPORT_PENDING_NOTICE_KEY);
+    } else {
+      await keyValueStorage.setItem(
+        WEEKLY_REPORT_PENDING_NOTICE_KEY,
+        JSON.stringify(unique),
+      );
+    }
+    for (const identifier of unique) untrackedNoticeIds.delete(identifier);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Retire one schedule and say whether it is gone. Expo resolves when the OS
+ * holds no notification under that identifier, so `true` means "not live any
+ * more" — exactly what the bookkeeping needs. `false` means the identity must
+ * stay recorded, because the notice may still fire.
+ */
+async function forgetNotice(identifier: string): Promise<boolean> {
+  try {
+    await Notifications.cancelScheduledNotificationAsync(identifier);
+    untrackedNoticeIds.delete(identifier);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -153,36 +257,123 @@ async function stateAfterDecline(reason: WeeklyReportRefusal): Promise<WeeklyRep
 }
 
 /**
+ * Retire every notice this module knows may still be live — the mapping and
+ * every pending identifier, including a survivor of an earlier failed attempt.
+ *
+ * An identifier whose cancellation the phone refuses STAYS recorded (as the
+ * mapping when it was the primary, otherwise in the pending list), so it is
+ * never silently left to fire: the next opt-out tries it again. Only a
+ * confirmed cancellation removes an identity — a refused one is moved into the
+ * pending list, never dropped.
+ */
+async function retireTrackedNotices(): Promise<void> {
+  const primary = await readPrimaryNoticeId();
+  const pending = await readPendingNoticeIds();
+  const tracked = trackedNoticeIds(primary.id, pending.ids);
+  const survivors: string[] = [];
+
+  for (const identifier of tracked) {
+    if (!(await forgetNotice(identifier))) survivors.push(identifier);
+  }
+
+  const survivorsBeyondPrimary = survivors.filter((identifier) => identifier !== primary.id);
+  if (pending.replaceable) {
+    if (!(await storePendingNoticeIds(survivorsBeyondPrimary))) {
+      for (const identifier of survivorsBeyondPrimary) untrackedNoticeIds.add(identifier);
+    }
+  } else {
+    // The list may name notices this call could not read, so overwriting it
+    // would forget them. Keep only the survivors it does know, in memory.
+    for (const identifier of survivorsBeyondPrimary) untrackedNoticeIds.add(identifier);
+  }
+
+  // The mapping may name only a notice that is still live. A cancelled one is
+  // dropped, so a later opt-in cannot mistake it for something it still holds.
+  // An unreadable mapping is left alone: it may name a notice still to retire.
+  if (primary.readable && (!primary.id || !survivors.includes(primary.id))) {
+    try {
+      await keyValueStorage.removeItem(WEEKLY_REPORT_NOTICE_KEY);
+    } catch {
+      // best-effort: a stale mapping only costs a harmless extra cancel later
+    }
+  }
+}
+
+/**
  * Apply the opt-in: schedule or retire the one weekly notice, and answer with
  * the state now in force — and, when the device refused to hold one, the
  * reason it refused, so a surface can say why rather than leave a declined
  * attempt looking like a report nobody ever asked for.
  *
- * OFF retires the held notice and clears the flag — the operator asked for
- * silence, so a notice that outlived its own opt-out would be the lie this
- * module exists to avoid.
+ * OFF retires every notice this module still knows is live — the held one and
+ * any survivor an earlier failed attempt left behind — and clears the flag.
+ * The operator asked for silence, so a notice that outlived its own opt-out
+ * would be the lie this module exists to avoid.
  *
- * ON asks for permission and schedules exactly one notice, retiring a notice
- * the same state already held only once a replacement has landed: a declined
- * permission or a failed schedule leaves a working reminder in place rather
- * than trading it for nothing. And it holds NO flag it cannot honour — a
- * scheduled notice that never landed must not read as "on" in the toggle, so
- * the answer is the state this device actually holds.
+ * ON is a transaction in a fixed order, because every write below can fail.
+ * It first reads the device's two records: if either cannot be read, the
+ * attempt refuses without scheduling, because it cannot know what it would be
+ * stacking on and must never overwrite a record it could not read.
+ *
+ *   1. Schedule the new notice. A throw or an empty identifier is the same
+ *      refusal as before, and nothing this device held has been touched.
+ *   2. Record the attempt's identity — and the identity of the notice it is
+ *      replacing — in the pending list. If the store refuses, keep no notice
+ *      it cannot name: undo this attempt and leave the held notice alone, so
+ *      the answer is whatever that held notice still reads as.
+ *   3. Record consent. If the flag cannot be written, the attempt earns
+ *      nothing new; undo the notice THIS attempt created and leave the held
+ *      notice exactly as it was — mapping, schedule and consent all unchanged.
+ *      (When the flag was already on, the phone still holds that consent, so
+ *      the held notice keeps reading on.)
+ *   4. Promote the attempt's notice to the mapping. If that write fails, the
+ *      notice is still live and still named by the pending list, so the device
+ *      does hold what the flag now says; retire nothing, because the mapping
+ *      still needs a live notice to name.
+ *   5. Only now retire what step 4 superseded. A cancellation the phone
+ *      refuses stays in the pending list, so it is named until a later opt-out
+ *      retires it.
+ *
+ * No step turns a failed replacement into a consent change: the flag is only
+ * ever set to on after the new notice exists, and it is only cleared by an
+ * opt-out.
  */
-export async function setWeeklyReportOptIn(enabled: boolean): Promise<WeeklyReportOptInState> {
+export function setWeeklyReportOptIn(enabled: boolean): Promise<WeeklyReportOptInState> {
+  // A toggle must see the preceding toggle's complete journal. Otherwise two
+  // opt-ins can both read an empty journal and overwrite each other's live id,
+  // or an opt-out can finish before an earlier schedule has returned its id.
+  const attempt = weeklyReportAttempt.then(() => applyWeeklyReportOptIn(enabled));
+  weeklyReportAttempt = attempt.then(() => undefined, () => undefined);
+  return attempt;
+}
+
+let weeklyReportAttempt: Promise<void> = Promise.resolve();
+
+async function applyWeeklyReportOptIn(enabled: boolean): Promise<WeeklyReportOptInState> {
   if (!enabled) {
-    await cancelHeldNotice();
+    await retireTrackedNotices();
     try {
       await keyValueStorage.removeItem(WEEKLY_REPORT_OPT_IN_KEY);
     } catch {
-      // best-effort: the notice is already retired, which is the operator's ask
+      // best-effort: the notices are already retired, which is the operator's ask
     }
     return { state: 'off' };
   }
 
+  const held = await readPrimaryNoticeId();
+  const pending = await readPendingNoticeIds();
+  if (!held.readable || !pending.replaceable) {
+    // The device's own record cannot be read, so an attempt cannot know what
+    // it would be stacking on. Fail closed without scheduling or prompting:
+    // nothing is touched, and the unreadable record is left intact for a later
+    // call to retire.
+    return stateAfterDecline('schedule');
+  }
+
   if (!(await ensurePermission())) return stateAfterDecline('permission');
 
-  const held = await knownNoticeId();
+  const alreadyTracked = trackedNoticeIds(held.id, pending.ids);
+
   let identifier: string | null;
   try {
     identifier = await Notifications.scheduleNotificationAsync({
@@ -203,27 +394,50 @@ export async function setWeeklyReportOptIn(enabled: boolean): Promise<WeeklyRepo
   // the surface cannot promise a report nothing will announce.
   if (!identifier) return stateAfterDecline('schedule');
 
+  // Step 2: the attempt's notice must be nameable before anything else can
+  // fail. The notice being replaced is recorded beside it so that, once the
+  // new one is promoted, an uncancelled old one still has a name.
+  const attemptIds = uniqueNoticeIds([...alreadyTracked, identifier]);
+  if (!(await storePendingNoticeIds(attemptIds))) {
+    // The device will not record what it holds, so it must not hold a notice it
+    // cannot name. Undo only this attempt; the held notice was never touched.
+    if (!(await forgetNotice(identifier))) untrackedNoticeIds.add(identifier);
+    return stateAfterDecline('schedule');
+  }
+
+  // Step 3: consent. No new notice may be kept behind a flag that refused.
+  try {
+    await keyValueStorage.setItem(WEEKLY_REPORT_OPT_IN_KEY, WEEKLY_REPORT_OPT_IN_ON);
+  } catch {
+    if (await forgetNotice(identifier)) {
+      // The attempt's own notice is gone, so drop its id from the record while
+      // keeping every identifier the device held before this attempt.
+      await storePendingNoticeIds(attemptIds.filter((id) => id !== identifier));
+    }
+    // If the cancellation was refused, the identifier is still in the pending
+    // list and a later opt-out will retire it.
+    return stateAfterDecline('schedule');
+  }
+
+  // Step 4: promote the new notice to the primary mapping.
   try {
     await keyValueStorage.setItem(WEEKLY_REPORT_NOTICE_KEY, identifier);
   } catch {
-    // The notice is scheduled either way; without the mapping the next opt-out
-    // cannot retire it by id, which is the cost of a locked store, not a lie.
-  }
-  if (held && held !== identifier) {
-    try {
-      await Notifications.cancelScheduledNotificationAsync(held);
-    } catch {
-      // best-effort: a replaced notice still sitting in the tray is cosmetic
-    }
+    // The notice is live, consented to, and named in the pending list; the
+    // mapping still names the notice it named before, which is why nothing is
+    // retired here. Both are tracked, so the later opt-out retires both.
+    return { state: 'on' };
   }
 
-  try {
-    await keyValueStorage.setItem(WEEKLY_REPORT_OPT_IN_KEY, WEEKLY_REPORT_OPT_IN_ON);
-    return { state: 'on' };
-  } catch {
-    // The notice landed but the flag is not stored, so the state this device
-    // holds is the flag's — and the schedule itself did land, so there is no
-    // refusal to name here.
-    return storedOptInState();
+  // Step 5: the new notice is the held one; retire what it superseded.
+  const superseded = attemptIds.filter((id) => id !== identifier);
+  const survivors: string[] = [];
+  for (const supersededId of superseded) {
+    if (!(await forgetNotice(supersededId))) survivors.push(supersededId);
   }
+  if (!(await storePendingNoticeIds(survivors))) {
+    for (const survivor of survivors) untrackedNoticeIds.add(survivor);
+  }
+
+  return { state: 'on' };
 }
