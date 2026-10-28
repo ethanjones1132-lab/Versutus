@@ -7,11 +7,11 @@ import { FontFamily, Spacing, type SemanticPalette } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import { haptics } from '@/lib/haptics';
 import {
+  collectJsonTreeContainerPaths,
   flattenJsonTreeRows,
   jsonTreeNode,
   type JsonPrimitiveKind,
   type JsonTreeRow,
-  type JsonTreeNode,
 } from '@/lib/terminal/json-tree';
 
 type Props = {
@@ -29,7 +29,7 @@ export function JsonView({ value, maxDepth = 2 }: Props) {
   const tokens = useTokens();
   const root = useMemo(() => jsonTreeNode(value), [value]);
   const initial = useMemo(
-    () => collectRootPaths(root, maxDepth),
+    () => collectJsonTreeContainerPaths(root, maxDepth),
     [root, maxDepth],
   );
   const [expanded, setExpanded] = useState<Set<string>>(() => initial);
@@ -68,18 +68,6 @@ export function JsonView({ value, maxDepth = 2 }: Props) {
       />
     </View>
   );
-}
-
-/** Paths of every container at or above `maxDepth` so they start open. */
-function collectRootPaths(node: JsonTreeNode, maxDepth: number, path = 'root', depth = 0): Set<string> {
-  const paths = new Set<string>();
-  if (depth < maxDepth) paths.add(path);
-  if (node.kind === 'object') {
-    for (const entry of node.entries) collectRootPaths(entry.node, maxDepth, `${path}.${entry.key}`, depth + 1).forEach((p) => paths.add(p));
-  } else if (node.kind === 'array') {
-    node.children.forEach((child, index) => collectRootPaths(child, maxDepth, `${path}[${index}]`, depth + 1).forEach((p) => paths.add(p)));
-  }
-  return paths;
 }
 
 function JsonTreeRowView({

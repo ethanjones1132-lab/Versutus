@@ -116,11 +116,67 @@ export type JsonTreeRow =
   | { kind: 'key'; id: string; path: string; depth: number; key: string }
   | { kind: 'brace'; id: string; path: string; depth: number; brace: '{' | '}' | '[' | ']' };
 
+/** Keys spelled plainly keep the historical `parent.key` path segment. */
+function isPlainKey(key: string): boolean {
+  return !(
+    key.length === 0 ||
+    key.includes('.') ||
+    key.includes('[') ||
+    key.includes(']') ||
+    key.includes('"') ||
+    key.includes('\\')
+  );
+}
+
+/**
+ * Path of an object child under `path`.
+ *
+ * Ordinary keys keep the historical `parent.key` spelling, so their paths and
+ * `c:`/`k:`/`p:` row ids stay stable. Keys that carry a path delimiter, a
+ * quote or a backslash — and the empty key — use a bracket segment holding the
+ * JSON-encoded key, e.g. `root["a.b"]`. A literal `"a.b"` key therefore never
+ * shares a path, id or expanded-set entry with a nested `a` → `b`.
+ */
+export function jsonTreeObjectPath(path: string, key: string): string {
+  return isPlainKey(key) ? `${path}.${key}` : `${path}[${JSON.stringify(key)}]`;
+}
+
+/** Array children always use `parent[index]`; indices cannot alias key segments. */
+export function jsonTreeArrayPath(path: string, index: number): string {
+  return `${path}[${index}]`;
+}
+
+/**
+ * Paths of every node at or above `maxDepth` so containers start open. Child
+ * paths come from the same encoders `flattenJsonTreeRows` uses, so the
+ * initial expanded set always names exactly the rows it means to open.
+ */
+export function collectJsonTreeContainerPaths(
+  node: JsonTreeNode,
+  maxDepth: number,
+  path = 'root',
+  depth = 0,
+  paths = new Set<string>(),
+): Set<string> {
+  if (depth < maxDepth) paths.add(path);
+  if (node.kind === 'object') {
+    for (const entry of node.entries) {
+      collectJsonTreeContainerPaths(entry.node, maxDepth, jsonTreeObjectPath(path, entry.key), depth + 1, paths);
+    }
+  } else if (node.kind === 'array') {
+    node.children.forEach((child, index) => {
+      collectJsonTreeContainerPaths(child, maxDepth, jsonTreeArrayPath(path, index), depth + 1, paths);
+    });
+  }
+  return paths;
+}
+
 /**
  * Flatten the visible tree into depth-keyed rows so the renderer can window
  * it. A collapsed container contributes only its own row — its descendants
  * are pruned until that path is expanded again. Row ids are unique per
- * path/kind so expanding and collapsing reuse stable list keys.
+ * path/kind so expanding and collapsing reuse stable list keys; paths are
+ * built by the shared encoders above so distinct keys never alias.
  */
 export function flattenJsonTreeRows(root: JsonTreeNode, expanded: ReadonlySet<string>): JsonTreeRow[] {
   const rows: JsonTreeRow[] = [];
@@ -146,14 +202,17 @@ export function flattenJsonTreeRows(root: JsonTreeNode, expanded: ReadonlySet<st
     if (node.kind === 'object') {
       rows.push({ kind: 'brace', id: `{:${path}`, path, depth, brace: '{' });
       for (const entry of node.entries) {
-        rows.push({ kind: 'key', id: `k:${path}.${entry.key}`, path: `${path}.${entry.key}`, depth, key: entry.key });
-        visit(entry.node, `${path}.${entry.key}`, depth + 1);
+        const childPath = jsonTreeObjectPath(path, entry.key);
+        rows.push({ kind: 'key', id: `k:${childPath}`, path: childPath, depth, key: entry.key });
+        visit(entry.node, childPath, depth + 1);
       }
       rows.push({ kind: 'brace', id: `}:${path}`, path, depth, brace: '}' });
       return;
     }
     rows.push({ kind: 'brace', id: `[:${path}`, path, depth, brace: '[' });
-    node.children.forEach((child, index) => visit(child, `${path}[${index}]`, depth + 1));
+    node.children.forEach((child, index) => {
+      visit(child, jsonTreeArrayPath(path, index), depth + 1);
+    });
     rows.push({ kind: 'brace', id: `]:${path}`, path, depth, brace: ']' });
   };
 
