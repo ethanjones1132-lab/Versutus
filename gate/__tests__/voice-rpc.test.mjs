@@ -343,3 +343,89 @@ test('a long call that keeps sending audio never loses its reservation', async (
   );
   assert.equal(registry.get(grant.voiceSessionId).ended, false);
 });
+
+// The headline feature must be proven to open a call, not merely to avoid an
+// error. These drive the real `voice.session.start` over the same fake Gate the
+// tests above use and read what it opened out of the same registry the call's
+// audio link reads: a reply with an id in it is not evidence on its own.
+test('a call start really opens a session, with its engine, Bot thread and id', async () => {
+  const lines = [];
+  const { methods, registry } = createVoiceRpc({
+    capabilities: capabilities({ local: 'ready', codex: 'disabled' }),
+    makeId: () => 'vs-open-1',
+    log: (line) => lines.push(line),
+  });
+
+  const grant = await methods['voice.session.start']({ engine: 'auto', thread }, ctx);
+
+  // The id the phone hands to its audio link, and the engine identity the call
+  // runs on: the two facts the call screen shows the operator.
+  assert.equal(grant.voiceSessionId, 'vs-open-1');
+  assert.equal(grant.engine, 'local');
+  assert.equal(grant.fellBackFrom, undefined);
+
+  // Not only a reply: the session exists, under this device, for this Bot's
+  // thread and on this engine. A start that answered but opened nothing — or
+  // opened it for another device or thread — fails here.
+  const opened = registry.get(grant.voiceSessionId);
+  assert.ok(opened, 'the start answered without opening a session');
+  assert.equal(opened.ended, false);
+  assert.equal(opened.deviceId, 'dev-1');
+  assert.equal(opened.engine, 'local');
+  assert.deepEqual(opened.thread, thread);
+  assert.equal(registry.liveForDevice('dev-1').voiceSessionId, grant.voiceSessionId);
+  assert.ok(lines.some((line) => /voice.session.start ok/.test(line)
+    && line.includes('engine=local')
+    && line.includes(`session=${grant.voiceSessionId}`)));
+});
+
+// The Bot's own engine is the call's identity too: the session must carry the
+// engine the Gate chose for that thread, not a hard-coded default. A start that
+// opened `local` for a Bot that asked for `codex` would open the wrong call.
+test('the opened session carries the engine the Gate chose for the Bot', async () => {
+  const botThread = { ...thread, voiceEngine: 'codex' };
+  const { methods, registry } = createVoiceRpc({
+    capabilities: capabilities({ local: 'ready', codex: 'ready' }),
+    makeId: () => 'vs-codex-1',
+  });
+
+  const grant = await methods['voice.session.start']({ thread: botThread }, ctx);
+  assert.equal(grant.engine, 'codex');
+  const opened = registry.get(grant.voiceSessionId);
+  assert.ok(opened, 'the start answered without opening a session');
+  assert.equal(opened.engine, 'codex');
+  assert.deepEqual(opened.thread, botThread);
+});
+
+test('a refused start opens no session, names the refusal, and leaves the device free', async () => {
+  let engines = { local: 'not-installed', codex: 'disabled' };
+  const lines = [];
+  const { methods, registry } = createVoiceRpc({
+    capabilities: () => capabilities(engines)(),
+    makeId: () => 'vs-retry-1',
+    log: (line) => lines.push(line),
+  });
+
+  await assert.rejects(
+    () => methods['voice.session.start']({ engine: 'auto', thread }, ctx),
+    (error) => {
+      assert.equal(error.code, 'no_engine');
+      assert.equal(error.status, 409);
+      assert.match(error.message, /not installed/i);
+      return true;
+    },
+  );
+
+  // The refusal is surfaced, and it opened nothing: no session record, and the
+  // device is not held by a call that never started.
+  assert.equal(registry.sessions.size, 0);
+  assert.equal(registry.liveForDevice('dev-1'), null);
+  assert.ok(lines.some((line) => /voice.session.start fail/.test(line) && /code=no_engine/.test(line)));
+
+  // What was refused was the missing engine, not the device: once one is ready
+  // the same phone can start, which is what the operator's retry depends on.
+  engines = { local: 'ready', codex: 'disabled' };
+  const retry = await methods['voice.session.start']({ engine: 'auto', thread }, ctx);
+  assert.equal(retry.voiceSessionId, 'vs-retry-1');
+  assert.equal(registry.liveForDevice('dev-1').voiceSessionId, 'vs-retry-1');
+});
