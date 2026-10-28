@@ -51,7 +51,7 @@ export function NewAgentSheet({
   visible: boolean;
   busy?: boolean;
   error?: string;
-  /** Present when editing an existing Bot; the parent keys this sheet by target so state resets. */
+  /** Present when editing an existing Bot; its values seed the form on open. */
   initial?: EditAgentInitial;
   /**
    * The gateway's model catalogue. When it is non-empty the pin is chosen from
@@ -94,16 +94,32 @@ export function NewAgentSheet({
   const hiddenModelCount = Math.max(0, matches.length - MODEL_ROW_CAP);
   const pinned = modelId.trim();
 
+  // Back to the form's start: create defaults, or — while `initial` still
+  // names a Bot — that Bot's current values, mirroring the useState
+  // initializers above so a reopening sheet looks freshly opened.
   const reset = () => {
-    setName('');
+    setName(initial?.name ?? '');
     setSoul('');
-    setDescription('');
-    setModelId('');
-    setProviderId('');
+    setDescription(initial?.description ?? '');
+    setModelId(initial?.modelId ?? '');
+    setProviderId(initial?.providerId ?? '');
     setInheritKeys(true);
     setModelQuery('');
     setRuntimeId(runtimes[0]?.id ?? '');
   };
+
+  // The sheet's parent keeps this component mounted while the Modal merely
+  // hides it, so a draft used to survive a close made without the dismiss
+  // handler — a successful create reopened prefilled with the last Bot, and a
+  // second Create would try to duplicate it. Reinitialising at each opening
+  // makes reopen behave like a fresh open, while a refusal (the sheet never
+  // hid, `visible` never moved) and unrelated catalogue/prop renders keep the
+  // operator's typed draft untouched.
+  const [prevVisible, setPrevVisible] = useState(visible);
+  if (visible !== prevVisible) {
+    setPrevVisible(visible);
+    if (visible) reset();
+  }
 
   return (
     <BaseSheet
