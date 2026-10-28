@@ -16,8 +16,10 @@ import {
   hexToLinear,
   lampLight,
   linearToOklch,
+  linearToSrgb,
   luminance,
   mixLights,
+  oklchToLinear,
   stageCeilingContrast,
   stageLightsFor,
   stageRoomKey,
@@ -47,6 +49,39 @@ const LAMPS: { name: string; color: Rgb; crest: string }[] = BOT_CREST_TONES.fla
 function hueDistance(a: number, b: number): number {
   const d = Math.abs(a - b) % 360;
   return d > 180 ? 360 - d : d;
+}
+
+/** The status hues, as the guard sees them. */
+const STATUSES = STATUS_HUES_OKLCH;
+
+/** Whether `hue` keeps the clearance from every status hue (float error allowed). */
+function clearsEveryBand(hue: number): boolean {
+  return STATUSES.every((status) => hueDistance(hue, status) >= STATUS_HUE_CLEARANCE - 1e-9);
+}
+
+/**
+ * The only hues that can be the nearest safe one: the band edges that clear
+ * every band. Here that is 208.3 (mint's top edge) and 336.9 (red's low edge);
+ * red's top edge 66.9 and amber's low edge 43.1 both sit inside another band.
+ */
+const FEASIBLE_EDGES = STATUSES.flatMap((status) => [
+  (status - STATUS_HUE_CLEARANCE + 360) % 360,
+  (status + STATUS_HUE_CLEARANCE) % 360,
+]).filter(clearsEveryBand);
+
+/** How near the closest hue that clears every band is to `hue`. */
+function nearestFeasibleDistance(hue: number): number {
+  return Math.min(...FEASIBLE_EDGES.map((edge) => hueDistance(hue, edge)));
+}
+
+/** The 8-bit sRGB crest hex for an OKLCH hue, so the light tests need no guessed palette. */
+function hexFromOklch(l: number, c: number, h: number): string {
+  const channels = oklchToLinear({ l, c, h }).map((value) =>
+    Math.round(linearToSrgb(Math.min(1, Math.max(0, value))) * 255)
+      .toString(16)
+      .padStart(2, '0'),
+  );
+  return `#${channels.join('').toUpperCase()}`;
 }
 
 describe('the stage the lamp lights', () => {
@@ -92,15 +127,70 @@ describe('lamp colours', () => {
     }
   });
 
-  test('a hue inside a status band is steered to the band’s nearest edge', () => {
-    const [red, amber, mint] = STATUS_HUES_OKLCH;
-    expect(guardLampHue(red + 2)).toBeCloseTo(red + STATUS_HUE_CLEARANCE, 6);
-    expect(guardLampHue(red - 2)).toBeCloseTo(red - STATUS_HUE_CLEARANCE + 360, 6);
-    expect(guardLampHue(amber)).toBeCloseTo(amber - STATUS_HUE_CLEARANCE, 6);
+  test('a hue inside a status band is steered to the nearest hue that clears every band', () => {
+    const [red, amber, mint] = STATUSES;
+    // Amber is 88.1; the old single-band steer landed on 43.1, 21.2 degrees
+    // from the red status hue. The nearest safe hue is red's low edge.
+    expect(guardLampHue(amber)).toBeCloseTo(336.9, 6);
+    expect(hueDistance(guardLampHue(amber), red)).toBeGreaterThanOrEqual(STATUS_HUE_CLEARANCE - 1e-6);
+    // 60 is inside amber's band; the old steer landed on 66.9, still inside it.
+    expect(guardLampHue(60)).toBeCloseTo(336.9, 6);
+    expect(hueDistance(guardLampHue(60), amber)).toBeGreaterThanOrEqual(STATUS_HUE_CLEARANCE - 1e-6);
+    // Red's own neighbours go to its low edge; mint's to its high edge.
+    expect(guardLampHue(red + 2)).toBeCloseTo(336.9, 6);
+    expect(guardLampHue(red - 2)).toBeCloseTo(336.9, 6);
     expect(guardLampHue(mint + 10)).toBeCloseTo(mint + STATUS_HUE_CLEARANCE, 6);
     // Violet is nowhere near a status hue and passes untouched.
     expect(guardLampHue(285)).toBe(285);
   });
+
+  test('band edges, the wraparound and the tie rule are stable', () => {
+    // The two feasible edges are safe hues themselves and pass through exactly.
+    expect(guardLampHue(336.9)).toBe(336.9);
+    expect(guardLampHue(208.3)).toBe(208.3);
+    // Inside a band on either side of zero, the same edge wins.
+    expect(guardLampHue(359)).toBeCloseTo(336.9, 6);
+    expect(guardLampHue(0)).toBeCloseTo(336.9, 6);
+    expect(guardLampHue(-5)).toBeCloseTo(336.9, 6);
+    expect(guardLampHue(400)).toBeCloseTo(336.9, 6);
+    // 92.6 sits 115.7 degrees from both feasible edges; the smaller angle wins.
+    expect(guardLampHue(92.6)).toBeCloseTo(208.3, 6);
+    // Hues clear of every band keep their own hue, exactly.
+    for (const safe of [220, 250, 285, 310, 330]) expect(guardLampHue(safe)).toBe(safe);
+  });
+
+  test('a whole-degree-pair grid always lands on the nearest hue that clears every band', () => {
+    for (let hue = 0; hue <= 360; hue += 0.5) {
+      const guarded = guardLampHue(hue);
+      expect(Number.isFinite(guarded)).toBe(true);
+      expect(guarded).toBeGreaterThanOrEqual(0);
+      expect(guarded).toBeLessThan(360);
+      // The real invariant: every band, not merely the one that matched first.
+      for (const status of STATUSES) {
+        expect(hueDistance(guarded, status)).toBeGreaterThanOrEqual(STATUS_HUE_CLEARANCE - 1e-6);
+      }
+      if (clearsEveryBand(hue)) {
+        expect(guarded).toBe(hue);
+      } else {
+        expect(hueDistance(hue, guarded)).toBeCloseTo(nearestFeasibleDistance(hue), 6);
+      }
+    }
+  });
+
+  test.each([STATUSES[1], 60])(
+    'a crest at %s lights the stage in a hue that clears every status band',
+    (crestHue) => {
+      const crest = hexFromOklch(0.72, 0.08, crestHue);
+      // The crest really does sit inside a status band, so the guard has to act.
+      expect(hueDistance(linearToOklch(hexToLinear(crest)).h, STATUSES[1])).toBeLessThan(
+        STATUS_HUE_CLEARANCE,
+      );
+      const { h } = linearToOklch(lampLight(crest, LAMP_CORE_CHROMA, LAMP_CORE_FLOOR));
+      for (const status of STATUSES) {
+        expect(hueDistance(h, status)).toBeGreaterThanOrEqual(STATUS_HUE_CLEARANCE - 0.5);
+      }
+    },
+  );
 });
 
 describe('rooms', () => {

@@ -121,20 +121,56 @@ function hueDistance(a: number, b: number): number {
   return d > 180 ? 360 - d : d;
 }
 
+/** Float error in degrees tolerated when a hue sits exactly on a band edge. */
+const HUE_TOLERANCE = 1e-9;
+
+/** Whether `hue` keeps the full clearance from every status hue, not just the nearest one. */
+function clearsEveryStatusBand(hue: number): boolean {
+  return STATUS_HUES_OKLCH.every(
+    (status) => hueDistance(hue, status) >= STATUS_HUE_CLEARANCE - HUE_TOLERANCE,
+  );
+}
+
+/** `hue` folded into [0, 360). */
+function wrapHue(hue: number): number {
+  const wrapped = hue % 360;
+  return wrapped < 0 ? wrapped + 360 : wrapped;
+}
+
 /**
- * A crest hue made safe to light a room with: a hue inside a status guard band
- * is steered to the nearest edge of the band, so raspberry becomes a deep rose
- * rather than a crimson that reads as failure.
+ * A crest hue made safe to light a room with: a hue that comes within the
+ * clearance of any status hue is moved to the nearest hue that clears *every*
+ * status band, so raspberry becomes a deep rose rather than a crimson that
+ * reads as failure.
+ *
+ * The status hues sit 66 and 75 degrees apart, less than the 90 degrees two
+ * bands span, so their bands overlap: one band's edge can lie inside another
+ * band. Only hues that clear all three are offered, which makes amber 88.1 a
+ * rose 336.9 rather than 43.1, still inside the failure guard. A hue outside
+ * every band is returned untouched. When two edges are equally near, the
+ * smaller angle wins — the rule never flips with iteration order.
  */
 export function guardLampHue(hue: number): number {
+  if (clearsEveryStatusBand(hue)) return hue;
+  // Every feasible hue meets a band edge, so the nearest one is one of those edges.
+  let best = hue;
+  let bestDistance = Infinity;
   for (const status of STATUS_HUES_OKLCH) {
-    if (hueDistance(hue, status) < STATUS_HUE_CLEARANCE) {
-      const below = (status - STATUS_HUE_CLEARANCE + 360) % 360;
-      const above = (status + STATUS_HUE_CLEARANCE) % 360;
-      return hueDistance(hue, below) <= hueDistance(hue, above) ? below : above;
+    for (const edge of [status - STATUS_HUE_CLEARANCE, status + STATUS_HUE_CLEARANCE]) {
+      const candidate = wrapHue(edge);
+      if (!clearsEveryStatusBand(candidate)) continue;
+      const distance = hueDistance(hue, candidate);
+      if (distance < bestDistance - HUE_TOLERANCE) {
+        best = candidate;
+        bestDistance = distance;
+      } else if (Math.abs(distance - bestDistance) <= HUE_TOLERANCE && candidate < best) {
+        best = candidate;
+        bestDistance = distance;
+      }
     }
   }
-  return hue;
+  // Only reachable if the bands left no feasible hue at all; these hues never do.
+  return best;
 }
 
 /** The lightness at which this hue and chroma carry exactly `target` luminance, or null if out of gamut. */
