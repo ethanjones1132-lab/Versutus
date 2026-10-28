@@ -36,6 +36,40 @@ describe('markdown parser', () => {
     expect(blocks[2]).toMatchObject({ type: 'code', language: 'ts', code: 'const x = 1;' });
   });
 
+  test('keeps the number an ordered list starts at, including zero', () => {
+    expect(parseMarkdown('3. third\n4. fourth')[0]).toEqual({
+      type: 'list',
+      ordered: true,
+      start: 3,
+      items: [[{ text: 'third' }], [{ text: 'fourth' }]],
+    });
+    expect(parseMarkdown('0. zero\n1. one')[0]).toMatchObject({
+      type: 'list',
+      ordered: true,
+      start: 0,
+    });
+  });
+
+  test('a list resumed after a paragraph keeps its own first number', () => {
+    const blocks = parseMarkdown('Setup notes.\n\n3. third\n4. fourth');
+    expect(blocks.map((block) => block.type)).toEqual(['paragraph', 'list']);
+    expect(blocks[1]).toMatchObject({ type: 'list', ordered: true, start: 3 });
+  });
+
+  test('a list resumed after a code block keeps its own first number', () => {
+    const blocks = parseMarkdown('1. one\n2. two\n\n```sh\nrun\n```\n\n3. three\n4. four');
+    expect(blocks.map((block) => block.type)).toEqual(['list', 'code', 'list']);
+    expect(blocks[0]).toMatchObject({ type: 'list', ordered: true, start: 1 });
+    expect(blocks[2]).toMatchObject({ type: 'list', ordered: true, start: 3 });
+  });
+
+  test('ordinary ordered lists start at 1 and unordered lists carry no start', () => {
+    expect(parseMarkdown('1. one\n2. two')[0]).toMatchObject({ ordered: true, start: 1 });
+    const unordered = parseMarkdown('- one\n- two')[0];
+    expect(unordered).toMatchObject({ type: 'list', ordered: false });
+    expect(unordered).not.toHaveProperty('start');
+  });
+
   test('parseMarkdown takes longer as the reply grows', () => {
     const short = SAMPLE_LINE.repeat(8);
     const long = SAMPLE_LINE.repeat(400);

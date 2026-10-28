@@ -92,7 +92,7 @@ function BlockView({ block, baseColor, compact, maxFontSizeMultiplier }: { block
             <View key={index} style={styles.listItem}>
               {block.ordered ? (
                 <RNText maxFontSizeMultiplier={maxFontSizeMultiplier} style={[compact ? styles.listMarkerCompact : styles.listMarker, { color: Palette.textTertiary }]}>
-                  {`${index + 1}.`}
+                  {`${(block.start ?? 1) + index}.`}
                 </RNText>
               ) : (
                 // A drawn dot, not a glyph: '•' in Instrument Sans sets as a

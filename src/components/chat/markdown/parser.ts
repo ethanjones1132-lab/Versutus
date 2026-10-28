@@ -19,7 +19,10 @@ export type MdBlock =
   | { type: 'heading'; level: 1 | 2 | 3 | 4; spans: MdInline[] }
   | { type: 'code'; language?: string; code: string }
   | { type: 'quote'; spans: MdInline[] }
-  | { type: 'list'; ordered: boolean; items: MdInline[][] }
+  // `start` is the number the model wrote on an ordered list's first item
+  // (0 is valid). It is absent on unordered lists and on list blocks built by
+  // hand before this field existed; the renderer treats absent as 1.
+  | { type: 'list'; ordered: boolean; start?: number; items: MdInline[][] }
   | { type: 'hr' };
 
 const LIST_ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
@@ -224,6 +227,9 @@ export function parseMarkdown(text: string): MdBlock[] {
     if (listItem) {
       flushParagraph();
       const ordered = /^\d/.test(listItem[2]);
+      // Keep the first written marker, so a list resumed after a paragraph or
+      // code block ("... 3. 4.") still displays the numbers the model wrote.
+      const start = ordered ? parseInt(listItem[2], 10) : undefined;
       const items: MdInline[][] = [];
       while (i < lines.length) {
         const match = lines[i].match(LIST_ITEM);
@@ -231,7 +237,11 @@ export function parseMarkdown(text: string): MdBlock[] {
         items.push(parseInline(match[3]));
         i += 1;
       }
-      blocks.push({ type: 'list', ordered, items });
+      blocks.push(
+        start === undefined
+          ? { type: 'list', ordered, items }
+          : { type: 'list', ordered, start, items },
+      );
       continue;
     }
 
