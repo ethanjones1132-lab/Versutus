@@ -357,6 +357,18 @@ function ChatSkeleton() {
  */
 const DISMISSIBLE_ERROR_TIMEOUT_MS = 12000;
 
+/**
+ * The identity a banner is mounted under. A replacement error is a new key, so
+ * the banner carrying the previous error (and the auto-dismiss timer it armed)
+ * is torn down and the new one starts its own full lifetime — instead of
+ * inheriting whatever was left of the countdown the old error had already run.
+ */
+function errorKeyFor(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) return `${error.name}:${error.message}`;
+  return String(error);
+}
+
 function LastErrorBanner({
   error,
   onSetup,
@@ -766,6 +778,22 @@ export function ChatScreen() {
   // Deferred a tick like every other producer in this repo: writing state
   // straight from an effect body trips react-hooks/set-state-in-effect.
   const attachmentsThread = draftThread ? composerDraftKey(draftThread) : undefined;
+  // The thread the staged photos belong to, readable from an async continuation.
+  // Every attachment path waits on the OS (a permission prompt, the picker, a
+  // file read), and the surface can change while it waits — a Bot Chat from a
+  // quick reply or a deep link, a roster row, a gateway switch. A closure
+  // captures the thread the tap happened in; this ref names the thread the
+  // screen shows NOW, so a pick that resolves after the switch can be dropped
+  // instead of appending to (or clearing) the new thread's composer.
+  const attachmentsOwnerRef = useRef<string | undefined>(attachmentsThread);
+  useEffect(() => {
+    attachmentsOwnerRef.current = attachmentsThread;
+    return () => {
+      // Unmount ends every in-flight pick's claim: nothing may land on a
+      // composer that is gone, and nothing may clear a later mount's contents.
+      attachmentsOwnerRef.current = undefined;
+    };
+  }, [attachmentsThread]);
   useEffect(() => {
     const timer = setTimeout(() => {
       setAttachments((current) => (current.length === 0 ? current : []));
@@ -1367,7 +1395,13 @@ export function ChatScreen() {
 
   const handleAttach = useCallback(async () => {
     if (!canAttach) return;
+    // The thread this pick belongs to, captured before the first await. The
+    // ref is the authority after each boundary: a closure cannot see the
+    // switch that happened while the picker was up.
+    const thread = attachmentsThread;
+    const stillThisThread = () => attachmentsOwnerRef.current === thread;
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!stillThisThread()) return;
     if (!permission.granted) {
       // Two refusals, two fixes: a permission the platform will still re-ask
       // is another tap away, one it will not is a trip to Settings. Either
@@ -1392,17 +1426,23 @@ export function ChatScreen() {
       base64: true,
       allowsMultipleSelection: true,
     });
+    if (!stillThisThread()) return;
     if (result.canceled) return;
     const picked = chatAttachmentsFromPicker(result.assets, attachments.length, attachmentChars(attachments));
     // A picture this turn cannot carry is named here, not discovered at send.
     if (picked.refused > 0) setAttachNotice(attachmentRefusedCopy(picked.refused));
     setAttachments((current) => [...current, ...picked.attachments]);
-  }, [attachments, canAttach]);
+  }, [attachments, attachmentsThread, canAttach]);
 
   const handleTakePhoto = useCallback(async () => {
     if (!canAttach) return;
+    // Same ownership rule as the library pick: a capture that comes back after
+    // the operator has left the thread is dropped rather than staged there.
+    const thread = attachmentsThread;
+    const stillThisThread = () => attachmentsOwnerRef.current === thread;
     try {
       const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!stillThisThread()) return;
       if (!permission.granted) {
         setAttachNotice(
           permission.canAskAgain
@@ -1413,17 +1453,24 @@ export function ChatScreen() {
       }
       setAttachNotice(undefined);
       const result = await ImagePicker.launchCameraAsync({ quality: 0.5, base64: true });
+      if (!stillThisThread()) return;
       if (result.canceled || !result.assets) return;
       const picked = chatAttachmentsFromPicker(result.assets, attachments.length, attachmentChars(attachments));
       if (picked.refused > 0) setAttachNotice(attachmentRefusedCopy(picked.refused));
       setAttachments((current) => [...current, ...picked.attachments]);
     } catch {
+      // An old capture's failure says nothing about the thread on screen.
+      if (!stillThisThread()) return;
       setAttachNotice('The camera could not open. Check camera access and try again.');
     }
-  }, [attachments, canAttach]);
+  }, [attachments, attachmentsThread, canAttach]);
 
   const handleAttachFile = useCallback(async () => {
     if (!canAttachFile) return;
+    // The document path awaits the picker and then one read per file; every
+    // one of those boundaries can outlive the thread the tap happened in.
+    const thread = attachmentsThread;
+    const stillThisThread = () => attachmentsOwnerRef.current === thread;
     setAttachNotice(undefined);
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -1431,6 +1478,7 @@ export function ChatScreen() {
         multiple: true,
         copyToCacheDirectory: true,
       });
+      if (!stillThisThread()) return;
       if (result.canceled) return;
 
       const availableCount = Math.max(0, MAX_CHAT_ATTACHMENTS - attachments.length);
@@ -1440,6 +1488,7 @@ export function ChatScreen() {
       const readable: { uri: string; name: string; mimeType: string; base64: string }[] = [];
 
       for (const asset of result.assets.slice(0, availableCount)) {
+        if (!stillThisThread()) return;
         try {
           // Use picker metadata before reading the file into JS. When a picker
           // omits size, ask the copied cache file; an unknown size is refused
@@ -1447,6 +1496,7 @@ export function ChatScreen() {
           let size = asset.size;
           if (typeof size !== 'number' || !Number.isFinite(size) || size < 0) {
             const info = await FileSystem.getInfoAsync(asset.uri);
+            if (!stillThisThread()) return;
             size = info.exists && typeof info.size === 'number' ? info.size : undefined;
           }
           if (size === undefined) {
@@ -1459,6 +1509,7 @@ export function ChatScreen() {
             continue;
           }
           const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
+          if (!stillThisThread()) return;
           if (base64.length > remainingChars) {
             refused += 1;
             continue;
@@ -1480,9 +1531,10 @@ export function ChatScreen() {
       if (refused > 0) setAttachNotice(fileAttachmentRefusedCopy(refused));
       setAttachments((current) => [...current, ...picked.attachments]);
     } catch {
+      if (!stillThisThread()) return;
       setAttachNotice('The document picker could not open. Try again.');
     }
-  }, [attachments, canAttachFile]);
+  }, [attachments, attachmentsThread, canAttachFile]);
 
   const handleRemoveAttachment = useCallback((uri: string) => {
     setAttachments((current) => current.filter((attachment) => attachment.uri !== uri));
@@ -2245,6 +2297,13 @@ export function ChatScreen() {
     void gatewayRequest('sessions.list', { limit: THREAD_SPEND_GLANCE_LIMIT })
       .then(async (payload) => {
         const read = sessionSpendReadFromUnknown(payload);
+        // The screen may have left this thread while the narrow read was in
+        // flight. The wide read is 200 rows on a single-threaded Gate and its
+        // stamp spends the surface's throttle window — so a cancelled effect
+        // must do neither, or the thread now on screen is refused the read it is
+        // owed (SPEND-6). This is the SAME check `applyRead` makes, moved ahead
+        // of the work rather than only ahead of the paint.
+        if (cancelled) return;
         if (!read.ok || !threadSpendNeedsWideRead(read, currentSessionId)) {
           applyRead(read);
           return;
@@ -2772,6 +2831,14 @@ export function ChatScreen() {
 
       {lastError ? (
         <LastErrorBanner
+          // Each error is its own banner, and its own countdown. The 12 s
+          // dismissal belongs to the error that armed it: a replacement that
+          // arrives while this one is up used to inherit whatever was left of
+          // the previous timer and could vanish under a second later. Keying by
+          // the error remounts the banner, so the new one gets a full lifetime
+          // of its own — actionable errors arm no timer either way, so their
+          // control still stays on screen.
+          key={errorKeyFor(lastError)}
           error={lastError}
           onSetup={() => router.push('/gateway/setup' as Href)}
           onReconnect={() => void retryAutoConnect()}
