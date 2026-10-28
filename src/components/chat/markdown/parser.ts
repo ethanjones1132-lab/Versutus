@@ -31,6 +31,81 @@ const FENCE = /^\s*(```+|~~~+)\s*([\w+-]*)\s*$/;
 const HR = /^\s*([-*_])(?:\s*\1){2,}\s*$/;
 const QUOTE = /^>\s?(.*)$/;
 
+const WORD_CHAR = /\w/;
+const SPACE_CHAR = /\s/;
+
+function isWordChar(ch: string | undefined): boolean {
+  return ch !== undefined && WORD_CHAR.test(ch);
+}
+
+function isSpaceChar(ch: string | undefined): boolean {
+  return ch !== undefined && SPACE_CHAR.test(ch);
+}
+
+/**
+ * Is this `__` run one half of an identifier-like dunder (`__init__`,
+ * `__name__`, `foo__bar__`)? Prose bold hugs words too, so the character
+ * before the opener cannot tell them apart — `__init__.py` begins the text
+ * with no character before it. A run belongs to a dunder when an identifier
+ * joins it to the matching `__` run with no space or punctuation between.
+ */
+function isDunderHalf(text: string, at: number): boolean {
+  // Opening half: walk the identifier to the next `__`.
+  if (isWordChar(text[at + 2])) {
+    for (let j = at + 2; j < text.length; j += 1) {
+      if (text[j] === '_' && text[j + 1] === '_') return true;
+      if (isSpaceChar(text[j]) || !isWordChar(text[j])) break;
+    }
+  }
+  // Closing half: walk the identifier back to the previous `__`.
+  if (isWordChar(text[at - 1])) {
+    for (let j = at - 1; j >= 1; j -= 1) {
+      if (text[j] === '_' && text[j - 1] === '_') return true;
+      if (isSpaceChar(text[j]) || !isWordChar(text[j])) break;
+    }
+  }
+  return false;
+}
+
+/**
+ * Flanking rules for an emphasis opener: it may not be followed by whitespace
+ * (so `2 * 3 * 4` and a lone `*` keep their stars). `__` also may not open
+ * inside an identifier (`foo__bar`) or form a dunder (`__init__`). Plain `_`
+ * additionally needs a word boundary at the start, which keeps snake_case
+ * literal.
+ */
+function canOpenEmphasis(text: string, at: number, marker: string): boolean {
+  const next = marker.length === 2 ? text[at + 2] : text[at + 1];
+  if (next === undefined || isSpaceChar(next)) return false;
+  if (marker === '__') {
+    return !isWordChar(text[at - 1]) && !isDunderHalf(text, at);
+  }
+  if (marker === '_') {
+    return at === 0 || isSpaceChar(text[at - 1]);
+  }
+  return true;
+}
+
+/**
+ * First closer the flanking rules accept: it may not be preceded by
+ * whitespace, a `__` closer may not be a dunder half, and a lone `*`/`_`
+ * never closes on the first half of a `**`/`__` run, so `*a **b** c*` leaves
+ * the inner pair for the bold branch.
+ */
+function findCloser(text: string, from: number, marker: string): number {
+  for (let at = from; at <= text.length - marker.length; at += 1) {
+    if (!text.startsWith(marker, at)) continue;
+    if (marker.length === 1 && text[at + 1] === marker) {
+      at += 1;
+      continue;
+    }
+    if (isSpaceChar(text[at - 1])) continue;
+    if (marker === '__' && isDunderHalf(text, at)) continue;
+    return at;
+  }
+  return -1;
+}
+
 function mergeAdjacent(spans: MdInline[]): MdInline[] {
   const merged: MdInline[] = [];
   for (const span of spans) {
@@ -95,7 +170,7 @@ export function parseInline(text: string): MdInline[] {
     // Bold **text** / __text__ (may contain nested inline styles)
     if (text.startsWith('**', i) || text.startsWith('__', i)) {
       const marker = text.slice(i, i + 2);
-      const close = text.indexOf(marker, i + 2);
+      const close = canOpenEmphasis(text, i, marker) ? findCloser(text, i + 2, marker) : -1;
       if (close > i + 2) {
         pushPlain(i);
         const inner = parseInline(text.slice(i + 2, close)).map((span) => ({
@@ -121,20 +196,17 @@ export function parseInline(text: string): MdInline[] {
       }
     }
 
-    // Italic *text* / _text_ (underscore requires a word boundary start to
-    // avoid mangling snake_case)
+    // Italic *text* / _text_ (both obey the flanking rules above; plain `_`
+    // still needs a word boundary at the start to keep snake_case literal)
     if (text[i] === '*' || text[i] === '_') {
       const marker = text[i];
-      const boundaryOk = marker === '*' || i === 0 || /\s/.test(text[i - 1]);
-      if (boundaryOk) {
-        const close = text.indexOf(marker, i + 1);
-        if (close > i + 1) {
-          pushPlain(i);
-          spans.push({ text: text.slice(i + 1, close), italic: true });
-          i = close + 1;
-          plainStart = i;
-          continue;
-        }
+      const close = canOpenEmphasis(text, i, marker) ? findCloser(text, i + 1, marker) : -1;
+      if (close > i + 1) {
+        pushPlain(i);
+        spans.push({ text: text.slice(i + 1, close), italic: true });
+        i = close + 1;
+        plainStart = i;
+        continue;
       }
     }
 
