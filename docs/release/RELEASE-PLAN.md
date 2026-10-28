@@ -1,6 +1,6 @@
 # Release Plan — Versutus (VS-003)
 
-Last updated: 2026-10-16 · App version 1.0.0 · Expo SDK 57 · branch in use for this work
+Last updated: 2026-10-27 · App version 1.0.0 · Expo SDK 57 · branch in use for this work
 
 This is the operator runbook for taking the current tree to **Play open testing** and a **GitHub release**. It is documentation only: it does not change app code, config, CI, secrets, or tests. Every action on a store or console (Play Console, EAS, GitHub Releases, APNs/FCM credential consoles) is owned by **Ethan** personally; engineering steps that touch only the repo may be prepared by any agent, but the release decision and publish click remain Ethan's.
 
@@ -74,11 +74,40 @@ All entries in this section are Play Console actions owned by Ethan.
 
 | Step | Owner | Action |
 |---|---|---|
-| 6.1 Create and push the tag `v1.0.0` on the release commit | Ethan | `git tag v1.0.0 <commit> && git push origin v1.0.0` |
-| 6.2 Draft release notes from shipped scope: client for AI agent gateways, voice (push-to-talk + hands-free call), true push via Gate relay, widgets, deep links. Pull from `README.md` and the ADR list | Ethan / Engineering | no secrets, no private gateway hosts |
+| 6.1 Draft and commit the release notes with the step order under "Release notes" below, into `CHANGELOG.md` | Ethan / Engineering | no secrets, no private gateway hosts; verify the final release commit before tagging |
+| 6.2 Create and push the tag `v1.0.0` on that verified release commit | Ethan | `git tag v1.0.0 <commit> && git push origin v1.0.0` |
 | 6.3 Attach the Android artifact (`app-release.apk` or `.aab`) and its SHA-256 | Ethan | GitHub Releases UI or `gh release create v1.0.0 <asset> --title ... --notes-file ...` |
 | 6.4 Optional: attach a web export built with `npm run export:web` (served via `npm run serve:web`) | Ethan / Engineering | web build is static output; document that the web client still requires a reachable gateway |
 | 6.5 Mark the release as pre-release if any physical-device acceptance item in `FUTURE-ITEMS.md` is still open (widget placement, hands-free call three-turn soak) | Ethan | see `FUTURE-ITEMS.md` §4 and §Android widget/hands-free acceptance |
+
+### Release notes
+
+The notes live in `CHANGELOG.md` at the repo root. `docs/release/RELEASE-NOTES.md` only
+points there. A GitHub release body is a copy of the `CHANGELOG.md` section for the tag,
+never a second source.
+
+Step order:
+
+1. **Collect** the merged commits since the previous release tag:
+   `git log --oneline <last-tag>..HEAD`. Before the first release tag there is no `<last-tag>`, so
+   read the tail of `git log --oneline` and keep the list short.
+2. **Group** what a user can actually see: `Added` (something they can now do), `Changed`
+   (behaviour that now differs), `Fixed` (a defect they could hit). Drop test-only, CI,
+   coverage and refactor commits — the person installing the app cannot observe them.
+3. **Rewrite** each entry in user language: what they see, not the commit subject. No
+   dates, version numbers, install counts or download counts the repository cannot prove.
+4. **Write** the grouped entries into `CHANGELOG.md` under the version from
+   `package.json`, leaving `## [Unreleased]` at the top for work merged after the tag.
+   Commit the notes, then run the original verification on that final release commit
+   before Ethan creates its tag (step 6.2), so the tagged source contains the notes.
+5. **Attach** the same text to the GitHub release when the tag exists, as the release body
+   (step 6.3: `gh release create v1.0.0 <asset> --notes-file <file>` copies the tagged
+   `CHANGELOG.md` section; the GitHub UI accepts the same text pasted in).
+
+For `v1.0.0` the starting scope is the shipped surface: client for AI agent gateways,
+voice (push-to-talk + hands-free call), true push via the Gate relay, widgets, deep links
+(`README.md`, ADR list). The `1.0.0` section of `CHANGELOG.md` already carries the last
+landed commits.
 
 ## 7. Verification evidence to save with the release (Ethan)
 
