@@ -89,14 +89,43 @@ export function setApprovalPolicy(
   return next;
 }
 
-export async function loadApprovalPolicies(): Promise<ApprovalPolicies> {
+/**
+ * The read that can refuse, for the one writer. A storage throw, unparsable
+ * JSON, or a value that is not a policy map at all answers `{ ok: false }`, so
+ * the toggle can tell "unreadable" from "no opt-ins" before it overwrites the
+ * map. A missing key is `{ ok: true, policies: {} }` — genuinely empty, safe
+ * to save over.
+ */
+export type ApprovalPoliciesRead = { ok: true; policies: ApprovalPolicies } | { ok: false };
+
+export async function readApprovalPoliciesStrict(): Promise<ApprovalPoliciesRead> {
+  let raw: string | null;
   try {
-    const raw = await keyValueStorage.getItem(APPROVAL_POLICIES_STORAGE_KEY);
-    if (!raw) return {};
-    return approvalPoliciesFromUnknown(JSON.parse(raw) as unknown);
+    raw = await keyValueStorage.getItem(APPROVAL_POLICIES_STORAGE_KEY);
   } catch {
-    return {};
+    return { ok: false };
   }
+  if (raw === null) return { ok: true, policies: {} };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return { ok: false };
+  }
+  // Valid JSON that is not a map (or is an array) may still be the operator's
+  // other Bot entries in a shape we cannot read; rewriting it would drop them.
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false };
+  return { ok: true, policies: approvalPoliciesFromUnknown(parsed) };
+}
+
+/**
+ * The lenient read every decision path uses: an unreadable policy store looks
+ * exactly like no opt-ins, which fails closed to "ask". The writer must not
+ * read this way — it would save over the entries it could not read.
+ */
+export async function loadApprovalPolicies(): Promise<ApprovalPolicies> {
+  const read = await readApprovalPoliciesStrict();
+  return read.ok ? read.policies : {};
 }
 
 export async function saveApprovalPolicies(policies: ApprovalPolicies): Promise<boolean> {

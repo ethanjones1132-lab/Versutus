@@ -9,6 +9,7 @@ import {
   approvalPolicyCopy,
   approvalPolicyKey,
   loadApprovalPolicies,
+  readApprovalPoliciesStrict,
   saveApprovalPolicies,
   setApprovalPolicy,
 } from '@/lib/gateway/approval-policy';
@@ -41,14 +42,27 @@ export function BotApprovalPolicyRow({ botId }: { botId: string }) {
 
   const toggle = async (next: boolean) => {
     if (!activeGateway || saving) return;
+    const key = approvalPolicyKey(activeGateway.id, botId);
+    // Where the switch was before this attempt: the last position we knew. It is
+    // off when nothing was loaded, which is where an unreadable store returns it.
+    const lastKnown = enabled;
     setSaving(true);
     setEnabled(next);
     try {
-      const policies = await loadApprovalPolicies();
-      const ok = await saveApprovalPolicies(setApprovalPolicy(policies, activeGateway.id, botId, next));
+      const stored = await readApprovalPoliciesStrict();
+      if (!stored.ok) {
+        // An unreadable store is NOT an empty one. Saving here would write a map
+        // holding only this Bot's key, erasing every other Bot's opt-in, so the
+        // switch goes back without a write.
+        setEnabled(lastKnown);
+        return;
+      }
+      const ok = await saveApprovalPolicies(
+        setApprovalPolicy(stored.policies, activeGateway.id, botId, next),
+      );
       if (!ok) {
-        const stored = await loadApprovalPolicies();
-        setEnabled(stored[approvalPolicyKey(activeGateway.id, botId)]?.autoApproveRead === true);
+        const after = await readApprovalPoliciesStrict();
+        setEnabled(after.ok ? after.policies[key]?.autoApproveRead === true : lastKnown);
       }
     } finally {
       setSaving(false);
