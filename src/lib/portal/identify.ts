@@ -4,7 +4,7 @@
 //   2. Open Gateway Manifest (authoritative, custom gates)
 //   3. Hermes fingerprint (/health + /v1/capabilities)
 //   4. OpenClaw fingerprint (bounded WS probe expecting connect.challenge)
-//   5. unknown (HTTP health OK, nothing else matches)
+//   5. unknown (nothing else matched; record whether HTTP answered at all)
 // See docs/portal-architecture.md §3.
 
 import { httpToWsBase } from '@/lib/gateway/url';
@@ -20,6 +20,15 @@ import {
   type GatewayManifest,
   type GatewayManifestProvider,
 } from '@/lib/portal/manifest';
+
+/**
+ * Whether the address produced an HTTP answer at all. `answered` means a
+ * response came back — any status, refusals included — so whatever else is
+ * wrong is not the path. `no-answer` means the fetch never got one: refused,
+ * timed out, aborted. Only set on the `unknown` identity, which is the one
+ * verdict that has nothing but this read to go on.
+ */
+export type GatewayReachability = 'answered' | 'no-answer';
 
 export type GatewayIdentity = {
   kind: GatewayKind;
@@ -37,6 +46,8 @@ export type GatewayIdentity = {
     grantPath?: string;
   };
   transportHint?: 'http' | 'ws';
+  /** Unknown only: did anything at this address answer HTTP at all? */
+  reachability?: GatewayReachability;
   capabilities?: string[];
   /** Providers this gate advertises behind one manifest — see manifest.ts. */
   providers?: GatewayManifestProvider[];
@@ -146,15 +157,19 @@ export async function identifyGateway(options: IdentifyGatewayOptions): Promise<
   ).catch(() => null);
   if (openclaw) return openclaw;
 
-  // 5. Unknown — but record whether HTTP answers at all.
-  const httpAlive = await withHostLookupRetry(baseUrl, alternateIpv4, (candidate) =>
+  // 5. Unknown — but record whether HTTP answers at all. A server that refuses
+  // /health (401/403/404/500) did answer on this address: that is a credential
+  // question. An address where nothing answered is a dead path, and the caller
+  // must not be able to confuse the two.
+  const reachability = await withHostLookupRetry(baseUrl, alternateIpv4, (candidate) =>
     probeHttpAlive(candidate, Math.min(3000, remaining())),
-  ).catch(() => false);
+  ).catch((): GatewayReachability => 'no-answer');
   return {
     kind: 'unknown',
     kindLabel: 'Unknown gateway',
     auth: { schemes: [], requiresToken: true, grantPath: undefined },
-    transportHint: httpAlive ? 'http' : undefined,
+    reachability,
+    transportHint: reachability === 'answered' ? 'http' : undefined,
     source: 'unknown',
     identifiedAt: Date.now(),
   };
@@ -315,15 +330,17 @@ async function probeOpenClaw(baseUrl: string, timeoutMs: number): Promise<Gatewa
   });
 }
 
-async function probeHttpAlive(baseUrl: string, timeoutMs: number): Promise<boolean> {
+async function probeHttpAlive(baseUrl: string, timeoutMs: number): Promise<GatewayReachability> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/health`, { signal: controller.signal });
-    return response.ok;
+    // Any response at all is an answer — 401/403/404/500 included. Only the
+    // absence of one (a throw, the timeout, an abort) means nothing answered.
+    await fetch(`${baseUrl.replace(/\/+$/, '')}/health`, { signal: controller.signal });
+    return 'answered';
   } catch (error) {
     if (isHostLookupFailure(error)) throw error;
-    return false;
+    return 'no-answer';
   } finally {
     clearTimeout(timer);
   }

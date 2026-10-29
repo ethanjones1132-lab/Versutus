@@ -113,6 +113,16 @@ export default function AddGatewayScreen() {
             setSaving(false);
             return;
           }
+        } else if (identity.kind === 'unknown' && identity.reachability === 'no-answer') {
+          // Nothing answered at that address. That is a failed attempt, not a
+          // credential question: there is no gateway here to ask for a token,
+          // so file it like the unreachable access result and never open the
+          // token field for it.
+          setSaveError(
+            `Nothing answered at ${normalizedUrl} — the gateway is not reachable there. Check the address and that the gateway is running.`,
+          );
+          setSaving(false);
+          return;
         } else if (identity.auth.requiresToken && !token.trim()) {
           setAccessNote('This gateway requires an access token — paste it below to connect.');
           setShowAdvanced(true);
