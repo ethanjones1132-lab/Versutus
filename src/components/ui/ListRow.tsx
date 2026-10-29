@@ -1,4 +1,10 @@
-import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import {
+  StyleSheet,
+  View,
+  type GestureResponderEvent,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
@@ -25,7 +31,13 @@ export type ListRowProps = {
   /** Fully custom leading element (e.g. a generated avatar). Overrides icon/statusColor when set. */
   leading?: React.ReactNode;
   trailing?: React.ReactNode;
-  onPress?: () => void;
+  /**
+   * The tap. It receives the press event because a row is also a `Link asChild`
+   * target: expo-router's injected handler reads the click (`button`,
+   * `defaultPrevented`, `currentTarget`) on web before it navigates, so it must
+   * be handed one. Callers that ignore it are unchanged.
+   */
+  onPress?: (event: GestureResponderEvent) => void;
   /**
    * Long-press action, independent of onPress — this is how a row can carry
    * a secondary surface (e.g. a Bot detail sheet) while the tap keeps its
@@ -79,9 +91,15 @@ export function ListRow({
   const showChevron = chevron ?? !!onPress;
   const interactive = !!onPress || !!onLongPress;
 
-  const handlePress = async () => {
-    await haptics.selection();
-    onPress?.();
+  const handlePress = async (event: GestureResponderEvent) => {
+    // The haptic is started here and awaited once the caller has run: a press
+    // event is only live while its gesture is being dispatched. On web the
+    // `Link asChild` handler reads `button`/`currentTarget` and calls
+    // `preventDefault()`, none of which survive an `await` — and this row used
+    // to call `onPress` with no event at all, so such a row navigated nowhere.
+    const haptic = haptics.selection();
+    onPress?.(event);
+    await haptic;
   };
 
   const handleLongPress = async () => {
