@@ -269,7 +269,7 @@ test('a second read answers from the Gate\'s own copy while Hermes is taking 5 s
     assert.equal(hermes.outstanding(), true, 'the warm list answered while the backend read was still open');
 
     // Two screens opening on a stale copy must cost ONE background read.
-    const third = await listSessions(gate, '&limit=20');
+    await listSessions(gate, '&limit=20');
     assert.equal(hermes.outstanding(), true, 'the second warm list answered while the backend read was still open');
     assert.equal(hermes.reads().length, 2, 'one live read plus one refill, not one per screen');
 
