@@ -100,6 +100,7 @@ function Studio({ botId, name, onClose }: { botId: string; name?: string; onClos
   }));
   const [reaction, setReaction] = useState(0);
   const [dragging, setDragging] = useState(false);
+  const [notSaved, setNotSaved] = useState(false);
   const formRail = useRef<ScrollView>(null);
   const faceRail = useRef<ScrollView>(null);
   const railsPlaced = useRef(false);
@@ -140,7 +141,13 @@ function Studio({ botId, name, onClose }: { botId: string; name?: string; onClos
     setDraft((d) => ({ ...d, tone, ...huesOfTone(tone) }));
   };
   const keep = async () => {
-    await saveBotLook(botId, lookChoiceFor(look, natural));
+    setNotSaved(false);
+    const saved = await saveBotLook(botId, lookChoiceFor(look, natural));
+    if (!saved) {
+      // The write was refused: stay open and say so rather than claim success.
+      setNotSaved(true);
+      return;
+    }
     void haptics.success();
     onClose();
   };
@@ -248,6 +255,12 @@ function Studio({ botId, name, onClose }: { botId: string; name?: string; onClos
           </RailTile>
         ))}
       </ScrollView>
+
+      {notSaved ? (
+        <Text variant="caption" color="statusDisconnected" style={styles.notSaved}>
+          This look was not saved. Please try again.
+        </Text>
+      ) : null}
 
       <View style={styles.actions}>
         <Button
@@ -379,6 +392,10 @@ const styles = StyleSheet.create({
     width: 18,
     height: 2,
     borderRadius: 1,
+  },
+  notSaved: {
+    marginTop: Spacing.three,
+    paddingHorizontal: Spacing.one,
   },
   actions: {
     flexDirection: 'row',

@@ -78,16 +78,25 @@ export function ensureBotLooksLoaded(): Promise<void> {
 
 /**
  * Keep a Bot's look, or forget it (null) so the Bot wears its natural look
- * again. The change is drawn at once and written behind.
+ * again. The change is drawn at once and written behind; `true` means the
+ * device kept it, `false` means the write was refused — the look is still
+ * drawn for this run, but it will not survive a reload.
  */
-export async function saveBotLook(botId: string, choice: BotLookChoice | null): Promise<void> {
+export async function saveBotLook(botId: string, choice: BotLookChoice | null): Promise<boolean> {
   await ensureBotLooksLoaded();
   const next = new Map(crestLooksSnapshot());
   const clean = choice ? readLookChoice(choice) : undefined;
   if (clean) next.set(botId, clean);
   else next.delete(botId);
   registerCrestLooks(next);
-  await keyValueStorage.setItem(BOT_LOOKS_KEY, JSON.stringify(Object.fromEntries(next))).catch(() => undefined);
+  try {
+    await keyValueStorage.setItem(BOT_LOOKS_KEY, JSON.stringify(Object.fromEntries(next)));
+    return true;
+  } catch {
+    // best-effort: a refused write must never throw; the studio keeps the sheet
+    // open and says the look was not saved
+    return false;
+  }
 }
 
 /** Tests only: forget the shared first read. */
