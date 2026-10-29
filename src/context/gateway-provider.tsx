@@ -616,6 +616,11 @@ type GatewayContextValue = {
     previousFingerprint: string;
     observedFingerprint: string;
     gatewayName: string;
+    gatewayId: string;
+    /** Plain reason the last approval attempt did not persist. */
+    error?: string;
+    /** True while this prompt's approval write is in flight. */
+    pending?: boolean;
   } | null;
   approveTlsFingerprintChange: () => Promise<void>;
   rejectTlsFingerprintChange: () => void;
@@ -1023,6 +1028,38 @@ async function clearRetiredGatewayStores(ids: readonly string[]): Promise<void> 
   await Promise.allSettled(ids.map((id) => clearRecentBotShortcutsForGateway(id)));
 }
 
+/**
+ * The changed fingerprint awaiting the operator's decision. `gateway` is the
+ * saved profile the beacon disagreed with: approving rewrites its fingerprint
+ * and trust, so it is kept here rather than read back from a roster that may
+ * have moved on while the operator was looking at the hashes.
+ */
+type TlsFingerprintChange = {
+  gateway: GatewayProfile;
+  previousFingerprint: string;
+  observedFingerprint: string;
+  /** Plain reason the last approval attempt did not persist, shown on the sheet. */
+  error?: string;
+  /** True while this prompt's approval write is in flight. */
+  pending?: boolean;
+};
+
+/** The trust write never landed; the prompt keeps both answers on screen. */
+const TLS_FINGERPRINT_SAVE_FAILED =
+  'Could not save the new fingerprint. The gateway is still disconnected. Try again, or stay disconnected.';
+
+/** Persistence landed but the connection that follows was not proven. */
+const TLS_FINGERPRINT_SAVED_NOT_CONNECTED =
+  'The new fingerprint was saved, but the gateway did not connect. Check the gateway, then retry the connection.';
+
+/**
+ * A completion that no longer owns its prompt: the operator rejected it,
+ * started another attempt, or raised a newer change. Nothing about it may
+ * touch the prompt now on screen — not its error, not a clear, not a haptic.
+ */
+const TLS_FINGERPRINT_APPROVAL_SUPERSEDED =
+  'A newer fingerprint decision replaced this one.';
+
 export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [gateways, setGateways] = useState<GatewayProfile[]>([]);
   const [activeGateway, setActiveGateway] = useState<GatewayProfile | null>(null);
@@ -1381,23 +1418,35 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [pendingApprovalsState, setPendingApprovalsState] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [pendingApprovalsError, setPendingApprovalsError] = useState<string | null>(null);
   const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
-  const [tlsFingerprintChange, setTlsFingerprintChange] = useState<{
-    gateway: GatewayProfile;
-    previousFingerprint: string;
+  const [tlsFingerprintChange, setTlsFingerprintChange] = useState<TlsFingerprintChange | null>(null);
+  const tlsFingerprintChangeRef = useRef<TlsFingerprintChange | null>(null);
+  /**
+   * The approval write this provider currently owns, keyed by the gateway and
+   * the fingerprint the operator approved. Kept out of render state so a second
+   * tap joins the write already in flight instead of writing it again, and so a
+   * completion can tell whether it still owns the prompt it started from.
+   */
+  const tlsApprovalAttemptRef = useRef<{
+    gatewayId: string;
     observedFingerprint: string;
+    promise: Promise<void>;
   } | null>(null);
-  const tlsFingerprintChangeRef = useRef<{
-    gateway: GatewayProfile;
-    previousFingerprint: string;
-    observedFingerprint: string;
-  } | null>(null);
-  const updateTlsFingerprintChange = useCallback(
-    (next: { gateway: GatewayProfile; previousFingerprint: string; observedFingerprint: string } | null) => {
-      tlsFingerprintChangeRef.current = next;
-      setTlsFingerprintChange(next);
-    },
-    [],
-  );
+  const updateTlsFingerprintChange = useCallback((next: TlsFingerprintChange | null) => {
+    const current = tlsFingerprintChangeRef.current;
+    // A prompt for a different gateway or fingerprint replaces the previous
+    // decision: the in-flight write for the old one must not clear, revive or
+    // report on the new prompt when it lands.
+    if (
+      next &&
+      (!current ||
+        current.gateway.id !== next.gateway.id ||
+        current.observedFingerprint !== next.observedFingerprint)
+    ) {
+      tlsApprovalAttemptRef.current = null;
+    }
+    tlsFingerprintChangeRef.current = next;
+    setTlsFingerprintChange(next);
+  }, []);
   const [activityRuns, setActivityRuns] = useState<ActivityRun[]>([]);
   /**
    * The store actually answered a roster read. A swallowed getItem refusal
@@ -5829,7 +5878,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (!host) throw new Error('Enter your gateway address');
 
       // This explicit attempt must report its own TLS decision, not a change
-      // left over from a previous connection attempt.
+      // left over from a previous connection attempt — including a write that
+      // is still in flight for the old one.
+      tlsApprovalAttemptRef.current = null;
       updateTlsFingerprintChange(null);
       setProbeMessage('');
 
@@ -6196,23 +6247,114 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     void reloadHistory();
   }, [activeGateway, reloadHistory]);
 
-  const approveTlsFingerprintChange = useCallback(async () => {
-    if (!tlsFingerprintChange) return;
-    const { gateway, observedFingerprint } = tlsFingerprintChange;
-    const updated = {
+  const approveTlsFingerprintChange = useCallback(async (): Promise<void> => {
+    const prompt = tlsFingerprintChangeRef.current;
+    if (!prompt) return;
+    const { gateway, observedFingerprint } = prompt;
+
+    const inFlight = tlsApprovalAttemptRef.current;
+    if (
+      inFlight &&
+      inFlight.gatewayId === gateway.id &&
+      inFlight.observedFingerprint === observedFingerprint
+    ) {
+      // The same decision, not a second write: a double tap joins the attempt
+      // already persisting this fingerprint.
+      return inFlight.promise;
+    }
+
+    /**
+     * Whether this completion still speaks for the prompt it started from. The
+     * operator can reject, a newer change can replace it, or an explicit setup
+     * can dismiss it while the store write is outstanding; none of those may be
+     * cleared, given an error, or told the approval succeeded by this attempt.
+     */
+    const ownsPrompt = () => tlsApprovalAttemptRef.current === attempt;
+
+    const updated: GatewayProfile = {
       ...gateway,
       tlsFingerprint: observedFingerprint,
       tlsFingerprintTrusted: true,
       tlsFingerprintFirstSeenAt: Date.now(),
     };
-    updateTlsFingerprintChange(null);
-    setActiveGateway(updated);
-    const next = await upsertGateway(updated);
-    setGateways(next);
-    await attachClient(updated);
-  }, [tlsFingerprintChange, attachClient, updateTlsFingerprintChange]);
+
+    // The sheet stays open through the write and keeps both answers available;
+    // `pending` is what stops a second tap reaching a second write.
+    updateTlsFingerprintChange({ ...prompt, pending: true, error: undefined });
+
+    const attempt: {
+      gatewayId: string;
+      observedFingerprint: string;
+      promise: Promise<void>;
+    } = {
+      gatewayId: gateway.id,
+      observedFingerprint,
+      promise: Promise.resolve(),
+    };
+    tlsApprovalAttemptRef.current = attempt;
+
+    const run = (async () => {
+      let next: GatewayProfile[] = [];
+      try {
+        next = await upsertGateway(updated);
+      } catch (error) {
+        // The trust decision never landed. Keep the prompt — the only recovery
+        // UI — and name the failure plainly instead of dismissing it.
+        if (ownsPrompt()) {
+          const current = tlsFingerprintChangeRef.current;
+          if (current) {
+            updateTlsFingerprintChange({
+              ...current,
+              pending: false,
+              error: TLS_FINGERPRINT_SAVE_FAILED,
+            });
+          }
+        }
+        throw error;
+      }
+
+      if (!ownsPrompt()) throw new Error(TLS_FINGERPRINT_APPROVAL_SUPERSEDED);
+
+      // Persistence and connectivity are separate facts. Only the write is
+      // proven here; the connection is judged from the client's own status
+      // below, because a fulfilled attach can leave the gateway unreachable.
+      setGateways(next);
+      setActiveGateway(updated);
+      updateTlsFingerprintChange(null);
+
+      if (!ownsPrompt()) throw new Error(TLS_FINGERPRINT_APPROVAL_SUPERSEDED);
+
+      try {
+        await attachClient(updated);
+      } catch (error) {
+        if (!ownsPrompt()) throw new Error(TLS_FINGERPRINT_APPROVAL_SUPERSEDED);
+        const detail = error instanceof Error && error.message ? ` ${error.message}` : '';
+        setLastError(`${TLS_FINGERPRINT_SAVED_NOT_CONNECTED}${detail}`);
+        throw error;
+      }
+
+      if (!ownsPrompt()) throw new Error(TLS_FINGERPRINT_APPROVAL_SUPERSEDED);
+      // `attachClient` may return early (a superseded attach, a live client,
+      // a gateway left reconnecting). A fulfilled promise is not a connected
+      // gateway, so the status it left behind is the only proof there is.
+      if (statusRef.current !== 'connected') {
+        setLastError(TLS_FINGERPRINT_SAVED_NOT_CONNECTED);
+        throw new Error(TLS_FINGERPRINT_SAVED_NOT_CONNECTED);
+      }
+    })();
+
+    attempt.promise = run;
+    try {
+      await run;
+    } finally {
+      if (tlsApprovalAttemptRef.current === attempt) tlsApprovalAttemptRef.current = null;
+    }
+  }, [attachClient, updateTlsFingerprintChange]);
 
   const rejectTlsFingerprintChange = useCallback(() => {
+    // The operator answered the prompt. A write already in flight no longer
+    // owns this decision, and its completion must not re-open or report on it.
+    tlsApprovalAttemptRef.current = null;
     updateTlsFingerprintChange(null);
     disconnectGateway();
   }, [disconnectGateway, updateTlsFingerprintChange]);
@@ -7681,6 +7823,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             previousFingerprint: tlsFingerprintChange.previousFingerprint,
             observedFingerprint: tlsFingerprintChange.observedFingerprint,
             gatewayName: tlsFingerprintChange.gateway.name,
+            gatewayId: tlsFingerprintChange.gateway.id,
+            ...(tlsFingerprintChange.error ? { error: tlsFingerprintChange.error } : null),
+            ...(tlsFingerprintChange.pending ? { pending: true } : null),
           }
         : null,
       approveTlsFingerprintChange,

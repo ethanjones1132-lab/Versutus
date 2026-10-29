@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { BaseSheet, Button, Divider, Text } from '@/components/ui';
@@ -14,7 +14,16 @@ export type TlsFingerprintChangeSheetProps = {
   observedFingerprint: string;
   /** Label for the gateway being connected, when known. */
   gatewayLabel?: string;
-  onApprove: () => void;
+  gatewayId?: string;
+  /** Why the previous approval attempt did not persist, in plain words. */
+  error?: string;
+  /** An approval write for this prompt is already in flight. */
+  pending?: boolean;
+  /**
+   * Runs the approval. It must resolve only when the decision is persisted;
+   * a failure leaves this sheet open with `error`, so the operator can retry.
+   */
+  onApprove: () => void | Promise<void>;
   onReject: () => void;
 };
 
@@ -32,16 +41,60 @@ export function TlsFingerprintChangeSheet({
   previousFingerprint,
   observedFingerprint,
   gatewayLabel,
+  gatewayId,
+  error,
+  pending = false,
   onApprove,
   onReject,
 }: TlsFingerprintChangeSheetProps) {
   const tokens = useTokens();
+  const [approving, setApproving] = useState(false);
+  const promptKey = JSON.stringify([visible, gatewayId, previousFingerprint, observedFingerprint]);
+  const [previousPromptKey, setPreviousPromptKey] = useState(promptKey);
+  if (promptKey !== previousPromptKey) {
+    setPreviousPromptKey(promptKey);
+    if (visible) setApproving(false);
+  }
+  // State alone cannot stop a second tap in the same tick, before the busy
+  // render lands. The ref is the synchronous gate; the provider has its own
+  // attempt key as the durable one.
+  const approvingRef = useRef<object | null>(null);
+  const busy = pending || approving;
 
   useEffect(() => {
     if (visible) {
       void haptics.warning();
     }
   }, [visible]);
+
+  // A different prompt is a different decision: the previous attempt's busy
+  // state must not keep the new decision's Trust button disabled while the old
+  // write settles.
+  useEffect(() => {
+    if (!visible) return;
+    approvingRef.current = null;
+  }, [visible, gatewayId, previousFingerprint, observedFingerprint]);
+
+  const approve = async () => {
+    if (approvingRef.current || pending) return;
+    const attempt = {};
+    approvingRef.current = attempt;
+    setApproving(true);
+    try {
+      await onApprove();
+      // Only a persisted decision gets the success haptic. A refusal leaves
+      // the sheet open with its reason and the button ready to try again.
+      if (approvingRef.current === attempt) void haptics.success();
+    } catch {
+      // The provider owns the plain error on this prompt; a success signal
+      // here would contradict the failure it just reported.
+    } finally {
+      if (approvingRef.current === attempt) {
+        approvingRef.current = null;
+        setApproving(false);
+      }
+    }
+  };
 
   if (!visible) return null;
 
@@ -97,15 +150,24 @@ export function TlsFingerprintChangeSheet({
           fingerprint for future connections.
         </Text>
 
+        {error ? (
+          <Text variant="caption" color="statusDisconnected" selectable>
+            {error}
+          </Text>
+        ) : null}
+
         <View style={styles.actions}>
-          <Button label="Stay disconnected" variant="ghost" onPress={onReject} />
+          <Button label="Stay disconnected" variant="ghost" onPress={() => {
+            approvingRef.current = null;
+            setApproving(false);
+            onReject();
+          }} />
           <Button
             label="Trust new fingerprint"
             variant="secondary"
-            onPress={() => {
-              void haptics.success();
-              onApprove();
-            }}
+            disabled={busy}
+            busy={busy}
+            onPress={approve}
           />
         </View>
       </View>

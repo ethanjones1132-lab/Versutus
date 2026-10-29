@@ -18,7 +18,10 @@ export function TlsFingerprintGuard() {
       previousFingerprint={tlsFingerprintChange?.previousFingerprint ?? ''}
       observedFingerprint={tlsFingerprintChange?.observedFingerprint ?? ''}
       gatewayLabel={tlsFingerprintChange?.gatewayName}
-      onApprove={() => void approveTlsFingerprintChange()}
+      gatewayId={tlsFingerprintChange?.gatewayId}
+      error={tlsFingerprintChange?.error}
+      pending={tlsFingerprintChange?.pending}
+      onApprove={approveTlsFingerprintChange}
       onReject={rejectTlsFingerprintChange}
     />
   );
