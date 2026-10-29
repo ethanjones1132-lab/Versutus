@@ -1,6 +1,6 @@
 import { DrawerMenuButton } from '@/components/nav/drawer-menu-button';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -29,6 +29,7 @@ import {
   approvalAuditRecent,
   approvalAuditTallyCopy,
 } from '@/lib/gateway/approval-audit-view';
+import type { GatewayProfile } from '@/lib/gateway/types';
 
 /**
  * The scheduled-work view. Workflows slice 3b extracted the individual run
@@ -59,6 +60,22 @@ export default function ActivityScreen() {
   // A refused refresh read is named below the header instead of ending the
   // spinner as if the pull succeeded; cleared by the next success.
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  // A refused connect is its own failure, named by the gateway it was for. It
+  // used to be folded into `refreshError`, whose notice promises that a refresh
+  // will fix it — but a refresh only re-reads gateway state and never re-runs
+  // `connectGateway`, so Retry there could not recover the connection.
+  const [connectionFailure, setConnectionFailure] = useState<{
+    gateway: GatewayProfile;
+    message: string;
+  } | null>(null);
+  // Ordered connection attempts. A selection or a retry takes the next token,
+  // so a slow attempt that settles after a newer one can tell itself apart and
+  // neither overwrite nor clear the newer notice. `retryPending` is a ref for
+  // the same reason the dashboard's delete guard is: two Retry presses inside
+  // one frame both come off the same rendered closure, and setState has not
+  // landed yet, so the state alone cannot tell the second press from the first.
+  const connectionAttemptSequence = useRef(0);
+  const retryPending = useRef(false);
   // A pull-to-refresh re-reads the gateway reads above and signals the cron
   // section to re-list; bumping this signal reaches the section's re-list
   // without remounting the tab, and the section coalesces it with a read
@@ -145,6 +162,51 @@ export default function ActivityScreen() {
     setRefreshing(false);
   };
 
+  // Starting a new selection clears the notice from the one before it: the
+  // operator has moved to a gateway, and a connect that now answers must not
+  // leave a stale refusal behind. Retry keeps the notice up instead — it is
+  // repeating the same refused connect, and the card is what says so until the
+  // attempt answers. The returned token is what lets a late settle tell itself
+  // apart from a newer attempt. Called as the argument to `.catch`, so it runs
+  // when the attempt starts, not when it fails, and two attempts that are both
+  // in flight are ordered by it.
+  const beginConnectionAttempt = (gateway: GatewayProfile, supersedeNotice: boolean) => {
+    const sequence = (connectionAttemptSequence.current += 1);
+    if (supersedeNotice) setConnectionFailure(null);
+    return {
+      sequence,
+      onFailure: (caught: unknown) => {
+        if (sequence !== connectionAttemptSequence.current) return;
+        setConnectionFailure({
+          gateway,
+          message: caught instanceof Error ? caught.message : String(caught),
+        });
+      },
+    };
+  };
+
+  // Retry repeats the refused action itself: the same profile, connected
+  // again. It never pulls to refresh — that re-reads gateway state and cannot
+  // reconnect — and it clears only the connection notice on success, leaving
+  // the refresh notice to the read that owns it. A second refusal is caught
+  // and named again, so the card stays recoverable.
+  const retryConnection = async (failure: { gateway: GatewayProfile }) => {
+    if (retryPending.current) return;
+    retryPending.current = true;
+    const attempt = beginConnectionAttempt(failure.gateway, false);
+    try {
+      await connectGateway(failure.gateway);
+      // Only a completion that is still the newest attempt may clear the
+      // notice: a retry that answers after a newer selection failed must leave
+      // that newer refusal on screen.
+      if (attempt.sequence === connectionAttemptSequence.current) setConnectionFailure(null);
+    } catch (caught) {
+      attempt.onFailure(caught);
+    } finally {
+      retryPending.current = false;
+    }
+  };
+
   return (
     <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })} parallaxY={parallaxY}>
       <ScrollView
@@ -201,6 +263,18 @@ export default function ActivityScreen() {
               next="Retry the refresh."
               onRetry={() => void onRefresh()}
               onDismiss={() => setRefreshError(null)}
+            />
+          ) : null}
+
+          {/* A connect the Gate refused is not a read that went stale: it
+              names the gateway, and Retry repeats the connect. */}
+          {connectionFailure ? (
+            <ErrorCard
+              cause={connectionFailure.message}
+              affected={`Connection to ${connectionFailure.gateway.name}`}
+              next="Retry the connection."
+              onRetry={() => void retryConnection(connectionFailure)}
+              onDismiss={() => setConnectionFailure(null)}
             />
           ) : null}
 
@@ -285,12 +359,11 @@ export default function ActivityScreen() {
           onSelect={(gateway) => {
             // `connectGateway` rethrows an auth refusal by design and this action
             // is fire-and-forget, so without a handler a refused key was an
-            // unhandled rejection with nothing on screen. The refresh notice is
-            // the screen's one error line, and the provider has already written
-            // the same reason into `lastError`.
-            void connectGateway(gateway).catch((caught: unknown) => {
-              setRefreshError(caught instanceof Error ? caught.message : String(caught));
-            });
+            // unhandled rejection with nothing on screen. The refusal belongs to
+            // the connection, not to the refresh reads: its own notice names this
+            // gateway, and the attempt token drops a late settle from an older
+            // selection before it can overwrite or clear a newer one.
+            void connectGateway(gateway).catch(beginConnectionAttempt(gateway, true).onFailure);
           }}
         />
       </View>
