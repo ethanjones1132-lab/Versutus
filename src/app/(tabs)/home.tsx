@@ -48,7 +48,14 @@ export default function HomeScreen() {
     setRefreshing(true);
     const started = Date.now();
     try {
-      await Promise.all([refreshCapabilities(), refreshGateways(), reloadHistory()]);
+      // Sequentially, in the order Home is actually read: what the gateway can
+      // do, then the local roster, then the history the dashboard's digest is
+      // built from. Fanned out in one `Promise.all` these three went to a host
+      // the repo documents as serving one request at a time, so the spinner
+      // waited on a concurrent pile rather than on the work (VS-004).
+      await refreshCapabilities();
+      await refreshGateways();
+      await reloadHistory();
       setRefreshError(null);
     } catch (caught) {
       setRefreshError(caught instanceof Error ? caught.message : String(caught));
