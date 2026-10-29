@@ -106,6 +106,12 @@ function controllableBackend({ kind = 'hermes', bots = ['atlas'], listDelayMs = 
       held = { promise };
       return { release: () => { held = null; release(); } };
     },
+    /**
+     * True while a held read is still open. An answer taken while this is true
+     * did not wait on the backend: the copy answered it, and a path that asked
+     * the backend instead would still be parked on the hold.
+     */
+    outstanding() { return held !== null; },
     backend,
   };
 }
@@ -257,11 +263,14 @@ test('a second read answers from the Gate\'s own copy while Hermes is taking 5 s
     assert.equal(second.status, 200);
     assert.deepEqual(second.body.data.map((row) => row.id), ['ses_1', 'ses_2']);
     assert.equal(second.body.index.stale, true, 'and it says the copy is stale');
-    assert.ok(second.ms < 100, `a warm list must be instant, took ${second.ms}ms`);
+    // The live read behind the refill is still parked on the hold, so an answer
+    // that is already here came from the copy: had it waited on Hermes it would
+    // still be waiting, and this test would run out of time rather than pass.
+    assert.equal(hermes.outstanding(), true, 'the warm list answered while the backend read was still open');
 
     // Two screens opening on a stale copy must cost ONE background read.
     const third = await listSessions(gate, '&limit=20');
-    assert.ok(third.ms < 100, `a warm list must be instant, took ${third.ms}ms`);
+    assert.equal(hermes.outstanding(), true, 'the second warm list answered while the backend read was still open');
     assert.equal(hermes.reads().length, 2, 'one live read plus one refill, not one per screen');
 
     held.release();
@@ -713,23 +722,29 @@ test('an unknown Bot is refused once, on every conversation route', async () => 
 test('the tap validation is answered from the Gate\'s own copy, not a fresh catalogue read', async () => {
   const { gate, hermes, environmentId } = await makeGate({ listDelayMs: 150 });
   hermes.setRows([ROW('ses_1', { source: 'api_server' })]);
+  let held = null;
   try {
     // The sheet read that warmed the copy is the only read this Gate makes.
     assert.equal((await listSessions(gate, '&limit=20')).status, 200);
     assert.equal(hermes.reads().length, 1);
 
-    const started = Date.now();
+    // A catalogue read costs 150 ms plus whatever the hold adds, so the hold is
+    // the causal proof: a restore that asked the catalogue again would park on
+    // it and run past this test's own timeout, and a restore that answers at all
+    // answered from the copy.
+    held = hermes.hold();
     const restored = await rpc(gate, 'session.restore', { sessionId: 'ses_1', backendId: environmentId });
     assert.equal(restored.status, 200, JSON.stringify(restored.body));
     assert.equal(restored.body.result.id, 'ses_1');
     assert.equal(restored.body.result.source, 'api_server');
+    assert.equal(hermes.outstanding(), true, 'the tap answered while the catalogue read was still open');
     assert.equal(
       hermes.reads().length,
       1,
       `the tap must not read the catalogue again, got ${JSON.stringify(hermes.reads())}`,
     );
-    assert.ok(Date.now() - started < 100, `the copy answers in microseconds, took ${Date.now() - started}ms`);
   } finally {
+    held?.release();
     await gate.close();
   }
 });
