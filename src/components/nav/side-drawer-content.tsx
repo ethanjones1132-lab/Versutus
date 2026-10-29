@@ -180,6 +180,19 @@ function sameRoster(a: readonly PublicBot[], b: readonly PublicBot[]): boolean {
 }
 
 /**
+ * A roster belongs to the gateway it was read from, and so does the line that
+ * says it could not be refreshed. The drawer outlives every gateway switch —
+ * it is mounted beside every screen for the life of the app — so both carry
+ * their owner: rows remembered for A are never B's to paint or to open,
+ * however late A's read lands.
+ */
+type OwnedRoster = { gatewayId: string; bots: PublicBot[] };
+type OwnedTeamNote = { gatewayId: string; message: string; retryable: boolean };
+
+/** Nothing to draw while the displayed roster belongs to another gateway. */
+const NO_TEAM: readonly PublicBot[] = [];
+
+/**
  * Presence folded from the runs, KEPT as the same map whenever the answer did
  * not change. `teamPresence` builds a fresh map per call, so without this a run
  * event that moves no Bot between "working" and "needs you" would arrive as a
@@ -540,12 +553,13 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
   });
   const presence = useStablePresence(activityRunsForActiveGateway);
   const routeName = props.state.routes[props.state.index]?.name;
-  const [team, setTeam] = useState<PublicBot[]>([]);
+  const [roster, setRoster] = useState<OwnedRoster | null>(null);
   // The line under the team list: a refused read keeps the last roster and says
   // so instead of leaving an empty section, and a refused tap says which Bot
   // would not open. Only the read carries a retry, because the row itself is
-  // the retry for a tap.
-  const [teamNote, setTeamNote] = useState<{ message: string; retryable: boolean } | null>(null);
+  // the retry for a tap. It names the gateway it describes, so A's refusal or
+  // A's failed tap is never painted beside B's team.
+  const [teamNote, setTeamNote] = useState<OwnedTeamNote | null>(null);
   const [retryTick, setRetryTick] = useState(0);
   // When this drawer's last live read ran, and for which gateway — the ledger
   // `status` flips are throttled against.
@@ -553,8 +567,10 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
   // When the connection last left `connected`, so a real outage can be told
   // from a monitor self-heal that never really dropped.
   const offlineSinceAtRef = useRef<number | null>(null);
-  // `savedAt` of the copy currently painted, from the shared roster cache.
-  const cachedAtRef = useRef<number | null>(null);
+  // `savedAt` of the copy currently painted, and the gateway it was remembered
+  // for. A's fresh timestamp must not stand in for B's missing cache when the
+  // read throttle decides whether B is due.
+  const cachedAtRef = useRef<{ gatewayId: string; at: number } | null>(null);
   // Which gateway a LIVE read has already answered for. Both effects below
   // start in the same commit, so on a cold start (AsyncStorage opening its
   // SQLite DB) the `/v1/bots` answer can land first — and a remembered roster
@@ -565,6 +581,19 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
   // the error is the point of painting one at all.
   const liveAnsweredRef = useRef<string | null>(null);
   const gatewayId = activeGateway?.id ?? null;
+  // Presses already in flight read this once they resume. The open is checked
+  // again after it resolves, which is the gap where a switch can land.
+  const gatewayIdRef = useRef(gatewayId);
+  useEffect(() => {
+    gatewayIdRef.current = gatewayId;
+  }, [gatewayId]);
+
+  // The display boundary is gateway identity, decided during render rather
+  // than in an effect: switching to B (or to no gateway) drops A's rows and
+  // A's note in that very render, before any effect could run. A cached or
+  // live A completion still only updates A's owned state, which B never shows.
+  const team = roster !== null && roster.gatewayId === gatewayId ? roster.bots : NO_TEAM;
+  const visibleTeamNote = teamNote !== null && teamNote.gatewayId === gatewayId ? teamNote : null;
 
   // When the connection last left `connected`, stamped the first time it is
   // seen down. It is NOT cleared on the way back up: this effect is declared
@@ -581,14 +610,22 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
   // that read is refused.
   useEffect(() => {
     if (!gatewayId) return;
+    // A gateway change is a new arrival: the previous gateway's live answer
+    // says nothing about this one's remembered copy, so the guard below starts
+    // clean for the gateway now being painted.
+    liveAnsweredRef.current = null;
     let cancelled = false;
     void readCached<PublicBot[]>('roster', gatewayId, 'bots')
       .then((cached) => {
         if (cancelled || !cached) return;
         // Never over a live answer that already landed for this gateway.
         if (liveAnsweredRef.current === gatewayId) return;
-        cachedAtRef.current = cached.savedAt;
-        setTeam((painted) => (sameRoster(painted, cached.value) ? painted : cached.value));
+        cachedAtRef.current = { gatewayId, at: cached.savedAt };
+        setRoster((painted) =>
+          painted !== null && painted.gatewayId === gatewayId && sameRoster(painted.bots, cached.value)
+            ? painted
+            : { gatewayId, bots: cached.value },
+        );
       })
       .catch(() => undefined);
     return () => {
@@ -600,12 +637,13 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
     if (!gatewayId) return;
     const now = Date.now();
     const offlineSinceAt = offlineSinceAtRef.current;
+    const cachedAt = cachedAtRef.current;
     const due = drawerRosterReadDue({
       status,
       gatewayId,
       lastRead: rosterReadAtRef.current,
       offlineSinceAt,
-      cachedSavedAt: cachedAtRef.current,
+      cachedSavedAt: cachedAt !== null && cachedAt.gatewayId === gatewayId ? cachedAt.at : null,
       now,
     });
     // Judged once per arrival at `connected`: an outage stamp is about that
@@ -621,9 +659,13 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
         // An identical roster is still a fresh answer: it ages the cache below
         // and it clears the retry line, but it must not repaint rows that
         // already say exactly this.
-        setTeam((painted) => (sameRoster(painted, bots) ? painted : bots));
+        setRoster((painted) =>
+          painted !== null && painted.gatewayId === gatewayId && sameRoster(painted.bots, bots)
+            ? painted
+            : { gatewayId, bots },
+        );
         setTeamNote(null);
-        cachedAtRef.current = Date.now();
+        cachedAtRef.current = { gatewayId, at: Date.now() };
         void writeCached('roster', gatewayId, 'bots', bots).catch(() => undefined);
       })
       .catch(() => {
@@ -631,8 +673,9 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
         // The same rule the roster screen follows: a failed re-read keeps the
         // rows the operator is looking at and names itself beside them. The
         // reason stays on the provider's own status line; this line is the
-        // drawer admitting it is out of date.
-        setTeamNote({ message: "Couldn't refresh your team", retryable: true });
+        // drawer admitting it is out of date. Named for the gateway it is
+        // about: B's refusal must not surface beside A's team, or the reverse.
+        setTeamNote({ gatewayId, message: "Couldn't refresh your team", retryable: true });
       });
     return () => {
       cancelled = true;
@@ -667,19 +710,29 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
 
   const openTeammate = useCallback(
     async (bot: PublicBot) => {
-      const outcome = await openTeammateChat(bot, openBot, (botId) =>
-        requestSurface({ kind: 'bot', botId }),
-      );
+      // A press that began on A's row can reach here after the switch: the
+      // drawer moved on, so the row no longer exists and its Bot is not B's to
+      // open. Nothing is reported either — there is no B row to report about.
+      // Checked again after the open: the await is the gap where the operator
+      // can switch, and a success must not then surface A's Bot under B.
+      const pressedOn = gatewayId;
+      if (pressedOn === null || gatewayIdRef.current !== pressedOn) return;
+      const outcome = await openTeammateChat(bot, openBot, (botId) => {
+        if (gatewayIdRef.current !== pressedOn) return;
+        requestSurface({ kind: 'bot', botId });
+      });
+      if (gatewayIdRef.current !== pressedOn) return;
       if (!outcome.ok) {
         // The drawer stays open: a failed tap used to leave the operator on the
-        // previous Bot's chat with nothing said.
-        setTeamNote({ message: outcome.reason, retryable: false });
+        // previous Bot's chat with nothing said. Named for the gateway whose
+        // row was pressed, so a switch does not carry the complaint along.
+        setTeamNote({ gatewayId: pressedOn, message: outcome.reason, retryable: false });
         return;
       }
       propsRef.current.navigation.closeDrawer();
       router.push('/chat');
     },
-    [openBot, requestSurface, router],
+    [gatewayId, openBot, requestSurface, router],
   );
 
   // A fresh conversation with no Bot in between — the drawer's first answer
@@ -724,11 +777,11 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
         {/* The team block appears for the roster OR for the line that admits the
             roster could not be refreshed — a failed first read used to leave
             nothing at all on screen. */}
-        {routableTeam.length > 0 || teamNote ? (
+        {routableTeam.length > 0 || visibleTeamNote ? (
           <TeamSection
             team={routableTeam}
             presence={presence}
-            note={teamNote}
+            note={visibleTeamNote}
             onPressBot={openTeammate}
             onRetry={retryTeam}
           />
