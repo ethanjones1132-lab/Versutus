@@ -297,15 +297,30 @@ export function GatewayHomeDashboard() {
             </View>
           </View>
         </View>
-        {/* The readiness sentence gets the card's full width: beside the badge
-            column it was cut to "Ready for chat, slash …" on a phone. */}
+        {/* A live connection is not a promise that chat can run. The Gate
+            accepted this phone, but a turn still needs a model provider whose
+            credential is usable. The only provider readiness this screen can
+            see rides the manifest's `providers[]`, which may be a cached copy
+            and carries no timestamp — and the capability counts tally slash
+            commands when no provider is declared — so it cannot prove a model
+            is ready to answer right now. Say what is known (connected), name
+            that chat readiness is unknown, and point at the one route that
+            configures a provider. */}
         <Text variant="body" style={styles.onGlassSecondary}>
           {connected
-            ? runsSupported
-              ? 'Ready for chat, slash commands, and agentic runs.'
-              : 'Ready for chat and the commands this gateway offers.'
+            ? 'Connected to your gateway. Chat readiness is unknown — if a model provider needs setup, open Settings > Providers & gateways.'
             : 'Saved locally. Select a reachable gateway to activate it.'}
         </Text>
+        {connected ? (
+          <Link href="/gateway/setup" asChild>
+            <Button
+              label="Providers & gateways"
+              variant="secondary"
+              size="sm"
+              style={styles.providerAction}
+            />
+          </Link>
+        ) : null}
 
         {/* Full width: connection failures name a host and a reason, and the
             cramped status column truncated them to uselessness. */}
@@ -581,6 +596,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.two,
   },
   retryAction: {
+    alignSelf: 'flex-start',
+  },
+  providerAction: {
     alignSelf: 'flex-start',
   },
   approvalCard: {

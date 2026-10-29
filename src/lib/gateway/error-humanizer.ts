@@ -19,6 +19,29 @@ export type HumanizedError = {
   action: HumanizedErrorAction;
 };
 
+const MISSING_PROVIDER_CREDENTIAL_MESSAGE = 'provider has no credential to send';
+
+/** The Gate's machine-readable code for a refusal, when the transport kept it. */
+function errorCodeOf(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' && code.trim() ? code.trim() : undefined;
+}
+
+/**
+ * A turn the Gate refused before it reached the model vendor because the
+ * provider record has no credential (gate/core/providers/service.mjs). The
+ * typed code is the authority; the message is the fallback for transports that
+ * keep only text. Neither is this phone's gateway token and neither is a
+ * network fault, so both must be read before the auth/network heuristics.
+ */
+function isMissingProviderCredential(error: unknown, message: string): boolean {
+  return (
+    errorCodeOf(error) === 'missing_credentials'
+    || message.trim() === MISSING_PROVIDER_CREDENTIAL_MESSAGE
+  );
+}
+
 function describeChatRoutingRefusal(message: string): HumanizedError | undefined {
   const details = { cause: message, affected: 'chat routing', action: 'dismiss' as const };
   if (message.startsWith('This chat names no Bot, backend or model,')) {
@@ -86,12 +109,29 @@ export function humanizeGatewayError(
     };
   }
 
+  const message = error instanceof Error ? error.message : String(error);
+
+  // The Gate refused the turn because its provider record has no credential.
+  // It arrives as a 409 carrying `code: missing_credentials`; a transport that
+  // dropped the code still keeps the message. Saying "gateway error 409" (or,
+  // worse, reading 401/403 as this phone's key) sends the operator to replace a
+  // working gateway token instead of configuring the provider.
+  if (isMissingProviderCredential(error, message)) {
+    return {
+      title: 'Model provider needs configuration',
+      cause: 'The model provider has no credential, so the Gate had nothing to send. The gateway connection itself succeeded.',
+      affected: 'model provider',
+      next: 'Open Settings > Providers & gateways and add the provider key or sign in.',
+      action: 'setup',
+    };
+  }
+
   // A model provider refusing the Gate's own upstream call arrives as
   // "chat failed: <status>" (gate/core/providers/profiles/registry.mjs). It is
   // not this device's gateway token: reading it as one sent the operator to
   // replace a token that was working (2026-09-16).
   const providerRefusal = /^(?:local provider )?chat failed: (\d{3})$/.exec(
-    (error instanceof Error ? error.message : String(error)).trim(),
+    message.trim(),
   );
   if (providerRefusal) {
     return {
@@ -105,7 +145,6 @@ export function humanizeGatewayError(
 
   // Chat transports retain the Gate's message, but do not all retain its code.
   // Match its refusal templates before auth/network heuristics inspect model names.
-  const message = error instanceof Error ? error.message : String(error);
   const routingRefusal = describeChatRoutingRefusal(message);
   if (routingRefusal) return routingRefusal;
 
