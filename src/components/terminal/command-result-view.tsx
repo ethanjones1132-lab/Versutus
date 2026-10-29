@@ -8,9 +8,10 @@ import { describeCommandResult } from '@/lib/terminal/json-tree';
 
 import { JsonView } from './json-view';
 
-// Inline (preview) text results (list/help dumps) render inside a capped,
-// scrollable teaser so a long dump stays reachable on the phone; the sheet
-// renders the full, unbounded output.
+// Inline (preview) results render inside a capped viewport so a long result
+// stays reachable on the phone; the sheet renders the full, unbounded output.
+// Text scrolls in its own teaser ScrollView; JSON scrolls inside JsonView's
+// windowed FlatList, which this cap gives a real viewport.
 const RPC_RESULT_PREVIEW_MAX_HEIGHT = 240;
 
 /** Shared structured/plain render for a command log (inline card + sheet). */
@@ -37,6 +38,8 @@ export function CommandResultView({ log, preview = false }: { log: string; previ
     );
   }
 
+  const tree = <JsonView value={model.value} />;
+
   return (
     <View style={styles.json}>
       {model.signal.failed ? (
@@ -46,7 +49,11 @@ export function CommandResultView({ log, preview = false }: { log: string; previ
           </Text>
         </View>
       ) : null}
-      <JsonView value={model.value} />
+      {/* The inline card caps the tree so JsonView's FlatList owns a bounded
+          viewport and keeps its windowing; the sheet (preview false) leaves
+          the tree uncapped. The badge stays outside the cap so a failure is
+          always visible above the scrolling rows. */}
+      {preview ? <View style={styles.jsonPreview}>{tree}</View> : tree}
     </View>
   );
 }
@@ -54,6 +61,12 @@ export function CommandResultView({ log, preview = false }: { log: string; previ
 const styles = StyleSheet.create({
   json: {
     gap: Spacing.two,
+    flexShrink: 1,
+  },
+  // Only the inline card applies this; the cap is a maxHeight so a short tree
+  // still renders at its natural size while a large one gets a scroll viewport.
+  jsonPreview: {
+    maxHeight: RPC_RESULT_PREVIEW_MAX_HEIGHT,
     flexShrink: 1,
   },
   exitBadge: {
