@@ -72,7 +72,7 @@ describe('Every high-value action is ≤3 taps from the Chat root', () => {
 
   test('connect gateway is the not-connected Chat empty CTA', () => {
     const src = readChatScreen();
-    expect(src).toContain('onConnect={() => void retryAutoConnect()}');
+    expect(src).toContain('onConnect={() => retryAutoConnect()}');
   });
 
   test('Chat chrome carries its own settings entries — no Home detour', () => {

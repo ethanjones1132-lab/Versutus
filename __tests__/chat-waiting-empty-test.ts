@@ -66,7 +66,7 @@ describe('Bot Chat waiting-for-connection empty state', () => {
 
   test('the no-gateway ChatEmptyState still wires onConnect to retryAutoConnect', () => {
     const src = readChatScreen();
-    expect(src).toContain('onConnect={() => void retryAutoConnect()}');
+    expect(src).toContain('onConnect={() => retryAutoConnect()}');
   });
 
   test('the group-room empty state keeps its Back-to-the-roster action untouched', () => {

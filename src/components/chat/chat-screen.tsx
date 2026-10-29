@@ -2552,7 +2552,9 @@ export function ChatScreen() {
                 ? probeMessage || 'Connecting automatically…'
                 : 'Versutus will connect to your PC automatically. You can also tap below.'
           }
-          onConnect={() => void retryAutoConnect()}
+          onConnect={() => retryAutoConnect()}
+          attempting={connectionPhase === 'searching' || connectionPhase === 'connecting'}
+          onSetup={() => router.push('/onboarding')}
           onGoHome={() => router.replace('/home')}
           onSettings={() => router.push('/gateway/settings')}
         />
