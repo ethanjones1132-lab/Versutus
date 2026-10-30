@@ -123,11 +123,20 @@ export function useNotificationPreferences() {
   // gateway is dropped rather than sent through another's client, and a reply
   // still owed by the old gateway paints nothing on the new screen.
   const gatewayEpochRef = useRef(0);
+  // The gateway epoch a successful read or write has unlocked. `synced` on its
+  // own cannot say WHICH gateway it describes, and every callback here is
+  // stable across a switch, so the write entry points compare this against the
+  // live epoch: only the gateway whose row was actually read may be written.
+  const syncedEpochRef = useRef(-1);
   const liveRef = useRef(true);
 
   const isCustom = activeGateway?.kind === 'custom';
   const connected = status === 'connected' && isCustom;
   const activeGatewayId = activeGateway?.id ?? null;
+  // The gateway this hook is bound to right now. `load` is a stable callback,
+  // so a read it started cannot see the switch that happened after it left;
+  // comparing against this at settle time retires that read's answer.
+  const activeGatewayIdRef = useRef(activeGatewayId);
 
   /**
    * Read what the phone allows right now. A READ, never the request: this
@@ -170,6 +179,16 @@ export function useNotificationPreferences() {
     // Bumped in every branch, so a switch away from a gateway (which re-runs
     // this with `connected` false) retires the answer that gateway still owes.
     const seq = ++loadSeqRef.current;
+    const gatewayId = activeGatewayId;
+    const epoch = gatewayEpochRef.current;
+    // Nothing on screen is the active gateway's until its own read lands. The
+    // row, the rollback target and the unlock all belonged to whatever was read
+    // before — a previous gateway, or this one before a reconnect — so they are
+    // relinquished here rather than painted over somebody else's row.
+    confirmedRef.current = DEFAULT_PREFS;
+    setPrefs(DEFAULT_PREFS);
+    setSynced(false);
+    syncedEpochRef.current = -1;
     if (!connected) {
       // Nothing will be fetched, so no read is in flight — never spin.
       setLoading(false);
@@ -182,21 +201,31 @@ export function useNotificationPreferences() {
       const params = await pushDeviceParams();
       sentDeviceId = true;
       const raw = await gatewayRequest<Record<string, unknown>>('notifications.preferences.get', params);
-      // A newer load (a gateway change re-ran this) owns the screen now.
-      if (seq !== loadSeqRef.current) return;
+      // A newer load (a gateway change re-ran this) owns the screen now, and a
+      // read made for another gateway or a retired epoch unlocks nothing even
+      // if no later load has been issued yet.
+      if (seq !== loadSeqRef.current || gatewayId !== activeGatewayIdRef.current) return;
+      if (epoch !== gatewayEpochRef.current) return;
       const row = normalize(raw);
       confirmedRef.current = row;
       setPrefs(row);
       setSynced(true);
+      syncedEpochRef.current = epoch;
     } catch (err) {
-      if (seq !== loadSeqRef.current) return;
+      if (seq !== loadSeqRef.current || gatewayId !== activeGatewayIdRef.current) return;
+      if (epoch !== gatewayEpochRef.current) return;
+      // A refusal is not an answer about this gateway's row: the switches stay
+      // locked on the placeholder until a read lands.
+      confirmedRef.current = DEFAULT_PREFS;
+      setSynced(false);
+      syncedEpochRef.current = -1;
       // A refusal that arrived after the phone named itself is the Gate's own
       // verdict (unpaired), not the missing-identity copy.
       setError(describeGatewayError(err, { sentDeviceId }));
     } finally {
       if (seq === loadSeqRef.current) setLoading(false);
     }
-  }, [connected, gatewayRequest]);
+  }, [activeGatewayId, connected, gatewayRequest]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -219,9 +248,17 @@ export function useNotificationPreferences() {
 
   // A gateway switch re-keys every write. Anything still queued was computed
   // against the old gateway's row and must not be sent through the new client,
-  // and any reply the old gateway still owes must paint nothing here.
+  // and any reply the old gateway still owes must paint nothing here. The row
+  // on screen, the row a refusal rolls back to and the unlock belonged to the
+  // gateway being left, so all three are relinquished with it: until the new
+  // gateway answers, its switches are placeholders that stay locked.
   useEffect(() => {
     gatewayEpochRef.current += 1;
+    activeGatewayIdRef.current = activeGatewayId;
+    confirmedRef.current = DEFAULT_PREFS;
+    // Retire write ownership immediately; the scheduled load clears the UI
+    // row and synced state before starting the new gateway's read.
+    syncedEpochRef.current = -1;
     const stale = queueRef.current;
     queueRef.current = [];
     for (const write of stale) {
@@ -262,22 +299,30 @@ export function useNotificationPreferences() {
         try {
           const params = await pushDeviceParams();
           sentDeviceId = true;
-          const raw = await gatewayRequest<Record<string, unknown>>('notifications.preferences.set', {
-            ...(patch as Record<string, unknown>),
-            // The row a bootstrap-token phone owns is filed under its device id.
-            ...params,
-          });
-          const row = normalize(raw);
+          // Naming the phone is an await, and the operator can leave the
+          // gateway inside it. This patch was computed against the old row, so
+          // it is dropped before it leaves rather than sent through the new
+          // gateway's client — the same rule the queue applies, for the batch
+          // that had already been taken.
           if (sameGateway()) {
-            confirmedRef.current = row;
-            // Only the newest write's reply owns the screen. An older row predates
-            // a tap the operator has already made, so painting it would move a
-            // switch back under their finger.
-            if (newest()) setPrefs(row);
-            setSynced(true);
-            void readPermission();
+            const raw = await gatewayRequest<Record<string, unknown>>('notifications.preferences.set', {
+              ...(patch as Record<string, unknown>),
+              // The row a bootstrap-token phone owns is filed under its device id.
+              ...params,
+            });
+            const row = normalize(raw);
+            if (sameGateway()) {
+              confirmedRef.current = row;
+              // Only the newest write's reply owns the screen. An older row predates
+              // a tap the operator has already made, so painting it would move a
+              // switch back under their finger.
+              if (newest()) setPrefs(row);
+              setSynced(true);
+              syncedEpochRef.current = epoch;
+              void readPermission();
+            }
+            saved = true;
           }
-          saved = true;
         } catch (err) {
           if (sameGateway()) {
             setError(describeGatewayError(err, { sentDeviceId }));
@@ -287,6 +332,7 @@ export function useNotificationPreferences() {
             // settings are read.
             if (newest()) setPrefs(confirmedRef.current);
             setSynced(false);
+            syncedEpochRef.current = -1;
           }
         } finally {
           // One waiter's answer and one count back per write, so a coalesced
@@ -313,12 +359,18 @@ export function useNotificationPreferences() {
    */
   const setPatch = useCallback(
     (patch: Partial<NotificationPreferences>): Promise<boolean> => {
+      // This callback is stable across a gateway switch, so the caller may be a
+      // switch drawn from the gateway just left. Only a row this hook actually
+      // read (or wrote) for the active gateway may be patched: otherwise a tap
+      // computed from A's values would land on B's row before B was read.
+      if (syncedEpochRef.current !== gatewayEpochRef.current) return Promise.resolve(false);
+      const epoch = gatewayEpochRef.current;
       const seq = ++seqRef.current;
       setPrefs((current) => ({ ...current, ...patch }));
       setError(null);
       beginSave();
       return new Promise<boolean>((resolve) => {
-        queueRef.current.push({ patch, seq, settle: resolve, gatewayEpoch: gatewayEpochRef.current });
+        queueRef.current.push({ patch, seq, settle: resolve, gatewayEpoch: epoch });
         void flush();
       });
     },
@@ -338,8 +390,19 @@ export function useNotificationPreferences() {
    */
   const setEnabled = useCallback(
     async (on: boolean): Promise<boolean> => {
+      // Same ownership rule as `setPatch`, checked before the OS is asked: a
+      // stale toggle must not spend a permission prompt or a push registration
+      // on a row this gateway has not been read for.
+      if (syncedEpochRef.current !== gatewayEpochRef.current) return false;
+      const epoch = gatewayEpochRef.current;
+      const loadSeq = loadSeqRef.current;
+      const ownsRow = () => liveRef.current
+        && epoch === gatewayEpochRef.current
+        && loadSeq === loadSeqRef.current
+        && syncedEpochRef.current === epoch;
       if (on) {
         const current = await readPermission();
+        if (!ownsRow()) return false;
         if (current === 'denied') {
           setError('Notifications are off for Versutus in the system settings — allow them, then try again.');
           return false;
@@ -347,29 +410,34 @@ export function useNotificationPreferences() {
         if (current !== 'granted') {
           try {
             const result = await Notifications.requestPermissionsAsync();
+            if (!ownsRow()) return false;
             setPermission(permissionFrom(result));
             if (!result.granted) {
               setError('Notifications are off for Versutus in the system settings — allow them, then try again.');
               return false;
             }
           } catch {
+            if (!ownsRow()) return false;
             setError('The system permission request failed — try again.');
             return false;
           }
         }
-        await setPatch({ enabled: true });
+        const saved = await setPatch({ enabled: true });
+        if (!saved || !ownsRow()) return false;
         // The token may postdate the last connect (fresh permission): sync it now.
         try {
           await syncPushRegistration({
-            rpcRequest: (method, params) => gatewayRequest(method, params ?? {}),
+            rpcRequest: (method, params) => ownsRow()
+              ? gatewayRequest(method, params ?? {})
+              : Promise.reject(new Error('Notification gateway changed.')),
           });
         } catch {
           // Registration retries on the next connect; the toggle still stands.
         }
-        return true;
+        return ownsRow();
       }
-      await setPatch({ enabled: false });
-      return true;
+      const saved = await setPatch({ enabled: false });
+      return saved && ownsRow();
     },
     [gatewayRequest, readPermission, setPatch],
   );
