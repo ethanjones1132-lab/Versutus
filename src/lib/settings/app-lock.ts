@@ -6,7 +6,9 @@
 //
 // Two rules keep the lock from becoming a lockout:
 //   - a stored value that is not exactly `true` is off, so a half-written or
-//     older blob can never turn the lock on by itself;
+//     older blob can never turn the lock on by itself; a blob that does not
+//     even parse is a lost answer rather than an off one, and a device that
+//     can answer the prompt holds the cover for it (`appLockVerdictFromRaw`);
 //   - a device that cannot answer the biometric question — no hardware, no
 //     enrollment, or a platform without the module (web) — never locks. An
 //     enrollment removed after the flag was stored therefore UNLOCKS rather
@@ -95,6 +97,37 @@ export function heldRouteHref(pathname: string, query: HeldRouteQuery): string {
   return search ? `${pathname}?${search}` : pathname;
 }
 
+/** What a read of the stored opt-in settles on. */
+export type AppLockVerdict = 'on' | 'off' | 'unknown';
+
+/**
+ * Classify one raw read of the stored opt-in. Nothing stored is the one shape
+ * that plainly reads off — the lock is opt-in, and an absent blob was never a
+ * yes. A blob that parses hands the verdict to `appLockFromStored`, so an
+ * older or half-written-but-valid blob still cannot turn the lock on by
+ * itself. A blob that does not parse at all is `unknown`: the answer the
+ * switch once gave is LOST, not negative, and the caller decides — the device
+ * seam holds the cover for a lost answer on a device that can lift it.
+ */
+export function appLockVerdictFromRaw(raw: string | null): AppLockVerdict {
+  if (raw === null) return 'off';
+  try {
+    return appLockFromStored(JSON.parse(raw) as unknown) ? 'on' : 'off';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
+ * The stored opt-in VERDICT, for the caller who has to tell a lost answer
+ * apart from an absent flag. Same seam as `loadAppLock`: absent reads off by
+ * the opt-in rule, a read the store refuses rejects rather than reading as
+ * off, and a blob that does not parse reads unknown instead of off.
+ */
+export async function loadAppLockVerdict(): Promise<AppLockVerdict> {
+  return appLockVerdictFromRaw(await keyValueStorage.getItem(APP_LOCK_STORAGE_KEY));
+}
+
 /**
  * Read this device's stored opt-in. Absent and corrupt both read as off. A read
  * the store refuses THROWS rather than reading as off: a refused read is not an
@@ -102,13 +135,7 @@ export function heldRouteHref(pathname: string, query: HeldRouteQuery): string {
  * that can authenticate fails closed (see `deviceAppLockState`).
  */
 export async function loadAppLock(): Promise<boolean> {
-  const raw = await keyValueStorage.getItem(APP_LOCK_STORAGE_KEY);
-  if (raw === null) return false;
-  try {
-    return appLockFromStored(JSON.parse(raw) as unknown);
-  } catch {
-    return false;
-  }
+  return (await loadAppLockVerdict()) === 'on';
 }
 
 const listeners = new Set<() => void>();

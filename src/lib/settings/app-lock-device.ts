@@ -8,8 +8,9 @@ import * as LocalAuthentication from 'expo-local-authentication';
 
 import {
   appLockUnavailableReason,
-  loadAppLock,
+  loadAppLockVerdict,
   type AppLockUnavailableReason,
+  type AppLockVerdict,
 } from '@/lib/settings/app-lock';
 
 /**
@@ -24,22 +25,23 @@ export type AppLockState = {
 };
 
 /**
- * The stored opt-in read against what this device can actually do. A flag the
- * store refuses to give up is held as on when the device can answer the biometric
- * prompt: the operator unlocks with Face ID, a fingerprint or the passcode, so
- * that fails closed without sealing anyone out. A device that cannot answer
- * keeps the lock off, as it always has.
+ * The stored opt-in read against what this device can actually do. A verdict
+ * the storage read cannot establish — a blob the store refuses to give up, or
+ * a blob it hands back malformed — is held as on when the device can answer
+ * the biometric prompt: the operator unlocks with Face ID, a fingerprint or
+ * the passcode, so that fails closed without sealing anyone out. A device
+ * that cannot answer keeps the lock off, as it always has.
  */
 export async function deviceAppLockState(): Promise<AppLockState> {
-  let stored: boolean | null;
+  let verdict: AppLockVerdict;
   try {
-    stored = await loadAppLock();
+    verdict = await loadAppLockVerdict();
   } catch {
-    stored = null;
+    verdict = 'unknown';
   }
   const reason = await deviceAppLockUnavailableReason();
-  if (stored === null) return { enabled: reason === null, reason };
-  return { enabled: stored, reason };
+  if (verdict === 'unknown') return { enabled: reason === null, reason };
+  return { enabled: verdict === 'on', reason };
 }
 
 /**
