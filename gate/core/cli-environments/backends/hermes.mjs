@@ -147,6 +147,11 @@ export function createHermesBackend({
    * orders of magnitude worse. 30s clears normal slowness with headroom while
    * still catching the failure decisively — a bound that tripped on ordinary
    * load would trade a hang for a lie.
+   *
+   * The metadata writes below share this ceiling: they hit the same
+   * `state.db`, so a create or a delete in that state hangs exactly as a read
+   * does. Opening Bot Chat creates a session, and creating or deleting a
+   * Routine writes one, so each of those must fail honestly rather than wait.
    */
   const READ_TIMEOUT_MS = readTimeoutMs;
 
@@ -169,6 +174,41 @@ export function createHermesBackend({
       if (!aborted) throw error;
       const timeout = new Error(
         `hermes did not answer "${what}" within ${Math.round(timeoutMs / 1000)}s — the host is reachable but its state database is not answering queries`,
+      );
+      timeout.code = 'backend_timeout';
+      throw timeout;
+    }
+  }
+
+  /**
+   * A metadata write that fails honestly instead of hanging, using the same
+   * ceiling as a read.
+   *
+   * A write is not a read in one way that matters: once it was sent, the host
+   * may already have applied it. So a timeout aborts the request (including a
+   * response body that never finishes) and reports that the outcome is
+   * unknown — it never resends, because a second create would leave a duplicate
+   * session or Routine behind and a second delete would hide the first one's
+   * refusal. Every non-timeout failure is passed through untouched, refusals
+   * included, so a 409 still says what Hermes said.
+   *
+   * Deliberately scoped to the four metadata writes below. Chat, runs, job
+   * actions and Bot create/edit legitimately take longer and keep their own
+   * bounds; a timeout there would trade a hang for a lie.
+   */
+  async function writeCall(path, init, what) {
+    const signal = AbortSignal.timeout(READ_TIMEOUT_MS);
+    try {
+      return await call(path, { ...init, signal });
+    } catch (error) {
+      // `signal.aborted` catches one case the names alone do not: a refusal
+      // whose error body never finishes is swallowed by `call`'s
+      // `.catch(() => '')`, so it would otherwise surface as a bare HTTP
+      // status. Past the ceiling the write is a timeout whatever came back.
+      const aborted = signal.aborted || error?.name === 'TimeoutError' || error?.name === 'AbortError';
+      if (!aborted) throw error;
+      const timeout = new Error(
+        `hermes did not answer "${what}" within ${Math.round(READ_TIMEOUT_MS / 1000)}s — the host is reachable but its state database is not answering queries; the request was aborted and may or may not have been applied`,
       );
       timeout.code = 'backend_timeout';
       throw timeout;
@@ -257,7 +297,7 @@ export function createHermesBackend({
       if (title) payload.title = title;
       if (model?.modelId) payload.model = model.modelId;
       try {
-        const body = await call('/api/sessions', { method: 'POST', body: JSON.stringify(payload) });
+        const body = await writeCall('/api/sessions', { method: 'POST', body: JSON.stringify(payload) }, 'create a session');
         // Create answers `{object, session}` rather than the session directly.
         return toGatewaySession(body.session ?? body);
       } catch (error) {
@@ -274,7 +314,7 @@ export function createHermesBackend({
     },
 
     async deleteSession(sessionId) {
-      await call(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+      await writeCall(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }, 'delete a session');
     },
 
     async listMessages(sessionId, limit) {
@@ -390,7 +430,7 @@ export function createHermesBackend({
     },
 
     async createJob(body) {
-      return call('/api/jobs', { method: 'POST', body: JSON.stringify(body ?? {}) });
+      return writeCall('/api/jobs', { method: 'POST', body: JSON.stringify(body ?? {}) }, 'create a cron job');
     },
 
     async runJob(jobId) {
@@ -403,10 +443,10 @@ export function createHermesBackend({
     },
 
     async removeJob(jobId) {
-      // Mirror deleteSession's call shape: same Hermes endpoint style
-      // (DELETE on the bare /api/jobs/{id}), no body, a successful 2xx
+      // Mirrors deleteSession's call shape and bound: same Hermes endpoint
+      // style (DELETE on the bare /api/jobs/{id}), no body, a successful 2xx
       // resolves and a refusal surfaces as a thrown `hermes: <text>`.
-      await call(`/api/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
+      await writeCall(`/api/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }, 'delete a cron job');
     },
 
     /**

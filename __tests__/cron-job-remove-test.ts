@@ -220,7 +220,7 @@ describe('cron job sheet remove', () => {
     // it already uses for deleteSession: call(path, { method: 'DELETE' }),
     // no body, the bare /api/jobs/{id} URL.
     const src = readHermesBackendSource();
-    expect(src).toMatch(/async removeJob\(jobId\)\s*\{[\s\S]*?await call\(`\/api\/jobs\/\$\{encodeURIComponent\(jobId\)\}`,\s*\{\s*method:\s*'DELETE'\s*\}\);[\s\S]*?\}/);
+    expect(src).toMatch(/async removeJob\(jobId\)\s*\{[\s\S]*?await (?:writeCall|call)\(`\/api\/jobs\/\$\{encodeURIComponent\(jobId\)\}`,\s*\{\s*method:\s*'DELETE'\s*\}(?:,\s*'[^']*')?\);[\s\S]*?\}/);
   });
 
   test('the Gate allowlist and DELETE handler reach removeJob on the backend', () => {
