@@ -2,6 +2,7 @@ import { createDecipheriv } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { readJsonFile } from '../atomic-file.mjs';
 import { CredentialVault } from '../credentials/vault.mjs';
 import { createPlatformCredentialBackend } from '../credentials/platform-backend.mjs';
 
@@ -80,13 +81,28 @@ export async function migrateLegacySecretsToVault(root, vault = vaultFor(root)) 
   }
 }
 
+/**
+ * The legacy AES store predates the credential vault. A file that was never
+ * written is honestly an empty store; a file that exists but cannot be read or
+ * parsed is not. Answering the damaged case with `{}` made every secret it
+ * still holds look absent: the migration moved nothing and reported success,
+ * `listSecretNames` returned no names, and `getSecret` returned undefined for a
+ * ref that was still on disk. Only ENOENT is empty; everything else throws, the
+ * same distinction `readJsonFile` draws for every other store.
+ */
 async function readLegacyStore(root) {
-  try {
-    const raw = await readFile(join(root, 'secrets', 'store.enc.json'), 'utf8');
-    return Object.assign(Object.create(null), JSON.parse(raw));
-  } catch {
-    return Object.create(null);
+  const path = join(root, 'secrets', 'store.enc.json');
+  const result = await readJsonFile(path);
+  if (result.state === 'missing') return Object.create(null);
+  if (result.state === 'ok' && result.value && typeof result.value === 'object' && !Array.isArray(result.value)) {
+    return Object.assign(Object.create(null), result.value);
   }
+  const reason = result.state === 'corrupt'
+    ? (result.error?.code ?? 'invalid JSON or unreadable file')
+    : 'its contents are not an object of secret refs';
+  const failure = new Error(`legacy secrets store ${path} is damaged (${reason}); it is not empty`);
+  failure.code = 'legacy_secrets_store_unreadable';
+  throw failure;
 }
 
 async function readLegacySecret(root, refName) {
