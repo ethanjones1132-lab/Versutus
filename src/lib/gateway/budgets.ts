@@ -9,6 +9,12 @@
 // read that FAILS is unknown spend — the run does NOT start (fail-closed) and
 // the reason names the retry, because running anyway would be pretending the
 // cap was clear. The cap is untouched.
+//
+// A store that could not be READ at all is a fourth fact: `loadBudgets` answers
+// `BUDGETS_UNREAD` rather than `{}`, so a surface that writes the whole map
+// back cannot mistake "unknown" for "none set" and delete every other cap with
+// its first edit. The pre-run guard still reads that as no cap set — it only
+// ever asks whether this Bot has one.
 
 import { sessionSpendReadFromUnknown } from '@/lib/gateway/session-analytics';
 import { botSpendRows } from '@/lib/gateway/spend-report';
@@ -19,6 +25,17 @@ export const BUDGETS_STORAGE_KEY = 'versutus:bot-budgets';
 
 /** Caps keyed by `budgetKey`, in US dollars. */
 export type BotBudgets = Record<string, number>;
+
+/**
+ * What `loadBudgets` answers when the store could not be read or parsed at all.
+ *
+ * A distinct value, not `{}`, because the two are different facts and only one
+ * of them permits a write: "no caps are set" can be saved over, "the caps could
+ * not be read" cannot — a surface that writes the whole map back would
+ * otherwise drop every cap it never saw. It is still a plain empty map to any
+ * reader that only wants caps, and frozen so it cannot be mistaken for state.
+ */
+export const BUDGETS_UNREAD = Object.freeze({}) as BotBudgets;
 
 /** One Bot's identity inside the budget store; the session-label key rule. */
 export function budgetKey(gatewayId: string, botId: string): string {
@@ -191,14 +208,22 @@ export function botSpendFromSessions(botId: string, payload: unknown): number {
   return row?.costUsd ?? 0;
 }
 
-/** Read every stored cap. A refused or unreadable store is no caps. */
+/**
+ * Read every stored cap.
+ *
+ * A store that could not be read or parsed answers `BUDGETS_UNREAD`, not `{}`:
+ * "no caps set" and "the caps could not be read" are different facts, and only
+ * the first may be written over. A caller that merely wants caps (the pre-run
+ * guard) reads it as no cap; a caller that writes the map back must check for
+ * it by identity and stay shut until a read succeeds.
+ */
 export async function loadBudgets(): Promise<BotBudgets> {
   try {
     const raw = await keyValueStorage.getItem(BUDGETS_STORAGE_KEY);
-    if (!raw) return {};
+    if (raw === null) return {};
     return budgetsFromUnknown(JSON.parse(raw) as unknown);
   } catch {
-    return {};
+    return BUDGETS_UNREAD;
   }
 }
 

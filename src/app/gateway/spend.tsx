@@ -9,6 +9,7 @@ import { Card, EmptyState, ErrorCard, Icon, PageTitle, PressableScale, Screen, S
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import {
+  BUDGETS_UNREAD,
   loadBudgets,
   saveBudgets,
   setBotBudget,
@@ -46,6 +47,25 @@ import {
  * last complete one is this old.
  */
 const BOT_SPEND_WAVE_MIN_INTERVAL_MS = 60_000;
+
+/**
+ * One read's answer, kept with the gateway it was read from.
+ *
+ * Nothing this screen shows about spend is this device's: the total, the week,
+ * the session rows and the per-Bot report are that PC's. Tagging each answer
+ * with its gateway is what keeps a switch honest without a frame of the
+ * previous gateway's numbers under the new one's name — the value is only read
+ * back when the tag matches the gateway on screen, so clearing follows from the
+ * switch itself rather than from an effect racing the first read.
+ */
+type GatewayRead<T> = { gatewayId: string | undefined; value: T };
+
+/**
+ * The budget read's own failure line. Not the spend read's: no cap was read, so
+ * nothing here is a total — and nothing may be written over caps this device
+ * could not see, because the writer saves the whole map back.
+ */
+const BUDGETS_UNREAD_COPY = 'The budget caps stored on this device could not be read.';
 
 /**
  * P5's screen: what this gateway's sessions have cost.
@@ -94,6 +114,19 @@ const BOT_SPEND_WAVE_MIN_INTERVAL_MS = 60_000;
  * whole catalogue read, whose age is unbounded, so the "Last 7 days" line
  * (`spendWindowCopy`) belongs to the 7-day chart and not here.
  *
+ * A gateway switch is a change of subject: every number here is one PC's, so
+ * each read is tagged with the gateway it was asked of and is only shown while
+ * that gateway is still on screen. A read in flight when the gateway changes is
+ * cancelled, and a read for the new gateway that FAILS starts from "nothing
+ * known" — it never retains the previous gateway's total or rows, which would
+ * otherwise sit under the new gateway's name beside the error.
+ *
+ * The caps are this device's, and the writer saves the whole map back, so the
+ * store is read through `BUDGETS_UNREAD`: caps that could not be read are
+ * unknown caps, not no caps. Until a read succeeds no cap is written and the
+ * failure is named where a cap would be set, so a first edit can never save a
+ * one-entry map over every other Bot's cap.
+ *
  * The entry points are their own slice of P5.
  */
 export default function GatewaySpendScreen() {
@@ -107,35 +140,67 @@ export default function GatewaySpendScreen() {
     activeGateway,
     retryAutoConnect,
   } = useGateway();
-  const [state, setState] = useState<SessionSpendState>(EMPTY_SESSION_SPEND);
+  const gatewayId = activeGateway?.id;
+  const [spendRead, setSpendRead] = useState<GatewayRead<SessionSpendState>>({
+    gatewayId: undefined,
+    value: EMPTY_SESSION_SPEND,
+  });
   const [readError, setReadError] = useState<string | null>(null);
-  const [botReport, setBotReport] = useState<BotSpendReport | null>(null);
+  const [botReport, setBotReport] = useState<GatewayRead<BotSpendReport> | null>(null);
   const [budgets, setBudgets] = useState<BotBudgets>({});
-  const [budgetsLoaded, setBudgetsLoaded] = useState(false);
+  const [budgetsStatus, setBudgetsStatus] = useState<'pending' | 'loaded' | 'unread'>('pending');
   const [now] = useState(() => Date.now());
+
+  // What this screen may paint: only the reads that belong to the gateway on
+  // screen. A previous gateway's numbers stay in state, where they belong, and
+  // never reach the page — a failed read for the new gateway lands on the empty
+  // state, so it cannot resurrect them either.
+  const state = spendRead.gatewayId === gatewayId ? spendRead.value : EMPTY_SESSION_SPEND;
+  const report = botReport && botReport.gatewayId === gatewayId ? botReport.value : null;
 
   // What the read below found in storage, kept so the writer can tell a cap
   // that was just read back from one the operator set.
   const loadedBudgets = useRef<BotBudgets | null>(null);
 
-  // D5's caps are this device's; read them once for the budget rows.
-  useEffect(() => {
-    let cancelled = false;
+  // The store read's generation: a retry (or leaving the screen) retires the
+  // answer of the read it supersedes.
+  const budgetsReadGeneration = useRef(0);
+
+  // D5's caps are this device's; read them once for the budget rows — and again
+  // only when the operator asks, because a store that could not be read is not
+  // an empty one. `BUDGETS_UNREAD` says so, and until a read succeeds nothing
+  // may be written: the writer below saves the whole map, so one cap set over
+  // caps this device never saw would delete every other Bot's.
+  const readStoredBudgets = useCallback(() => {
+    // Each read retires the answer of the one it supersedes, so a slow failure
+    // cannot land after a newer success and shut the writer again.
+    const generation = budgetsReadGeneration.current + 1;
+    budgetsReadGeneration.current = generation;
     void loadBudgets().then((stored) => {
-      if (cancelled) return;
+      if (generation !== budgetsReadGeneration.current) return;
+      if (stored === BUDGETS_UNREAD) {
+        setBudgetsStatus('unread');
+        return;
+      }
       loadedBudgets.current = stored;
       setBudgets(stored);
-      setBudgetsLoaded(true);
+      setBudgetsStatus('loaded');
     });
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
+  useEffect(() => {
+    readStoredBudgets();
+    // Leaving the screen retires the read the way a retry does.
+    return () => {
+      budgetsReadGeneration.current += 1;
+    };
+  }, [readStoredBudgets]);
+
   const handleSetBudget = (botId: string, cap: number | undefined) => {
-    const gatewayId = activeGateway?.id;
-    if (!gatewayId) return;
-    setBudgets((previous) => setBotBudget(previous, gatewayId, botId, cap));
+    const budgetGatewayId = activeGateway?.id;
+    // No write before a successful read: unknown caps are not no caps.
+    if (!budgetGatewayId || budgetsStatus !== 'loaded') return;
+    setBudgets((previous) => setBotBudget(previous, budgetGatewayId, botId, cap));
   };
 
   // The one writer, and deliberately outside every state updater: React may
@@ -144,31 +209,47 @@ export default function GatewaySpendScreen() {
   // only what committed — and the value just read back from storage is not a
   // change, so the load above writes nothing.
   useEffect(() => {
-    if (!budgetsLoaded || loadedBudgets.current === budgets) return;
+    if (budgetsStatus !== 'loaded' || loadedBudgets.current === budgets) return;
     void saveBudgets(budgets);
-  }, [budgets, budgetsLoaded]);
+  }, [budgets, budgetsStatus]);
 
   // The one catalogue read, shared by the connection effect and the
   // ErrorCard's Retry: a refusal keeps its caught message as the cause
   // instead of discarding it, so recovery means re-running this read — not
   // leaving the screen.
+  const spendReadGeneration = useRef(0);
   const loadSpend = useCallback(
     (isCancelled: () => boolean) => {
+      const generation = ++spendReadGeneration.current;
+      // The gateway this read is for, captured now: an answer belongs to the
+      // gateway it was asked of, whatever is on screen when it lands.
+      const readFor = gatewayId;
+      const current = (previous: GatewayRead<SessionSpendState>) =>
+        previous.gatewayId === readFor ? previous.value : EMPTY_SESSION_SPEND;
       void gatewayRequest('sessions.list', { limit: SESSION_SPEND_LIST_LIMIT })
         .then((payload) => {
           if (isCancelled()) return;
+          if (generation !== spendReadGeneration.current) return;
           setReadError(null);
-          setState((previous) =>
-            applySessionSpendRead(previous, sessionSpendReadFromUnknown(payload)),
-          );
+          setSpendRead((previous) => ({
+            gatewayId: readFor,
+            // A failed re-read keeps the last good list, but only the list this
+            // same gateway read: another gateway's sessions are never retained
+            // as this one's.
+            value: applySessionSpendRead(current(previous), sessionSpendReadFromUnknown(payload)),
+          }));
         })
         .catch((caught) => {
           if (isCancelled()) return;
+          if (generation !== spendReadGeneration.current) return;
           setReadError(caught instanceof Error ? caught.message : String(caught));
-          setState((previous) => applySessionSpendRead(previous, { ok: false }));
+          setSpendRead((previous) => ({
+            gatewayId: readFor,
+            value: applySessionSpendRead(current(previous), { ok: false }),
+          }));
         });
     },
-    [gatewayRequest],
+    [gatewayId, gatewayRequest],
   );
 
   useEffect(() => {
@@ -177,6 +258,7 @@ export default function GatewaySpendScreen() {
     loadSpend(() => cancelled);
     return () => {
       cancelled = true;
+      spendReadGeneration.current += 1;
     };
   }, [loadSpend, status]);
 
@@ -201,17 +283,27 @@ export default function GatewaySpendScreen() {
     completedAt: number;
     gatewayId: string | undefined;
   }>({ controller: null, running: false, completedAt: 0, gatewayId: undefined });
-  const gatewayId = activeGateway?.id;
+
+  // A gateway switch hands the ledger over: the previous PC's wave is stopped
+  // here rather than left to finish reads whose answer belongs to a gateway
+  // that is no longer on screen, and its freshness claim goes with it. Caps and
+  // rows are per gateway, so a different gateway starts its own ledger rather
+  // than inheriting the previous PC's.
+  useEffect(() => {
+    const ledger = botWave.current;
+    ledger.controller?.abort();
+    ledger.controller = null;
+    ledger.running = false;
+    ledger.completedAt = 0;
+    ledger.gatewayId = gatewayId;
+  }, [gatewayId]);
 
   const runBotSpendWave = useCallback(() => {
     const ledger = botWave.current;
-    // Caps and rows are per gateway, so a different gateway starts its own
-    // ledger rather than inheriting the previous PC's freshness claim.
-    if (ledger.gatewayId !== gatewayId) {
-      ledger.gatewayId = gatewayId;
-      ledger.completedAt = 0;
-      ledger.running = false;
-    }
+    // The handover effect above owns which gateway this ledger answers for. A
+    // runner asked about a gateway the ledger has not been handed claims
+    // nothing — it would be reading the wrong PC's roster under this one's name.
+    if (ledger.gatewayId !== gatewayId) return;
     // Never two waves at once, and a reconnect earns a new wave only once the
     // last complete one is stale.
     if (ledger.running) return;
@@ -229,9 +321,11 @@ export default function GatewaySpendScreen() {
     // at all on that path.
     const source: BotSpendSource = canReadBotSessions ? { listBots, readBotSessions } : { listBots };
     void readBotSpend(source, { signal: controller.signal })
-      .then((report) => {
+      .then((read) => {
         if (controller.signal.aborted) return;
-        setBotReport(report);
+        // Tagged like the total: a report belongs to the gateway it was read
+        // from, so it is never painted under another one's name.
+        setBotReport({ gatewayId, value: read });
       })
       .catch(() => {
         if (controller.signal.aborted) return;
@@ -346,12 +440,24 @@ export default function GatewaySpendScreen() {
 
         {state.loaded ? <SpendChart buckets={buckets} rowCount={state.rowCount} /> : null}
 
-        {botReport ? (
+        {report ? (
           <SpendPerBotSection
-            report={botReport}
+            report={report}
             gatewayId={activeGateway?.id}
             budgets={budgets}
             onSetBudget={activeGateway ? handleSetBudget : undefined}
+          />
+        ) : null}
+
+        {/* The caps belong to the per-Bot rows above, so the failure is named
+            here, where a cap would be set: unknown caps are never written over. */}
+        {report && budgetsStatus === 'unread' ? (
+          <ErrorCard
+            cause={BUDGETS_UNREAD_COPY}
+            affected="the Bot caps stored on this device"
+            next="No cap can be saved until they can be read again, because a save replaces the whole stored map."
+            retryLabel="Try again"
+            onRetry={readStoredBudgets}
           />
         ) : null}
 
