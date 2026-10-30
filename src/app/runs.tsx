@@ -350,10 +350,17 @@ export default function RunsScreen() {
   // on it — retires the notice instead of leaving it up until the next pull.
   const lastStatus = useRef(status);
   const recoveringFrom = useRef(false);
+  // The spend fold reads the connection state through this ref instead of
+  // closing over it (below). A status change is not a new read: closing over
+  // `status` gave `loadBotSpend` a new identity on every flap, so the focus
+  // effect re-ran, its cleanup aborted the wave in flight and the fold started
+  // it again from zero — the churn the comments above exist to prevent.
+  const spendStatus = useRef(status);
   useEffect(() => {
     const connected = status === 'connected';
     recoveringFrom.current = connected && lastStatus.current !== 'connected';
     lastStatus.current = status;
+    spendStatus.current = status;
   }, [status]);
 
   // The walk-away: a blur or an unmount ends the wave. The signal travels the
@@ -392,7 +399,7 @@ export default function RunsScreen() {
       // wave is created at all. A wave that asked nothing may not claim the
       // window either — that claim is what used to swallow the connect landing
       // right after it, leaving the scorecards empty for the whole minute.
-      if (status !== 'connected') return Promise.resolve();
+      if (spendStatus.current !== 'connected') return Promise.resolve();
       const running = ledger.ticket;
       if (running && !running.settled) return running.promise;
       if (
@@ -456,7 +463,19 @@ export default function RunsScreen() {
       })();
       return ticket.promise;
     },
-    [canReadBotSessions, gatewayId, listBots, readBotSessions, status, stopSpendWave],
+    [canReadBotSessions, gatewayId, listBots, readBotSessions, stopSpendWave],
+  );
+
+  // Focus ownership is separate from the read callback: a connection edge may
+  // join a wave only while this screen is still focused.
+  const spendFocused = useRef(false);
+  useFocusEffect(
+    useCallback(() => {
+      spendFocused.current = true;
+      return () => {
+        spendFocused.current = false;
+      };
+    }, []),
   );
 
   // The focus read and its walk-away, in the one edge that owns both.
@@ -466,6 +485,21 @@ export default function RunsScreen() {
       return stopSpendWave;
     }, [loadBotSpend, stopSpendWave]),
   );
+
+  // A status change is not a new read, but the CONNECT edge is: a wave asked
+  // for while the device was not connected asked nothing and claimed no
+  // freshness, so the connection landing must ask again — through the same
+  // entry point. A flap that lands on a wave still out JOINS it (above) rather
+  // than aborting it and reading the roster and every Bot again from zero,
+  // which is what happened while this edge was part of the focus effect's
+  // identity. The walk-away stays with blur and unmount alone.
+  const spendStatusWasConnected = useRef(status === 'connected');
+  useEffect(() => {
+    const connected = status === 'connected';
+    const arrived = connected && !spendStatusWasConnected.current;
+    spendStatusWasConnected.current = connected;
+    if (arrived && spendFocused.current) void loadBotSpend();
+  }, [loadBotSpend, status]);
 
   // The reload signal reaches both folds through the entry points above, never
   // beside them. The focus effects already read on the first focus, so this one
@@ -497,6 +531,14 @@ export default function RunsScreen() {
     return items;
   }, [activeRuns, finishedRuns]);
 
+  // The list a focus request lands on is read when the request lands, through
+  // this ref, rather than captured when it was made — or made part of the
+  // effects' identity, which is what let every later run-list update re-scroll.
+  const listDataRef = useRef(listData);
+  useEffect(() => {
+    listDataRef.current = listData;
+  }, [listData]);
+
   // The highlight fold reads the list rows this screen already folds, so a
   // highlighted id is by construction an id a row actually carries, never a
   // guess. It runs in a second tick (the first retired the request and dropped
@@ -506,24 +548,33 @@ export default function RunsScreen() {
   // honest answer.
   useEffect(() => {
     if (!focusRequest) return undefined;
+    const request = focusRequest;
     const timer = setTimeout(() => {
-      setFocusedRunId(focusedRunItemId(listData, focusRequest));
+      setFocusedRunId(focusedRunItemId(listDataRef.current, request));
       setFocusRequest(null);
     }, 0);
     return () => clearTimeout(timer);
-  }, [focusRequest, listData]);
+  }, [focusRequest]);
 
   // A focused run is not only lit but brought into view: the operator tapped
-  // it on Activity (or a notice named it) and should land on it.
+  // it on Activity (or a notice named it) and should land on it. One request is
+  // one scroll — this effect keys on the highlighted id alone, never on the run
+  // list, so a live event or a status update cannot pull the list back under
+  // the operator's own scrolling. The highlight is spent with that scroll, so
+  // the ring belongs to the tap that asked for it and not to every later
+  // update; a request naming a row the list does not hold simply retires.
   useEffect(() => {
     if (!focusedRunId) return undefined;
-    const index = listData.findIndex((item) => item.id === focusedRunId);
-    if (index < 0) return undefined;
+    const id = focusedRunId;
     const timer = setTimeout(() => {
-      listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.15 });
+      const index = listDataRef.current.findIndex((item) => item.id === id);
+      if (index >= 0) {
+        listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.15 });
+      }
+      setFocusedRunId(null);
     }, 250);
     return () => clearTimeout(timer);
-  }, [focusedRunId, listData]);
+  }, [focusedRunId]);
 
   const renderItem = useCallback(
     ({ item }: { item: ActivityItem }) => {
