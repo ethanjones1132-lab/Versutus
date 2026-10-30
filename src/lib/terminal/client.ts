@@ -5,14 +5,33 @@ import { streamingFetch } from '@/lib/net/streaming-fetch';
 import { parseTerminalSseEvent, type TerminalSseFrame } from '@/lib/terminal/sse';
 
 const TERMINAL_INPUT_TIMEOUT_MS = 15_000;
+// A stalled transport (a hung gateway) must never accumulate keystrokes that
+// would dispatch minutes later: at most this many sends may WAIT per session,
+// behind the one in flight. Further callers are refused promptly, with no
+// transport call, until the backlog drains or its payloads are dropped.
+const TERMINAL_INPUT_MAX_WAITING = 4;
 
 /**
- * Terminal input sends are ordered per session: two quick submits are
- * independent requests that can reorder on the wire, so each session's sends
- * chain onto the previous one. A failed send does not block later ones — the
- * chain swallows the rejection and the next send still dispatches.
+ * Terminal input is serialized per session: two quick submits are independent
+ * requests that can reorder on the wire, so a session dispatches one send at a
+ * time and keeps later ones waiting, in order. The per-session backlog is
+ * bounded (@link TERMINAL_INPUT_MAX_WAITING) and a failed or stalled send
+ * invalidates every payload still queued behind it — stale keystrokes must
+ * never dispatch after that failure. A send issued after the failure starts a
+ * fresh queue, and closing the session retires its unsent sends.
  */
-const inputQueues = new Map<string, Promise<void>>();
+type WaitingTerminalInput = {
+  dispatch: () => Promise<void>;
+  resolve: () => void;
+  reject: (reason: unknown) => void;
+};
+
+type TerminalInputQueue = {
+  inFlight: Promise<void> | undefined;
+  waiting: WaitingTerminalInput[];
+};
+
+const inputQueues = new Map<string, TerminalInputQueue>();
 
 function queueKey(gatewayWsUrl: string, sid: string): string {
   return `${gatewayWsUrl}|${sid}`;
@@ -159,10 +178,19 @@ export async function openTerminalSession(
       closed = true;
       controller.abort();
       reader.cancel().catch(() => undefined);
+      // The session is gone: payloads still queued behind an in-flight send can
+      // no longer be delivered usefully. Retire them instead of replaying
+      // stale input through a stream that no longer exists.
+      if (sid) retireTerminalInput(gatewayWsUrl, sid, 'the terminal session was closed');
     },
   };
 }
 
+/**
+ * Queue one send for the session, FIFO behind whatever is in flight. Excess
+ * callers are refused without a transport call, and a failed or stalled send
+ * drops everything still queued behind it.
+ */
 export function sendTerminalInput(
   gatewayWsUrl: string,
   sid: string,
@@ -170,18 +198,87 @@ export function sendTerminalInput(
   token?: string,
 ): Promise<void> {
   const key = queueKey(gatewayWsUrl, sid);
-  const previous = inputQueues.get(key) ?? Promise.resolve();
-  // Chain off the settled promise (catch first) so a rejected send does not
-  // block the next one.
-  const send = previous.catch(() => undefined).then(() =>
-    dispatchTerminalInput(gatewayWsUrl, sid, data, token),
-  );
-  inputQueues.set(key, send);
-  // Drop the entry once settled so the map cannot grow without bound.
-  send.catch(() => undefined).finally(() => {
-    if (inputQueues.get(key) === send) inputQueues.delete(key);
+  const queue = inputQueues.get(key);
+  if (queue && queue.waiting.length >= TERMINAL_INPUT_MAX_WAITING) {
+    return Promise.reject(
+      new Error(
+        `Terminal input backlog is full (${TERMINAL_INPUT_MAX_WAITING} sends waiting for this session); input was not sent`,
+      ),
+    );
+  }
+  let resolve!: () => void;
+  let reject!: (reason: unknown) => void;
+  const pending = new Promise<void>((settled, unsettled) => {
+    resolve = settled;
+    reject = unsettled;
   });
-  return send;
+  const slot: WaitingTerminalInput = {
+    dispatch: () => dispatchTerminalInput(gatewayWsUrl, sid, data, token),
+    resolve,
+    reject,
+  };
+  if (queue) queue.waiting.push(slot);
+  else inputQueues.set(key, { inFlight: undefined, waiting: [slot] });
+  drainTerminalInputQueue(key);
+  return pending;
+}
+
+/**
+ * Dispatch the next waiting send for the session, one at a time, so two quick
+ * submits cannot reorder on the wire. Called again when the in-flight send
+ * settles; drops the map entry once the queue goes idle.
+ */
+function drainTerminalInputQueue(key: string): void {
+  const queue = inputQueues.get(key);
+  if (!queue || queue.inFlight) return;
+  const slot = queue.waiting.shift();
+  if (!slot) {
+    // Nothing left to dispatch: release the entry so the map cannot grow.
+    if (inputQueues.get(key) === queue) inputQueues.delete(key);
+    return;
+  }
+  const run = slot.dispatch();
+  run.then(slot.resolve, slot.reject);
+  queue.inFlight = run
+    .then(
+      () => undefined,
+      (error) => {
+        // A failed or stalled send invalidates every payload still queued
+        // behind it: stale input must never dispatch after that failure. A
+        // later explicit send recreates the queue and starts over cleanly.
+        const stale = new Error(
+          error instanceof Error && error.message
+            ? `Terminal input dropped: an earlier send for this session failed (${error.message})`
+            : 'Terminal input dropped: an earlier send for this session failed',
+        );
+        dropWaitingTerminalInput(key, queue, stale);
+        throw error;
+      },
+    )
+    .catch(() => undefined)
+    .finally(() => {
+      // Identity-checked: an old finalizer must never touch a queue that a
+      // newer generation of sends has already replaced.
+      if (inputQueues.get(key) !== queue) return;
+      queue.inFlight = undefined;
+      drainTerminalInputQueue(key);
+    });
+}
+
+/** Reject the payload a session still has queued and release its queue entry. */
+function dropWaitingTerminalInput(key: string, queue: TerminalInputQueue, error: Error): void {
+  const waiting = queue.waiting;
+  queue.waiting = [];
+  for (const slot of waiting) slot.reject(error);
+  if (inputQueues.get(key) === queue) inputQueues.delete(key);
+}
+
+/** Retire a session's unsent input (unsent work only; the in-flight call stands). */
+function retireTerminalInput(gatewayWsUrl: string, sid: string, reason: string): void {
+  const key = queueKey(gatewayWsUrl, sid);
+  const queue = inputQueues.get(key);
+  if (!queue) return;
+  dropWaitingTerminalInput(key, queue, new Error(`Terminal input dropped: ${reason}`));
 }
 
 async function dispatchTerminalInput(
