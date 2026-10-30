@@ -25,8 +25,10 @@ export function ChannelStatusRow({
   const tokens = useTokens();
   const model = describeChannelStatusRow(group);
   // Default collapsed keeps the row slim; the full degraded-bridge verdict is
-  // one tap away. The toggle sits inside the row Pressable that opens chat, so
-  // it stops the event from bubbling to that onPress.
+  // one tap away. The row action and the detail toggle are sibling controls in
+  // a plain View: nesting one interactive element inside another produced the
+  // web hydration overlay on Home, Activity and chat. The toggle still stops
+  // propagation so a tap can never bubble into the row's navigation handler.
   const [detailExpanded, setDetailExpanded] = useState(false);
   if (!model.visible) return null;
 
@@ -38,15 +40,17 @@ export function ChannelStatusRow({
         : tokens.textTertiary;
 
   return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={`${model.label} - ${model.detail}`}
-      style={[styles.row, model.tone === 'attention' && styles.rowAttention]}>
-      <View style={[styles.dot, { backgroundColor: dotColor }]} />
-      <Text variant="caption" numberOfLines={1} style={styles.label}>
-        {model.label}
-      </Text>
+    <View style={[styles.row, model.tone === 'attention' && styles.rowAttention]}>
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={`${model.label} - ${model.detail}`}
+        style={[styles.rowAction]}>
+        <View style={[styles.dot, { backgroundColor: dotColor }]} />
+        <Text variant="caption" numberOfLines={1} style={styles.label}>
+          {model.label}
+        </Text>
+      </Pressable>
       <PressableScale
         onPress={(event) => {
           event.stopPropagation();
@@ -55,6 +59,7 @@ export function ChannelStatusRow({
         hitSlop={CHIP_HIT_SLOP}
         accessibilityRole="button"
         accessibilityState={{ expanded: detailExpanded }}
+        aria-expanded={detailExpanded}
         accessibilityLabel={
           detailExpanded ? 'Collapse channel status detail' : 'Expand channel status detail'
         }
@@ -68,7 +73,7 @@ export function ChannelStatusRow({
         size={12}
         color="tertiary"
       />
-    </Pressable>
+    </View>
   );
 }
 
@@ -79,11 +84,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.two,
     paddingHorizontal: Spacing.two,
-    paddingVertical: Spacing.one,
     borderRadius: Radius.sm,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Palette.border,
     backgroundColor: Palette.backgroundInset,
+  },
+  rowAction: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    flexShrink: 1,
   },
   rowAttention: {
     borderColor: Palette.statusConnecting,
@@ -101,9 +112,10 @@ const styles = StyleSheet.create({
   detailToggle: {
     flex: 1,
     minWidth: 0,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   detail: {
-    flex: 1,
     minWidth: 0,
     textAlign: 'right',
   },
