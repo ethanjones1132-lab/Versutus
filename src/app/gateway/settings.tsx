@@ -48,7 +48,12 @@ import {
   loadApprovalAudit,
   type ApprovalAuditEntry,
 } from '@/lib/gateway/approval-policy';
-import { isAuthRejection, isDeviceIdentityError } from '@/lib/gateway/errors';
+import {
+  GatewayHttpError,
+  isAuthRejection,
+  isConnectionError,
+  isDeviceIdentityError,
+} from '@/lib/gateway/errors';
 import type { VoiceEngineCapabilities, VoiceEnginePreference } from '@/lib/voice/voice-engine-choice';
 import {
   GROK_DISABLED_REASON,
@@ -68,6 +73,28 @@ const INSTALL_POLL_MAX_DELAY_MS = 10_000;
 
 /** How long the phone keeps watching before it hands the wait back. */
 const INSTALL_POLL_BUDGET_MS = 10 * 60_000;
+
+/**
+ * A status read worth asking again for: the relayed path dropped the call, or
+ * the Gate itself is busy/restarting. Neither says anything about the install.
+ *
+ * A refusal that names the request — a 4xx, or the provider's own "Gateway not
+ * connected" pre-flight — is not retried: the connection monitor owns that edge,
+ * and polling a Gate this phone already knows is away is the phone work the
+ * watch exists not to do. The row names the lost outcome instead.
+ */
+function isTransientInstallStatusFailure(error: unknown): boolean {
+  // A numbered HTTP refusal is the Gate's own answer. A 4xx names this request
+  // and is not a dropped call, even when its text says "connection" or
+  // "timeout". Only a 5xx means the Gate is busy or restarting.
+  if (error instanceof GatewayHttpError) return error.status >= 500;
+  return isConnectionError(error);
+}
+
+/** The Gate's own words for a refusal, without flattening a non-Error throw. */
+function failureMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /** The readiness sentence for one Settings row. */
 function voiceReadiness(
@@ -114,8 +141,17 @@ export default function GatewaySettingsScreen() {
   // alone can no longer mean both "still checking" and "the Gate said no".
   const [voiceCheckState, setVoiceCheckState] = useState<'checking' | 'ready' | 'failed'>('checking');
   const [voiceCheckError, setVoiceCheckError] = useState<string | null>(null);
-  const [installing, setInstalling] = useState(false);
+  // Which watch is on: one that asked the Gate to start the install, one that
+  // only follows an install whose outcome this phone lost, or none. The two are
+  // never the same job — a start must never be how this phone recovers a watch.
+  const [installWatch, setInstallWatch] = useState<'start' | 'follow' | null>(null);
   const [installNote, setInstallNote] = useState<string | null>(null);
+  // What the last watch established, when the capabilities read is not the
+  // newest word: `ready` keeps the start row away (a new start must not race a
+  // download that just landed), `unknown` replaces it with a status check
+  // because the PC may still be downloading. Both last for this screen visit;
+  // a fresh mount reads the Gate again.
+  const [installFollow, setInstallFollow] = useState<'idle' | 'unknown' | 'ready'>('idle');
   // The install watch's own cancellation. The chain outlives the screen by
   // nature — leaving Settings must stop the RPCs, not just hide the rows.
   const installCancelRef = useRef<AbortController | null>(null);
@@ -307,114 +343,228 @@ export default function GatewaySettingsScreen() {
   // watch is cancellable (leaving the screen ends it), backs off so a busy Gate
   // is not polled at a fixed rate, and is bounded: a 2 GB download this phone
   // stops watching is still a download the PC finishes.
-  const handleVoiceInstall = useCallback(async () => {
-    installCancelRef.current?.abort();
-    // A watch already parked on a wait is released rather than left holding the
-    // old watch's timer: the abort stops its RPCs, this drops its clock.
-    installWaitRef.current?.();
-    installWaitRef.current = null;
-    const controller = new AbortController();
-    installCancelRef.current = controller;
-    const cancelled = () => controller.signal.aborted;
-    // A cancellable wait. The timer is owned by the screen, so the unmount edge
-    // clears it instead of waking the JS thread up to ten seconds later for a
-    // poll that will not happen.
-    const wait = (ms: number) =>
-      new Promise<void>((resolve) => {
-        const timer = setTimeout(() => {
-          installWaitRef.current = null;
-          resolve();
-        }, ms);
-        installWaitRef.current = () => clearTimeout(timer);
-      });
-    setInstalling(true);
-    setInstallNote('Downloading the PC voice models…');
-    try {
-      // The device params are read once for the whole watch: `pushDeviceParams`
-      // reads SecureStore and re-derives the ed25519 public key, which is far
-      // too much work to repeat every poll for an id that changes only when the
-      // identity is re-made — and a refusal from the Gate is the one thing that
-      // says it is stale. The read itself can refuse (an identity this phone
-      // cannot name or re-make), and then there is no install to start at all:
-      // the row must say that rather than keep claiming a download the PC never
-      // began, and the refusal must not escape a handler nothing catches.
-      let params: { deviceId: string };
+  //
+  // A watch does one of two jobs, and they are never the same job: `start` asks
+  // the Gate to begin a download, `follow` only reads the status of one that may
+  // already be running. The row offers `follow` exactly when this phone lost the
+  // install's outcome, so no recovery path can begin a second download.
+  const runVoiceInstallWatch = useCallback(
+    async (mode: 'start' | 'follow') => {
+      installCancelRef.current?.abort();
+      // A watch already parked on a wait is released rather than left holding
+      // the old watch's timer: the abort stops its RPCs, this drops its clock.
+      installWaitRef.current?.();
+      installWaitRef.current = null;
+      const controller = new AbortController();
+      installCancelRef.current = controller;
+      const cancelled = () => controller.signal.aborted;
+      // A cancellable wait. The timer is owned by the screen, so the unmount edge
+      // clears it instead of waking the JS thread up to ten seconds later for a
+      // poll that will not happen.
+      const wait = (ms: number) =>
+        new Promise<void>((resolve) => {
+          const timer = setTimeout(() => {
+            installWaitRef.current = null;
+            resolve();
+          }, ms);
+          installWaitRef.current = () => clearTimeout(timer);
+        });
+      setInstallWatch(mode);
+      // A new watch is a new question: the previous answer — ready, or an
+      // outcome this phone lost — must not decide which row this one shows.
+      setInstallFollow('idle');
+      setInstallNote(
+        mode === 'start' ? 'Downloading the PC voice models…' : 'Checking the install on the PC…',
+      );
       try {
-        params = await pushDeviceParams();
-      } catch (caught) {
-        if (!cancelled()) {
-          setInstallNote(
-            isDeviceIdentityError(caught)
-              ? 'This phone could not make its device identity, so the Gate could not start the install.'
-              : 'The Gate could not start the install.',
-          );
-        }
-        return;
-      }
-      if (cancelled()) return;
-      try {
-        await gatewayRequest('voice.install.start', params);
-      } catch {
-        if (!cancelled()) setInstallNote('The Gate could not start the install.');
-        return;
-      }
-      let waited = 0;
-      let delay = INSTALL_POLL_FIRST_DELAY_MS;
-      while (true) {
-        await wait(delay);
-        if (cancelled()) return;
-        waited += delay;
-        delay = Math.min(delay * 2, INSTALL_POLL_MAX_DELAY_MS);
-        if (waited >= INSTALL_POLL_BUDGET_MS) {
-          setInstallNote('Still installing on the PC — this phone stopped watching, check back later.');
-          break;
-        }
-        let install: { state?: string; reason?: string } | null = null;
+        // The device params are read once for the whole watch: `pushDeviceParams`
+        // reads SecureStore and re-derives the ed25519 public key, which is far
+        // too much work to repeat every poll for an id that changes only when the
+        // identity is re-made — and a refusal from the Gate is the one thing that
+        // says it is stale. The read itself can refuse (an identity this phone
+        // cannot name or re-make), and then there is no install to start at all:
+        // the row must say that rather than keep claiming a download the PC never
+        // began, and the refusal must not escape a handler nothing catches.
+        let params: { deviceId: string };
         try {
-          install = await gatewayRequest<{ state?: string; reason?: string }>(
-            'voice.install.status',
-            params,
-          );
+          params = await pushDeviceParams();
         } catch (caught) {
-          if (isAuthRejection(caught)) {
-            try {
-              params = await pushDeviceParams();
-            } catch {
-              // Keep the params this watch already has: there is no next poll,
-              // and the closing capabilities read can still use a fresh one.
+          if (!cancelled()) {
+            const identity = isDeviceIdentityError(caught);
+            if (mode === 'start') {
+              setInstallNote(
+                identity
+                  ? 'This phone could not make its device identity, so the Gate could not start the install.'
+                  : 'The Gate could not start the install.',
+              );
+            } else {
+              // Following failed before it could ask: the install's outcome is
+              // still unknown, so the check row stays and no start is offered.
+              setInstallFollow('unknown');
+              setInstallNote(
+                identity
+                  ? 'This phone could not make its device identity, so the Gate could not be asked about the install.'
+                  : 'The Gate could not be asked about this install.',
+              );
             }
           }
+          return;
+        }
+        if (cancelled()) return;
+        if (mode === 'start') {
+          try {
+            await gatewayRequest('voice.install.start', params);
+          } catch (caught) {
+            // A rejected request can be a lost acknowledgement after the PC
+            // accepted it. Establish its status before offering another start.
+            if (!cancelled()) {
+              if (
+                isTransientInstallStatusFailure(caught) ||
+                (caught instanceof GatewayHttpError && caught.status === 409)
+              ) {
+                setInstallFollow('unknown');
+                setInstallNote('The start could not be confirmed — check the install on the PC.');
+              } else {
+                setInstallNote('The Gate could not start the install.');
+              }
+            }
+            return;
+          }
+        }
+        if (cancelled()) return;
+        let waited = 0;
+        let delay = INSTALL_POLL_FIRST_DELAY_MS;
+        // The one identity refresh this watch is allowed: a refusal says the
+        // params are stale, but a second refusal after a fresh name is the
+        // Gate's verdict and re-deriving the key again would only cost the
+        // phone reads for an answer that did not change.
+        let authRefreshed = false;
+        while (true) {
+          await wait(delay);
+          if (cancelled()) return;
+          waited += delay;
+          delay = Math.min(delay * 2, INSTALL_POLL_MAX_DELAY_MS);
+          if (waited >= INSTALL_POLL_BUDGET_MS) {
+            // The download may well still be going on the PC; this phone only
+            // stops paying for the wait. That is a lost thread, not a failure:
+            // the row says the watch stopped and offers only to check status.
+            setInstallFollow('unknown');
+            setInstallNote(
+              'Still installing on the PC — this phone stopped watching, check back later.',
+            );
+            break;
+          }
+          let install: { state?: string; reason?: string } | null = null;
+          try {
+            install = await gatewayRequest<{ state?: string; reason?: string }>(
+              'voice.install.status',
+              params,
+            );
+          } catch (caught) {
+            if (cancelled()) return;
+            if (isAuthRejection(caught)) {
+              // The existing identity rule: the refusal is what says the params
+              // are stale, so re-derive them ONCE and keep following with the
+              // new name. The install was never restarted; only this phone's
+              // name was.
+              if (!authRefreshed) {
+                authRefreshed = true;
+                try {
+                  params = await pushDeviceParams();
+                } catch {
+                  if (cancelled()) return;
+                  // There is no new identity to offer, so this watch cannot ask
+                  // again — and the install may still be running on the PC.
+                  setInstallFollow('unknown');
+                  setInstallNote(
+                    'This phone could not refresh its device identity, so it stopped checking the install.',
+                  );
+                  break;
+                }
+                if (cancelled()) return;
+                setInstallNote(
+                  'The Gate asked this phone to refresh its identity — still checking this install…',
+                );
+                continue;
+              }
+              setInstallFollow('unknown');
+              setInstallNote(
+                "The Gate refused this phone's identity, so it stopped checking the install. The PC may still be installing.",
+              );
+              break;
+            }
+            if (isTransientInstallStatusFailure(caught)) {
+              // The same watch, the same params, the same install — retried
+              // inside the existing backoff and budget. A dropped call says
+              // nothing about what the PC is doing.
+              setInstallNote('Lost contact with the Gate — still checking this install…');
+              continue;
+            }
+            // The Gate answered and refused this request itself. Nothing here can
+            // tell whether the PC is still installing, so the row stops offering
+            // a start and offers to check instead.
+            setInstallFollow('unknown');
+            setInstallNote(`Couldn't check this install: ${failureMessage(caught)}`);
+            break;
+          }
+          if (cancelled()) return;
+          if (install?.state === 'ready') {
+            // A confirmed ready is the answer that takes the start offer away:
+            // no note is left behind to re-offer a download that already landed.
+            setInstallFollow('ready');
+            setInstallNote(null);
+            break;
+          }
+          if (install?.state === 'installing') {
+            setInstallNote(install?.reason ?? null);
+            continue;
+          }
+          // Any other answer is terminal — not-installed, or the Gate's own
+          // failure reason. The outcome is known, so the explicit start action
+          // may stay and say what it knows.
+          setInstallFollow('idle');
+          setInstallNote(install?.reason ?? null);
           break;
         }
         if (cancelled()) return;
-        setInstallNote(install?.reason ?? null);
-        if (install?.state !== 'installing') break;
-      }
-      if (cancelled()) return;
-      try {
-        const read = await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', params);
-        // The refresh after an install publishes the SAME read state as the
-        // first read, so a Gate that once refused does not stay "failed" while
-        // freshly readable rows sit beneath the error card.
-        if (!cancelled()) applyVoiceRead({ ok: true, capabilities: read });
+        try {
+          const read = await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', params);
+          // The refresh after an install publishes the SAME read state as the
+          // first read, so a Gate that once refused does not stay "failed" while
+          // freshly readable rows sit beneath the error card.
+          if (!cancelled()) applyVoiceRead({ ok: true, capabilities: read });
+        } catch {
+          // keep the last known capabilities
+        }
       } catch {
-        // keep the last known capabilities
+        // The handler's promise is what `onPress` calls, with nothing attached to
+        // it, so no rejection may leave here: one that does is an unhandled
+        // rejection AND a note still claiming a download that never started. Every
+        // read below handles its own refusal; this is the backstop for anything
+        // unforeseen in the watch, and it names the same refusal the Gate does.
+        if (!cancelled()) setInstallNote('The Gate could not start the install.');
+      } finally {
+        // Every exit — success, refusal, budget, cancellation — clears the row, so
+        // "Installing on this PC…" cannot outlive the watch that drew it.
+        if (installCancelRef.current === controller) installCancelRef.current = null;
+        installWaitRef.current = null;
+        if (!cancelled()) setInstallWatch(null);
       }
-    } catch {
-      // The handler's promise is what `onPress` calls, with nothing attached to
-      // it, so no rejection may leave here: one that does is an unhandled
-      // rejection AND a note still claiming a download that never started. Every
-      // read below handles its own refusal; this is the backstop for anything
-      // unforeseen in the watch, and it names the same refusal the Gate does.
-      if (!cancelled()) setInstallNote('The Gate could not start the install.');
-    } finally {
-      // Every exit — success, refusal, budget, cancellation — clears the row, so
-      // "Installing on this PC…" cannot outlive the watch that drew it.
-      if (installCancelRef.current === controller) installCancelRef.current = null;
-      installWaitRef.current = null;
-      if (!cancelled()) setInstalling(false);
-    }
-  }, [gatewayRequest, applyVoiceRead]);
+    },
+    [gatewayRequest, applyVoiceRead],
+  );
+
+  /** Ask the Gate to begin the install. Only offered when none is known running. */
+  const handleVoiceInstall = useCallback(
+    () => runVoiceInstallWatch('start'),
+    [runVoiceInstallWatch],
+  );
+
+  /** Follow an install whose outcome this phone lost — never a second start. */
+  const handleVoiceInstallCheck = useCallback(
+    () => runVoiceInstallWatch('follow'),
+    [runVoiceInstallWatch],
+  );
 
   const handleWidgetPrivacy = useCallback(
     async (next: boolean) => {
@@ -446,6 +596,12 @@ export default function GatewaySettingsScreen() {
   // refused read measured nothing and may not print a measured zero.
   const voiceUsageReadState =
     voiceCheckState === 'checking' ? 'loading' : voiceCheckState === 'failed' ? 'error' : 'ready';
+  // The start row is only for a PC the Gate says has no install running, or one
+  // whose explicit refusal is the last word. A confirmed ready answer, and a
+  // watch that lost its outcome, must never fall through to it.
+  const offerVoiceInstall =
+    installFollow === 'idle' &&
+    (voiceCapabilities?.engines.local?.state === 'not-installed' || Boolean(installNote));
 
   return (
     <Screen edges={['top', 'bottom']}>
@@ -634,16 +790,34 @@ export default function GatewaySettingsScreen() {
                 )}
               </Text>
             </View>
-            {installing ? (
+            {installWatch !== null ? (
               <View style={styles.voiceMeta}>
                 <Text variant="caption" color="accent">
-                  Installing on this PC…
+                  {installWatch === 'follow'
+                    ? 'Following the install on this PC…'
+                    : 'Installing on this PC…'}
                 </Text>
                 <Text variant="caption" color="tertiary" style={styles.voiceMetaText}>
                   {installNote ?? 'This can take a few minutes.'}
                 </Text>
               </View>
-            ) : voiceCapabilities?.engines.local?.state === 'not-installed' || installNote ? (
+            ) : installFollow === 'unknown' ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Check the install on this PC"
+                onPress={handleVoiceInstallCheck}
+                style={[styles.installRow, { backgroundColor: tokens.accentMuted }]}>
+                <Icon name={{ ios: 'arrow.clockwise', android: 'refresh', web: 'refresh' }} size={18} color="accent" />
+                <View style={styles.voiceText}>
+                  <Text variant="callout" color="accent">
+                    Check the install on this PC
+                  </Text>
+                  <Text variant="caption" color="tertiary">
+                    {installNote ?? 'This phone is not following the install any more.'}
+                  </Text>
+                </View>
+              </Pressable>
+            ) : offerVoiceInstall ? (
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Install on this PC"
