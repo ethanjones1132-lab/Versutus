@@ -435,6 +435,16 @@ const READ_TIMEOUT_MS = 30_000;
 /** How far before the send a message may be created and still be this turn's. */
 const TURN_START_SLOP_MS = 2000;
 const ABORTED = Symbol('aborted');
+/**
+ * What a cancelled send fails with, whichever step it had reached: the caller
+ * pressed Stop, not the server and not the model, and the public shape of that
+ * answer does not change with where the cancellation landed.
+ */
+const ABORTED_TURN_MESSAGE = 'opencode: the turn was aborted';
+
+function turnAbortedError() {
+  return new Error(ABORTED_TURN_MESSAGE);
+}
 
 /** Part types whose body streams through `message.part.delta`. */
 const STREAMED_PART_TYPES = new Set(['text', 'reasoning']);
@@ -808,6 +818,18 @@ export function createOpenCodeBackend({
     }
   }
 
+  /** A route that answered nothing within its own ceiling for this backend. */
+  function routeTimeoutError(path, timeoutMs) {
+    const seconds = Math.max(1, Math.round(timeoutMs / 1000));
+    return Object.assign(
+      new Error(
+        `opencode: ${root}${path} sent no response within ${seconds}s — ` +
+        'the server is running but it is not answering',
+      ),
+      { code: 'backend_timeout' },
+    );
+  }
+
   /**
    * One route read, under a ceiling this backend owns.
    *
@@ -841,14 +863,7 @@ export function createOpenCodeBackend({
       // answering, which is a fact about the server rather than about the model
       // the turn was about — model-fault.mjs reads the difference that way.
       if (bounded && (err?.name === 'TimeoutError' || err?.name === 'AbortError')) {
-        const seconds = Math.max(1, Math.round(timeoutMs / 1000));
-        throw Object.assign(
-          new Error(
-            `opencode: ${root}${path} sent no response within ${seconds}s — ` +
-            'the server is running but it is not answering',
-          ),
-          { code: 'backend_timeout' },
-        );
+        throw routeTimeoutError(path, timeoutMs);
       }
       const cause = err?.cause?.message ?? err?.message ?? String(err);
       throw new Error(`opencode: could not reach ${root}${path} (${cause})`);
@@ -903,6 +918,58 @@ export function createOpenCodeBackend({
     }
   }
 
+  /**
+   * The POST that submits a prompt.
+   *
+   * A prompt route is special in two ways at once: the caller's Stop has to
+   * reach it, because a cancelled message must never be accepted behind the
+   * operator's back, and a wedged server still must not hold it forever, so the
+   * route keeps the ceiling it had before it carried a signal. Cancellation wins
+   * over the transport's own wording — the caller reads the cancellation it
+   * asked for, not a URL and not a cause.
+   */
+  async function postPrompt(path, body, signal, major = 1, timeoutMs = readTimeoutMs) {
+    const controller = new AbortController();
+    const forwardAbort = () => controller.abort();
+    let timer;
+    let timedOut = false;
+    if (signal?.aborted) controller.abort();
+    else signal?.addEventListener('abort', forwardAbort, { once: true });
+    if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+      timer.unref?.();
+    }
+    try {
+      // `call` is handed the controller rather than the caller's signal so the
+      // route's ceiling and the cancellation share one request signal; the
+      // timeout is named here because `call` cannot tell the two apart.
+      return await call(path, { method: 'POST', body, signal: controller.signal }, 0, major);
+    } catch (error) {
+      if (signal?.aborted) throw turnAbortedError();
+      if (timedOut) throw routeTimeoutError(path, timeoutMs);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', forwardAbort);
+    }
+  }
+
+  /**
+   * A cancellation that landed while a prompt route was open.
+   *
+   * The route may already have been accepted, so the requested session is
+   * stopped with the same bounded mechanism a Stop uses, and nothing is ever
+   * re-sent. The caller gets the one cancellation failure, promptly.
+   */
+  async function stopCancelledSend(sessionId, major, turn) {
+    turn.close();
+    await stopTurn(sessionId, major);
+    throw turnAbortedError();
+  }
+
   /** The session's messages, read back once and bounded. */
   async function readTurnMessages(sessionId, major = 1) {
     const controller = new AbortController();
@@ -945,7 +1012,12 @@ export function createOpenCodeBackend({
     let settled = false;
     let idleController = null;
     let resolveOutcome;
+    let resolveCancelled;
     const outcome = new Promise((resolve) => { resolveOutcome = resolve; });
+    // The ready wait's own release: a Stop arrives before the subscription has
+    // opened, and the send must not sit out the ready ceiling before it can act
+    // on the cancellation.
+    const cancelled = new Promise((resolve) => { resolveCancelled = resolve; });
     const bound = () => (startedOutput ? idleMs : firstOutputIdleMs);
     const finish = (value) => {
       if (settled) return;
@@ -996,9 +1068,16 @@ export function createOpenCodeBackend({
     const onCallerAbort = () => {
       controller.abort();
       finish({ kind: 'aborted' });
+      resolveCancelled();
     };
     const close = () => {
       controller.abort();
+      // The bus is no longer this turn's witness: its silence timer and the
+      // caller's listener are retired with it, so a closed turn holds neither.
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
       signal?.removeEventListener('abort', onCallerAbort);
     };
     if (signal?.aborted) onCallerAbort();
@@ -1050,7 +1129,7 @@ export function createOpenCodeBackend({
         // Give up on a turn nobody is answering for, and stop the server's turn
         // before saying so: the next attempt would otherwise fight this one.
         await stopTurn(sessionId, major);
-        if (settledOutcome.kind === 'aborted') throw new Error('opencode: the turn was aborted');
+        if (settledOutcome.kind === 'aborted') throw turnAbortedError();
         throw new Error(silentTurnReason(model, settledOutcome.boundMs, retryNote));
       } finally {
         // The subscription is closed, never awaited: a feed that ignores its
@@ -1072,8 +1151,13 @@ export function createOpenCodeBackend({
     }
     return {
       // The subscription's own proof that it is live, bounded: the send waits
-      // for the ready point and never for the feed itself.
-      ready: boundedValue(subscription?.ready, BUS_READY_TIMEOUT_MS),
+      // for the ready point and never for the feed itself. The caller's abort
+      // releases it too, so a Stop pressed while the feed is still opening is
+      // acted on at once instead of after the ready ceiling.
+      ready: boundedValue(
+        Promise.race([subscription?.ready, cancelled]),
+        BUS_READY_TIMEOUT_MS,
+      ),
       wait: awaitTurnOnBus,
       close,
       /**
@@ -1085,6 +1169,14 @@ export function createOpenCodeBackend({
        */
       watchIdle: (promise, controller) => {
         idleController = controller;
+        // A turn that settled while the prompt was still being accepted already
+        // ran its settle-time cleanup, before this controller existed: the wait
+        // must not outlive the turn it belongs to.
+        if (settled) {
+          Promise.resolve(promise).catch(() => undefined);
+          controller.abort();
+          return;
+        }
         Promise.resolve(promise).then(
           () => finish({ kind: 'idle' }),
           () => arm(),
@@ -1161,8 +1253,17 @@ export function createOpenCodeBackend({
   async function sendMessageV2(sessionId, { text, model, signal } = {}) {
     const session = encodeURIComponent(sessionId);
     const turn = openTurnBus(sessionId, model, signal, 2);
+    // The ready wait answers to the caller's signal as well as its own ceiling:
+    // a Stop pressed while the subscription is opening is released at once.
     await turn.ready;
+    // Nothing has been submitted yet, so a cancelled send is failed here and the
+    // session is left alone — there is no turn of ours to stop.
+    if (signal?.aborted) {
+      turn.close();
+      throw turnAbortedError();
+    }
     const sentAt = Date.now();
+    let submitted = false;
     try {
       if (model?.providerId && model?.modelId) {
         await call(
@@ -1171,16 +1272,26 @@ export function createOpenCodeBackend({
           readTimeoutMs,
           2,
         );
+        // The model switch is not the prompt: a Stop that landed while it was
+        // in flight ends the send here, before anything is submitted.
+        if (signal?.aborted) throw turnAbortedError();
       }
-      await call(
+      submitted = true;
+      // The prompt carries the caller's signal, so a Stop while the route is
+      // still deciding cancels the request itself.
+      await postPrompt(
         `/api/session/${session}/prompt${locationQuery()}`,
-        { method: 'POST', body: JSON.stringify({ text }) },
-        readTimeoutMs,
+        JSON.stringify({ text }),
+        signal,
         2,
       );
     } catch (error) {
+      // v2 has no blocking fallback to double-submit: a cancelled prompt may
+      // have been accepted, so the same session is interrupted — bounded, like
+      // any Stop — and the send is never repeated.
+      if (signal?.aborted && submitted) await stopCancelledSend(sessionId, 2, turn);
       turn.close();
-      throw error;
+      throw signal?.aborted ? turnAbortedError() : error;
     }
     // The wait route answers 204 exactly when the session goes idle — the
     // completion signal the 2.0.x bus does not emit. Bounded by the turn's
@@ -1258,6 +1369,11 @@ export function createOpenCodeBackend({
      * turn, so the wait for the answer is bounded here and ends with a reason
      * rather than with a transport timeout. A 404 is the server saying it
      * predates that route, and the blocking POST still serves it.
+     *
+     * A Stop is not a send. The prompt POST carries the caller's signal; a
+     * cancellation before it is posted fails the caller without writing the
+     * message, and one that may already have been accepted stops this session
+     * through the same bounded route a Stop uses — never by submitting again.
      */
     async sendMessage(sessionId, { text, model, signal, agent } = {}) {
       const { major } = await serverProfile();
@@ -1274,11 +1390,27 @@ export function createOpenCodeBackend({
       // session's messages are read back against this mark, so the previous
       // turn's answer can never be passed off as this one's.
       const turn = openTurnBus(sessionId, model, signal, 1);
+      // The ready wait answers to the caller's signal as well as its own
+      // ceiling: a Stop pressed while the subscription is opening is released
+      // here at once instead of after the ready window.
       await turn.ready;
+      // A cancelled message must never be written into the session. Nothing has
+      // been posted yet, so there is no turn to stop: fail the caller and leave
+      // the session alone.
+      if (signal?.aborted) {
+        turn.close();
+        throw turnAbortedError();
+      }
       const sentAt = Date.now();
       try {
-        await call(`/session/${session}/prompt_async`, { method: 'POST', body: payload });
+        // The prompt POST carries the caller's signal: a Stop that lands while
+        // the route is still deciding cancels the request itself.
+        await postPrompt(`/session/${session}/prompt_async`, payload, signal, 1);
       } catch (error) {
+        // The acceptance may have reached the server before the cancel did:
+        // stop this session, bounded, and report the cancellation. Never fall
+        // through to another submission.
+        if (signal?.aborted) await stopCancelledSend(sessionId, 1, turn);
         // The bus is not this path's answer: the blocking route is.
         turn.close();
         // Only a missing route falls back: every other refusal may already have
@@ -1286,7 +1418,19 @@ export function createOpenCodeBackend({
         // route holds the POST open for the whole turn, so it gets the turn's
         // own silence bound rather than a metadata read's.
         if (error?.status !== 404) throw error;
-        return turnResult(await call(`/session/${session}/message`, { method: 'POST', body: payload }, idleMs));
+        // A cancel that arrived with the 404 must not start the blocking send
+        // either: that would submit the prompt the operator just cancelled.
+        if (signal?.aborted) await stopCancelledSend(sessionId, 1, turn);
+        try {
+          return turnResult(
+            await postPrompt(`/session/${session}/message`, payload, signal, 1, idleMs),
+          );
+        } catch (fallbackError) {
+          // The blocking send was cancelled mid-flight and may still have been
+          // accepted: stop the same session and never re-send.
+          if (signal?.aborted) await stopCancelledSend(sessionId, 1, turn);
+          throw fallbackError;
+        }
       }
       return turn.wait(sentAt);
     },
