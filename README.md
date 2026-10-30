@@ -189,6 +189,17 @@ submission can never roll a build straight out to production: it pins
 lands as a draft on the internal testing track; a human promotes it in the Play
 Console when a real release is intended.
 
+### Web demo (zero install)
+
+Versutus also ships a browser build. Export it and serve the static output; a tester needs only a browser and a reachable gateway — no install, no APK, no Metro.
+
+```bash
+npm run export:web
+npm run serve:web        # serves dist/ on port 8090
+```
+
+Open the URL the server prints. Browser support is Expo SDK 57's web target; no specific browser or version is pinned or tested by this repo. The demo is the same client, not the phone app: no Play Store install, no OS-keychain app lock (web keeps secrets in browser storage), and no device push notifications. The Gate must allow the demo origin (`--allow-origin`; the server prints the exact line). A gateway is still required; these instructions serve the demo locally and provide no hosted demo URL.
+
 ---
 
 ## Verification
