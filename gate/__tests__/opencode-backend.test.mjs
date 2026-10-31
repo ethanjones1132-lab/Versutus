@@ -297,6 +297,13 @@ function liveBackend(routes = {}, options = {}) {
     calls,
     /** True once a subscriber is attached to the bus this fixture feeds. */
     opened: () => Boolean(streamController),
+    /**
+     * True once the subscriber has taken every chunk queued so far. The
+     * default queuing strategy holds one chunk, so a free slot means the read
+     * loop has it — the processing boundary a test needs when the mock clock,
+     * not a sleep, decides when the next frame may fire.
+     */
+    drained: () => Boolean(streamController) && streamController.desiredSize === 1,
     send,
     // The server's side of the bus: a frame published with nobody subscribed is
     // gone, exactly as it is on a real OpenCode server.
@@ -1124,21 +1131,64 @@ test('a terminal frame before the throttle deadline cancels the held progress', 
   assert.equal(seen.filter((event) => event.type === 'tool.progress').length, 0);
 });
 
-test('an abort before the throttle deadline cancels the held progress', async () => {
-  const { backend, send } = liveBackend({});
+// `TOOL_PROGRESS_MIN_INTERVAL_MS` in the backend is not exported, so the test
+// mirrors it: the assertions here are about behaviour on either side of that
+// throttle, and a value that drifts from production would make them vacuous.
+const TOOL_PROGRESS_THROTTLE_MS = 120;
+
+test('an abort before the throttle deadline cancels the held progress', async (t) => {
+  // The throttle is a `setTimeout` armed from `Date.now()`, so the test owns
+  // both: a stalled event loop used to carry the real clock past the deadline
+  // between the second pending snapshot and the abort, which made this a race
+  // with the machine's load. Nothing below waits on wall-clock time; the only
+  // thing that moves the clock is `tick`.
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { backend, sendAll, drained } = liveBackend({});
   const seen = [];
   const controller = new AbortController();
   const stream = backend.streamEvents('ses_abc', (event) => seen.push(event), controller.signal);
-  await stream.ready;
-  send(partUpdated({ type: 'tool', tool: 'exec', callID: 'c1', state: { status: 'pending', input: { command: 'a' } } }));
-  send(partUpdated({ type: 'tool', tool: 'exec', callID: 'c1', state: { status: 'pending', input: { command: 'aa' } } }));
-  await waitForEvent(seen, 'tool.started');
-  // Let the held snapshot arm its timer, then leave before it can fire.
-  await delay(20);
-  controller.abort();
-  await stream;
-  await delay(240);
-  assert.equal(seen.filter((event) => event.type === 'tool.progress').length, 0);
+  try {
+    await stream.ready;
+    const startedAt = Date.now();
+    // One chunk, so both snapshots are handled in the same synchronous batch:
+    // the first emits `tool.started`, the second is held with its flush timer
+    // armed a full interval out.
+    sendAll(
+      partUpdated({ type: 'tool', tool: 'exec', callID: 'c1', state: { status: 'pending', input: { command: 'a' } } }),
+      partUpdated({ type: 'tool', tool: 'exec', callID: 'c1', state: { status: 'pending', input: { command: 'aa' } } }),
+    );
+    // A real macrotask — `setImmediate` is deliberately not mocked — so the
+    // read loop has taken the frame and handled both lines before the test
+    // moves on. `drained` proves nothing was left queued behind the reader,
+    // which would make the abort assertion below pass for the wrong reason.
+    // With the queue empty, no progress emitted and the clock unmoved, the
+    // second snapshot can only be held: a frame processed at this clock would
+    // have been held behind the throttle, and `seen` says it was not published.
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(drained(), 'the held snapshot must have been processed, not still queued');
+    assert.deepEqual(seen.map((event) => event.type), ['tool.started']);
+    // The deadline is a full interval away: the clock has not moved since the
+    // frame that armed it, so the abort lands before it, by construction.
+    assert.equal(Date.now(), startedAt);
+    controller.abort();
+    // The caller is gone the moment `abort()` returns, so the held flush must
+    // not deliver even when it comes due before the read loop has finished
+    // unwinding — this is the production abort cancellation itself.
+    t.mock.timers.tick(TOOL_PROGRESS_THROTTLE_MS);
+    await new Promise((resolve) => setImmediate(resolve));
+    // Then the stream settles and drops whatever the abort had not reached.
+    await stream;
+    // Walk the clock further past the deadline: nothing left armed may fire.
+    t.mock.timers.tick(TOOL_PROGRESS_THROTTLE_MS * 4);
+    await new Promise((resolve) => setImmediate(resolve));
+    // Negative control: with the abort cancellation reverted — no signal guard
+    // on the flush or on emit, no dropped progress when the turn ends — the
+    // ticks above release the held snapshot and this sees a second frame.
+    assert.deepEqual(seen.map((event) => event.type), ['tool.started']);
+  } finally {
+    controller.abort();
+    t.mock.timers.reset();
+  }
 });
 
 test('a pending tool part becomes tool.started and a completed one tool.output', () => {

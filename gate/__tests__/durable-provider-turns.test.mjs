@@ -46,6 +46,45 @@ async function startVendor({
   die = false,
 } = {}) {
   const state = { requests: 0, abandoned: 0 };
+  // The handshake the detached-turn tests wait on instead of polling. It is
+  // level triggered against `state.requests`: a waiter that subscribes after
+  // the vendor already has the request resolves at once, and one that
+  // subscribes before it is woken from the request handler. A stalled event
+  // loop can delay both sides, but it can never move the arrival out from
+  // under the waiter the way a wall-clock poll can.
+  const arrivalWaiters = new Set();
+  const announceArrival = () => {
+    for (const waiter of [...arrivalWaiters]) waiter.notify();
+  };
+  const requestArrival = (count = 1, timeoutMs = 5_000) => {
+    if (state.requests >= count) return Promise.resolve(state.requests);
+    return new Promise((resolve, reject) => {
+      const waiter = {};
+      const release = () => {
+        clearTimeout(waiter.timer);
+        arrivalWaiters.delete(waiter);
+      };
+      waiter.notify = () => {
+        if (state.requests < count) return;
+        release();
+        resolve(state.requests);
+      };
+      // A test that gave up (or tore the vendor down) must not leave a waiter
+      // armed behind it.
+      waiter.cancel = (error) => {
+        release();
+        reject(error);
+      };
+      // Bounded, so a vendor the Gate never reaches fails the test inside its
+      // own timeout rather than sitting on a promise that never settles.
+      waiter.timer = setTimeout(() => {
+        release();
+        reject(new Error(`the vendor did not receive request ${count} within ${timeoutMs}ms`));
+      }, timeoutMs);
+      waiter.timer.unref?.();
+      arrivalWaiters.add(waiter);
+    });
+  };
   let releaseHold = () => {};
   const held = hold ? new Promise((resolve) => { releaseHold = resolve; }) : Promise.resolve();
   // Tests that forget to release must not pin the process; a hung vendor is
@@ -53,6 +92,10 @@ async function startVendor({
   if (hold) setTimeout(() => releaseHold(), 8000).unref?.();
   const server = createServer((req, res) => {
     state.requests += 1;
+    // The turn is the vendor's from this line on: wake the detached-turn
+    // handshake before a byte is written, so a test's abort lands on a live
+    // turn rather than racing the request's arrival.
+    announceArrival();
     req.resume();
     res.on('close', () => {
       if (!res.writableFinished) state.abandoned += 1;
@@ -99,8 +142,15 @@ async function startVendor({
   return {
     state,
     baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
+    /** Resolves once the vendor has its `count`th request in hand. */
+    requestArrival,
     release: () => releaseHold(),
     close: () => {
+      // Settle any waiter still armed: a test that could not see the arrival
+      // must fail on its own assertion, not on a promise left hanging past it.
+      for (const waiter of [...arrivalWaiters]) {
+        waiter.cancel(new Error('the vendor closed before the request arrived'));
+      }
       server.closeAllConnections?.();
       return new Promise((resolve) => server.close(resolve));
     },
@@ -515,7 +565,9 @@ test('a detached provider turn that completes leaves provider readiness untouche
   try {
     const pending = streamingTurn(harness, { turnId: TURN_ID, controller });
     pending.catch(() => undefined);
-    assert.ok(await until(() => vendor.state.requests === 1));
+    // Causally after the vendor owns the turn, not a poll interval after: the
+    // abort must leave a genuinely live upstream turn behind.
+    await vendor.requestArrival();
     controller.abort();
     await pending.catch(() => undefined);
     await sleep(40);
@@ -546,7 +598,9 @@ test('a detached provider failure leaves provider readiness untouched', { timeou
   try {
     const pending = streamingTurn(harness, { turnId: TURN_ID, controller });
     pending.catch(() => undefined);
-    assert.ok(await until(() => vendor.state.requests === 1));
+    // Same handshake as the completion twin: the vendor must own the turn
+    // before the phone leaves, and awaiting it is causal rather than a window.
+    await vendor.requestArrival();
     controller.abort();
     await pending.catch(() => undefined);
     await sleep(40);
