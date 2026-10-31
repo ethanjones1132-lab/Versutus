@@ -37,6 +37,13 @@ const ROOM_DELETE_TIMEOUT_MS = 8_000;
 /** What the round's wall-clock bound rejects with, so a timeout is not a failure. */
 const ROUND_TIMED_OUT = Symbol('council round timed out');
 
+/**
+ * The most Bots one comparison asks. The same cap `councilTargets` applies:
+ * the selection action reads it too, so a picked chip is always a Bot the
+ * round will actually ask.
+ */
+const COUNCIL_MAX_BOTS = 3;
+
 /** Said beside the chips a failed re-read kept, never in place of them. */
 const ROSTER_REFRESH_FAILED_COPY = "Couldn't refresh the Bot list";
 
@@ -178,14 +185,21 @@ export default function CouncilScreen() {
     const selectedIds = new Set(selected);
     return councilTargets(
       roster.filter((bot) => selectedIds.has(bot.id)),
-      3,
+      COUNCIL_MAX_BOTS,
     );
   }, [roster, selected]);
 
+  // The cap is enforced where the selection is made: a chip that looks picked
+  // must be a Bot the round asks. Without this the fourth chip stayed
+  // highlighted while `councilTargets` silently dropped it. The functional
+  // update reads the latest selection, so several toggles inside one tick
+  // cannot each see room and overshoot together.
   const toggleBot = (botId: string) => {
-    setSelected((previous) =>
-      previous.includes(botId) ? previous.filter((id) => id !== botId) : [...previous, botId],
-    );
+    setSelected((previous) => {
+      if (previous.includes(botId)) return previous.filter((id) => id !== botId);
+      if (previous.length >= COUNCIL_MAX_BOTS) return previous;
+      return [...previous, botId];
+    });
   };
 
   const promptIssue = councilPromptIssue(prompt);
@@ -341,7 +355,7 @@ export default function CouncilScreen() {
           <>
             <Card variant="surface" padding={Spacing.three} style={styles.card}>
               <Text variant="micro" color="tertiary">
-                Bots to compare ({targets.length}/3)
+                {`Bots to compare (${targets.length}/${COUNCIL_MAX_BOTS})`}
               </Text>
               {rosterState === 'failed' ? (
                 <ErrorCard
@@ -372,14 +386,22 @@ export default function CouncilScreen() {
                 />
               ) : (
                 <View style={styles.chips}>
-                  {roster.map((bot) => (
-                    <Chip
-                      key={bot.id}
-                      label={bot.displayName || bot.id}
-                      selected={selected.includes(bot.id)}
-                      onPress={() => toggleBot(bot.id)}
-                    />
-                  ))}
+                  {roster.map((bot) => {
+                    const picked = selected.includes(bot.id);
+                    // At the cap a Bot that is not already picked cannot join
+                    // the round, so its chip says so instead of lighting up and
+                    // being dropped. Picked chips stay pressable: a slot is
+                    // freed by deselecting one.
+                    return (
+                      <Chip
+                        key={bot.id}
+                        label={bot.displayName || bot.id}
+                        selected={picked}
+                        disabled={!picked && selected.length >= COUNCIL_MAX_BOTS}
+                        onPress={() => toggleBot(bot.id)}
+                      />
+                    );
+                  })}
                 </View>
               )}
               {rosterError && roster.length > 0 ? (
