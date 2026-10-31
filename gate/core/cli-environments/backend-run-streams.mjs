@@ -28,8 +28,19 @@ import { join } from 'node:path';
  * drops one malformed frame, never the whole history).
  *
  * A single writer per run: the first live relay claims the tee via
- * `begin()`; concurrent relays of the same live run just pass bytes through
- * without appending, so a file never holds duplicated frames.
+ * `claimLive()`; concurrent relays of the same live run just pass bytes
+ * through without appending, so a file never holds duplicated frames.
+ *
+ * That holds while two relays overlap. It did NOT hold for a straggler: a
+ * relay opened alongside the first one, but whose claim is evaluated only
+ * after the first relay finished (`markComplete` + `end`), saw the run as
+ * unclaimed and teed it a second time — the marked file is never truncated,
+ * so it appended its own copy of frames the archive already held. The store
+ * therefore remembers, per process, the runs it has completed (`completed`
+ * below) and refuses a live claim for one of them: a run's archive is final
+ * once this process has seen its clean end. The memory is a bounded FIFO
+ * (DEFAULT_COMPLETED_MEMORY_LIMIT) and dies with the process; the on-disk
+ * marker stays the durable truth.
  *
  * COMPLETENESS — a file alone is not the truth:
  *
@@ -47,6 +58,14 @@ import { join } from 'node:path';
  */
 const DEFAULT_MAX_BYTES_PER_RUN = 8 * 1024 * 1024;
 const DEFAULT_MAX_RUNS = 100;
+// How many completed run ids a process remembers. Refusing a straggler relay
+// only needs the window of runs that could still have a relay open, which is
+// far smaller than this; the bound exists so a long-lived Gate that completes
+// thousands of runs does not grow a permanent Set. Evicting an id can only
+// reintroduce the duplicate for a run whose relay was still straggling through
+// that many completions, and a restart resets the memory anyway — the archive
+// marker, not this Set, decides what a replay sees.
+const DEFAULT_COMPLETED_MEMORY_LIMIT = 512;
 
 /** Run ids arrive from any API caller and end up as path segments. */
 function safeSegment(value, fallback = 'run') {
@@ -57,7 +76,11 @@ function safeSegment(value, fallback = 'run') {
 
 export function createBackendRunStreams(
   dir,
-  { maxBytesPerRun = DEFAULT_MAX_BYTES_PER_RUN, maxRuns = DEFAULT_MAX_RUNS } = {},
+  {
+    maxBytesPerRun = DEFAULT_MAX_BYTES_PER_RUN,
+    maxRuns = DEFAULT_MAX_RUNS,
+    completedMemoryLimit = DEFAULT_COMPLETED_MEMORY_LIMIT,
+  } = {},
 ) {
   /** Runs currently being teed by a live relay. */
   const active = new Set();
@@ -65,6 +88,11 @@ export function createBackendRunStreams(
   const sizes = new Map();
   /** Runs whose archive hit the byte cap: truncated prefix, never complete. */
   const capped = new Set();
+  /** Run ids this process has completed, oldest first. Bounded, see below. */
+  const completed = new Set();
+  const completedBound = Number.isFinite(completedMemoryLimit)
+    ? Math.max(0, Math.floor(completedMemoryLimit))
+    : DEFAULT_COMPLETED_MEMORY_LIMIT;
   let appends = 0;
   // The directory is created once: a recursive mkdirSync on every frame was
   // a third of the relay's synchronous cost for work that is done after the
@@ -83,6 +111,28 @@ export function createBackendRunStreams(
 
   function markerFor(runId) {
     return join(dir, `${safeSegment(runId)}.complete`);
+  }
+
+  /**
+   * Remember a run this process completed, evicting the oldest ids past the
+   * bound. A Set iterates in insertion order, so re-inserting an id (delete
+   * then add) keeps the order true to the last completion.
+   */
+  function rememberCompleted(runId) {
+    completed.delete(runId);
+    completed.add(runId);
+    while (completed.size > completedBound) {
+      const oldest = completed.values().next().value;
+      completed.delete(oldest);
+    }
+  }
+
+  /** Forget in-process completions named by a prune: the files are gone. */
+  function forgetCompletedSegments(segments) {
+    if (segments.size === 0 || completed.size === 0) return;
+    for (const runId of completed) {
+      if (segments.has(safeSegment(runId))) completed.delete(runId);
+    }
   }
 
   async function prune(activeAtEnqueue) {
@@ -112,12 +162,37 @@ export function createBackendRunStreams(
       }
     }
     byAge.sort((a, b) => a.mtimeMs - b.mtimeMs);
-    for (const stale of byAge.slice(0, files.length - maxRuns)) {
+    const doomed = byAge.slice(0, files.length - maxRuns);
+    // A pruned run is forgotten on disk, so this process forgets having
+    // completed it too: otherwise a later re-stream of that run could never
+    // rebuild an archive this process would keep refusing to tee.
+    forgetCompletedSegments(new Set(doomed.map((stale) => stale.name.slice(0, -4))));
+    for (const stale of doomed) {
       await rm(join(dir, stale.name), { force: true }).catch(() => {});
       // The completeness marker dies with its stream: an orphan marker must
       // not bless a future file that happens to reuse the same segment.
       await rm(join(dir, `${stale.name.slice(0, -4)}.complete`), { force: true }).catch(() => {});
     }
+  }
+
+  /**
+   * Take the tee: the one place that sets `active`. Callers decide whether a
+   * run id may be claimed at all (see begin / claimLive).
+   */
+  function claimTee(runId) {
+    if (active.has(runId)) return false;
+    active.add(runId);
+    capped.delete(runId);
+    try { ensureDir(); } catch { dirReady = false; }
+    if (!existsSync(markerFor(runId))) {
+      try {
+        truncateSync(fileFor(runId), 0);
+        sizes.delete(runId);
+      } catch {
+        // No file yet (or no dir yet) — nothing to reset.
+      }
+    }
+    return true;
   }
 
   return {
@@ -136,21 +211,37 @@ export function createBackendRunStreams(
      * upstream re-streams a live run from its first event, so re-teeing into
      * the same file would double every earlier frame — begin() starts the
      * file over. A marked file is complete history and is never reset.
+     *
+     * NOTE: this is the "start the tee" entry point (unit tests, explicit heal
+     * tooling); resuming a marked archive to append a tail is a deliberate act,
+     * so the completed-run memory is not consulted here. The relaying route
+     * must claim through claimLive() instead, which refuses a run this process
+     * has completed — that is the straggler fix.
      */
     begin(runId) {
-      if (active.has(runId)) return false;
-      active.add(runId);
-      capped.delete(runId);
-      try { ensureDir(); } catch { dirReady = false; }
-      if (!existsSync(markerFor(runId))) {
-        try {
-          truncateSync(fileFor(runId), 0);
-          sizes.delete(runId);
-        } catch {
-          // No file yet (or no dir yet) — nothing to reset.
-        }
-      }
-      return true;
+      return claimTee(runId);
+    },
+
+    /**
+     * Claim the tee for a LIVE relay of `runId` — the relaying route's claim.
+     *
+     * The same single-writer rule as begin(), plus the straggler case: a relay
+     * opened alongside the first one may reach this claim only AFTER that
+     * relay completed (markComplete) and released (end) the run, so `active`
+     * is already empty for it. The upstream re-streams the run from its first
+     * event and the marked file is never truncated, so claiming again would
+     * append a second copy of frames the archive already holds. A run this
+     * process has completed is therefore final: the claim is refused (the
+     * relay passes bytes through and archives nothing) and the file keeps
+     * every byte it had.
+     *
+     * A torn relay's partial is unaffected: it never reached markComplete, so
+     * it is not in the completed memory and the unmarked-partial heal above
+     * still replaces it.
+     */
+    claimLive(runId) {
+      if (completed.has(runId)) return false;
+      return claimTee(runId);
     },
 
     /** Release the tee. Called by the tee-holder when its relay ends. */
@@ -201,12 +292,19 @@ export function createBackendRunStreams(
      * stream as the upstream presented it and earns its completeness marker.
      * A capped run never earns it — the file is a truncated prefix, and a
      * replay must not present a cut-off stream as the full story.
+     *
+     * A run marked here is also remembered as final for this process, so a
+     * straggler relay cannot re-tee it (see claimLive).
      */
     markComplete(runId) {
       if (capped.has(runId)) return;
       try {
         ensureDir();
         writeFileSync(markerFor(runId), 'complete\n', 'utf8');
+        // Only a marker that really reached disk makes the archive final: a
+        // failed write leaves an unmarked partial that a re-stream must be
+        // able to replace, so nothing is remembered in that case.
+        rememberCompleted(runId);
       } catch {
         // Archive failures never take the live relay down with them.
       }

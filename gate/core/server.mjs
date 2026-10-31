@@ -3297,9 +3297,13 @@ export async function createGate(config = {}) {
         // Relay bytes unchanged: the app already parses Hermes run events.
         // The single tee-holder also archives them (backend-run-streams.mjs)
         // so a completed run replays from disk after the live buffer is gone.
+        // The claim is a LIVE claim: a relay opened alongside this one may
+        // only reach it after the first relay completed and released the run,
+        // and re-teeing then would append the same frames to a marked file a
+        // second time. A refused claim still relays every byte to its client.
         runEventStreams.add(res);
         res.once('close', () => runEventStreams.delete(res));
-        const tee = runStreams.begin(runId);
+        const tee = runStreams.claimLive(runId);
         const reader = upstream.body?.getReader?.();
         if (!reader) {
           res.end();
