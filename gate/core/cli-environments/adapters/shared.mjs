@@ -29,7 +29,10 @@ export function spawnCommand(executablePath) {
  * themselves -- and rejects only on spawn failure or timeout.
  */
 export async function runCli(executablePath, args, { timeoutMs = 5000, spawnImpl = spawn } = {}) {
-  await access(executablePath.endsWith('.mjs') ? executablePath : executablePath.split(' ')[0]);
+  // executablePath is a single literal filesystem path: spawnCommand/spawn use
+  // it unsplit, so the existence check must too. Splitting on spaces rejected
+  // valid `C:\Program Files\...` (or `/usr/local/...`) binaries as not runnable.
+  await access(executablePath);
   const { command, prefix } = spawnCommand(executablePath);
   return new Promise((resolve, reject) => {
     // stdin is never written; an open pipe would park a CLI that reads to EOF.
