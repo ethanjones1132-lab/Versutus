@@ -32,6 +32,10 @@ const MAX_PIXELS = 1_300_000;
 let glCanvas: HTMLCanvasElement | null = null;
 let gpu: Gpu | null = null;
 let unavailable = false;
+/** The browser took the context away; it is a pause, not an unsupported browser. */
+let contextLost = false;
+/** A context that worked once is transiently lost when it vanishes, never unsupported. */
+let hadContext = false;
 
 function compile(gl: WebGLRenderingContext, type: number, source: string): WebGLShader | null {
   const shader = gl.createShader(type);
@@ -47,15 +51,24 @@ function compile(gl: WebGLRenderingContext, type: number, source: string): WebGL
 }
 
 function build(): Gpu | null {
-  if (unavailable || typeof document === 'undefined') return null;
+  if (unavailable || contextLost || typeof document === 'undefined') return null;
   if (!glCanvas) {
     glCanvas = document.createElement('canvas');
     glCanvas.addEventListener('webglcontextlost', (event) => {
+      // Keep the canvas and the StageHandle: a lost context pauses the air
+      // until the browser hands it back, it does not make the GPU unsupported.
       event.preventDefault();
+      contextLost = true;
       gpu = null;
+      lastTick = 0;
     });
     glCanvas.addEventListener('webglcontextrestored', () => {
+      contextLost = false;
       gpu = null;
+      lastTick = 0;
+      // A still scene has no animation to make it draw again, so mark every
+      // entry dirty: the restoration is the wake signal.
+      for (const entry of entries) entry.dirty = true;
       wake();
     });
   }
@@ -69,21 +82,42 @@ function build(): Gpu | null {
     powerPreference: 'low-power',
   }) as WebGLRenderingContext | null;
   if (!gl) {
-    unavailable = true;
+    // A browser that never gave us a context is unsupported; one that took a
+    // working context away is only paused.
+    if (hadContext) contextLost = true;
+    else unavailable = true;
     return null;
   }
-  if (gl.isContextLost()) return null;
+  hadContext = true;
+  if (gl.isContextLost()) {
+    contextLost = true;
+    return null;
+  }
   const vertex = compile(gl, gl.VERTEX_SHADER, STAGE_VERTEX_GLSL);
   const fragment = compile(gl, gl.FRAGMENT_SHADER, STAGE_SHADER_GLSL);
+  // Compilation reports failure when the context vanishes mid-build; that is
+  // the same transient pause as a lost event, not a broken shader.
+  if (gl.isContextLost()) {
+    contextLost = true;
+    return null;
+  }
   const program = gl.createProgram();
   if (!vertex || !fragment || !program) {
-    unavailable = !gl.isContextLost();
+    if (gl.isContextLost()) {
+      contextLost = true;
+      return null;
+    }
+    unavailable = true;
     return null;
   }
   gl.attachShader(program, vertex);
   gl.attachShader(program, fragment);
   gl.linkProgram(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    if (gl.isContextLost()) {
+      contextLost = true;
+      return null;
+    }
     console.warn('[stage] shader failed to link:', gl.getProgramInfoLog(program));
     unavailable = true;
     return null;
@@ -107,10 +141,24 @@ export function stageGpuAvailable(): boolean {
   return gpu !== null || (!unavailable && glCanvas !== null);
 }
 
-function draw(uniforms: StageUniforms, width: number, height: number, target: CanvasRenderingContext2D): boolean {
+type DrawOutcome = 'drawn' | 'paused' | 'unavailable';
+
+function draw(uniforms: StageUniforms, width: number, height: number, target: CanvasRenderingContext2D): DrawOutcome {
   if (!gpu) gpu = build();
-  if (!gpu || !glCanvas) return false;
+  if (!gpu || !glCanvas) {
+    if (unavailable) return 'unavailable';
+    // No GPU state right now: pause and leave the entry dirty for restoration.
+    contextLost = true;
+    lastTick = 0;
+    return 'paused';
+  }
   const { gl, locations } = gpu;
+  if (gl.isContextLost()) {
+    contextLost = true;
+    gpu = null;
+    lastTick = 0;
+    return 'paused';
+  }
   if (glCanvas.width !== width || glCanvas.height !== height) {
     glCanvas.width = width;
     glCanvas.height = height;
@@ -128,7 +176,7 @@ function draw(uniforms: StageUniforms, width: number, height: number, target: Ca
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   // Same task as the draw, so the drawing buffer is still intact to copy.
   target.drawImage(glCanvas, 0, 0, width, height);
-  return true;
+  return 'drawn';
 }
 
 // ── The frame loop ───────────────────────────────────────────────────────
@@ -154,12 +202,19 @@ let firstLightDone = false;
 let wired = false;
 
 function wake(): void {
+  if (contextLost) return;
   if (!frame && typeof requestAnimationFrame !== 'undefined') frame = requestAnimationFrame(tick);
 }
 
 function tick(now: number): void {
   frame = 0;
   if (typeof document !== 'undefined' && document.hidden) {
+    lastTick = 0;
+    return;
+  }
+  // While the context is lost there is nothing to draw and nothing to poll:
+  // webglcontextrestored wakes the loop.
+  if (contextLost) {
     lastTick = 0;
     return;
   }
@@ -173,7 +228,13 @@ function tick(now: number): void {
     const step = entry.motion.step(now, dt, signals, { width: entry.width, height: entry.height, pixelRatio: 1 }, idle);
     const due = entry.dirty || step.animating || (step.drifting && now - entry.lastDraw >= STAGE_TIMING.driftFrameMs - 1);
     if (due) {
-      if (!draw(step.uniforms, entry.width, entry.height, entry.context)) {
+      const outcome = draw(step.uniforms, entry.width, entry.height, entry.context);
+      if (outcome === 'paused') {
+        // Keep `dirty` set: the restored context must redraw this frame even if
+        // the air had already gone still.
+        continue;
+      }
+      if (outcome === 'unavailable') {
         entry.onUnavailable();
         continue;
       }
@@ -182,7 +243,7 @@ function tick(now: number): void {
     }
     again = again || step.animating || step.drifting;
   }
-  if (again) wake();
+  if (again && !contextLost) wake();
   else lastTick = 0;
 }
 
