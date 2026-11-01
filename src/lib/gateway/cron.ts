@@ -143,11 +143,27 @@ export function nextRunLabel(nextRunAt: string, now = Date.now()): string | null
   return `${hh}:${mm}`;
 }
 
-/** How long a run took, or has been going. Null when the host reported no start. */
+/**
+ * How long a run took, or has been going. Null when the duration cannot be
+ * known — no start, or a finished run the host never stamped with an end.
+ *
+ * Only a live run is measured against the clock. A finished run with no
+ * `finishedAt` used to fall back to `now`, so its duration grew on every
+ * render: a run that had already ended kept claiming it was still getting
+ * longer. Absent end data is UNKNOWN (null, so the row prints no duration),
+ * never a fabricated count-up.
+ */
 export function runElapsedLabel(run: CronRun, now = Date.now()): string | null {
   const started = run.startedAt;
   if (typeof started !== 'number' || !Number.isFinite(started)) return null;
-  const end = run.status === 'running' ? now : (run.finishedAt ?? now);
+  let end: number;
+  if (run.status === 'running') {
+    end = now;
+  } else {
+    const finished = run.finishedAt;
+    if (typeof finished !== 'number' || !Number.isFinite(finished)) return null;
+    end = finished;
+  }
   const seconds = Math.max(0, Math.round((end - started) / 1000));
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
@@ -159,6 +175,89 @@ export function runElapsedLabel(run: CronRun, now = Date.now()): string | null {
 /** A run is live when the host has not closed it. */
 export function isRunLive(run: CronRun): boolean {
   return run.status === 'running';
+}
+
+/** Longest failure reason a run row prints before it is cut short. */
+export const CRON_RUN_FAILURE_MAX = 120;
+
+/** One run's verdict, in words a row can print without guessing. */
+export type CronRunVerdict = {
+  tone: 'running' | 'done' | 'failed' | 'unknown';
+  /** What the row prints: `running`, `completed`, `failed`, `cancelled`, or the host's own word. */
+  label: string;
+  /** The host's message, flattened to one bounded line; absent when it wrote none. */
+  detail?: string;
+};
+
+const RUN_WORD_RUNNING = /^(running|started|in[ _-]?progress|active)$/;
+const RUN_WORD_DONE = /^(ok|complete|completed|succeeded|success|done|finished)$/;
+const RUN_WORD_CANCELLED = /^(cancel+ed|cancel+ing|aborted|aborting|killed|stopped)$/;
+const RUN_WORD_FAILED = /^(fail|failed|failure|error|errored|timeout|timed[ _-]?out)$/;
+
+/**
+ * The host's error, flattened to one bounded line. A multi-line message would
+ * shove the run history apart, so it is squeezed to a single line; a value that
+ * is not a string carries no readable message and answers empty.
+ */
+function flattenRunFailure(error: CronRun['error']): string {
+  if (typeof error !== 'string') return '';
+  const flat = error.replace(/\s+/g, ' ').trim();
+  return flat.length > CRON_RUN_FAILURE_MAX
+    ? `${flat.slice(0, CRON_RUN_FAILURE_MAX - 1)}…`
+    : flat;
+}
+
+/**
+ * What one run was, judged from the host's error first and its status word
+ * second.
+ *
+ * A finished run that carries an error is a FAILURE, never a success: the wire
+ * `status` only says the run is closed, and printing the closure as "completed"
+ * is exactly the false success this verdict exists to prevent. The same holds
+ * for a failure or cancellation word in `status` — the RPC payload is not
+ * validated, so a host that reports `failed` (or a word this build has never
+ * seen) must not fall through to "completed". An unrecognised word is printed
+ * as the host wrote it, because repeating its word is honest and inventing
+ * success is not.
+ *
+ * Only an absent (or whitespace-only) error lets the status word speak.
+ */
+export function cronRunVerdict(run: CronRun): CronRunVerdict {
+  const detail = flattenRunFailure(run.error);
+  const wroteError =
+    run.error !== null &&
+    run.error !== undefined &&
+    (typeof run.error === 'string' ? run.error.trim().length > 0 : true);
+  // The host that wrote an error failed the run, whatever word it left behind.
+  if (wroteError) {
+    return detail
+      ? { tone: 'failed', label: 'failed', detail }
+      : { tone: 'failed', label: 'failed' };
+  }
+
+  const status = String(run.status ?? '').trim();
+  const word = status.toLowerCase();
+  if (RUN_WORD_RUNNING.test(word)) return { tone: 'running', label: 'running' };
+  if (RUN_WORD_DONE.test(word)) return { tone: 'done', label: 'completed' };
+  if (RUN_WORD_CANCELLED.test(word)) return { tone: 'failed', label: 'cancelled' };
+  if (RUN_WORD_FAILED.test(word)) return { tone: 'failed', label: 'failed' };
+  return { tone: 'unknown', label: status || 'unknown' };
+}
+
+/**
+ * The one-line subtitle for a run row: the verdict, then how long it took and
+ * how much it did. A failed run leads with its reason (bounded to one line) and
+ * drops the counts — the failure is the fact the operator acts on.
+ */
+export function cronRunSummary(run: CronRun, now = Date.now()): string {
+  const verdict = cronRunVerdict(run);
+  if (verdict.detail) return `${verdict.label} · ${verdict.detail}`;
+  const elapsed = runElapsedLabel(run, now);
+  const turns =
+    typeof run.turnCount === 'number' && Number.isFinite(run.turnCount)
+      ? `${run.turnCount} turns`
+      : null;
+  return [verdict.label, elapsed, turns].filter((part): part is string => Boolean(part)).join(' · ');
 }
 
 /**

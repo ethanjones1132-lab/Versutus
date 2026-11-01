@@ -9,7 +9,13 @@ import type {
   EnvironmentRunSummary,
   EnvironmentSnapshot,
 } from '@/lib/gateway/environment-types';
-import { environmentRunBadge, environmentRunView } from '@/lib/gateway/environment-run-view';
+import {
+  appendRunEvent,
+  capRunEvents,
+  environmentRunBadge,
+  environmentRunView,
+  MAX_RUN_EVENTS,
+} from '@/lib/gateway/environment-run-view';
 import { operationNeedsPromptInput, resolveLauncherOperations } from '@/lib/gateway/environment-operations';
 import { formatRunFailure } from '@/lib/gateway/run-failures';
 
@@ -17,22 +23,9 @@ type Client = ReturnType<typeof createEnvironmentClient>;
 
 const TERMINAL_EVENT = /^run\.(completed|failed|cancelled)$/;
 
-/**
- * How many streamed events one run may keep in memory. A chatty CLI can emit
- * thousands of frames in a single run; the sheet folds them into one reply, so
- * the tail is what matters and the head can go.
- */
-export const MAX_RUN_EVENTS = 2000;
-
-/** Keep the newest MAX_RUN_EVENTS, plus the `run.started` marker if the tail
- *  has already dropped it, so the bubble still says the run opened. */
-export function capRunEvents(events: EnvironmentRunEvent[]): EnvironmentRunEvent[] {
-  if (events.length <= MAX_RUN_EVENTS) return events;
-  const kept = events.slice(-MAX_RUN_EVENTS);
-  const opened = events.find((event) => event.type === 'run.started');
-  if (!opened || kept.includes(opened)) return kept;
-  return [opened, ...kept.slice(-(MAX_RUN_EVENTS - 1))];
-}
+// The log cap lives with the fold it protects (environment-run-view.ts); the
+// launcher keeps re-exporting it for the sheet's tests.
+export { capRunEvents, MAX_RUN_EVENTS };
 
 function approvalFrom(event: EnvironmentRunEvent): { id: string; summary: string } | null {
   if (!/approval/i.test(event.type)) return null;
@@ -225,7 +218,7 @@ export function EnvironmentRunLauncher({
         (event) => {
           if (runTokenRef.current !== token) return;
           lastEventTypeRef.current = event.type;
-          setEvents((current) => capRunEvents([...current, event]));
+          setEvents((current) => appendRunEvent(current, event));
           const pending = approvalFrom(event);
           if (pending) setApproval(pending);
         },

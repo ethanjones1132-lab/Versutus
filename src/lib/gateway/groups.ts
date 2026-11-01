@@ -249,11 +249,19 @@ export function GROUP_SESSION_TITLE(name: string): string {
   return `Group: ${name}`;
 }
 
+/**
+ * The refusal strings `validateGroup` returns. Built from the same constants
+ * the checks read, so a changed limit can never leave the operator told a
+ * number the validation no longer enforces (QUALITY-SCAN 2026-10-11).
+ */
+export const GROUP_MEMBER_FLOOR_MESSAGE = `need at least ${MIN_GROUP_MEMBERS} bots`;
+export const GROUP_MEMBER_CEILING_MESSAGE = `at most ${MAX_GROUP_MEMBERS} bots`;
+
 export function validateGroup({ name, memberIds }: { name: string; memberIds: string[] }): { ok: boolean; error?: string } {
   if (!name.trim()) return { ok: false, error: 'name required' };
   const unique = [...new Set(memberIds)];
-  if (unique.length < MIN_GROUP_MEMBERS) return { ok: false, error: 'need at least 2 bots' };
-  if (unique.length > MAX_GROUP_MEMBERS) return { ok: false, error: 'at most 6 bots' };
+  if (unique.length < MIN_GROUP_MEMBERS) return { ok: false, error: GROUP_MEMBER_FLOOR_MESSAGE };
+  if (unique.length > MAX_GROUP_MEMBERS) return { ok: false, error: GROUP_MEMBER_CEILING_MESSAGE };
   return { ok: true };
 }
 

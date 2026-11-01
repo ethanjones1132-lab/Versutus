@@ -69,8 +69,17 @@ describe('roster New Group Room under the two-bot floor', () => {
     const groups = readGroupsSource();
     const validate = groups.match(/export function validateGroup\([\s\S]*?\n\}/)?.[0];
     expect(validate).toBeDefined();
-    expect(validate).toMatch(/unique\.length < MIN_GROUP_MEMBERS\)\s*return \{ ok: false, error: 'need at least 2 bots' \}/);
-    expect(validate).toMatch(/unique\.length > MAX_GROUP_MEMBERS\)\s*return \{ ok: false, error: 'at most 6 bots' \}/);
+    // The refusals read their own limits, so the text cannot drift from the
+    // checks. A hand-copied number in either message is the regression this
+    // pins against (QUALITY-SCAN 2026-10-11 group_limits).
+    expect(validate).not.toMatch(/error: 'need at least \d+ bots'/);
+    expect(validate).not.toMatch(/error: 'at most \d+ bots'/);
+    expect(validate).toMatch(
+      /unique\.length < MIN_GROUP_MEMBERS\)\s*return \{ ok: false, error: GROUP_MEMBER_FLOOR_MESSAGE \}/,
+    );
+    expect(validate).toMatch(
+      /unique\.length > MAX_GROUP_MEMBERS\)\s*return \{ ok: false, error: GROUP_MEMBER_CEILING_MESSAGE \}/,
+    );
   });
 
   test('onNewGroup is still gated only by connected-and-can-host in chat-screen', () => {

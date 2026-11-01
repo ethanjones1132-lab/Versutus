@@ -1,10 +1,39 @@
-/** 1200 → "1.2k", 2500000 → "2.5M", 1200000000 → "1.2B" */
+function formatUnit(scaled: number, digits: number, suffix: string): string {
+  return `${scaled.toFixed(digits)}${suffix}`;
+}
+
+/** True when rounding `scaled` to `digits` decimals carries into the next unit ("999.95" → 1000.0). */
+function roundsToNextUnit(scaled: number, digits: number): boolean {
+  return Number(scaled.toFixed(digits)) >= 1000;
+}
+
+/**
+ * 1200 → "1.2k", 2500000 → "2.5M", 1200000000 → "1.2B".
+ * Values round inside their unit first and promote when that rounding reaches
+ * 1000, so 999_950 renders "1.0M" rather than "1000k".
+ */
 export function formatTokenCount(count: number): string {
   if (!Number.isFinite(count) || count < 0) return '0';
-  if (count < 1000) return String(Math.round(count));
-  if (count < 1_000_000) return `${(count / 1000).toFixed(count < 10_000 ? 1 : 0)}k`;
-  if (count < 1_000_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-  return `${(count / 1_000_000_000).toFixed(1)}B`;
+  if (count < 1_000) {
+    const rounded = Math.round(count);
+    return rounded < 1_000 ? String(rounded) : formatUnit(count / 1_000, 1, 'k');
+  }
+  if (count < 1_000_000) {
+    const digits = count < 10_000 ? 1 : 0;
+    if (roundsToNextUnit(count / 1_000, digits)) return formatUnit(count / 1_000_000, 1, 'M');
+    return formatUnit(count / 1_000, digits, 'k');
+  }
+  if (count < 1_000_000_000) {
+    if (roundsToNextUnit(count / 1_000_000, 1)) return formatUnit(count / 1_000_000_000, 1, 'B');
+    return formatUnit(count / 1_000_000, 1, 'M');
+  }
+  if (count < 1_000_000_000_000) {
+    if (roundsToNextUnit(count / 1_000_000_000, 1)) {
+      return formatUnit(count / 1_000_000_000_000, 1, 'T');
+    }
+    return formatUnit(count / 1_000_000_000, 1, 'B');
+  }
+  return formatUnit(count / 1_000_000_000_000, 1, 'T');
 }
 
 /** 0.0042 → "$0.0042", 1.2 → "$1.20" */

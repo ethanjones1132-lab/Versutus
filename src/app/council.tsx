@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, View } from 'react-native';
 
 import { CouncilCompareView } from '@/components/chat/council-compare-view';
 import { Button, Card, Chip, EmptyState, ErrorCard, Icon, PageTitle, PressableScale, Screen, Skeleton, Text, TextField } from '@/components/ui';
@@ -15,17 +15,25 @@ import {
   COUNCIL_STOPPED_NOTE,
   COUNCIL_TIMEOUT_NOTE,
   councilDisabledCopy,
+  councilLedgerRefusalCopy,
   councilNoAnswerColumns,
   councilPromptIssue,
   councilRoomGone,
+  councilRoomLedger,
   councilRoomName,
   councilTargets,
   notePendingRoom,
   runCouncil,
   sweepPendingRooms,
   type CouncilColumn,
+  type CouncilPendingRoomRefusal,
 } from '@/lib/gateway/council';
 import { keyValueStorage } from '@/lib/storage/key-value';
+
+const roomLedger = councilRoomLedger(
+  keyValueStorage,
+  Platform.OS === 'web' ? () => globalThis.localStorage : undefined,
+);
 
 /**
  * How long the delete of a transient room may hold a coroutine. The transport's
@@ -36,6 +44,21 @@ const ROOM_DELETE_TIMEOUT_MS = 8_000;
 
 /** What the round's wall-clock bound rejects with, so a timeout is not a failure. */
 const ROUND_TIMED_OUT = Symbol('council round timed out');
+
+/**
+ * The room exists but could not be written down as owed. The round is never
+ * sent: a room whose delete no future mount knows about is exactly the leak the
+ * ledger prevents, so this ends the comparison with a visible refusal instead.
+ */
+class CouncilRoomNotRecordedError extends Error {
+  readonly reason: CouncilPendingRoomRefusal;
+
+  constructor(reason: CouncilPendingRoomRefusal) {
+    super(councilLedgerRefusalCopy(reason));
+    this.name = 'CouncilRoomNotRecordedError';
+    this.reason = reason;
+  }
+}
 
 /**
  * The most Bots one comparison asks. The same cap `councilTargets` applies:
@@ -154,10 +177,10 @@ export default function CouncilScreen() {
       void (async () => {
         try {
           await boundedOperation(botGroups.deleteGroup(roomId), ROOM_DELETE_TIMEOUT_MS);
-          await clearPendingRoom(keyValueStorage, roomId);
+          await clearPendingRoom(roomLedger, roomId);
         } catch (cause) {
           // A room the Gate has already forgotten is the outcome we wanted.
-          if (councilRoomGone(cause)) await clearPendingRoom(keyValueStorage, roomId);
+          if (councilRoomGone(cause)) await clearPendingRoom(roomLedger, roomId);
         }
       })();
     },
@@ -171,7 +194,7 @@ export default function CouncilScreen() {
     if (status !== 'connected') return undefined;
     const timer = setTimeout(() => {
       void sweepPendingRooms(
-        keyValueStorage,
+        roomLedger,
         (roomId) => botGroups.deleteGroup(roomId),
         Date.now(),
         ROOM_DELETE_TIMEOUT_MS,
@@ -251,8 +274,13 @@ export default function CouncilScreen() {
           roomId = room.id;
           liveRoomRef.current = room.id;
           // Written before the send, so a process the OS kills mid-round leaves
-          // a note the next mount can act on.
-          await notePendingRoom(keyValueStorage, room.id);
+          // a note the next mount can act on. A full ledger or a failed read or
+          // write means the room is NOT durably recorded: the round must not be
+          // sent, because a killed process would leak a room nothing sweeps.
+          const admission = await notePendingRoom(roomLedger, room.id);
+          if (!admission.recorded) {
+            throw new CouncilRoomNotRecordedError(admission.reason);
+          }
           // Stopped (or bounded out) while the room was being created: nothing
           // will read this round, so it is never sent and the room goes now
           // rather than waiting to be swept.
@@ -280,6 +308,17 @@ export default function CouncilScreen() {
           // late answer cannot reach the columns; this only says what happened.
           setColumns((arrived) => councilNoAnswerColumns(targets, arrived));
           setNote(COUNCIL_TIMEOUT_NOTE);
+          // Invalidate the asynchronous create/admission path too: a room that
+          // arrives after the bound must be deleted without sending a round.
+          roundRef.current += 1;
+          setSending(false);
+          inFlightRef.current = false;
+        } else if (cause instanceof CouncilRoomNotRecordedError) {
+          // Nothing was sent: the room could not be admitted durably. The
+          // finally below deletes the room, and this says plainly why the
+          // comparison did not happen and what the operator can do.
+          setColumns([]);
+          setError(cause.message);
         } else {
           setError(cause instanceof Error ? cause.message : String(cause));
         }
@@ -298,7 +337,7 @@ export default function CouncilScreen() {
         dropRoom(created);
       }
       void sweepPendingRooms(
-        keyValueStorage,
+        roomLedger,
         (id) => botGroups.deleteGroup(id),
         Date.now(),
         ROOM_DELETE_TIMEOUT_MS,

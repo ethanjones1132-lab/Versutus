@@ -217,6 +217,32 @@ export function parseInline(text: string): MdInline[] {
   return mergeAdjacent(spans.filter((span) => span.text.length > 0));
 }
 
+/**
+ * Is this line the closing fence for a block opened by `minLength` copies of
+ * `marker`? The closer uses the same character, runs at least as long as the
+ * opener, and carries nothing but whitespace after the run — so a long fence
+ * can wrap short ones:
+ *
+ * ````md
+ * ```ts        <- content: the run is too short to close a four-backtick fence
+ * ````
+ *
+ * and a code line that merely starts with a fence run (` ```ts `) stays inside
+ * the block instead of ending it. Leading whitespace is tolerated, matching the
+ * opener's `^\s*` tolerance.
+ */
+function isClosingFence(line: string, marker: string, minLength: number): boolean {
+  let at = 0;
+  while (at < line.length && isSpaceChar(line[at])) at += 1;
+  let runLength = 0;
+  while (line[at + runLength] === marker) runLength += 1;
+  if (runLength < minLength) return false;
+  for (let rest = at + runLength; rest < line.length; rest += 1) {
+    if (!isSpaceChar(line[rest])) return false;
+  }
+  return true;
+}
+
 export function parseMarkdown(text: string): MdBlock[] {
   const lines = text.replace(/\r\n/g, '\n').split('\n');
   const blocks: MdBlock[] = [];
@@ -240,10 +266,10 @@ export function parseMarkdown(text: string): MdBlock[] {
     // one monospace block the moment streaming ends.
     const fence = line.match(FENCE);
     if (fence) {
-      const fenceChar = fence[1][0];
-      const closer = fenceChar.repeat(3);
+      const marker = fence[1][0];
+      const minLength = fence[1].length;
       let closeAt = i + 1;
-      while (closeAt < lines.length && !lines[closeAt].trimStart().startsWith(closer)) {
+      while (closeAt < lines.length && !isClosingFence(lines[closeAt], marker, minLength)) {
         closeAt += 1;
       }
       if (closeAt < lines.length) {
@@ -306,6 +332,11 @@ export function parseMarkdown(text: string): MdBlock[] {
       while (i < lines.length) {
         const match = lines[i].match(LIST_ITEM);
         if (!match) break;
+        // A numbered run and a bulleted run are different lists: merging them
+        // would draw chosen numbers as dots (or number the bullets). The
+        // indentation is ignored — the renderer has no nesting, so a nested
+        // item reads as a flat sibling rather than as a false hierarchy.
+        if (/^\d/.test(match[2]) !== ordered) break;
         items.push(parseInline(match[3]));
         i += 1;
       }

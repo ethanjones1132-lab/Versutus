@@ -9,6 +9,8 @@ import {
   describeRoundOutcome,
   filterGroupRooms,
   formatGroupMessageTime,
+  GROUP_MEMBER_CEILING_MESSAGE,
+  GROUP_MEMBER_FLOOR_MESSAGE,
   GROUP_MEMBER_FLOOR_REASON,
   GROUP_ROUNDS_ON_SEND,
   GROUP_SESSION_TITLE,
@@ -16,7 +18,9 @@ import {
   describeGroupCreationFloor,
   groupMemberLine,
   groupSpeakers,
+  MAX_GROUP_MEMBERS,
   MAX_GROUP_MESSAGES,
+  MIN_GROUP_MEMBERS,
   mergeTranscriptRows,
   planGroupRounds,
   removableMembers,
@@ -35,6 +39,45 @@ test('validateGroup enforces 2–6 members', () => {
   expect(validateGroup({ name: 'crew', memberIds: ['a'] }).ok).toBe(false);
   expect(validateGroup({ name: 'crew', memberIds: ['a', 'b'] }).ok).toBe(true);
   expect(validateGroup({ name: 'crew', memberIds: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] }).ok).toBe(false);
+});
+
+test('validateGroup messages are built from the member limits, never hand-copied numbers', () => {
+  // Wording is preserved byte-for-byte at today's limits…
+  expect(GROUP_MEMBER_FLOOR_MESSAGE).toBe('need at least 2 bots');
+  expect(GROUP_MEMBER_CEILING_MESSAGE).toBe('at most 6 bots');
+
+  const belowFloor = validateGroup({ name: 'crew', memberIds: ['a'] });
+  expect(belowFloor).toEqual({ ok: false, error: GROUP_MEMBER_FLOOR_MESSAGE });
+  expect(belowFloor.error).toBe(`need at least ${MIN_GROUP_MEMBERS} bots`);
+
+  const overCeiling = validateGroup({
+    name: 'crew',
+    memberIds: Array.from({ length: MAX_GROUP_MEMBERS + 1 }, (_, index) => `bot${index}`),
+  });
+  expect(overCeiling).toEqual({ ok: false, error: GROUP_MEMBER_CEILING_MESSAGE });
+  expect(overCeiling.error).toBe(`at most ${MAX_GROUP_MEMBERS} bots`);
+
+  // The boundary itself is the constant: the floor and the ceiling are
+  // accepted, one past either edge is refused with the same derived text.
+  expect(
+    validateGroup({
+      name: 'crew',
+      memberIds: Array.from({ length: MIN_GROUP_MEMBERS }, (_, index) => `bot${index}`),
+    }).ok,
+  ).toBe(true);
+  expect(
+    validateGroup({
+      name: 'crew',
+      memberIds: Array.from({ length: MAX_GROUP_MEMBERS }, (_, index) => `bot${index}`),
+    }).ok,
+  ).toBe(true);
+  // Duplicates do not buy an extra seat: uniqueness is counted first.
+  expect(
+    validateGroup({
+      name: 'crew',
+      memberIds: Array.from({ length: MAX_GROUP_MEMBERS + 1 }, () => 'same'),
+    }).ok,
+  ).toBe(false);
 });
 
 test('planGroupRounds defaults to ONE round (the Gate\'s wire plan)', () => {

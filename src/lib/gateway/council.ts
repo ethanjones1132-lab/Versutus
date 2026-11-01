@@ -195,8 +195,20 @@ export function boundedOperation<T>(work: Promise<T>, boundMs: number): Promise<
 export const COUNCIL_PENDING_ROOMS_KEY = 'versutus:council-pending-rooms';
 /** A room older than this cannot belong to a round this process is running. */
 export const COUNCIL_ROOM_LEAK_MS = 120_000;
-/** Only so a repeatedly killed process cannot grow the key without end. */
-const COUNCIL_PENDING_ROOM_CAP = 8;
+/**
+ * Only so a repeatedly killed process cannot grow the key without end.
+ *
+ * This is an ADMISSION bound, never an eviction rule. Every record in the ledger
+ * is a room this device still owes the Gate a delete for, and the oldest ones
+ * are exactly the leftovers `sweepPendingRooms` exists to delete. Dropping the
+ * oldest to make room for a newcomer destroyed the only handle on that room, so
+ * it was never swept again; the ledger was silently leaking the very records it
+ * was kept for. A full ledger now keeps every record it already owes and refuses
+ * the newcomer, loudly (`councilLedgerFullWarning`), so the bound caps how much
+ * new debt one process can take on between sweeps — never what the sweep can
+ * still settle.
+ */
+export const COUNCIL_PENDING_ROOM_CAP = 8;
 /**
  * The per-room bound the sweep gives each delete. The transport's own default
  * is 30 s, which is far too long when several owed rooms are swept serially on
@@ -220,6 +232,24 @@ export type CouncilRoomLedger = {
   removeItem(key: string): Promise<void>;
 };
 
+/** Use browser storage directly so refused reads and writes remain observable. */
+export function councilRoomLedger(
+  native: CouncilRoomLedger,
+  webStorage?: () => Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | undefined,
+): CouncilRoomLedger {
+  if (!webStorage) return native;
+  const storage = () => {
+    const value = webStorage();
+    if (!value) throw new Error('Browser storage is unavailable');
+    return value;
+  };
+  return {
+    async getItem(key) { return storage().getItem(key); },
+    async setItem(key, value) { storage().setItem(key, value); },
+    async removeItem(key) { storage().removeItem(key); },
+  };
+}
+
 // Read-modify-write over one key: two overlapping mutations each build their
 // list from the same snapshot, and the later write puts back the room the
 // earlier one dropped. One tail keeps them in order. The network calls in a
@@ -227,7 +257,7 @@ export type CouncilRoomLedger = {
 // own ledger write.
 let ledgerTail: Promise<void> = Promise.resolve();
 
-function enqueueLedgerMutation(task: () => Promise<void>): Promise<void> {
+function enqueueLedgerMutation<T>(task: () => Promise<T>): Promise<T> {
   const result = ledgerTail.then(task);
   ledgerTail = result.then(
     () => undefined,
@@ -254,14 +284,77 @@ export function parsePendingRooms(raw: string | null): CouncilPendingRoom[] {
   }
 }
 
-/** One more owed delete, newest last, never duplicating a room already owed. */
+/** What one admission attempt decided: the ledger to store, and any refused room. */
+export type CouncilPendingRoomAdmission = {
+  /** The ledger as it must be stored after this attempt. */
+  records: CouncilPendingRoom[];
+  /** The room that did not fit because the ledger was already full. */
+  refused?: CouncilPendingRoom;
+};
+
+/** Why a room could not be written down as owed. */
+export type CouncilPendingRoomRefusal = 'full' | 'unreadable' | 'unwritable';
+
+/**
+ * What recording a room actually achieved. `recorded: true` means the room is
+ * durably in the ledger, so a process death can still be swept. A refusal or a
+ * failed read/write is never reported as durable: the caller must not send a
+ * round whose room it cannot later delete.
+ */
+export type CouncilPendingRoomNote = { recorded: true } | { recorded: false; reason: CouncilPendingRoomRefusal };
+
+/**
+ * Note one more owed delete, newest last, never duplicating a room already owed.
+ *
+ * A room that is already in the ledger only has its record refreshed, so a live
+ * round that notes the same room twice never costs a slot. A NEW room at the
+ * bound is refused instead of evicting a record: the rooms already recorded are
+ * real debts `sweepPendingRooms` can still settle, and trading one of them for a
+ * newcomer is the silent loss this ledger exists to prevent. This function is
+ * pure; saying the refusal out loud is `notePendingRoom`'s job.
+ */
 export function rememberPendingRoom(
   records: CouncilPendingRoom[],
   roomId: string,
   createdAt: number,
-): CouncilPendingRoom[] {
+): CouncilPendingRoomAdmission {
   const kept = records.filter((record) => record.roomId !== roomId);
-  return [...kept, { roomId, createdAt }].slice(-COUNCIL_PENDING_ROOM_CAP);
+  const record = { roomId, createdAt };
+  if (kept.length !== records.length || kept.length < COUNCIL_PENDING_ROOM_CAP) {
+    return { records: [...kept, record] };
+  }
+  return { records, refused: record };
+}
+
+/** What the log says when a full ledger had to refuse a room. Never silent. */
+export function councilLedgerFullWarning(roomId: string): string {
+  return `pending-room ledger full (${COUNCIL_PENDING_ROOM_CAP} rooms); the delete for ${roomId} was not recorded and cannot be swept if this round is killed`;
+}
+
+/** What the log says when the ledger could not be read or written. Never silent. */
+export function councilLedgerRefusalWarning(
+  roomId: string,
+  reason: CouncilPendingRoomRefusal,
+): string {
+  if (reason === 'full') return councilLedgerFullWarning(roomId);
+  const cause = reason === 'unreadable' ? 'could not be read' : 'write was refused';
+  return `pending-room ledger ${cause}; the delete for ${roomId} was not recorded and cannot be swept if this round is killed`;
+}
+
+/**
+ * What the operator is told when a round could not admit its room. The round is
+ * not sent at all, so the copy says that plainly and names the one useful next
+ * step rather than reading as a failed answer from a Bot.
+ */
+export function councilLedgerRefusalCopy(reason: CouncilPendingRoomRefusal): string {
+  switch (reason) {
+    case 'full':
+      return "This comparison was not sent: the council's pending-room list is full, so this round's room could not be recorded for cleanup. Reconnect once earlier rooms have aged out so they can be swept, then compare again.";
+    case 'unreadable':
+      return "This comparison was not sent: the council could not read its pending-room list, so this round's room could not be recorded for cleanup. Reconnect and compare again.";
+    case 'unwritable':
+      return "This comparison was not sent: the council could not save this round's room for cleanup. Reconnect and compare again.";
+  }
 }
 
 /** The rooms still owed once these are settled. */
@@ -293,13 +386,35 @@ export function councilRoomGone(cause: unknown): boolean {
   return /\b404\b|not found|unknown room|no such (?:room|group)/i.test(message);
 }
 
-async function loadPendingRooms(ledger: CouncilRoomLedger): Promise<CouncilPendingRoom[]> {
+/**
+ * The ledger as stored, or `undefined` when it could not be read or its shape
+ * is not the one this module writes. An unreadable or malformed ledger must
+ * never be rewritten as if it were empty: that would drop every room the device
+ * still owes. Callers that settle or sweep a room skip the write on
+ * `undefined`; admission refuses the newcomer instead.
+ *
+ * `parsePendingRooms` stays deliberately tolerant for surfaces that only want a
+ * best-effort read. Every mutation uses this strict reader.
+ */
+function readStoredPendingRooms(raw: string | null): CouncilPendingRoom[] | undefined {
+  if (raw === null) return [];
   try {
-    return parsePendingRooms(await ledger.getItem(COUNCIL_PENDING_ROOMS_KEY));
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return undefined;
+    // A single malformed entry is enough to make the whole blob unsafe to
+    // rewrite: filtering it out would lose that room's last handle.
+    if (!parsed.every(isPendingRoom)) return undefined;
+    return parsed.filter(isPendingRoom);
   } catch {
-    // An unreadable ledger is an empty one; the sweep then has nothing to do
-    // rather than deleting rooms nobody is tracking.
-    return [];
+    return undefined;
+  }
+}
+
+async function loadPendingRooms(ledger: CouncilRoomLedger): Promise<CouncilPendingRoom[] | undefined> {
+  try {
+    return readStoredPendingRooms(await ledger.getItem(COUNCIL_PENDING_ROOMS_KEY));
+  } catch {
+    return undefined;
   }
 }
 
@@ -316,15 +431,45 @@ async function savePendingRooms(ledger: CouncilRoomLedger, records: CouncilPendi
   }
 }
 
-/** Record a room this device now owes the Gate a delete for. Never throws. */
+/**
+ * Record a room this device now owes the Gate a delete for. Never throws, and
+ * only reports `recorded: true` when the room is durably in the ledger: a read
+ * or write refusal is a refusal, never a pretend success. A full ledger keeps
+ * every record it already owes and refuses the newcomer.
+ */
 export async function notePendingRoom(
   ledger: CouncilRoomLedger,
   roomId: string,
   now: number = Date.now(),
-): Promise<void> {
-  if (!roomId) return;
-  await enqueueLedgerMutation(async () => {
-    await savePendingRooms(ledger, rememberPendingRoom(await loadPendingRooms(ledger), roomId, now));
+): Promise<CouncilPendingRoomNote> {
+  if (!roomId) return { recorded: false, reason: 'unwritable' };
+  return enqueueLedgerMutation(async (): Promise<CouncilPendingRoomNote> => {
+    // A failed read or a blob this build cannot understand is not an empty
+    // ledger: writing one would drop every room still owed, so the newcomer is
+    // refused instead.
+    const records = await loadPendingRooms(ledger);
+    if (!records) {
+      console.warn(`[council] ${councilLedgerRefusalWarning(roomId, 'unreadable')}`);
+      return { recorded: false, reason: 'unreadable' };
+    }
+    const admission = rememberPendingRoom(records, roomId, now);
+    if (admission.refused) {
+      // A full ledger is not a reason to lose a room quietly: the records
+      // already owed stay exactly as they are, and the refusal is said out
+      // loud so it can be found in the log rather than discovered later as an
+      // orphan room on the Gate.
+      console.warn(`[council] ${councilLedgerFullWarning(admission.refused.roomId)}`);
+      return { recorded: false, reason: 'full' };
+    }
+    try {
+      await ledger.setItem(COUNCIL_PENDING_ROOMS_KEY, JSON.stringify(admission.records));
+    } catch {
+      // The write did not land (or cannot be proven to have landed). The caller
+      // must not send a round whose room it cannot delete after a process death.
+      console.warn(`[council] ${councilLedgerRefusalWarning(roomId, 'unwritable')}`);
+      return { recorded: false, reason: 'unwritable' };
+    }
+    return { recorded: true };
   });
 }
 
@@ -332,7 +477,11 @@ export async function notePendingRoom(
 export async function clearPendingRoom(ledger: CouncilRoomLedger, roomId: string): Promise<void> {
   if (!roomId) return;
   await enqueueLedgerMutation(async () => {
-    await savePendingRooms(ledger, forgetPendingRooms(await loadPendingRooms(ledger), [roomId]));
+    const records = await loadPendingRooms(ledger);
+    // An unreadable ledger is left untouched: rewriting it would drop every
+    // room the device still owes.
+    if (!records) return;
+    await savePendingRooms(ledger, forgetPendingRooms(records, [roomId]));
   });
 }
 
@@ -352,7 +501,10 @@ export async function sweepPendingRooms(
   now: number = Date.now(),
   boundMs: number = COUNCIL_SWEEP_DELETE_TIMEOUT_MS,
 ): Promise<void> {
-  const stale = stalePendingRooms(await loadPendingRooms(ledger), now);
+  const records = await loadPendingRooms(ledger);
+  // An unreadable ledger leaves the sweep with nothing it can safely settle.
+  if (!records) return;
+  const stale = stalePendingRooms(records, now);
   if (stale.length === 0) return;
   for (const record of stale) {
     let settled = false;
@@ -369,6 +521,8 @@ export async function sweepPendingRooms(
 /** Drop one settled room from the ledger. Best-effort, like every ledger write. */
 async function settleSweptRoom(ledger: CouncilRoomLedger, roomId: string): Promise<void> {
   await enqueueLedgerMutation(async () => {
-    await savePendingRooms(ledger, forgetPendingRooms(await loadPendingRooms(ledger), [roomId]));
+    const records = await loadPendingRooms(ledger);
+    if (!records) return;
+    await savePendingRooms(ledger, forgetPendingRooms(records, [roomId]));
   });
 }

@@ -11,8 +11,8 @@ import {
   describeCronJobControlError,
 } from '@/lib/gateway/cron-job-controls';
 import {
+  cronRunSummary,
   describeCronHealth,
-  runElapsedLabel,
   type CronJob,
   type CronRun,
 } from '@/lib/gateway/cron';
@@ -49,24 +49,6 @@ function Row({ label, value }: { label: string; value?: string | null }) {
       <Text variant="micro" color="tertiary">{label.toUpperCase()}</Text>
       <Text variant="caption" selectable>{value ?? '—'}</Text>
     </View>
-  );
-}
-
-/**
- * One run's one-line verdict. A host error can be a multi-line message; the
- * row keeps it to a single bounded line so it cannot shove the history apart.
- * The wire `status` stays running/completed — `error` is what failed a run.
- */
-function runSubtitle(run: CronRun): string {
-  const error = run.error?.replace(/\s+/g, ' ').trim();
-  if (error) {
-    const bounded = error.length > 120 ? `${error.slice(0, 117)}…` : error;
-    return `failed · ${bounded}`;
-  }
-  return (
-    `${run.status === 'running' ? 'running' : 'completed'}` +
-    `${runElapsedLabel(run) ? ` · ${runElapsedLabel(run)}` : ''}` +
-    ` · ${run.turnCount} turns`
   );
 }
 
@@ -326,7 +308,7 @@ export function CronJobSheet({ job, onClose, onOpenRun, onRemoved, onChanged }: 
           <ListRow
             key={run.id}
             title={run.at ?? run.id}
-            subtitle={runSubtitle(run)}
+            subtitle={cronRunSummary(run)}
             onPress={() => onOpenRun(run.id)}
             style={styles.row}
           />

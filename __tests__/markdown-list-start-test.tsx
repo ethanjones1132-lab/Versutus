@@ -90,6 +90,21 @@ describe('MarkdownText renders the ordered-list numbers the model wrote', () => 
   test('unordered lists render drawn dots, not numbers', () => {
     expect(labels(render('- one\n- two'))).toEqual([]);
   });
+
+  test('a bullet run followed by a numbered run renders both as written', () => {
+    // Pre-fix the whole thing was one unordered list, so the numbered lines
+    // rendered as dots and lost their numbers.
+    expect(labels(render('- bullet\n1. first\n2. second'))).toEqual(['1.', '2.']);
+  });
+
+  test('a numbered run followed by bullets stops numbering at the bullets', () => {
+    // Pre-fix one ordered list numbered all three items 1./2./3.
+    expect(labels(render('1. first\n- bullet\n- another'))).toEqual(['1.']);
+  });
+
+  test('a numbered run after bullets keeps its written start', () => {
+    expect(labels(render('- bullet\n4. fourth\n5. fifth'))).toEqual(['4.', '5.']);
+  });
 });
 
 describe('the default for a list block built without a start', () => {

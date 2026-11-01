@@ -8,6 +8,7 @@ import { createGate } from '../gate/core/server.mjs';
 import { CredentialVault } from '../gate/core/credentials/vault.mjs';
 import { validEnvironment } from '../gate/__tests__/fixtures/cli-environment.mjs';
 import { fakeHermesPromptExecutable } from '../gate/__tests__/fixtures/cli-protocols/fake-hermes-prompt.mjs';
+import { compareRunEventStreams } from './__tests__/fixtures/wedge-replay-evidence.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -21,7 +22,9 @@ const execFileAsync = promisify(execFile);
  *   2. run + reply — a prompt run streams "pong" as run.output and completes
  *   3. discover    — the recent-runs list shows the finished run (state, exit)
  *   4. replay      — the event log replays from sequence 1 for a reattaching
- *                    phone (dropped connection recovery)
+ *                    phone (dropped connection recovery), with every event's
+ *                    sequence, type, runId and payload identical to the live
+ *                    stream — not merely the same event types
  *   5. stop        — Cancel kills a mid-flight run: exactly one run.cancelled,
  *                    discovery reports it, and the run's OS process is
  *                    verified dead afterwards
@@ -115,6 +118,20 @@ function assertMonotonicFromOne(step, events) {
       fail(step, `sequence ${event.sequence} at position ${index} (expected ${index + 1})`);
     }
   });
+}
+
+/**
+ * Prove a reattaching phone's replay reproduces the live stream, not merely its
+ * shape. Comparing event types alone let a replay swap two `run.output`
+ * fragments, drift a sequence or drop a payload field and still read green, so
+ * this walks sequence, type, runId and the whole payload tree (see the fixture
+ * for why only the emission timestamp is normalised). Returns the event count
+ * for the pass line.
+ */
+function assertReplayMatches(step, label, live, replay) {
+  const verdict = compareRunEventStreams(live, replay);
+  if (!verdict.ok) fail(step, `${label} ${verdict.reason}`);
+  return verdict.count;
 }
 
 function sleep(ms) {
@@ -298,12 +315,9 @@ try {
 
   // ── Step 4: replay the whole event log (reattach path) ────────────────────
   const replay = await sseEvents(gate.port, gate.token, 'hermes-local', runId);
-  if (replay.length !== events.length) fail('replay', `${replay.length} events vs ${events.length} live`);
-  if (replay.some((event, index) => event.type !== events[index].type)) {
-    fail('replay', 'event types differ from the live stream');
-  }
+  const replayedCount = assertReplayMatches('replay', 'replay', events, replay);
   if (replay[0]?.sequence !== 1) fail('replay', `replay did not start at sequence 1 (${replay[0]?.sequence})`);
-  pass('replay', `${replay.length} events replays identically from sequence 1`);
+  pass('replay', `${replayedCount} events replay identically from sequence 1 (sequence, type, runId and payload)`);
 
   // ── Step 5: the explicit stop — cancel a mid-flight run ───────────────────
   if (realExecutable) {
@@ -528,7 +542,7 @@ try {
 
   // …and a reattaching phone replays the same truthful log.
   const failReplay = await sseEvents(gate.port, gate.token, 'hermes-fail', failRunId);
-  if (failReplay.length !== failEvents.length) fail('fail', `${failReplay.length} replayed vs ${failEvents.length} live`);
+  assertReplayMatches('fail', 'replay', failEvents, failReplay);
   if (failReplay.at(-1)?.type !== 'run.failed') fail('fail', `replay ended in ${failReplay.at(-1)?.type}`);
   pass(
     'fail',
@@ -617,7 +631,7 @@ try {
   if (deniedEntry?.state !== 'cancelled') fail('deny', `discovery state after denial was ${deniedEntry?.state}`);
 
   const deniedReplay = await sseEvents(gate.port, gate.token, 'hermes-denied', deniedRunId);
-  if (deniedReplay.length !== deniedEvents.length) fail('deny', `${deniedReplay.length} replayed vs ${deniedEvents.length} live`);
+  assertReplayMatches('deny', 'replay', deniedEvents, deniedReplay);
   if (deniedReplay.at(-1)?.type !== 'run.cancelled') fail('deny', `replay ended in ${deniedReplay.at(-1)?.type}`);
   pass('deny', 'Deny stopped the run before anything spawned — run.cancelled "approval denied", discovery + replay agree');
 
@@ -714,7 +728,7 @@ try {
   const boundEntry = boundList.runs?.find((run) => run.runId === boundRunId);
   if (boundEntry?.state !== 'completed') fail('credentials', `discovery state was ${boundEntry?.state}`);
   const boundReplay = await sseEvents(gate.port, gate.token, 'hermes-bound', boundRunId);
-  if (boundReplay.length !== boundEvents.length) fail('credentials', `${boundReplay.length} replayed vs ${boundEvents.length} live`);
+  assertReplayMatches('credentials', 'replay', boundEvents, boundReplay);
   pass(
     'credentials',
     `bound value reached the CLI (${JSON.stringify(boundStdout.trim())}); dead binding warned as ${notes[0].payload.variable}=${notes[0].payload.reference}; discovery + replay agree`,
@@ -784,8 +798,8 @@ try {
    * THIS gate, starts a fresh one on the same gate home, and demands the same
    * answers over HTTP+SSE the phone would get after a restart: discovery
    * still lists the completed run with its outcome, replay still returns the
-   * full event history from sequence 1, and leg 9's refused start is still
-   * recorded nowhere.
+   * full event history from sequence 1 with payloads intact across the disk
+   * round trip, and leg 9's refused start is still recorded nowhere.
    */
   await gate.close();
   gate = await createGate({ root, gateHome, port: 0 });
@@ -804,12 +818,9 @@ try {
   if (survivor.pid !== null) fail('restart', 'an archived run advertised a pid');
 
   const replayAfterRestart = await sseEvents(gate.port, gate.token, 'hermes-local', runId);
-  if (replayAfterRestart.length !== events.length) {
-    fail('restart', `${replayAfterRestart.length} events after restart vs ${events.length} live`);
-  }
-  if (replayAfterRestart.some((event, index) => event.type !== events[index].type)) {
-    fail('restart', 'event types differ from the original live stream');
-  }
+  // The same event log, reloaded from disk by a new process: every payload must
+  // survive the archive round trip, not just the event count and sequence.
+  const replayedAfterRestart = assertReplayMatches('restart', 'archived replay', events, replayAfterRestart);
   if (replayAfterRestart[0]?.sequence !== 1) {
     fail('restart', `replay did not start at sequence 1 (${replayAfterRestart[0]?.sequence})`);
   }
@@ -821,7 +832,7 @@ try {
   if ((badListAfterRestart.runs ?? []).length !== 0) {
     fail('restart', 'the refused start of leg 9 appeared in history after a restart');
   }
-  pass('restart', `after killing the Gate: ${survivor.state} · exit ${survivor.exitCode} still listed, ${replayAfterRestart.length} events still replay from sequence 1, refusal still unrecorded`);
+  pass('restart', `after killing the Gate: ${survivor.state} · exit ${survivor.exitCode} still listed, ${replayedAfterRestart} events still replay with identical sequence, type, runId and payload from sequence 1, refusal still unrecorded`);
 
   // ── Step 11: a hung task hits its time limit and is stopped by name ───────
   /**
@@ -906,6 +917,7 @@ try {
     fail('time-limit', `discovery after the limit was ${hungEntry?.state}, pid ${hungEntry?.pid}`);
   }
   const hungReplay = await sseEvents(gate.port, gate.token, 'hermes-timeout', hungRunId);
+  assertReplayMatches('time-limit', 'replay', hungEvents, hungReplay);
   if (hungReplay.at(-1)?.type !== 'run.failed') fail('time-limit', `replay ended in ${hungReplay.at(-1)?.type}`);
   await assertEventuallyDead('time-limit', hungPid, 'hung run process');
 

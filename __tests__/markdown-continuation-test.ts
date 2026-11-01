@@ -63,6 +63,19 @@ describe('streaming markdown does not re-parse the whole buffer', () => {
     expect(body).toContain('still prose');
   });
 
+  test('a settled reply keeps a long fence that wraps a short one whole', () => {
+    const text = '````md\n```ts\nconst a = 1;\n```\n````';
+    // The streaming contract is unchanged: the in-flight body is plain text.
+    expect(markdownBlocksForDisplay(text, true)).toEqual([
+      { type: 'paragraph', spans: [{ text }] },
+    ]);
+    // Once settled, the shorter run inside is content and the long fence is
+    // what closes the block.
+    expect(markdownBlocksForDisplay(text, false)).toEqual([
+      { type: 'code', language: 'md', code: '```ts\nconst a = 1;\n```' },
+    ]);
+  });
+
   test('the non-streaming branch always parses the full structure', () => {
     const text = '# Title\n\n- one\n- two\n\n```ts\nconst x = 1;\n```';
     const blocks = markdownBlocksForDisplay(text, false);
