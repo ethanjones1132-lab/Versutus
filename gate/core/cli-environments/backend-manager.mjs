@@ -51,6 +51,14 @@ export function createBackendManager({
   // one and one failed start is one step of the ladder rather than one per
   // caller.
   const starting = new Map();
+  // The credentials resolved for the environment whose server is cached above,
+  // remembered for exactly that server's lifetime (cleared in stopAll): a
+  // lookup of a running environment must not decrypt the vault again, but a
+  // respawn that rebuilds the backend must not lose its credentials either.
+  const credentialsByEnvironment = new Map();
+  // One cold create in flight per environment. Concurrent lookups share that
+  // vault read and the server it publishes. Cleared in stopAll with the rest.
+  const opening = new Map();
 
   return { get, list, describe, methodsOf, stopAll, isBackendCapable, subscribe };
 
@@ -165,13 +173,42 @@ export function createBackendManager({
     }
 
     const isStdio = adapter.server?.transport === 'stdio';
+    let server = servers.get(environmentId);
     // Resolved once here rather than only inside the factory: an HTTP backend
     // attached to an operator's own server may still need to authenticate to
     // it (Hermes requires a bearer token on every route), and that is the
     // backend's concern, not the supervisor's.
-    const credentials = await resolveCredentials(record);
-    let server = servers.get(environmentId);
+    //
+    // But only while creating the server. Once one is cached for the
+    // environment, resolving again would decrypt the vault on every lookup and
+    // re-report an unresolved binding each time it was asked for; the set
+    // resolved at create time serves the whole life of that server.
+    //
+    // Concurrent cold lookups all pass the first map check. They share one
+    // vault read and one server; a second decrypt here is the bug this cache
+    // exists to stop, not an acceptable race.
+    let credentials = server
+      ? (credentialsByEnvironment.get(environmentId) ?? {})
+      : null;
     if (!server) {
+      let pending = opening.get(environmentId);
+      if (!pending) {
+        const work = resolveCredentials(record);
+        let shared;
+        shared = work.finally(() => {
+          if (opening.get(environmentId) === shared) opening.delete(environmentId);
+        });
+        opening.set(environmentId, shared);
+        pending = shared;
+      }
+      const resolved = await pending;
+      server = servers.get(environmentId);
+      credentials = server
+        ? (credentialsByEnvironment.get(environmentId) ?? resolved ?? {})
+        : resolved;
+    }
+    if (!server) {
+      credentialsByEnvironment.set(environmentId, credentials);
       // HTTP servers can be shared with an operator's own instance; a stdio
       // server is bound to its pipe and is always ours.
       const factory = createServer ?? (isStdio ? createStdioServer : createNativeServer);
@@ -348,6 +385,8 @@ export function createBackendManager({
     for (const server of servers.values()) await server.stop().catch(() => undefined);
     servers.clear();
     backends.clear();
+    credentialsByEnvironment.clear();
+    opening.clear();
     methodSets.clear();
     unavailable.clear();
     // An attempt still in flight belongs to a server that no longer exists; a
