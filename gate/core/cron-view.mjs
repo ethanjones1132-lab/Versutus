@@ -31,11 +31,20 @@ export function parseRoutineOwner(name) {
   return { botId: match[1], title: match[2].trim() };
 }
 
+/** What `error` says when the host recorded a failure but wrote no detail. */
+const ERROR_MARKER = 'error';
+
 /** One past or in-flight run, from the session that recorded it. */
 export function toCronRunView(session) {
   const parsed = parseCronSessionId(session?.id);
   if (!parsed) return null;
   const finishedAt = session.ended_at ?? null;
+  // An end time says the run stopped, not that it succeeded. Hermes records
+  // `end_reason: 'error'` for a failed run, so reporting "completed" here
+  // would hand history, widgets and the phone a false success. A session with
+  // no end is still going, whatever reason it is carrying.
+  const failed = Boolean(finishedAt) && session.end_reason === 'error';
+  const detail = typeof session.error === 'string' && session.error.trim() ? session.error : null;
   return {
     id: session.id,
     jobId: parsed.jobId,
@@ -45,9 +54,9 @@ export function toCronRunView(session) {
     // A cron session with no end is still going. The job's own
     // latest_execution is authoritative for the *newest* run; this keeps
     // history rows honest without a second lookup.
-    status: finishedAt ? 'completed' : 'running',
+    status: failed ? 'failed' : finishedAt ? 'completed' : 'running',
     turnCount: session.message_count ?? 0,
-    error: session.end_reason === 'error' ? (session.end_reason ?? null) : null,
+    error: failed ? (detail ?? ERROR_MARKER) : null,
   };
 }
 
