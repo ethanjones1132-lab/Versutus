@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -458,8 +459,15 @@ export function createClaudeCodeBackend({
         onEvent?.(normalized);
       };
 
+      // stdout arrives as raw Buffers whose UTF-8 sequences stop at chunk
+      // boundaries: a multi-byte code point split between two reads decoded
+      // through String(chunk) as U+FFFD on both sides, corrupting the JSON
+      // line before it was parsed. The decoder holds the incomplete tail back
+      // until the bytes that finish it arrive; a string chunk passes through
+      // unchanged.
+      const decoder = new StringDecoder('utf8');
       child.stdout?.on('data', (chunk) => {
-        buffer += String(chunk);
+        buffer += decoder.write(chunk);
         const lines = buffer.split('\n');
         buffer = lines.pop() ?? '';
         for (const line of lines) if (line.trim()) handle(line.trim());
@@ -491,6 +499,10 @@ export function createClaudeCodeBackend({
         if (onAbort) signal.removeEventListener('abort', onAbort);
         if (inflight === turn) inflight = null;
       }
+      // The last line's end was never announced, and any multi-byte sequence
+      // the child left incomplete on death must still be flushed before the
+      // final line is decoded and handled.
+      buffer += decoder.end();
       if (buffer.trim()) handle(buffer.trim());
 
       if (failure) throw new Error(`claude-code: ${failure}`);
