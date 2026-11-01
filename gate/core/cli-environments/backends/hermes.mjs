@@ -16,7 +16,7 @@
  * Verified against Hermes 0.20.3.
  */
 
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { writeFileAtomic } from '../../atomic-file.mjs';
@@ -780,45 +780,69 @@ export function createHermesBackend({
       const args = createBotArgs({ name: id, inheritKeys, description });
       await runCreateCommand(args, 60_000, 'failed to create profile');
       const botHome = join(profilesHome, 'profiles', id);
-      await mkdir(botHome, { recursive: true });
-      const defaultKey = (await getHermesBot(profilesHome, 'default'))?.listenKey ?? null;
-      let envText = '';
+      // Set only after the atomic .env replace returns. A refused replace
+      // leaves the CLI's original key as the only copy; deleting the profile
+      // would destroy it (hermes-bot-lookup.test.mjs). Steps after that
+      // replace — SOUL.md, the model pin, the provider pin — are this call's
+      // own fill-in, and a failure there rolls the new profile back so the
+      // next create is not refused with bot_exists.
+      let envLanded = false;
       try {
-        envText = await readFile(join(botHome, '.env'), 'utf8');
-      } catch {
-        envText = '';
-      }
-      const ensured = ensureDistinctListenKey(envText, defaultKey);
-      // Temp copy, then a rename onto the live .env. This file carries the key
-      // just minted and every inherited provider key, and it is the only place
-      // any of them exist: a truncating write that a kill interrupted left a
-      // Bot with no API_SERVER_KEY and no way to restore one. The rename lands a
-      // fresh temp file, so the mode is stated rather than inherited from
-      // whatever Hermes created — same convention as the other secret files
-      // (tokens.mjs, pairing.mjs, device-tokens.mjs).
-      await writeFileAtomic(join(botHome, '.env'), ensured.envText, { encoding: 'utf8', mode: 0o600 });
-      if (typeof soul === 'string' && soul.trim()) {
-        await writeFileAtomic(join(botHome, 'SOUL.md'), soul, { encoding: 'utf8' });
-      }
-      if (modelId) {
-        await runCreateCommand(
-          ['-p', id, 'config', 'set', 'model.default', String(modelId)],
-          15_000,
-          'failed to pin model',
+        await mkdir(botHome, { recursive: true });
+        const defaultKey = (await getHermesBot(profilesHome, 'default'))?.listenKey ?? null;
+        let envText = '';
+        try {
+          envText = await readFile(join(botHome, '.env'), 'utf8');
+        } catch {
+          envText = '';
+        }
+        const ensured = ensureDistinctListenKey(envText, defaultKey);
+        // Temp copy, then a rename onto the live .env. This file carries the key
+        // just minted and every inherited provider key, and it is the only place
+        // any of them exist: a truncating write that a kill interrupted left a
+        // Bot with no API_SERVER_KEY and no way to restore one. The rename lands a
+        // fresh temp file, so the mode is stated rather than inherited from
+        // whatever Hermes created — same convention as the other secret files
+        // (tokens.mjs, pairing.mjs, device-tokens.mjs).
+        await writeFileAtomic(join(botHome, '.env'), ensured.envText, { encoding: 'utf8', mode: 0o600 });
+        envLanded = true;
+        if (typeof soul === 'string' && soul.trim()) {
+          await writeFileAtomic(join(botHome, 'SOUL.md'), soul, { encoding: 'utf8' });
+        }
+        if (modelId) {
+          await runCreateCommand(
+            ['-p', id, 'config', 'set', 'model.default', String(modelId)],
+            15_000,
+            'failed to pin model',
+          );
+        }
+        if (providerId) {
+          await runCreateCommand(
+            ['-p', id, 'config', 'set', 'model.provider', String(providerId)],
+            15_000,
+            'failed to pin provider',
+          );
+        }
+        const record = await getHermesBot(profilesHome, id);
+        return toPublicBot(
+          record ?? { id, displayName: id, listenKey: ensured.listenKey, home: botHome },
+          defaultKey,
         );
+      } catch (error) {
+        // The CLI create already landed this profile. A failure after the .env
+        // replace — SOUL.md or a model pin — used to leave that directory
+        // behind, so the next attempt was refused with bot_exists and the Bot
+        // could never be created. Remove only the id this call just created
+        // (the existence check above proved it was not there), then rethrow
+        // the same fixed error: CLI output never reaches the client, and a
+        // rollback that itself fails must not mask that fixed error. A refused
+        // .env replace never reaches here with envLanded set, so the original
+        // key stays on disk.
+        if (envLanded) {
+          await rm(botHome, { recursive: true, force: true }).catch(() => {});
+        }
+        throw error;
       }
-      if (providerId) {
-        await runCreateCommand(
-          ['-p', id, 'config', 'set', 'model.provider', String(providerId)],
-          15_000,
-          'failed to pin provider',
-        );
-      }
-      const record = await getHermesBot(profilesHome, id);
-      return toPublicBot(
-        record ?? { id, displayName: id, listenKey: ensured.listenKey, home: botHome },
-        defaultKey,
-      );
     },
 
     /**
