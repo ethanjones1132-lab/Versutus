@@ -10,7 +10,13 @@ import { constellationNodeAccessibilityLabel, constellationSummaryCopy } from '@
 jest.mock('expo-router', () => ({ useRouter: () => ({ navigate: jest.fn(), push: jest.fn() }) }));
 jest.mock('@/components/fleet/constellation-view', () => ({ ConstellationView: 'ConstellationView' }));
 jest.mock('@/components/fleet/bot-sheet', () => ({ FleetBotSheet: 'FleetBotSheet' }));
-jest.mock('@/components/ui', () => ({ Screen: 'Screen', Text: 'Text' }));
+jest.mock('@/components/ui', () => ({
+  Screen: 'Screen',
+  Text: 'Text',
+  PageTitle: 'PageTitle',
+  PressableScale: 'PressableScale',
+  Icon: 'Icon',
+}));
 jest.mock('@/constants/tokens', () => ({ Spacing: { one: 4, four: 16 } }));
 jest.mock('@/context/gateway-provider', () => ({ useGateway: jest.fn() }));
 jest.mock('@/hooks/use-gateway-reachability', () => ({ useGatewayReachability: () => ({}) }));

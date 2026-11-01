@@ -1,10 +1,10 @@
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet } from 'react-native';
 
 import { ConstellationView } from '@/components/fleet/constellation-view';
 import { FleetBotSheet } from '@/components/fleet/bot-sheet';
-import { Screen, Text } from '@/components/ui';
+import { Icon, PageTitle, PressableScale, Screen, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useGatewayReachability } from '@/hooks/use-gateway-reachability';
@@ -345,13 +345,28 @@ export default function FleetScreen() {
   return (
     <Screen>
       <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.heading}>
-          <Text variant="title">Fleet</Text>
-          <Text variant="caption" color="secondary">
-            The gateways this device knows, and the Bots on the one it is connected to. A saved
-            gateway is dimmed and dated; only the connected one is live.
-          </Text>
-        </View>
+        <PageTitle
+          title="Fleet"
+          leading={
+            <PressableScale
+              onPress={() => (router.canGoBack() ? router.back() : router.replace('/home'))}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Back to Gate">
+              <Icon
+                name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }}
+                size={20}
+                color="textPrimary"
+              />
+            </PressableScale>
+          }
+          status={
+            <Text variant="caption" color="secondary">
+              The gateways this device knows, and the Bots on the one it is connected to. A saved
+              gateway is dimmed and dated; only the connected one is live.
+            </Text>
+          }
+        />
         {noticeMessage ? (
           <Text variant="caption" color="statusDisconnected">
             {noticeMessage}
@@ -374,8 +389,5 @@ const styles = StyleSheet.create({
   content: {
     padding: Spacing.four,
     gap: Spacing.four,
-  },
-  heading: {
-    gap: Spacing.one,
   },
 });

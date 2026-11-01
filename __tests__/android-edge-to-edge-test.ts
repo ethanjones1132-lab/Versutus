@@ -47,25 +47,13 @@ describe('android edge-to-edge / navigationBar handling', () => {
     expect(android).toBeDefined();
   });
 
-  test('declares navigationBar or edgeToEdgeEnabled so translucent nav-bar assumption is explicit', () => {
-    const hasNavBar = !!(android?.navigationBar || android?.androidNavigationBar);
-    const hasEdgeToEdge = android?.edgeToEdgeEnabled !== undefined;
-    // Expo 57: edge-to-edge is mandatory (Android 16), so navigationBar documents the
-    // translucent handling that ComposerKeyboardLift relies on (isNavigationBarTranslucentAndroid:true).
-    // Older SDKs used edgeToEdgeEnabled; either satisfies the intent.
-    expect(hasNavBar || hasEdgeToEdge).toBe(true);
-  });
-
-  test('navigationBar documents the translucent bar color (dark UI)', () => {
-    if (android?.navigationBar) {
-      expect(android.navigationBar.backgroundColor).toBeDefined();
-      expect(android.navigationBar.barStyle).toBeDefined();
-    } else if (android?.androidNavigationBar) {
-      expect(android.androidNavigationBar).toBeDefined();
-    } else {
-      // fallback: edgeToEdgeEnabled must be present
-      expect(android?.edgeToEdgeEnabled).toBeDefined();
-    }
+  test('does not declare a navigationBar key Expo ignores or rejects', () => {
+    // Expo SDK 57 is edge-to-edge by default (Android 15/16), and neither
+    // `android.navigationBar` nor `android.androidNavigationBar` is a valid
+    // app-config field any more. The old keys were schema errors and were
+    // silently ignored; the real contract is the translucent-bar lift below.
+    expect(android?.navigationBar).toBeUndefined();
+    expect(android?.androidNavigationBar).toBeUndefined();
   });
 
   test('softwareKeyboardLayoutMode is resize so insets.bottom subtraction is valid', () => {

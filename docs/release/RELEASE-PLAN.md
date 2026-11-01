@@ -1,6 +1,10 @@
 # Release Plan — Versutus (VS-003)
 
-Last updated: 2026-10-27 · App version 1.0.0 · Expo SDK 57 · branch in use for this work
+Last updated: 2026-10-31 · App version 1.0.0 · Expo SDK 57 · branch in use for this work
+
+The latest code and configuration audit is
+[`READINESS-AUDIT-2026-10-31.md`](READINESS-AUDIT-2026-10-31.md). Read it before
+starting the Console steps below; it records what changed and what remains open.
 
 This is the operator runbook for taking the current tree to **Play open testing** and a **GitHub release**. It is documentation only: it does not change app code, config, CI, secrets, or tests. Every action on a store or console (Play Console, EAS, GitHub Releases, APNs/FCM credential consoles) is owned by **Ethan** personally; engineering steps that touch only the repo may be prepared by any agent, but the release decision and publish click remain Ethan's.
 

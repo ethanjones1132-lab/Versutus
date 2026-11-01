@@ -401,7 +401,13 @@ describe('the Android share entry', () => {
       ],
       'expo-secure-store',
       'expo-web-browser',
-      'expo-notifications',
+      [
+        'expo-notifications',
+        {
+          icon: './assets/images/notification-icon.png',
+          color: '#8B7CFF',
+        },
+      ],
       [
         'expo-speech-recognition',
         {

@@ -190,6 +190,20 @@ export function DemoGatewayProvider({ children }: { children: React.ReactNode })
           const bot = SHOWCASE_BOTS.find((candidate) => candidate.id === params?.id);
           return { ...bot, soul: bot?.description ?? '' } as T;
         }
+        if (method === 'voice.capabilities') {
+          return {
+            enabled: true,
+            engines: {
+              local: { state: 'ready' },
+              codex: {
+                state: 'unavailable',
+                reason: 'Codex voice needs API-key auth; this showcase has no live provider.',
+              },
+            },
+            usedToday: { localMinutes: 12 },
+            lastError: null,
+          } as T;
+        }
         return {} as T;
       },
       gatewayFetch: async () => {

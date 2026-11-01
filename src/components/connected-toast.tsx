@@ -63,7 +63,15 @@ export function ConnectedToast() {
   }));
 
   return (
-    <View pointerEvents="none" style={[styles.host, { top: insets.top + Spacing.two }]}>
+    <View
+      pointerEvents="none"
+      // The toast stays mounted for its fade, but while it is not on screen it
+      // must not exist for a screen reader. Otherwise every launch and every
+      // screen announces "Gateway online" even when the app is disconnected.
+      accessibilityElementsHidden={!visible}
+      importantForAccessibility={visible ? 'yes' : 'no-hide-descendants'}
+      accessibilityLiveRegion={visible ? 'polite' : 'none'}
+      style={[styles.host, { top: insets.top + Spacing.two }]}>
       <Animated.View
         style={[
           styles.toast,

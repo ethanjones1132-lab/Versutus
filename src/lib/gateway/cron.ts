@@ -10,7 +10,7 @@
 // because that is the one fact that changes what the operator does next.
 
 import { describeRunFailure, type RunFailureView } from '@/lib/gateway/run-failures';
-import { parseRoutineName } from '@/lib/gateway/routines';
+import { parseRoutineName } from '@/lib/gateway/routine-name';
 
 /** One scheduled job, curated by the Gate with its raw record attached. */
 export type CronJob = {

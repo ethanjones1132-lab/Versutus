@@ -115,7 +115,9 @@ function voiceReadiness(
   if (id === 'auto') return 'Follows whichever engine below is ready.';
   if (!capabilities) return 'Checking this PC…';
   if (!capabilities.enabled) return 'Gate voice is turned off on this PC.';
-  const status = capabilities.engines[id];
+  // A Gate that predates voice, or answers a partial record, may omit
+  // `engines`. The rows then read "unavailable" rather than crashing Settings.
+  const status = capabilities.engines?.[id];
   return voiceEngineReadinessCopy(status?.state ?? 'unavailable', status?.reason);
 }
 
@@ -601,7 +603,7 @@ export default function GatewaySettingsScreen() {
   // watch that lost its outcome, must never fall through to it.
   const offerVoiceInstall =
     installFollow === 'idle' &&
-    (voiceCapabilities?.engines.local?.state === 'not-installed' || Boolean(installNote));
+    (voiceCapabilities?.engines?.local?.state === 'not-installed' || Boolean(installNote));
 
   return (
     <Screen edges={['top', 'bottom']}>

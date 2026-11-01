@@ -27,7 +27,11 @@ export type MarkdownTextProps = {
 };
 
 function openLink(url: string) {
-  void WebBrowser.openBrowserAsync(url).catch(() => undefined);
+  // Model output is untrusted. A markdown link can spell `javascript:`,
+  // `file:` or an Android `intent:` URL; handing that to the system browser is
+  // a launch primitive we do not need. Only ordinary web links leave the app.
+  if (!/^https?:\/\//i.test(url.trim())) return;
+  void WebBrowser.openBrowserAsync(url.trim()).catch(() => undefined);
 }
 
 function spanStyle(span: MdInline) {

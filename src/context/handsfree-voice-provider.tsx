@@ -1245,7 +1245,12 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       // The budget is disposed from a `finally`, not after the await: a chain that
       // rethrows would leave its timer pending, and a timer nobody disposed
       // rejects a promise no one is racing any more.
+      // The attempt id is minted here, not inside the helper, so the
+      // torn-down-while-starting branch below can cancel the exact native
+      // session this start opened. An unkeyed stop would also end a newer call.
+      const startId = newHandsfreeStartId();
       const attempt = await openGateVoiceSession({
+        startId,
         gatewayUrl: gateway.url,
         gatewayToken: gateway.token ?? '',
         target: {
@@ -1280,6 +1285,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         // the call to idle. The inner chain already logged the timeout with the
         // link that went quiet — logging it again here would be a second, less
         // accurate line for one fact.
+        // A native session that outlived the budget is cancelled by its own
+        // id: a timeout must not leave the microphone live behind an idle call.
+        cancelNativeSession(module, startId);
         abandonGateStart();
         dispatch({ type: 'start-timeout' });
         return { result: 'start-timed-out', detail: attempt.detail };
@@ -1298,6 +1306,12 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       });
 
       if (sessionRef.current.phase !== 'starting') {
+        // End was tapped while the start was still opening. The Gate session
+        // and the native microphone/socket were opened after teardown had
+        // already looked for them, so neither is stopped by the teardown that
+        // ran: cancel this exact start id here, or a call the operator ended
+        // keeps the microphone and foreground service live with no owner.
+        cancelNativeSession(module, startId);
         refuseGateStart();
         try {
           await latest.current.gatewayRequest('voice.session.stop', {

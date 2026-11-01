@@ -48,7 +48,8 @@ describe('agent markdown and tool-call chrome read as the brand stage', () => {
   test('markdown parsing, streaming guard, links and code blocks stay intact', () => {
     expect(markdown).toContain('markdownBlocksForDisplay(text, streaming)');
     expect(markdown).toContain('streaming = false');
-    expect(markdown).toContain("WebBrowser.openBrowserAsync(url)");
+    expect(markdown).toContain('WebBrowser.openBrowserAsync(url.trim())');
+    expect(markdown).toContain("^https?:\\/\\//i");
     expect(markdown).toContain("accessibilityRole={span.link ? 'link' : undefined}");
     expect(markdown).toContain('<CodeBlock code={block.code} language={block.language} />');
     expect(markdown).toContain('maxFontSizeMultiplier ?? (compact ? 1.4 : undefined)');

@@ -124,9 +124,12 @@ export function deepLinkTarget(
     const botId = (firstValue(query.bot) ?? '').trim();
     const tsRaw = firstValue(query.ts);
     const sig = firstValue(query.sig);
-    const ts = tsRaw === undefined ? Number.NaN : Number(tsRaw);
+    // `Number('')` and `Number('  ')` are both 0, which used to make an empty
+    // timestamp look like a signed link. Only a real positive epoch is one.
+    const ts = tsRaw !== undefined && /^\d+$/.test(tsRaw) ? Number(tsRaw) : Number.NaN;
     const signed = firstValue(query.autoStart) === '1'
       && Number.isFinite(ts)
+      && ts > 0
       && typeof sig === 'string'
       && sig.length > 0;
     return {

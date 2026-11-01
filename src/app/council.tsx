@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { CouncilCompareView } from '@/components/chat/council-compare-view';
-import { Button, Card, Chip, EmptyState, ErrorCard, Screen, Skeleton, Text, TextField } from '@/components/ui';
+import { Button, Card, Chip, EmptyState, ErrorCard, Icon, PageTitle, PressableScale, Screen, Skeleton, Text, TextField } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import type { PublicBot } from '@/lib/gateway/bots';
@@ -324,12 +324,27 @@ export default function CouncilScreen() {
   return (
     <Screen>
       <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.heading}>
-          <Text variant="title">Council</Text>
-          <Text variant="caption" color="secondary">
-            Ask up to three Bots the same prompt and compare their answers side by side.
-          </Text>
-        </View>
+        <PageTitle
+          title="Council"
+          leading={
+            <PressableScale
+              onPress={() => (router.canGoBack() ? router.back() : router.replace('/home'))}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Back to Gate">
+              <Icon
+                name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }}
+                size={20}
+                color="textPrimary"
+              />
+            </PressableScale>
+          }
+          status={
+            <Text variant="caption" color="secondary">
+              Ask up to three Bots the same prompt and compare their answers side by side.
+            </Text>
+          }
+        />
 
         {!hasGroupRooms ? (
           <Card variant="surface" padding={Spacing.three}>
@@ -447,9 +462,6 @@ const styles = StyleSheet.create({
   content: {
     padding: Spacing.four,
     gap: Spacing.four,
-  },
-  heading: {
-    gap: Spacing.one,
   },
   card: {
     gap: Spacing.three,

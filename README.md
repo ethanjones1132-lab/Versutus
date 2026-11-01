@@ -222,12 +222,12 @@ Live smoke exercises connect, capability snapshot, auth rejection, and every cap
 
 | | |
 |---|---|
-| Test files | 135 — 63 app (Jest) + 72 gate (`node:test`) |
-| Test cases | 928 |
-| Coverage on `src/lib/gateway` | 44.77% statements · 46.99% lines · 36.06% branches · 48.29% functions |
+| Test files | 1,032 — 813 app (Jest) + 219 gate (`node:test`) |
+| Test cases | 10,357 — 8,244 Jest + 2,113 gate |
+| Coverage on `src/lib/gateway` | 89.74% statements · 92.37% lines · 82.17% branches · 91.36% functions |
 | Coverage direction | ratcheted — `scripts/coverage-ratchet.mts` fails the build if it drops |
 | CI | `tsc`, lint, Jest, gate tests, and portal smoke on every push and PR |
-| Architecture decisions | 13 ADRs in `docs/adr/`, including one that supersedes an earlier one |
+| Architecture decisions | 16 ADRs in `docs/adr/`, including one that supersedes an earlier one |
 
 Coverage is mid-40s and rising, scoped deliberately to `src/lib/gateway` — the transport, routing, and persistence layer where a regression is silent. UI is covered by behaviour tests rather than counted toward that gate. The ratchet exists so the number cannot quietly go backwards.
 

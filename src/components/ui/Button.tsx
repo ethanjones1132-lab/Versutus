@@ -61,7 +61,7 @@ export function Button({
         // scaling made labels wrap out of their container and collide with
         // adjacent controls.
         maxFontSizeMultiplier={1.3}
-        style={styles.label}>
+        style={[styles.label, variant === 'primary' && styles.primaryLabel]}>
         {label}
       </Text>
     </PressableScale>
@@ -90,5 +90,11 @@ const styles = StyleSheet.create({
   },
   label: {
     fontFamily: FontFamily.sansSemiBold,
+  },
+  // Pure white, not the #F5F7FA body white: at 15 px/500 on accentDeep the
+  // near-white measures 4.43:1, just under WCAG AA. White is 4.76:1 and is the
+  // only change needed; the brand fill itself stays put.
+  primaryLabel: {
+    color: '#FFFFFF',
   },
 });

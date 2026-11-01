@@ -126,7 +126,7 @@ export function ConstellationView({
                 </Text>
               ) : null}
               {node.badges.length > 0 ? (
-                <View style={styles.badges}>
+                <View style={[styles.badges, { maxWidth: boxWidth }]}>
                   {node.badges.map((badge) =>
                     badge.action === 'approval' && onPressApproval ? (
                       <PressableScale

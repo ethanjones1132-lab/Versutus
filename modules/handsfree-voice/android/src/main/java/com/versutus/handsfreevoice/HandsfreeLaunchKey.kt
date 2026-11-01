@@ -89,7 +89,13 @@ object HandsfreeLaunchKey {
     (store.getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
     val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256, "AndroidKeyStore")
     generator.init(
-      KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_SIGN).build(),
+      // An HMAC key has to name the digest it will sign with. Omitting it let
+      // some Keystore implementations create a key and others throw, and the
+      // throw was swallowed by verifyLaunch, so a signed call link failed
+      // silently depending on the device.
+      KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_SIGN)
+        .setDigests(KeyProperties.DIGEST_SHA256)
+        .build(),
     )
     return generator.generateKey()
   }

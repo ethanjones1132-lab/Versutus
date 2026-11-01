@@ -30,8 +30,12 @@ const BOT_ROW_OFFSET = 72;
 // Bots never compress below a label's width: a roster too wide for one row
 // wraps into the next, BOT_ROW_GAP further down. BOT_LABEL_WIDTH is the room a
 // Bot's name is given, so two neighbours BOT_SPACING apart cannot overlap.
-const BOT_SPACING = 104;
-const BOT_LABEL_WIDTH = 96;
+// The label budget is wider than a bare name on purpose: a status badge
+// ("Running", "1 failed", "needs you") hangs under the same node and was the
+// thing overlapping its neighbour on a phone. At this spacing a row holds five
+// Bots and wraps the rest, instead of squeezing six badges into one line.
+const BOT_SPACING = 128;
+const BOT_LABEL_WIDTH = 120;
 const BOT_ROW_GAP = 64;
 
 export type FleetGatewayInput = { id: string; name?: string };

@@ -1,16 +1,10 @@
 import { cronJobSummary, type CronJob } from './cron';
+import { parseRoutineName, routineName } from './routine-name';
 import { formatRunFailure } from './run-failures';
 
-export function routineName(botId: string, title: string): string {
-  const trimmed = title.trim();
-  return `[bot:${botId}] ${trimmed}`;
-}
-
-export function parseRoutineName(name: string): { botId?: string; title: string } {
-  const match = /^\[bot:([^\]]+)\]\s*(.*)$/.exec(name ?? '');
-  if (!match) return { title: name ?? '' };
-  return { botId: match[1], title: match[2] };
-}
+// Re-exported so the public surface of this module is unchanged for callers
+// and tests that already import the naming convention from here.
+export { parseRoutineName, routineName };
 
 export type RoutineDraft = {
   title: string;

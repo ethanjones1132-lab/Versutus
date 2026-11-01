@@ -17,6 +17,9 @@ jest.mock('@/components/ui', () => ({
   Skeleton: 'Skeleton',
   EmptyState: 'EmptyState',
   ErrorCard: 'ErrorCard',
+  PageTitle: 'PageTitle',
+  PressableScale: 'PressableScale',
+  Icon: 'Icon',
 }));
 jest.mock('@/components/chat/council-compare-view', () => ({
   CouncilCompareView: 'CouncilCompareView',

@@ -4,6 +4,7 @@ import { fetch as expoFetch } from 'expo/fetch';
 
 import * as Notifications from 'expo-notifications';
 import * as Linking from 'expo-linking';
+import Head from 'expo-router/head';
 import { Stack, ThemeProvider, useRouter, type ErrorBoundaryProps } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef } from 'react';
@@ -622,6 +623,17 @@ export default function RootLayout() {
       <HandsfreeVoiceProvider>
         <FontProvider>
           <ThemeProvider value={VersutusDarkTheme}>
+             {/* Expo Router owns the document head during static rendering;
+                 the +html fallback title is overwritten by this empty head
+                 unless the route supplies one. */}
+             <Head>
+               <title>Versutus</title>
+               <meta
+                 name="description"
+                 content="Versutus is a precise mobile console for a self-hosted AI agent gateway: chat, Bots, live runs, approvals, and voice."
+               />
+               <meta name="theme-color" content="#0A0A0B" />
+             </Head>
              <StatusBar style="light" />
              <NotificationRouter />
              <GatewayDeepLinkRouter />
@@ -640,19 +652,19 @@ export default function RootLayout() {
                   <Stack.Screen
                     name="fleet"
                     options={{
-                      headerShown: true,
+                      // Fleet draws its own serif title and back control, like
+                      // Runs and Spend; a native header above it duplicated the
+                      // page name and left a hard seam over the ambient stage.
+                      headerShown: false,
                       title: 'Fleet',
-                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                      headerTintColor: VersutusDarkTheme.colors.text,
                     }}
                   />
                   <Stack.Screen
                     name="council"
                     options={{
-                      headerShown: true,
+                      // Same rule as Fleet: one title, drawn by the page.
+                      headerShown: false,
                       title: 'Council',
-                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                      headerTintColor: VersutusDarkTheme.colors.text,
                     }}
                   />
                   <Stack.Screen

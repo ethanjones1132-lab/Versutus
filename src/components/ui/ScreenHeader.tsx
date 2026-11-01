@@ -40,7 +40,11 @@ export function ScreenHeader({
 
       {trailing ??
         (onTrailingPress ? (
-          <PressableScale onPress={onTrailingPress} hitSlop={12}>
+          <PressableScale
+            onPress={onTrailingPress}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Open settings">
             <GlassSurface variant="inset" padding={0} style={styles.trailing}>
               {Platform.OS === 'web' ? (
                 <WebSymbol name={trailingIcon.web} size={22} color={tokens.accent} />

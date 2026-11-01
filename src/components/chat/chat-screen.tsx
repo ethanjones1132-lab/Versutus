@@ -4,7 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { type Href, useFocusEffect, useIsFocused, useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, FlatList, Platform, RefreshControl, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { AppState, BackHandler, FlatList, Platform, RefreshControl, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated from 'react-native-reanimated';
 
@@ -1043,6 +1043,21 @@ export function ChatScreen() {
     setBackendPickerVisible(false);
     setSurface(next);
   }, []);
+
+  // Android's system back follows the header's back control: a thread, a room
+  // or configurable chat returns to the roster before the app itself is
+  // allowed to close. Without this the one gesture every Android owner uses
+  // leaves the product instead of walking one level up inside it. Sheets and
+  // the keyboard are native consumers and get the press first; this only sees
+  // what they did not take.
+  useEffect(() => {
+    if (Platform.OS !== 'android' || surface.kind === 'roster') return undefined;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      showSurface({ kind: 'roster' });
+      return true;
+    });
+    return () => subscription.remove();
+  }, [showSurface, surface.kind]);
 
   // Open one Bot's Chat and stay there only if it opened. `openBot` answers a
   // refusal instead of throwing, so a caller that waits only for a rejection
