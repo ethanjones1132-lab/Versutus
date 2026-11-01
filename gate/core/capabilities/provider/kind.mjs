@@ -1,7 +1,9 @@
 const FLAVORS = ['openai', 'anthropic', 'custom'];
 
 function isLoopback(hostname) {
-  return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+  // WHATWG URL reports an IPv6 hostname with brackets (e.g. '[::1]'), so accept
+  // both the bracketed and bare forms of the IPv6 loopback address.
+  return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1' || hostname === '[::1]';
 }
 
 function validate(config) {
