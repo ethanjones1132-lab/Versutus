@@ -3566,8 +3566,20 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         return nextProfile;
       }
       // Saved under this exact URL, and nothing else in the roster can
-      // authenticate for that Gate: connect the copy that is there.
-      if (existing) return existing;
+      // authenticate for that Gate. When the caller supplies the key this
+      // profile is missing, that key IS the answer: persist it on the saved
+      // profile and connect the copy that carries it. Returning the token-less
+      // copy would discard the key the operator just typed and stop the attach
+      // on "token required" — the dead end this branch exists to close.
+      if (existing) {
+        if (!existing.token && token) {
+          const nextProfile = { ...existing, token };
+          const next = await upsertGateway(nextProfile);
+          setGateways(next);
+          return nextProfile;
+        }
+        return existing;
+      }
 
       const discoveredMatch = discovered.find((item) => item.url === url);
       let kind: GatewayProfile['kind'] =
