@@ -40,6 +40,12 @@ export function OnboardingScreen() {
   // `connectionPhase` is only committed by a later render, so reading it where
   // `await retryAutoConnect()` returns reads the phase from BEFORE the tap.
   const [awaitingRetryPhase, setAwaitingRetryPhase] = useState(false);
+  // A retry that succeeds lands the operator in the app exactly once. The
+  // verdict is judged in an effect, and an effect can be judged again while the
+  // phase lags the state that scheduled it (and StrictMode runs every effect
+  // twice), so the landing needs its own latch the way the cycle has one —
+  // otherwise a second `replace` would put a second chat entry on the stack.
+  const retryLandedRef = useRef(false);
   // `setRetrying` after the screen is gone is a setState on a dead tree, so the
   // cycle's own cleanup says whether this screen is still the one waiting.
   const mountedRef = useRef(true);
@@ -101,6 +107,7 @@ export function OnboardingScreen() {
   async function handleRetry() {
     if (retryingRef.current) return;
     retryingRef.current = true;
+    retryLandedRef.current = false;
     setRetrying(true);
     setAwaitingRetryPhase(false);
     // The last retry's verdict is about the last retry; leaving its card up
@@ -121,7 +128,8 @@ export function OnboardingScreen() {
         setRetrying(false);
         // The verdict is judged where the phase is committed: the render this
         // tap triggers still carries the phase from BEFORE the ladder ran, so
-        // reading it where the await returns would read the wrong one.
+        // reading it where the await returns would read the wrong one. Both
+        // outcomes are read there — `failed` names itself, `connected` lands.
         setAwaitingRetryPhase(true);
       }
     }
@@ -129,6 +137,22 @@ export function OnboardingScreen() {
 
   useEffect(() => {
     if (!awaitingRetryPhase) return;
+    // A retry that succeeds IS a connect, so it has to take the operator into
+    // the app the way the Connect CTA does. Without this the probe ladder
+    // recovers the connection and the operator is left on a screen whose only
+    // remaining answer is the failure it has already shown them.
+    if (connectionPhase === 'connected') {
+      // Cleared before the landing: the verdict has been acted on, so a later
+      // mount starts clean and cannot re-navigate from a stale retry.
+      setAwaitingRetryPhase(false);
+      if (retryLandedRef.current) return;
+      retryLandedRef.current = true;
+      void haptics.success();
+      router.replace('/(tabs)/chat');
+      return;
+    }
+    // A cycle that ends in `failed` again names itself in the error card — the
+    // probe message still carries the words from BEFORE the tap.
     if (connectionPhase !== 'failed') return;
     setAwaitingRetryPhase(false);
     setError(
@@ -137,7 +161,7 @@ export function OnboardingScreen() {
         probeMessage ??
         'The gateway could not be reached. Check its address and network, then try again.',
     );
-  }, [awaitingRetryPhase, connectionPhase, probeMessage]);
+  }, [awaitingRetryPhase, connectionPhase, probeMessage, router]);
 
   return (
     <Screen>
