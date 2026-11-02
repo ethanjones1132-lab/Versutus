@@ -17,12 +17,36 @@ import {
 } from '@/lib/gateway/provider-oauth';
 import type { ProviderProfile, ProviderSnapshot } from '@/lib/gateway/provider-types';
 
+/**
+ * A gateway that cannot answer the profile read at all names that in prose:
+ * `<method> is not supported by this gateway` (client.ts `rpcRequest`),
+ * `Unknown method` (gate/core/server.mjs) or `<method> is not supported by
+ * <kind>` (manifest-client.ts) — the shapes `isOAuthAttemptPollUnsupported`
+ * already recognises. Such a Gate predates `providers.profiles.list`, so it has
+ * no profiles to register from; that is an answer, not a failed read.
+ */
+function predatesProfilesRpc(caught: unknown): boolean {
+  const message = caught instanceof Error ? caught.message : String(caught);
+  return (
+    message.includes('Unknown method') ||
+    message.includes('unknown_method') ||
+    message.includes('is not supported by')
+  );
+}
+
 /** Model providers the Gate owns: registration, credentials, catalogs. */
 export function ProvidersSection() {
   const { status, gatewayRequest, retryAutoConnect } = useGateway();
   const client = useMemo(() => createProviderClient(gatewayRequest), [gatewayRequest]);
   const [providers, setProviders] = useState<ProviderSnapshot[]>([]);
   const [profiles, setProfiles] = useState<ProviderProfile[]>([]);
+  /**
+   * What the profile read established, kept apart from `profiles.length`: an
+   * empty list is the Gate saying it ships no profiles, while a failed read
+   * says nothing about them — and the two used to render identically.
+   * `missing` is a Gate that predates `providers.profiles.list`.
+   */
+  const [profilesRead, setProfilesRead] = useState<'listed' | 'missing' | 'failed'>('listed');
   const [registering, setRegistering] = useState(false);
   const [busy, setBusy] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -45,12 +69,25 @@ export function ProvidersSection() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
-    // A Gate predating providers.profiles.list still lists fine — it just
-    // cannot offer registration, so this must not clear the list.
+    // A Gate predating providers.profiles.list still lists fine — it answers
+    // "unknown method" and simply cannot offer registration, so that answer
+    // leaves the provider list and the section error alone. Any other refusal
+    // is a read that failed: the section must name it (otherwise a Gate whose
+    // read broke reads as a Gate with no profiles), and registration stays
+    // reachable because a failed read never proved the Gate has none.
     try {
       setProfiles(await client.listProfiles());
-    } catch {
+      setProfilesRead('listed');
+    } catch (caught) {
       setProfiles([]);
+      if (predatesProfilesRpc(caught)) {
+        setProfilesRead('missing');
+      } else {
+        setProfilesRead('failed');
+        // Fill an empty slot only: a failed providers.list already names the
+        // primary read, and its Retry re-runs both reads.
+        setError((current) => current ?? (caught instanceof Error ? caught.message : String(caught)));
+      }
     } finally {
       setLoaded(true);
     }
@@ -153,7 +190,11 @@ export function ProvidersSection() {
     }
   }
 
-  const canRegister = status === 'connected' && profiles.length > 0;
+  // Registration needs a profile to name the vendor shape, so a Gate that lists
+  // none — or predates the read — cannot register from here. A read that failed
+  // is not that answer, it is unknown, so it must not hide the button.
+  const canRegister =
+    status === 'connected' && (profilesRead === 'failed' || profiles.length > 0);
 
   /**
    * Rename a provider's label on the Gate. The trimmed value is what reaches
