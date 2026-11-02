@@ -5,11 +5,25 @@ import { BaseSheet, Button, Chip, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import type { PublicBot } from '@/lib/gateway/bots';
 import {
+  GROUP_ROUNDS_ON_SEND,
   MAX_GROUP_MEMBERS,
   MIN_GROUP_MEMBERS,
   describeGroupCreationFloor,
   validateGroup,
 } from '@/lib/gateway/groups';
+
+/**
+ * The sheet's promise about how many rounds one send runs, derived from the
+ * same constant the send path reads (`GROUP_ROUNDS_ON_SEND`). A hand-copied
+ * number is how this line once promised three rounds while the phone planned
+ * one (QUALITY-SCAN 2026-10-11 group_rounds_copy).
+ *
+ * `rounds` defaults to the real constant; it is a parameter so the copy can be
+ * checked against a non-default count without editing the gateway constant.
+ */
+export function describeGroupRoundsCopy(rounds: number = GROUP_ROUNDS_ON_SEND): string {
+  return `One message runs a round-robin: every member replies in turn, up to ${rounds} round${rounds === 1 ? '' : 's'}.`;
+}
 
 /**
  * Create a Gate-owned group room: a name plus 2–6 bots. Membership is chosen
@@ -64,7 +78,7 @@ export function CreateGroupSheet({
         contentContainerStyle={styles.pad}>
         <Text variant="title">New group room</Text>
         <Text variant="caption" color="secondary" style={styles.hint}>
-          One message runs a round-robin: every member replies in turn, up to 3 rounds.
+          {describeGroupRoundsCopy()}
         </Text>
 
         <TextField

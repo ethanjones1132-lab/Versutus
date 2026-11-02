@@ -97,7 +97,17 @@ export class OAuthManager {
 
   async disconnect(providerId, { oauthProfileId } = {}) {
     const profile = this.profiles.get(oauthProfileId || providerId);
-    const stored = await this.readTokens(providerId);
+    // A stored value that is not the JSON this module wrote is still a grant
+    // the owner asked us to remove. `readTokens` parses unguarded, so a corrupt
+    // entry used to reject here and the delete below never ran -- leaving the
+    // bad value in the vault forever. There is no token to revoke in that case,
+    // but the delete is the whole point of a disconnect.
+    let stored;
+    try {
+      stored = await this.readTokens(providerId);
+    } catch {
+      stored = undefined;
+    }
     let remote = false;
     if (profile && stored?.refreshToken) {
       const metadata = await discoverIssuer(profile.issuer, { fetchImpl: this.fetchImpl }).catch(() => null);

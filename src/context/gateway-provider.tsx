@@ -54,7 +54,7 @@ import {
   type TurnMeta,
   type TurnStreamResult,
 } from '@/lib/gateway/turns';
-import { createStreamBatcher } from '@/lib/gateway/stream-batching';
+import { createStreamBatcher, STREAM_BATCH_MS } from '@/lib/gateway/stream-batching';
 import { readHistory } from '@/lib/gateway/history-read';
 import {
   appendBounded,
@@ -1059,6 +1059,75 @@ const TLS_FINGERPRINT_SAVED_NOT_CONNECTED =
  */
 const TLS_FINGERPRINT_APPROVAL_SUPERSEDED =
   'A newer fingerprint decision replaced this one.';
+
+/**
+ * Coalesce streamed command output into at most one transcript write per
+ * short interval.
+ *
+ * A command's agent transport can emit dozens of deltas a second. Calling
+ * `updateLocalMessage` on every one re-rendered the provider and rewrote the
+ * transcript row each time — the same jank the chat stream already coalesces
+ * per frame. The buffer holds the latest FULL text (never a diff), schedules
+ * one write, and lets the caller flush the tail before a final write or drop
+ * it when that final write supersedes it.
+ */
+export type CommandDeltaBuffer = {
+  /** Buffer the latest full text; the next scheduled write carries it. */
+  queue(text: string): void;
+  /** Write buffered text now and cancel the scheduled write. */
+  flush(): void;
+  /** Drop buffered text without writing it. */
+  cancel(): void;
+  /** For tests: the text waiting for the next write, or null. */
+  readonly pending: string | null;
+};
+
+export function createCommandDeltaBuffer(options: {
+  write: (text: string) => void;
+  /** Injectable scheduler for deterministic tests. */
+  schedule?: (cb: () => void) => number;
+  cancel?: (id: number) => void;
+}): CommandDeltaBuffer {
+  const scheduleFn =
+    options.schedule ??
+    ((cb: () => void): number => setTimeout(cb, STREAM_BATCH_MS) as unknown as number);
+  const cancelFn = options.cancel ?? ((id: number): void => clearTimeout(id as unknown as number));
+  let timer: number | null = null;
+  let pending: string | null = null;
+
+  const doWrite = (): void => {
+    timer = null;
+    if (pending === null) return;
+    const text = pending;
+    pending = null;
+    options.write(text);
+  };
+
+  return {
+    queue(text: string): void {
+      pending = text;
+      if (timer !== null) return;
+      timer = scheduleFn(doWrite);
+    },
+    flush(): void {
+      if (timer !== null) {
+        cancelFn(timer);
+        timer = null;
+      }
+      doWrite();
+    },
+    cancel(): void {
+      if (timer !== null) {
+        cancelFn(timer);
+        timer = null;
+      }
+      pending = null;
+    },
+    get pending(): string | null {
+      return pending;
+    },
+  };
+}
 
 export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [gateways, setGateways] = useState<GatewayProfile[]>([]);
@@ -4421,7 +4490,21 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     ): Promise<SendChatInputOutcome> => {
       const trimmed = text.trim();
       const files = attachments ?? [];
-      const gateway = activeGateway;
+      // Whose words these are is read NOW, at send time, not from the closure
+      // this callback was built in. A composer send and a call rebuild this
+      // callback every render, but the outbox flush runs one loop across a Bot
+      // open and a whole turn per row: the operator can switch CLI environment
+      // or Bot while the loop is between rows, and the row must land in the
+      // conversation that is selected when it goes out. A row that carries a
+      // scope of its own still wins — the flush opens that Bot first, and the
+      // ref it leaves behind is what this send then reads.
+      //
+      // The names are unchanged on purpose: the send-time scope is what every
+      // expression below already meant, and this file's other long-lived
+      // senders (`runTask`, `sendRunQueued`) read the same mirrors.
+      const gateway = activeGatewayRef.current ?? activeGateway;
+      const selectedBackendId = selectedBackendIdRef.current;
+      const selectedBotId = selectedBotIdRef.current;
       const client = clientRef.current;
       // An image-only turn is valid: the guard must not require text.
       if ((!trimmed && files.length === 0) || !gateway || !client || isSending) return 'busy';
@@ -4616,6 +4699,19 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             persistGateway(next);
           }
         }
+        // The reply is final and on screen, so the composer belongs to the
+        // operator again. A handoff is delivery of this turn, not part of it: a
+        // roster read plus one call per mentioned Bot can take seconds, and
+        // holding `isSending` through them stood the next message down and left
+        // the composer reading as busy after the answer had already landed.
+        // Released through the same identity guard as the `finally`, so a send
+        // that starts while a handoff is out keeps its own lock (PROV-6) and
+        // this send's unwind cannot unlock it.
+        if (sendingRunIdRef.current === runId) {
+          sendingRunIdRef.current = null;
+          setIsSending(false);
+          isSendingRef.current = false;
+        }
         // Bot-to-bot handoff after a successful reply: deliver @mentions of
         // other bots on the roster. Failures here used to be swallowed — the
         // user believed the other bot received the handoff when it did not.
@@ -4757,8 +4853,6 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       clearInterruptedRecovery,
       isSending,
       persistGateway,
-      selectedBackendId,
-      selectedBotId,
     ],
   );
 
@@ -5394,6 +5488,19 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
         // Execute gateway slash command — stream agent-transport output live.
         let streamedText = '';
+        // One write per short interval, not one per delta: the buffer owns the
+        // scheduled transcript/state write and the `write` below only ever
+        // paints the latest full text. The completion and cancel paths settle
+        // the tail explicitly, so the last delta is never lost and never
+        // overwrites a final result that superseded it.
+        const commandDelta = createCommandDeltaBuffer({
+          write: (text) => {
+            updateLocalMessage(commandMessageId, {
+              text,
+              command: { input: trimmed, title: commandLabel, status: 'running', ephemeral: true },
+            });
+          },
+        });
         // `/workflow` reads this device's stored step sequences for the
         // active gateway; no gateway route carries them. The read is strict: a
         // store that cannot be read gives management no save path, so a list
@@ -5437,17 +5544,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           runTask: (prompt, onEvent) =>
             runTask(prompt, onEvent, () => {
               streamedText = `${streamedText}\n⏳ Waiting for your approval…`.trim();
-              updateLocalMessage(commandMessageId, {
-                text: streamedText,
-                command: { input: trimmed, title: commandLabel, status: 'running', ephemeral: true },
-              });
+              // A note the operator must see now: queue + flush paints it in
+              // the same tick instead of waiting for the next batch interval.
+              commandDelta.queue(streamedText);
+              commandDelta.flush();
             }),
           onAgentDelta: (delta) => {
             streamedText += delta;
-            updateLocalMessage(commandMessageId, {
-              text: streamedText,
-              command: { input: trimmed, title: commandLabel, status: 'running', ephemeral: true },
-            });
+            commandDelta.queue(streamedText);
           },
           // Hermes/Gate: /model set updates the profile the same way the picker does.
           // OpenClaw keeps config.patch via the slash path when setModelOverride is omitted
@@ -5491,6 +5595,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
                 },
         });
         const duration = Date.now() - commandStartTimeRef.current;
+        // The result supersedes any streamed preview still waiting: drop it so
+        // a late scheduled write cannot paint old text over the final answer.
+        commandDelta.cancel();
         updateLocalMessage(commandMessageId, {
           text: response.text,
           timestamp: Date.now(),
@@ -5522,16 +5629,20 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // only thing here that reaches the transcript, which is why the bubble's
         // is cleared rather than patched to another value.
         if (isUserAbort(error)) {
-          // Whatever the command streamed is the operator's to keep; only the
-          // untouched placeholder would still read as work in flight. A command
-          // whose client was superseded — a gateway switch, a disconnect, a
-          // deleted profile — must not write its "cancelled" entry back into the
-          // thread that replaced it.
+          // Whatever the command streamed is the operator's to keep: settle the
+          // buffered tail first, so the status-only patch below cannot race a
+          // scheduled write still holding the last deltas. Only an untouched
+          // placeholder would still read as work in flight. A command whose
+          // client was superseded — a gateway switch, a disconnect, a deleted
+          // profile — must not write its "cancelled" entry back into the thread
+          // that replaced it.
+          commandDelta.flush();
           if (clientGenerationRef.current === commandGeneration) {
-            const placeholder = `Running ${commandLabel}...`;
-            const bubble = messagesRef.current.find((item) => item.id === commandMessageId);
+            // `messagesRef` trails the state queue and the flush above only
+            // queued this frame's text; the local accumulator is the exact
+            // stream, so it decides whether there is output worth keeping.
             updateLocalMessage(commandMessageId, {
-              ...(bubble?.text === placeholder ? { text: `Cancelled: ${commandLabel}` } : {}),
+              ...(!streamedText.trim() ? { text: `Cancelled: ${commandLabel}` } : {}),
               command: { input: trimmed, title: commandLabel, status: undefined, ephemeral: true },
             });
           }
@@ -5544,6 +5655,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         });
         return 'error';
       } finally {
+        commandDelta.cancel();
         setIsCommandRunning(false);
         setRunningCommandLabel(null);
         commandStartTimeRef.current = 0;

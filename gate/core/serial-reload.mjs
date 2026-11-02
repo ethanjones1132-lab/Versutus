@@ -71,10 +71,12 @@ export function createSerialReload(compute) {
  * Collapse a burst of requests into one run, a moment after the last of them.
  *
  * Readiness follows real turns, and turns arrive in bursts: a batch of chats, or
- * a phone retrying, would otherwise rebuild the whole state once each. The
- * timer is unreferenced so a pending reload is never a reason for the Gate to
- * stay alive, and a failed run is swallowed because there is nobody left to
- * report it to and the next request will try again.
+ * a phone retrying, would otherwise rebuild the whole state once each. Each
+ * request restarts the wait, so the run lands a moment after the last of them
+ * rather than a fixed moment after the first. The timer is unreferenced so a
+ * pending reload is never a reason for the Gate to stay alive, and a failed run
+ * is swallowed because there is nobody left to report it to and the next
+ * request will try again.
  *
  * @param {() => Promise<unknown>} reload
  * @param {{ delayMs?: number }} [options]
@@ -83,7 +85,9 @@ export function createSerialReload(compute) {
 export function createDebouncedReload(reload, { delayMs = 1000 } = {}) {
   let timer = null;
   return () => {
-    if (timer) return;
+    // A request inside the current window moves the deadline: the reload must
+    // see the state the last request asked about, not the first one's.
+    if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
       Promise.resolve().then(reload).catch(() => undefined);

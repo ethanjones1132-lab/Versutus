@@ -202,6 +202,12 @@ export class CliEnvironmentService {
     // environment still busy", and both are on the start/finish path — so
     // neither may cost a walk over every run this process ever started.
     this.liveRuns = new Map();
+    // Start requests between their synchronous reservation and the moment
+    // their run is registered in liveRuns, per environment. A ticket taken
+    // before the first await is what stops two starts from both passing the
+    // concurrency check above a single free slot.
+    this.pendingStarts = new Map();
+    this.startTickets = 0;
     this.runSeq = 0;
     this.maxRetainedRuns = Math.max(1, Number(maxRetainedRuns) || 0);
     this.defaultEndpoints = defaultEndpoints;
@@ -335,11 +341,41 @@ export class CliEnvironmentService {
     return total;
   }
 
+  /**
+   * Take a run slot before the first await, then start.
+   *
+   * The concurrency limit lives on the environment record, which is only
+   * readable after `require()` awaits — so a check made after that await let
+   * two concurrent starts both see the same free slot and both register a run,
+   * on a limit of one just as on a limit of eight. The synchronous ticket below
+   * is the reservation; the check inside startRunReserved counts the tickets
+   * taken before this one, so the earliest caller keeps the slot and the rest
+   * are refused instead of oversubscribing it. The ticket is handed over to
+   * `liveRuns` in the same synchronous step that registers the run (there are
+   * no awaits between `trackLive` and the return), and released on every path
+   * that never registers one — a failed probe, a missing workspace, a reused
+   * run id and the rest — so a refusal never leaks a slot.
+   */
   async startRun(request) {
+    const reservation = this.reserveStartSlot(request.environmentId);
+    try {
+      return await this.startRunReserved(request, reservation);
+    } finally {
+      this.releaseStartSlot(reservation);
+    }
+  }
+
+  async startRunReserved(request, reservation) {
     const record = await this.require(request.environmentId);
     const active = this.activeRuns(request.environmentId);
-    if (active.length >= (record.lifecycle?.maxConcurrentRuns ?? 1)) {
-      const error = new Error(describeBusy(active));
+    if (active.length + this.startsAhead(reservation) >= (record.lifecycle?.maxConcurrentRuns ?? 1)) {
+      // No live run but an earlier start is still between its reservation and
+      // its registration: name that, because no runId exists yet to name.
+      const error = new Error(
+        active.length
+          ? describeBusy(active)
+          : 'environment is busy \u2014 another task is starting; wait for it to begin or finish',
+      );
       error.code = 'busy';
       throw error;
     }
@@ -437,6 +473,10 @@ export class CliEnvironmentService {
     };
     this.runs.set(runId, run);
     this.trackLive(run);
+    // Hand the reservation over to the live index in the same synchronous
+    // step: there is no await between this line and the return, so no other
+    // start can see both the run and its still-pending ticket.
+    this.releaseStartSlot(reservation);
     this.environmentState.set(record.id, { state: 'busy' });
     log.emit({ type: 'run.started', payload: { operation: request.operation, sandbox: request.sandbox } });
     // A dead binding is not fatal (model routing can ride invocation tokens)
@@ -809,6 +849,33 @@ export class CliEnvironmentService {
    */
   endpointsFor() {
     return this.defaultEndpoints ?? chatEndpointForPort(process.env.VERSUTUS_GATE_PORT) ?? undefined;
+  }
+
+  reserveStartSlot(environmentId) {
+    const ticket = (this.startTickets += 1);
+    let tickets = this.pendingStarts.get(environmentId);
+    if (!tickets) {
+      tickets = new Set();
+      this.pendingStarts.set(environmentId, tickets);
+    }
+    tickets.add(ticket);
+    return { environmentId, ticket };
+  }
+
+  releaseStartSlot(reservation) {
+    const tickets = this.pendingStarts.get(reservation.environmentId);
+    if (!tickets) return;
+    tickets.delete(reservation.ticket);
+    if (tickets.size === 0) this.pendingStarts.delete(reservation.environmentId);
+  }
+
+  /** Reservations taken before this one, in ticket order: they win the slot. */
+  startsAhead(reservation) {
+    const tickets = this.pendingStarts.get(reservation.environmentId);
+    if (!tickets) return 0;
+    let ahead = 0;
+    for (const ticket of tickets) if (ticket < reservation.ticket) ahead += 1;
+    return ahead;
   }
 
   trackLive(run) {

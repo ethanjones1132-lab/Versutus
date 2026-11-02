@@ -91,7 +91,9 @@ export default function ImportBotScreen() {
         }
         setText(picked.content);
         clearFailure();
-        setFileNote(`Read ${picked.name}: ${picked.content.toLocaleString()} characters.`);
+        // Format the LENGTH, not the text: a string's own `toLocaleString`
+        // returns the string unchanged, which reprinted the whole packet here.
+        setFileNote(`Read ${picked.name}: ${picked.content.length.toLocaleString()} characters.`);
       })
       .catch(() => setFailure({ source: 'file', message: 'The file could not be read.' }));
   };

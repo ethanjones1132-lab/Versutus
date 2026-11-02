@@ -29,6 +29,9 @@ export function bootstrapTokenLine(token, env = process.env) {
  * chunks are split into lines, and the Gate bootstrap token never lands on
  * disk (`Token: …` is redacted — `gate start` prints it to stdout and the
  * supervisor captures that stream).
+ *
+ * Rotation is best-effort: a rotation that fails (the current file cannot be
+ * moved aside) leaves the file in place and the line is still appended.
  */
 export class RotatingLog {
   constructor(dir, { name = 'gate.log', maxBytes = 10 * 1024 * 1024, keep = 5 } = {}) {
@@ -91,7 +94,16 @@ export class RotatingLog {
       return;
     }
     if (size < this.maxBytes) return;
-    rmSync(join(this.dir, `${this.name}.${this.keep}`), { force: true });
+    // Rotation is best-effort: a directory that cannot be cleaned, a sharing
+    // violation on Windows or a read-only volume must not throw out of
+    // write() and lose the line. If the current file cannot be moved aside we
+    // keep appending to it — a log that grows past its limit is a smaller
+    // problem than a log line that never lands.
+    try {
+      rmSync(join(this.dir, `${this.name}.${this.keep}`), { force: true });
+    } catch {
+      // An old generation that cannot be removed only costs history.
+    }
     for (let i = this.keep - 1; i >= 1; i -= 1) {
       try {
         renameSync(join(this.dir, `${this.name}.${i}`), join(this.dir, `${this.name}.${i + 1}`));
@@ -99,7 +111,12 @@ export class RotatingLog {
         // A missing generation is not an error — just a short history.
       }
     }
-    renameSync(this.path, join(this.dir, `${this.name}.1`));
+    try {
+      renameSync(this.path, join(this.dir, `${this.name}.1`));
+    } catch {
+      // Keep writing to the current file; the next append retries the
+      // rotation (and keeps appending if it fails again).
+    }
   }
 }
 

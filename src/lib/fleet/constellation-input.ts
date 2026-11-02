@@ -20,7 +20,15 @@ export type FleetProjectionReachability = {
   latencyMs?: number;
   error?: string;
 };
-export type FleetProjectionRun = { id: string; botId?: string; status: string };
+export type FleetProjectionRun = {
+  id: string;
+  botId?: string;
+  status: string;
+  /** The gateway the run was started on; absent on rows saved before it existed. */
+  gatewayId?: string;
+  /** The run's prompt: the map names the run by its first line. */
+  prompt?: string;
+};
 export type FleetProjectionBot = { id: string; displayName?: string };
 
 export type FleetConstellationArgs = {
@@ -62,7 +70,16 @@ export function fleetConstellationInput(args: FleetConstellationArgs): Constella
 
   const activityRuns = (args.activityRuns ?? []).map((run) => {
     const botId = run.botId?.trim();
-    return botId ? { id: run.id, botId, status: run.status } : { id: run.id, status: run.status };
+    const gatewayId = run.gatewayId?.trim();
+    const label = runLabel(run.prompt);
+    const row: { id: string; botId?: string; status: string; gatewayId?: string; label?: string } = {
+      id: run.id,
+      status: run.status,
+    };
+    if (botId) row.botId = botId;
+    if (gatewayId) row.gatewayId = gatewayId;
+    if (label) row.label = label;
+    return row;
   });
 
   const pendingRunId = args.pendingRunApproval?.runId;
@@ -97,4 +114,17 @@ function attributionForRun(
 ): { botId?: string } {
   const run = runs.find((candidate) => candidate.id === runId);
   return run?.botId ? { botId: run.botId } : {};
+}
+
+/**
+ * The map's name for a run: the first line of the prompt the operator wrote,
+ * trimmed. The widget snapshot reads a run title the same way (`runTitle`,
+ * src/lib/widget/snapshot.ts:99), so two surfaces cannot name one run two
+ * ways. An empty prompt is a run with no name — the model then shows it as
+ * "Running" rather than inventing a title.
+ */
+function runLabel(prompt?: string): string | undefined {
+  if (typeof prompt !== 'string') return undefined;
+  const firstLine = prompt.split(/\r?\n/, 1)[0]?.trim();
+  return firstLine ? firstLine : undefined;
 }

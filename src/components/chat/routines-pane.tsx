@@ -1,9 +1,25 @@
-import { memo, useState } from 'react';
+import {
+  Children,
+  cloneElement,
+  isValidElement,
+  memo,
+  useState,
+  type ReactNode,
+} from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { CronJobSheet } from '@/components/activity/cron-job-sheet';
 import { CronRunSheet } from '@/components/activity/cron-run-sheet';
-import { Button, DisclosureRow, ErrorCard, ListRow, Skeleton, Text, TextField } from '@/components/ui';
+import {
+  Button,
+  DisclosureRow,
+  ErrorCard,
+  ListRow,
+  Skeleton,
+  Text,
+  TextField,
+  type TextFieldProps,
+} from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { ROUTINE_TEMPLATES, applyRoutineTemplate } from '@/lib/gateway/routine-templates';
 import {
@@ -21,6 +37,30 @@ import {
 } from '@/lib/gateway/routines';
 
 export type { RoutineJob };
+
+/**
+ * Applies the pane's busy lock to the draft fields as one unit. A locked field
+ * renders exactly as it does when idle but refuses edits, so a create result
+ * cannot land over text typed after Add was pressed. The field declarations
+ * stay plain: the lock belongs to the form, not to any one field.
+ */
+function LockedDraftFields({
+  locked,
+  children,
+}: {
+  locked: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <>
+      {Children.map(children, (child) =>
+        isValidElement<TextFieldProps>(child)
+          ? cloneElement(child, { editable: !locked })
+          : child,
+      )}
+    </>
+  );
+}
 
 /** Bot Chat routines pane — wrapped in `memo` so a chat-screen tick that does
  *  not change `jobs`, `loaded`, `failed`, `readError`, `onCreate`,
@@ -197,9 +237,11 @@ function RoutinesPaneImpl({
           <Text variant="micro" color="secondary">
             New routine
           </Text>
-          <TextField value={title} onChangeText={setTitle} placeholder="inbox" />
-          <TextField value={schedule} onChangeText={setSchedule} placeholder={DEFAULT_ROUTINE_SCHEDULE} />
-          <TextField value={prompt} onChangeText={setPrompt} placeholder="Summarize overnight mail" multiline />
+          <LockedDraftFields locked={busy}>
+            <TextField value={title} onChangeText={setTitle} placeholder="inbox" />
+            <TextField value={schedule} onChangeText={setSchedule} placeholder={DEFAULT_ROUTINE_SCHEDULE} />
+            <TextField value={prompt} onChangeText={setPrompt} placeholder="Summarize overnight mail" multiline />
+          </LockedDraftFields>
           <Button
             label={creating ? 'Adding…' : 'Add'}
             disabled={busy || !title.trim() || !prompt.trim()}

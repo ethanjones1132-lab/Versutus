@@ -61,6 +61,10 @@ export class Supervisor {
     this._lastExit = null;
     this._lastHealthyAt = null;
     this._stopping = false;
+    // A `service restart` is a deliberate exit: the child's own shutdown must
+    // not be booked as a crash, or the next restart waits out the crash
+    // backoff (up to 60 s) for nothing.
+    this._restartRequested = false;
     this._timers = new Set();
   }
 
@@ -109,6 +113,7 @@ export class Supervisor {
       this._spawn();
       return;
     }
+    this._restartRequested = true;
     this._status = 'restarting';
     this._emitState();
     this._askGracefulStop();
@@ -184,6 +189,8 @@ export class Supervisor {
     this._childPid = null;
     this._clearTimers();
     this._lastExit = { code: code ?? null, signal: signal ?? null, at };
+    const restartRequested = this._restartRequested;
+    this._restartRequested = false;
     if (this._stopping) {
       this._status = 'stopped';
       this._log(`child exited (${describeExit(code, signal)}); staying stopped`);
@@ -191,6 +198,16 @@ export class Supervisor {
       return;
     }
     this._restarts += 1;
+    // A requested restart is not a crash: respawn on the next tick, leave the
+    // crash ladder alone, so a run of `service restart` calls cannot escalate
+    // the delay a real failure would earn.
+    if (restartRequested) {
+      this._status = 'restarting';
+      this._log(`child exited (${describeExit(code, signal)}) on request; restarting now (restart ${this._restarts})`);
+      this._emitState();
+      this._later(0, () => this._spawn());
+      return;
+    }
     // Ten quiet minutes forgive the past: the next failure starts over at 1 s.
     if (this._childStartedAt !== null && this._now() - this._childStartedAt >= this._stableMs) {
       this._failures = 0;

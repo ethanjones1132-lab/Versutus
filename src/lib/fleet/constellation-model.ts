@@ -46,7 +46,24 @@ export type FleetReachability = Record<string, {
   error?: string;
 } | undefined>;
 export type FleetBotInput = { id: string; displayName?: string };
-export type FleetRunInput = { id: string; botId?: string; status: string };
+export type FleetRunInput = {
+  id: string;
+  botId?: string;
+  status: string;
+  /**
+   * The gateway this run was started on. A Bot belongs to one gateway (its
+   * node id is `bot:<gateway>:<bot>`), so a run from another gateway can never
+   * mark this gateway's Bot live or failed. Absent on rows saved before this
+   * field existed — those stay visible under the live gateway.
+   */
+  gatewayId?: string;
+  /**
+   * The run's own name, as the operator wrote it (the prompt's first line —
+   * the projection derives it). A run with no readable name carries none, and
+   * the map then says "Running" without inventing a title.
+   */
+  label?: string;
+};
 export type FleetApprovalInput = { botId?: string };
 
 export type ConstellationInput = {
@@ -139,23 +156,10 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
   if (profiles.length === 0) return EMPTY;
 
   // A live run and its Bot: the map shows what each star is doing, one
-  // running name at most per Bot — the newest run wins, order is the input's.
-  const runningRuns = new Map<string, string>();
-  // The failure count per Bot is the same per-run status the scorecard's
-  // `scorecardFate` reads: only `failed` counts, never cancelled (the
-  // operator's own stop), unresolved (a fate never learned) or anything
-  // unsettled. A run naming no Bot lands nowhere — the same discipline the
-  // scorecard applies to a row with no `botId`.
-  const failuresByBot = new Map<string, number>();
-  for (const run of input.activityRuns ?? []) {
-    if (run.status !== 'failed' || typeof run.botId !== 'string' || !run.botId) continue;
-    failuresByBot.set(run.botId, (failuresByBot.get(run.botId) ?? 0) + 1);
-  }
-  for (const run of input.activityRuns ?? []) {
-    if (run.status !== 'running' || typeof run.botId !== 'string' || !run.botId) continue;
-    if (!runningRuns.has(run.botId)) runningRuns.set(run.botId, '');
-  }
-  const runningBots = new Set(runningRuns.keys());
+  // running name at most per Bot — the newest run wins, order is the input's,
+  // and the name is that run's own label (never a neighbouring run's). Runs
+  // are gateway facts, so the fold happens per live gateway below: a same-named
+  // Bot on another gateway is a different star and must not borrow this run.
 
   // The routine read the connected gateway reported — described, not re-worded.
   // A gateway that named no jobs is a map with no arcs, not a map that guesses.
@@ -174,7 +178,13 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
   const edges: ConstellationEdge[] = [];
   let botsTotal = 0;
   let runningTotal = 0;
-  let approvalsTotal = 0;
+  // Every pending approval is waiting on the operator, including one the
+  // roster cannot place — a run whose Bot left the roster, or a row naming no
+  // Bot at all (the projection emits `{}` for an unattributable run). Such an
+  // orphan has no star to badge, but the HUD total must not undercount the
+  // queue; the per-node badges below still only count approvals a rostered Bot
+  // owns, and no Bot is invented for an unknown id.
+  let approvalsTotal = (input.pendingApprovals ?? []).length;
 
   profiles.forEach((profile, index) => {
     const angle = -Math.PI / 2 + (2 * Math.PI * index) / profiles.length;
@@ -207,6 +217,34 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
     nodes.push(gatewayNode);
 
     if (!live) return;
+    // The runs this gateway owns. A run names the gateway it was started on,
+    // and a Bot belongs to exactly one gateway (`bot:<gateway>:<bot>`), so a
+    // run from another gateway — a same-named Bot elsewhere — is never this
+    // Bot running or failing. A row saved before `gatewayId` existed names
+    // none; it stays visible under the live gateway, the same legacy rule
+    // `runsForGateway` applies (src/lib/gateway/runs.ts:141).
+    const gatewayRuns = (input.activityRuns ?? []).filter((run) => {
+      const runGatewayId = typeof run.gatewayId === 'string' ? run.gatewayId.trim() : '';
+      return !runGatewayId || runGatewayId === profile.id;
+    });
+    const runningRuns = new Map<string, string | undefined>();
+    // The failure count per Bot is the same per-run status the scorecard's
+    // `scorecardFate` reads: only `failed` counts, never cancelled (the
+    // operator's own stop), unresolved (a fate never learned) or anything
+    // unsettled. A run naming no Bot lands nowhere — the same discipline the
+    // scorecard applies to a row with no `botId`.
+    const failuresByBot = new Map<string, number>();
+    for (const run of gatewayRuns) {
+      if (run.status !== 'failed' || typeof run.botId !== 'string' || !run.botId) continue;
+      failuresByBot.set(run.botId, (failuresByBot.get(run.botId) ?? 0) + 1);
+    }
+    for (const run of gatewayRuns) {
+      if (run.status !== 'running' || typeof run.botId !== 'string' || !run.botId) continue;
+      if (runningRuns.has(run.botId)) continue;
+      const label = typeof run.label === 'string' ? run.label.trim() : '';
+      runningRuns.set(run.botId, label ? label : undefined);
+    }
+    const runningBots = new Set(runningRuns.keys());
     const rosterWarning: ConstellationBadge | undefined = input.rosterReadStatus && input.rosterReadStatus !== 'ready'
       ? { label: `Roster ${input.rosterReadStatus}`, tone: 'neutral' } : undefined;
     if (rosterWarning) badges.push(rosterWarning);
@@ -238,7 +276,7 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
       let runningRunName: string | undefined;
       if (runningBots.has(bot.id)) {
         botBadges.push({ label: 'Running', tone: 'accent' });
-        runningRunName = runningRuns.get(bot.id) || undefined;
+        runningRunName = runningRuns.get(bot.id);
       }
       // The failed-count badge: the same run-derived fact the Activity
       // scorecard folds (`only a run this device saw reached `failed``), so
@@ -252,7 +290,6 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
         });
       }
       const approvals = approvalsByBot.get(bot.id) ?? 0;
-      approvalsTotal += approvals;
       if (approvals > 0) {
         botBadges.push({
           label: `${approvals} approval${approvals === 1 ? '' : 's'}`,

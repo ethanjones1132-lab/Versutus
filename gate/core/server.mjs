@@ -87,6 +87,12 @@ const AUTH_MAX_BODY_BYTES = 64 * 1024 * 1024;
 // event, so a tool card nobody ever closes cannot pin a turn open forever.
 const TURN_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
 const DEFAULT_DETACHED_TURN_MAX_MS = 12 * 60 * 60 * 1000;
+// Node holds a timer's delay in a signed 32-bit integer: anything larger is
+// replaced with 1 ms (it warns and fires at once). A ceiling read from the
+// environment is therefore bounded here, at the timer that arms it — an
+// operator asking for a ceiling longer than a timer can express must not get
+// the opposite, every detached turn ended the moment the phone left.
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 const DEFAULT_DETACHED_STALL_MS = 30 * 60 * 1000;
 // How many turns one caller may leave running unseen. A runaway guard, not a
 // reaper: past it a NEW detach is refused (with a log line) and the turn keeps
@@ -500,7 +506,10 @@ async function bindDurableTurn(res, {
     // long the turn had already been running attached says nothing about whether
     // it is still working — the old arithmetic took that as the remaining budget
     // and killed a healthy turn the instant its socket closed.
-    turn.ageTimer = setTimeout(() => endByGate('max_age'), detachedTurnMaxMs);
+    turn.ageTimer = setTimeout(
+      () => endByGate('max_age'),
+      Math.min(detachedTurnMaxMs, MAX_TIMER_DELAY_MS),
+    );
     turn.ageTimer.unref?.();
   }
 
@@ -842,6 +851,39 @@ function writeUnknownTurn(res) {
   res.end(JSON.stringify({
     error: { message: 'No such turn for this caller.', code: 'unknown_turn' },
   }));
+}
+
+/**
+ * Read a list route's `limit` query parameter.
+ *
+ * `null` means no limit was asked for: the parameter is absent or empty.
+ *
+ * Anything else must be a positive whole number, and every other value is
+ * refused rather than handed to `Array.prototype.slice`. `Number(x) ||
+ * undefined` used to turn a bad limit into a confident lie: `limit=-5` sliced
+ * from the END of a session list (every row but the newest five) and emptied
+ * every message page, while `limit=abc` became "the whole list". Both came
+ * back as 200 with real-looking rows, so a caller could not tell a malformed
+ * request from a truthful answer.
+ *
+ * `limit=0` is refused too instead of reading as "no limit": zero rows is a
+ * request no screen makes, and choosing between "nothing" and "everything"
+ * is exactly the ambiguity being removed. The documented range is therefore
+ * 1..Number.MAX_SAFE_INTEGER, plus "absent" for the whole list.
+ */
+function parseListLimit(raw) {
+  if (raw === null || raw === '') return { limit: null };
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    return { error: `limit must be a positive whole number, got "${raw}"` };
+  }
+  return { limit: value };
+}
+
+/** Refuse a list read whose `limit` is not a positive whole number. */
+function writeInvalidLimit(res, message) {
+  res.writeHead(400, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: { message, code: 'invalid_limit' } }));
 }
 
 /** Backend models are `providerId/modelId`, since a CLI reaches many vendors. */
@@ -3934,6 +3976,14 @@ export async function createGate(config = {}) {
       }
 
       if (pathname === '/v1/sessions' && method === 'GET') {
+        // A malformed limit is refused before any Bot or backend is resolved:
+        // the request is wrong on its own terms, and slicing by it would answer
+        // a question nobody asked (`-5` returned all but the newest five).
+        const parsedLimit = parseListLimit(url.searchParams.get('limit'));
+        if (parsedLimit.error) {
+          writeInvalidLimit(res, parsedLimit.error);
+          return;
+        }
         const botId = readBotId(url);
         const scope = await resolveConversationScope(url.searchParams.get('backendId'), botId);
         // `scope?.backend`, not `scope`: a Bot that cannot be resolved leaves a
@@ -3942,7 +3992,7 @@ export async function createGate(config = {}) {
         // catch answered a second time over a response that was already sent.
         if (!scope?.backend) return;
         const { backend, environmentId } = scope;
-        const limit = Number(url.searchParams.get('limit')) || undefined;
+        const limit = parsedLimit.limit ?? undefined;
         // The limit must travel: slicing here cannot recover rows the backend
         // never returned. Hermes answers /api/sessions with its own default
         // page, so a request for 200 quietly meant 50 — and a Bot Chat older
@@ -4000,9 +4050,17 @@ export async function createGate(config = {}) {
 
       const sessionMessagesMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/messages$/);
       if (sessionMessagesMatch && method === 'GET') {
+        // Same rule as the session list: a page bound that is not a positive
+        // whole number is a 400, not a slice. `-5` used to make `lower` exceed
+        // `upper` and answer an empty page with a 200.
+        const parsedLimit = parseListLimit(url.searchParams.get('limit'));
+        if (parsedLimit.error) {
+          writeInvalidLimit(res, parsedLimit.error);
+          return;
+        }
         const backend = await resolveConversationBackend(url.searchParams.get('backendId'), readBotId(url));
         if (!backend) return;
-        const limit = Number(url.searchParams.get('limit')) || undefined;
+        const limit = parsedLimit.limit ?? undefined;
         const before = url.searchParams.get('before') || undefined;
 
         // Paging is done here rather than in the backends: all three read their
@@ -4753,7 +4811,16 @@ export async function createGate(config = {}) {
           writeScopeRefusal(res, requirement);
           return;
         }
-        const handler = registryMethods[rpcMethod] ?? gatewayMethods[rpcMethod] ?? state.dispatch.get(rpcMethod);
+        // Own properties only. Both tables are object literals, so a plain
+        // `registryMethods[rpcMethod]` also finds Object.prototype's members:
+        // "constructor" came back as a function and answered 200 with the
+        // params echoed as the result, and "toString"/"__proto__" answered 400
+        // as if the handler had thrown. A name the Gate never registered must
+        // reach the unknown-method answer below, not an inherited member.
+        // `state.dispatch` is a Map, whose get() already ignores the prototype.
+        const handler = (Object.hasOwn(registryMethods, rpcMethod) ? registryMethods[rpcMethod] : undefined)
+          ?? (Object.hasOwn(gatewayMethods, rpcMethod) ? gatewayMethods[rpcMethod] : undefined)
+          ?? state.dispatch.get(rpcMethod);
         if (!handler) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: `Unknown method "${rpcMethod}"`, code: 'unknown_method' } }));
@@ -4840,9 +4907,13 @@ export async function createGate(config = {}) {
       }
       try {
         res.writeHead(500);
+        // The caller is told the Gate failed, never why. This catch is also
+        // behind the unauthenticated access route, and a filesystem or library
+        // error carries absolute paths; the detail is on the line above, in the
+        // Gate's own log, where an operator can read it and a caller cannot.
         res.end(JSON.stringify({
           error: 'Internal Server Error',
-          message: err.message,
+          message: 'The Gate hit an unexpected internal error. The Gate log has the details.',
         }));
       } catch {
         res.end();

@@ -30,7 +30,7 @@ import { Platform } from 'react-native';
 
 import { keyValueStorage } from '@/lib/storage/key-value';
 import { androidWidgetPayload } from '@/lib/widget/android-widget-payload';
-import type { GlanceableSnapshot } from '@/lib/widget/snapshot';
+import { glanceableSnapshot, type GlanceableSnapshot } from '@/lib/widget/snapshot';
 
 /**
  * The payload JSON the app last wrote, kept beside the card's own storage.
@@ -98,15 +98,21 @@ export function writeWidgetSnapshot(
  * exists for exactly this and had no caller. Queued behind the writes it retires
  * (a payload written after the clear would describe a gateway that is gone) and it
  * drops the merge's base with it.
+ *
+ * iOS has no clear call to make — expo-widgets' `Widget` offers reload,
+ * updateSnapshot and updateTimeline only (Widgets.js) — so the empty state is
+ * handed to the target as an ordinary snapshot through `updateSnapshot`, the same
+ * door every other iOS write uses.
  */
 export function clearWidgetSnapshot(
   loadAndroid: () => Promise<AndroidWidgetModule> = async () => (await import('../../../modules/versutus-widget')).default,
+  load: () => Promise<WidgetTarget> = () => import('@/components/widget/glanceable-widget'),
 ): Promise<void> {
   return new Promise<void>((resolve) => {
     enqueueWidgetJob({
       kind: 'clear',
       run: async () => {
-        await clearWidgetCard(loadAndroid);
+        await clearWidgetCard(loadAndroid, load);
         return true;
       },
       resolve: () => resolve(),
@@ -235,12 +241,37 @@ async function performWidgetWrite(
   return true;
 }
 
-async function clearWidgetCard(loadAndroid: () => Promise<AndroidWidgetModule>): Promise<void> {
-  const module = await loadAndroidWidgetModule(loadAndroid);
-  try {
-    await module?.clearPayload();
-  } catch {
-    // Nothing left to draw and nothing to retry: the card redraws its empty state.
+/**
+ * The snapshot the card is handed once the app has no gateway left. It is the
+ * ordinary fold of an empty set of facts, not a hand-written shape, so it cannot
+ * drift from the snapshot the writes use: no Bots, no result, no runs, and the
+ * target's own words for a disconnected, idle card.
+ */
+function clearedWidgetSnapshot(now: number): GlanceableSnapshot {
+  return glanceableSnapshot({ status: 'disconnected', runs: [], routines: [] }, now);
+}
+
+async function clearWidgetCard(
+  loadAndroid: () => Promise<AndroidWidgetModule>,
+  load: () => Promise<WidgetTarget>,
+): Promise<void> {
+  if (Platform.OS === 'android') {
+    const module = await loadAndroidWidgetModule(loadAndroid);
+    try {
+      await module?.clearPayload();
+    } catch {
+      // Nothing left to draw and nothing to retry: the card redraws its empty state.
+    }
+  } else {
+    // iOS: there is no clear on the widget object, so the empty state is a
+    // snapshot. A load that fails is the same no-widget build the writes answer
+    // `false` for, and the merge base is still dropped below.
+    const target = await loadWidgetTarget(load);
+    try {
+      target?.default.updateSnapshot(clearedWidgetSnapshot(Date.now()));
+    } catch {
+      // The card keeps what it held; the app has nothing better to hand it.
+    }
   }
   await forgetLastWidgetPayload();
 }

@@ -83,12 +83,17 @@ export function createPushSend({ fetchImpl = globalThis.fetch } = {}) {
   // receipt ticket ids back to the push tokens the store prunes by.
   async function send(messages = []) {
     const list = Array.isArray(messages) ? messages : [];
+    const tickets = [];
+    const ticketTokens = {};
+    const deadTokens = [];
+    // Zero-based index of the chunk being sent. On failure it names the chunk
+    // that failed; `delivered` (the number of messages already accepted by
+    // Expo) is exactly that chunk's offset into `list`, so a caller can retry
+    // only the remainder.
+    let chunkIndex = -1;
     try {
-      const tickets = [];
-      const ticketTokens = {};
-      const deadTokens = [];
-
       for (let index = 0; index < list.length; index += SEND_CHUNK_SIZE) {
+        chunkIndex += 1;
         const chunk = list.slice(index, index + SEND_CHUNK_SIZE);
         const payload = await postJson(fetchImpl, SEND_URL, chunk);
         if (payload?.errors?.length) throw new Error(payload.errors.map((entry) => entry.message ?? entry.code).filter(Boolean).join('; ') || 'Expo send request failed');
@@ -112,7 +117,22 @@ export function createPushSend({ fetchImpl = globalThis.fetch } = {}) {
         deadTokens: [...new Set(deadTokens)],
       };
     } catch (error) {
-      return errorResult(error);
+      // A later chunk's failure must not erase what earlier chunks already
+      // delivered. Expo accepted those messages, so their tickets and
+      // ticket-to-token map are the only handle the deferred receipt
+      // collection has to prune devices that later report DeviceNotRegistered;
+      // returning a bare { ok: false } dropped them on the floor. The batch is
+      // still reported as failed so a caller retries the remainder.
+      return {
+        ok: false,
+        error,
+        tickets,
+        ticketTokens,
+        receipts: [],
+        deadTokens: [...new Set(deadTokens)],
+        delivered: tickets.length,
+        failedChunk: chunkIndex,
+      };
     }
   }
 

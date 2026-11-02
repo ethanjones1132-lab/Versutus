@@ -100,6 +100,17 @@ export async function createPkceAttempt(
       state: url.searchParams.get('state'),
       error: url.searchParams.get('error'),
     };
+    // `state` is what binds a callback to the authorization request this
+    // attempt opened, and this listener is the only thing that ends the
+    // attempt. A request carrying another (or no) state did not come from that
+    // request -- it may be a stray navigation, a stale tab or a forgery -- so it
+    // is refused with 400 and changes nothing: the attempt stays open and the
+    // browser is still waiting for the real callback.
+    if (received.state !== attempt.state) {
+      res.writeHead(400, { 'content-type': 'text/plain' });
+      res.end('Authorization state mismatch');
+      return;
+    }
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end(received.error ? 'Authorization failed' : 'Authorization complete', () => {
       // The callback has been served, so the loopback listener this attempt

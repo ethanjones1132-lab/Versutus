@@ -62,17 +62,29 @@ export function sheetAnchoredEdgeMargin(input: {
 /**
  * The tallest a sheet may be without any part of it leaving the screen.
  *
- * Never returns more than the space actually available, and never returns a
- * uselessly small number on a bad measurement — a zero or missing window
- * height means "not measured yet", and clamping to a floor keeps the sheet
- * usable rather than collapsing it to nothing.
+ * On a measured window the ceiling is the space actually left: window height
+ * minus the system insets, the sheet's own margins, and any IME lift. A sheet
+ * taller than that grows off the top of the screen and takes its header with
+ * it — the overflow this module exists to prevent — so the available space
+ * wins even when it is smaller than `minimum`.
+ *
+ * `minimum` is a fallback for a degenerate measurement, not a guaranteed
+ * height. A zero, missing or non-finite window height means "not measured
+ * yet", and the floor keeps the sheet usable rather than collapsing it to
+ * nothing. The floor also wins when the insets alone consume the window and no
+ * positive height is left to honour: there is no ceiling to respect, and a
+ * zero-height sheet would hide every control.
  */
 export function sheetMaxHeight(input: {
   windowHeight: number;
   insetTop?: number;
   insetBottom?: number;
   position?: 'top' | 'bottom';
-  /** Smallest height worth rendering; below this the ceiling is ignored. */
+  /**
+   * Fallback height for a degenerate measurement — an unmeasured window or no
+   * positive space left. Not a guaranteed minimum: a measured window's
+   * available space wins whenever any of it remains.
+   */
   minimum?: number;
   /** IME height. Shrinks a bottom sheet by the extra lift; ignored at the top. */
   keyboardHeight?: number;
@@ -97,7 +109,12 @@ export function sheetMaxHeight(input: {
     margin.inner -
     extraLift;
 
-  return Math.max(minimum, Math.round(available));
+  // The available space is the ceiling. Applying the floor on top of it here
+  // would let a sheet grow past the top of the screen whenever the IME shrank
+  // the window below `minimum` — exactly the overflow this module prevents.
+  const ceiling = Math.round(available);
+  if (ceiling <= 0) return minimum;
+  return ceiling;
 }
 
 /** Extra bottom padding inside the sheet so a 42px gesture bar cannot clip the Close hitSlop. */
