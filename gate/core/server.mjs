@@ -3019,13 +3019,48 @@ export async function createGate(config = {}) {
         }));
       }
 
-      /** Every Bot-capable environment's roster, rows tagged with where each lives. */
+      /** The roster error envelope, used by the merged and single-backend reads alike. */
+      function rosterFailure(error) {
+        const upstreamStatus = Number(error?.status);
+        const status = Number.isInteger(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus < 600
+          ? upstreamStatus : 502;
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: {
+          message: typeof error?.message === 'string' && error.message ? error.message : 'Could not read the Bot roster',
+          code: typeof error?.code === 'string' && error.code ? error.code : 'bot_read_failed',
+        } }));
+      }
+
+      /** How a failed environment is named beside the rows that did answer. */
+      function rosterWarning(backendId, error) {
+        return {
+          backendId,
+          code: typeof error?.code === 'string' && error.code ? error.code : 'bot_read_failed',
+          message: typeof error?.message === 'string' && error.message ? error.message : 'Could not read the Bot roster',
+        };
+      }
+
+      /**
+       * Every Bot-capable environment's roster, rows tagged with where each lives.
+       *
+       * A failed read used to disappear: `firstError` was collected and never
+       * read, so an environment that could not be reached looked exactly like
+       * one with no Bots, and the phone quietly claimed the roster was complete.
+       * A failure beside rows that did answer is now named in `warnings` on the
+       * same envelope; a failure with nothing to show is reported instead of
+       * turning into an empty list.
+       */
       async function mergedBotRoster() {
         const listed = [];
+        const warnings = [];
         let firstError = null;
         for (const entry of await backendManager.list()) {
           if (!await backendCanServe(entry, 'listBots')) continue;
-          const backend = await backendManager.get(entry.id).catch((error) => { firstError ??= error; return null; });
+          const backend = await backendManager.get(entry.id).catch((error) => {
+            firstError ??= error;
+            warnings.push(rosterWarning(entry.id, error));
+            return null;
+          });
           if (typeof backend?.listBots !== 'function') continue;
           try {
             const roster = await backend.listBots();
@@ -3033,13 +3068,15 @@ export async function createGate(config = {}) {
             listed.push({ id: entry.id, kind: backend.kind ?? entry.adapterId, rows, roster });
           } catch (error) {
             firstError ??= error;
+            warnings.push(rosterWarning(entry.id, error));
           }
         }
-        // One environment: nothing to merge and nothing to relabel, so its own
-        // answer goes out verbatim. Nothing listed (an outage) falls through to
-        // the single-backend path, which reports it the way it always has.
-        if (listed.length === 1) return listed[0].roster;
-        if (listed.length === 0) return null;
+        // Nothing listed and nothing failed: no environment reached this route
+        // at all, so the single-backend path reports it the way it always has.
+        if (listed.length === 0) return firstError ? { failure: firstError } : null;
+        // One environment and nothing failed: nothing to merge, relabel or warn
+        // about, so its own answer goes out verbatim.
+        if (listed.length === 1 && warnings.length === 0) return { roster: listed[0].roster };
         const seen = new Set();
         const data = [];
         for (const { id, kind, rows } of listed) {
@@ -3050,7 +3087,9 @@ export async function createGate(config = {}) {
             data.push({ ...row, backendId: id, runtime: row.runtime ?? kind });
           }
         }
-        return { object: 'list', data };
+        // Additive, and absent when nothing failed: a healthy roster is byte-for-
+        // byte what it was before.
+        return { roster: warnings.length ? { object: 'list', data, warnings } : { object: 'list', data } };
       }
 
       /** The environment that already has a Bot of this name, other than `backend`. */
@@ -3629,9 +3668,13 @@ export async function createGate(config = {}) {
         // exactly as it always did.
         if (!url.searchParams.get('backendId')) {
           const merged = await mergedBotRoster();
+          if (merged?.failure) {
+            rosterFailure(merged.failure);
+            return;
+          }
           if (merged) {
             res.writeHead(200);
-            res.end(JSON.stringify(merged));
+            res.end(JSON.stringify(merged.roster));
             return;
           }
         }
@@ -3642,14 +3685,7 @@ export async function createGate(config = {}) {
           res.writeHead(200);
           res.end(JSON.stringify(roster));
         } catch (error) {
-          const upstreamStatus = Number(error?.status);
-          const status = Number.isInteger(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus < 600
-            ? upstreamStatus : 502;
-          res.writeHead(status, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: {
-            message: typeof error?.message === 'string' && error.message ? error.message : 'Could not read the Bot roster',
-            code: typeof error?.code === 'string' && error.code ? error.code : 'bot_read_failed',
-          } }));
+          rosterFailure(error);
         }
         return;
       }

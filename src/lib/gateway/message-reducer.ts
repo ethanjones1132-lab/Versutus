@@ -195,7 +195,20 @@ export function appendToolCallDelta(
   );
   const nextTools: ChatToolCall[] =
     match >= 0
-      ? existing.map((item, i) => (i === match ? { ...item, ...toolCall } : item))
+      ? existing.map((item, i) => {
+          if (i !== match) return item;
+          const merged = { ...item, ...toolCall };
+          // The same call can be reported again in a later fragment that still
+          // says `running` (or says nothing at all). A terminal status already
+          // on the card is the turn's own report that the tool finished, and a
+          // fragment of the call is not evidence to reopen it.
+          if (item.status === 'complete' || item.status === 'error') {
+            if (toolCall.status === undefined || toolCall.status === 'running') {
+              merged.status = item.status;
+            }
+          }
+          return merged;
+        })
       : [...existing, toolCall];
   copy[idx] = { ...copy[idx], toolCalls: nextTools, streaming: !isStoppedTurn(copy[idx]) };
   return copy;

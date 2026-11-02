@@ -83,9 +83,11 @@ import { clearCachedForGateway, readCached, writeCached } from '@/lib/cache/swr-
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { advertisedIpv4 } from '@/lib/gateway/host-lookup';
 import {
+  hasBotInventory as probeBotInventory,
   hasBotManagement as probeBotManagement,
   hasBotSessionScoping as probeBotSessionScoping,
   loadBotChat,
+  publishBotInventoryAvailable,
   type ChatSurface,
   type PublicBot,
 } from '@/lib/gateway/bots';
@@ -148,6 +150,7 @@ import { manifestUrlForGateway } from '@/lib/gateway/gateway-origin';
 import { loadRecentCommands, pushRecentCommand } from '@/lib/gateway/recents';
 import {
   ACTIVITY_EVENT_CAP,
+  advanceRunEventSequence,
   executeRun,
   finishRunTranscript,
   isTerminalRunStatus,
@@ -159,6 +162,7 @@ import {
   settleUnresolvedRuns,
   type ActivityRun,
   type RunCapableClient,
+  type RunEventSequenceMark,
   type RunTranscriptPage,
 } from '@/lib/gateway/runs';
 import { routineJobsFromList } from '@/lib/gateway/routines';
@@ -1370,6 +1374,19 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       ),
     [status, activeHello, liveCapabilities, capabilityCheckedAt, capabilityInstances, activeManifest, selectedBackendId],
   );
+  /**
+   * The run API's judged state, derived exactly as the Activity screen reads it
+   * (`runs.tsx`: the `agent` group's status). Passed to `/run` so a backend the
+   * snapshot already judged run-less is refused before a start request creates
+   * a failed Activity row. A disconnected gateway reports `unavailable`, which
+   * stays `unknown` here — the reconnect path owns that message.
+   */
+  const agentRunsStatus = useMemo<'ready' | 'unsupported' | 'unknown'>(() => {
+    const group = capabilitySnapshot.groups.find((entry) => entry.id === 'agent');
+    if (group?.status === 'ready') return 'ready';
+    if (group?.status === 'unsupported') return 'unsupported';
+    return 'unknown';
+  }, [capabilitySnapshot]);
   const [pendingConfirmation, setPendingConfirmation] = useState<GatewayActionPreview | null>(null);
   const pendingConfirmationMessageIdRef = useRef<string | null>(null);
   const [modelPicker, setModelPicker] = useState<{
@@ -2369,6 +2386,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setHasBotManagement(false);
       setHasGroupRooms(false);
       setCanReadBotSessions(false);
+      // No client is installed, so nothing claims the roster is unreadable:
+      // back to "no evidence", where a disconnected roster waits.
+      publishBotInventoryAvailable(true);
       setActiveGateway(null);
       setActiveHello(null);
       setActiveManifest(null);
@@ -3452,6 +3472,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setHasBotManagement(probeBotManagement(client));
       setHasGroupRooms(probeGroupRooms(client));
       setCanReadBotSessions(probeBotSessionScoping(client));
+      // The roster surface needs the same verdict for one reason the others do
+      // not: `listBots` answers `[]` for a client with no roster call, and an
+      // empty list from a read that never happened must not read as "this Gate
+      // has no Bots". Published, not returned, because that surface draws from
+      // a module signal rather than from this context.
+      publishBotInventoryAvailable(probeBotInventory(client));
       applyConnectionPhase('connecting');
       // connect() rejects only on auth rejection; unreachable gateways are left
       // in 'reconnecting' with backoff running.
@@ -4403,6 +4429,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setHasBotManagement(false);
       setHasGroupRooms(false);
       setCanReadBotSessions(false);
+      // No client is installed, so nothing claims the roster is unreadable:
+      // back to "no evidence", where a disconnected roster waits.
+      publishBotInventoryAvailable(true);
       setActiveGateway(null);
       setActiveHello(null);
       setActiveManifest(null);
@@ -4461,6 +4490,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     setHasBotManagement(false);
     setHasGroupRooms(false);
     setCanReadBotSessions(false);
+    // See the retire teardown above: no client, so no "cannot inventory" claim.
+    publishBotInventoryAvailable(true);
     setMessages([]);
     // The same hand-over `connectGateway` makes: the flag is given up here, and
     // the send still waiting on the client just discarded must not take it back.
@@ -5059,6 +5090,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         ...prev,
       ]);
       const trackedId = { current: localId };
+      // The highest event sequence already folded into this row's preview. A
+      // stream that re-opens mid-run makes the Gate replay from sequence 0, so
+      // without this the Activity preview showed every replayed frame twice.
+      // The mark carries its run id, so `onStarted` re-keying the row starts a
+      // fresh counter without any extra bookkeeping.
+      let previewSequence: RunEventSequenceMark | null = null;
       // The driver owns this row from the moment it exists, provisional id and
       // all: `onStarted` re-keys it, and until then the row the operator can
       // stop is the only name this driver has.
@@ -5086,14 +5123,22 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             activeRunTaskIdRef.current = runId;
           },
           onEvent: (event) => {
-            const preview = runEventPreview(event);
-            patchActivityRuns((prev) =>
-              prev.map((run) =>
-                run.id === trackedId.current
-                  ? { ...run, events: [...run.events, { type: event.type, preview, timestamp: event.timestamp }].slice(-ACTIVITY_EVENT_CAP) }
-                  : run,
-              ),
+            const admitted = advanceRunEventSequence(
+              previewSequence,
+              trackedId.current,
+              event.sequence,
             );
+            previewSequence = admitted.mark;
+            if (admitted.append) {
+              const preview = runEventPreview(event);
+              patchActivityRuns((prev) =>
+                prev.map((run) =>
+                  run.id === trackedId.current
+                    ? { ...run, events: [...run.events, { type: event.type, preview, timestamp: event.timestamp }].slice(-ACTIVITY_EVENT_CAP) }
+                    : run,
+                ),
+              );
+            }
             onEvent?.({
               type: event.type,
               data: event.data,
@@ -5481,26 +5526,29 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // gateway switch (or disconnect, or a deleted profile) does not write its
       // "cancelled" transcript into the thread that replaced it.
       const commandGeneration = clientGenerationRef.current;
+      // Declared before the `try`: the abort branch and the `finally` below read
+      // both, and a `let`/`const` inside the `try` block is out of scope there
+      // (a ReferenceError the first time any command settled).
+      let streamedText = '';
+      // One write per short interval, not one per delta: the buffer owns the
+      // scheduled transcript/state write and the `write` below only ever
+      // paints the latest full text. The completion and cancel paths settle
+      // the tail explicitly, so the last delta is never lost and never
+      // overwrites a final result that superseded it.
+      const commandDelta = createCommandDeltaBuffer({
+        write: (text) => {
+          updateLocalMessage(commandMessageId, {
+            text,
+            command: { input: trimmed, title: commandLabel, status: 'running', ephemeral: true },
+          });
+        },
+      });
 
       try {
         const client = clientRef.current;
         if (!client || statusRef.current !== 'connected') throw new Error('Gateway not connected');
 
         // Execute gateway slash command — stream agent-transport output live.
-        let streamedText = '';
-        // One write per short interval, not one per delta: the buffer owns the
-        // scheduled transcript/state write and the `write` below only ever
-        // paints the latest full text. The completion and cancel paths settle
-        // the tail explicitly, so the last delta is never lost and never
-        // overwrites a final result that superseded it.
-        const commandDelta = createCommandDeltaBuffer({
-          write: (text) => {
-            updateLocalMessage(commandMessageId, {
-              text,
-              command: { input: trimmed, title: commandLabel, status: 'running', ephemeral: true },
-            });
-          },
-        });
         // `/workflow` reads this device's stored step sequences for the
         // active gateway; no gateway route carries them. The read is strict: a
         // store that cannot be read gives management no save path, so a list
@@ -5527,6 +5575,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           gatewayRequest,
           runAgentCommand,
           methods: capabilitySnapshot.methods,
+          agentRunsStatus,
           dynamicCommands,
           messages: messagesRef.current,
           resetConversation: () => createNewSessionRef.current(),
@@ -5666,6 +5715,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       activeHello,
       appendLocalMessage,
       capabilitySnapshot.methods,
+      agentRunsStatus,
       dynamicCommands,
       gatewayRequest,
       isCommandRunning,

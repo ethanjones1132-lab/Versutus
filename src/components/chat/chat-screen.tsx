@@ -47,6 +47,8 @@ import { modelLockFor, type ModelTurnLock } from '@/lib/gateway/run-failures';
 import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDividerCached } from '@/lib/format';
+import { INITIAL_AUTO_SCROLL, nextAutoScroll, type AutoScrollState } from '@/lib/chat/auto-scroll';
+import { stableTranscriptItems, type TranscriptItem } from '@/lib/chat/transcript-items';
 import { haptics } from '@/lib/haptics';
 // The phone-side local notice a routine's schedule maps to; every confirmed
 // mutation below keeps it in step (fire-and-forget, best-effort).
@@ -321,10 +323,6 @@ export function rosterRowsAfterRead(
 }
 
 type SessionRecord = HermesSession & { sessionId?: string; name?: string };
-
-// One transcript row: the message plus the day-divider decision, computed once
-// per message-array change so renderItem stays referentially stable mid-turn.
-type TranscriptItem = { message: ChatMessage; label: string | undefined; showDivider: boolean };
 
 function toSessionItem(session: SessionRecord): SessionItem {
   return {
@@ -1025,6 +1023,11 @@ export function ChatScreen() {
   // ever mounted, so the handle is the field that is actually on screen.
   const composerInputRef = useRef<TextFieldHandle>(null);
   const pinnedRef = useRef(true);
+  // The transcript's auto-scroll bookkeeping: at most one `scrollToEnd` per
+  // frame while the operator is pinned to the bottom. The reducer is pure
+  // (`@/lib/chat/auto-scroll`); these two refs are all the screen keeps.
+  const autoScrollRef = useRef<AutoScrollState>(INITIAL_AUTO_SCROLL);
+  const autoScrollFrameRef = useRef<number | null>(null);
   const atTopRef = useRef(true);
   const jumpVisibleRef = useRef(false);
   // Latest-commit mirror of `messages` so callbacks that need the list stay
@@ -1821,16 +1824,36 @@ export function ChatScreen() {
     }
   }, [onScroll]);
 
-  const handleContentSizeChange = useCallback(() => {
-    if (pinnedRef.current) {
-      // While a reply streams, this fires once per delta batch that adds a line,
-      // so an animated scroll is started and restarted dozens of times a second
-      // and the pinned transcript visibly twitches. A growing content size wants
-      // the same jump the list has already made: no animation. A jump pill tap is
-      // the operator's own gesture and keeps its glide.
-      listRef.current?.scrollToEnd({ animated: !isStreaming });
-    }
-  }, [isStreaming]);
+  const handleContentSizeChange = useCallback(
+    (_contentWidth: number, contentHeight: number) => {
+      const step = nextAutoScroll(autoScrollRef.current, {
+        type: 'content-size',
+        contentHeight,
+        pinned: pinnedRef.current,
+        animated: !isStreaming,
+      });
+      autoScrollRef.current = step.state;
+      if (step.scroll) listRef.current?.scrollToEnd({ animated: step.scroll.animated });
+      // While a reply streams, this fires once per delta batch that adds a line.
+      // Starting an animated scroll on each one restarted the glide dozens of
+      // times a second and the pinned transcript visibly twitched, so a growing
+      // content size wants the same jump the list has already made: no
+      // animation. A jump pill tap is the operator's own gesture and keeps its
+      // glide. The coalescer caps the requests at one per frame, spending a
+      // growth that arrived after this frame's request at the frame boundary.
+      if (!step.state.framePending || autoScrollFrameRef.current !== null) return;
+      autoScrollFrameRef.current = requestAnimationFrame(function autoScrollFrame() {
+        autoScrollFrameRef.current = null;
+        const frame = nextAutoScroll(autoScrollRef.current, { type: 'frame' });
+        autoScrollRef.current = frame.state;
+        if (frame.scroll) listRef.current?.scrollToEnd({ animated: frame.scroll.animated });
+        if (frame.state.framePending && autoScrollFrameRef.current === null) {
+          autoScrollFrameRef.current = requestAnimationFrame(autoScrollFrame);
+        }
+      });
+    },
+    [isStreaming],
+  );
 
   const scrollToLatest = useCallback(() => {
     pinnedRef.current = true;
@@ -2526,16 +2549,25 @@ export function ChatScreen() {
     [rosterRows, surface],
   );
 
+  // The row fold is pure and lives in `@/lib/chat/transcript-items`: it carries
+  // an untouched bubble's row object forward, so a streamed flush gives
+  // `renderItem` a new object only for the bubble it changed. The ref mirrors
+  // the last folded list for that carry, the same way `messagesRef` mirrors the
+  // messages (the memo itself stays pure).
+  const transcriptItemsRef = useRef<TranscriptItem[]>([]);
   const transcriptItems = useMemo<TranscriptItem[]>(
-    () =>
-      messages.map((message, index) => {
-        const label = message.timestamp ? formatDayDividerCached(message.timestamp) : undefined;
-        const previous = messages[index - 1];
-        const previousLabel = previous?.timestamp ? formatDayDividerCached(previous.timestamp) : undefined;
-        return { message, label, showDivider: !!label && label !== previousLabel };
-      }),
+    () => stableTranscriptItems(messages, formatDayDividerCached, transcriptItemsRef.current),
     [messages],
   );
+  useEffect(() => {
+    transcriptItemsRef.current = transcriptItems;
+  }, [transcriptItems]);
+  // A different thread is a new list. Its first reported height is not a
+  // "shrink" of the previous thread's, so the coalescer's remembered height
+  // must not decide whether the pinned transcript follows it to the bottom.
+  useEffect(() => {
+    autoScrollRef.current = INITIAL_AUTO_SCROLL;
+  }, [spendSurfaceKey, currentSessionId]);
 
   const renderMessage = useCallback(
     ({ item }: { item: TranscriptItem }) => {

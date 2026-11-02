@@ -10,6 +10,7 @@ import { errorCodeFromHttpBody, messageFromHttpErrorBody } from '@/lib/gateway/h
 import { advertisedIpv4 } from '@/lib/gateway/host-lookup';
 import { HttpTransport, assertChatStreamComplete } from '@/lib/gateway/http-transport';
 import { GatewayRpcError, rpcParamsWithScope } from '@/lib/gateway/rpc-scope';
+import { isRunEventFrame } from '@/lib/gateway/runs';
 import { ConnectionMonitor, hasRecentContact } from '@/lib/gateway/connection-monitor';
 import {
   readChatFrames,
@@ -45,6 +46,42 @@ function interpolatePath(path: string, vars: Record<string, string>): string {
     const key = named ?? colon ?? '';
     return vars[key] ?? '';
   });
+}
+
+/** A row the roster can draw: it must at least name the Bot. */
+function isBotRow(value: unknown): value is PublicBot {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const id = (value as { id?: unknown }).id;
+  return typeof id === 'string' && id.trim().length > 0;
+}
+
+/**
+ * The rows of a `GET <bots>` answer, or a refusal.
+ *
+ * The transport hands back the body verbatim when it is not JSON, so an
+ * OpenCode 2.x server answering an unknown route with an HTML page used to
+ * arrive here as the string `<!doctype html>…` — not an array, no `.data`, and
+ * therefore `[]`. The roster painted "No bots" and the remembered copy was
+ * overwritten with that emptiness, which is a claim the Gate never made.
+ *
+ * Only a list of Bots (bare, or in the Gate's `{ object, data }` envelope) is
+ * believed. An empty list still is: zero Bots is a real answer, an unreadable
+ * body is not.
+ */
+function botRosterFromResponse(value: unknown): PublicBot[] {
+  const rows = Array.isArray(value)
+    ? value
+    : value && typeof value === 'object' && Array.isArray((value as { data?: unknown }).data)
+      ? (value as { data: unknown[] }).data
+      : null;
+  if (!rows || !rows.every(isBotRow)) {
+    throw new GatewayHttpError(
+      'The gateway answered the Bot list with data the app could not read, so the roster was left as it was.',
+      200,
+      'bot_roster_unreadable',
+    );
+  }
+  return rows;
 }
 
 /** How long authorizedFetch waits for response headers before aborting. */
@@ -826,8 +863,8 @@ export class ManifestClient implements PortalClient {
   async listBots(): Promise<PublicBot[]> {
     const path = this.endpoints.bots;
     if (!path) return [];
-    const result = await this.rootTransport.request<{ data?: PublicBot[] } | PublicBot[]>('GET', path);
-    return Array.isArray(result) ? result : result.data ?? [];
+    const result = await this.rootTransport.request<unknown>('GET', path);
+    return botRosterFromResponse(result);
   }
 
   /**
@@ -1241,7 +1278,11 @@ export class ManifestClient implements PortalClient {
       response,
       (data) => {
         try {
-          onEvent(JSON.parse(data) as RunEvent);
+          const frame: unknown = JSON.parse(data);
+          // A malformed frame must not kill the stream; neither must a frame
+          // that parses but is not a run event. Both clients share the guard
+          // so neither delivers what the other drops.
+          if (isRunEventFrame(frame)) onEvent(frame);
         } catch {
           // A malformed frame must not kill the stream.
         }

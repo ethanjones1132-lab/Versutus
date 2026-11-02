@@ -12,7 +12,15 @@
 // a call is a live conversation with one thread, and sending speech into a
 // different one is the failure this guards against.
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { AppState, Platform } from 'react-native';
 import type { SharedValue } from 'react-native-reanimated';
 import { useSharedValue } from 'react-native-reanimated';
@@ -1537,39 +1545,75 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     Boolean(activeGateway) &&
     handsfreeDeviceCanOfferCall(availability, nativeModuleLoaded, transport);
 
-  const value: HandsfreeVoiceContextValue = {
-    phase,
-    active,
-    muted,
-    startedAtMs: session.startedAtMs,
-    sendingSinceMs,
-    partial,
-    // The Gate's own account of the turn. Both are call-scoped: outside a live
-    // Gate call there is no turn to report, and the banner draws nothing.
-    turnError: gateLive ? gateBanner.turnError : null,
-    turnState: gateLive ? gateBanner.turnState : null,
-    approval: gateLive ? gateBanner.approval : null,
-    label,
-    reason: session.reason,
-    lastEndReason: session.lastEndReason,
-    callsEnded: session.callsEnded,
-    level,
-    engine: engineInfo?.engine,
-    engineReason: engineInfo?.reason,
-    canStart,
-    transport,
-    startBlocker: handsfreeStartBlocker({
+  // A re-render that leaves every field this value reads untouched — an AppState
+  // change, a parent repaint, a shared-value tick — must not hand consumers a new
+  // object and redraw every screen that reads the call. The fields below are the
+  // whole of what it reads; the stable callbacks stay stable, so they never
+  // rebuild it on their own.
+  const value: HandsfreeVoiceContextValue = useMemo(
+    () => ({
+      phase,
+      active,
+      muted,
+      startedAtMs: session.startedAtMs,
+      sendingSinceMs,
+      partial,
+      // The Gate's own account of the turn. Both are call-scoped: outside a live
+      // Gate call there is no turn to report, and the banner draws nothing.
+      turnError: gateLive ? gateBanner.turnError : null,
+      turnState: gateLive ? gateBanner.turnState : null,
+      approval: gateLive ? gateBanner.approval : null,
+      label,
+      reason: session.reason,
+      lastEndReason: session.lastEndReason,
+      callsEnded: session.callsEnded,
+      level,
+      engine: engineInfo?.engine,
+      engineReason: engineInfo?.reason,
+      canStart,
+      transport,
+      startBlocker: handsfreeStartBlocker({
+        status,
+        isSending,
+        isCommandRunning,
+        pendingApproval: Boolean(pendingRunApproval),
+      }),
+      start,
+      mute,
+      unmute,
+      skipReply,
+      end,
+    }),
+    [
+      phase,
+      active,
+      muted,
+      session.startedAtMs,
+      sendingSinceMs,
+      partial,
+      gateLive,
+      gateBanner.turnError,
+      gateBanner.turnState,
+      gateBanner.approval,
+      label,
+      session.reason,
+      session.lastEndReason,
+      session.callsEnded,
+      level,
+      engineInfo,
+      canStart,
+      transport,
       status,
       isSending,
       isCommandRunning,
-      pendingApproval: Boolean(pendingRunApproval),
-    }),
-    start,
-    mute,
-    unmute,
-    skipReply,
-    end,
-  };
+      pendingRunApproval,
+      start,
+      mute,
+      unmute,
+      skipReply,
+      end,
+    ],
+  );
 
   return <HandsfreeVoiceContext.Provider value={value}>{children}</HandsfreeVoiceContext.Provider>;
 }

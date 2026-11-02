@@ -143,6 +143,41 @@ export function runsForGateway(runs: ActivityRun[], gatewayId: string | undefine
   return runs.filter((run) => !run.gatewayId || run.gatewayId === gatewayId);
 }
 
+/**
+ * The highest numeric sequence already previewed for one run.
+ *
+ * `runId` is part of the mark, not a key beside it: one driver owns one run at
+ * a time, and comparing the run id is what resets the counter when the row is
+ * re-keyed from the provisional local id to the id the gateway returned.
+ */
+export type RunEventSequenceMark = { runId: string; highest: number };
+
+/**
+ * Decide whether one delivered run frame is new to the Activity preview, and
+ * carry the counter forward.
+ *
+ * A live stream that re-opens — a dropped socket, a reconnect mid-run — makes
+ * the Gate replay the run from sequence 0, and the preview used to append every
+ * replayed frame a second time. A frame carrying a numeric `sequence` is shown
+ * only when it is strictly above the highest already shown for that run. A
+ * frame with no numeric sequence is always shown: the wire contract does not
+ * require one, and withholding it would lose events rather than dedupe them.
+ */
+export function advanceRunEventSequence(
+  mark: RunEventSequenceMark | null,
+  runId: string,
+  sequence: unknown,
+): { mark: RunEventSequenceMark | null; append: boolean } {
+  const current = mark && mark.runId === runId ? mark : null;
+  if (typeof sequence !== 'number' || !Number.isFinite(sequence)) {
+    // No counter on the wire: nothing to compare, so the frame is new. A frame
+    // under a re-keyed run id still drops the old run's counter.
+    return { mark: current, append: true };
+  }
+  if (current && sequence <= current.highest) return { mark: current, append: false };
+  return { mark: { runId, highest: sequence }, append: true };
+}
+
 /** Defensive one-line preview of a run event payload. */
 export function runEventPreview(event: RunEvent): string {
   const data = event.data as Record<string, unknown> | undefined;
@@ -191,13 +226,37 @@ const APPROVAL_REQUIRED_SIGNALS = new Set([
 const APPROVAL_RESOLVED = /(approved|denied|rejected|resolved|granted)/;
 
 /**
+ * Whether a decoded SSE frame is a run event this client can hand on.
+ *
+ * `JSON.parse` accepts `null`, numbers, strings and arrays just as readily as
+ * an object, and one gateway client passed every one of those through as a
+ * `RunEvent` while the other's reader silently dropped some of them. The
+ * callback below then reads `event.type`, so a non-event frame was a shape
+ * crash rather than an ignored frame. Both clients gate on this one predicate
+ * so their answers cannot drift: only a non-null object carrying a string
+ * `type` is a frame. Recognised types are still the reader's business — an
+ * unknown `type` passes through untouched.
+ */
+export function isRunEventFrame(value: unknown): value is RunEvent {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { type?: unknown }).type === 'string'
+  );
+}
+
+/**
  * Whether a run status or event type is asking the user to approve something.
  *
  * Resolved decisions are explicitly excluded: a bare `/approv/` test also
  * matches `approved` and `approval.resolved`, which re-opens the prompt for a
  * decision the user already made and can loop the run against the poll cap.
  */
-export function runNeedsApproval(signal: string): boolean {
+export function runNeedsApproval(signal: unknown): boolean {
+  // A frame that carried a non-string type never reaches the reader (see
+  // isRunEventFrame), but the loose status fallback is fed from event data as
+  // well; a missing or malformed field asks for nothing rather than throwing.
+  if (typeof signal !== 'string') return false;
   const normalized = signal.trim().toLowerCase();
   if (!normalized) return false;
   if (APPROVAL_REQUIRED_SIGNALS.has(normalized)) return true;

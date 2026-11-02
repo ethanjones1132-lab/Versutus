@@ -38,6 +38,26 @@ const COMMAND_STATUS_TONE = {
   error: 'danger',
 } as const;
 
+/**
+ * A command bubble whose status was cleared is a stop, not a success.
+ *
+ * Cancel clears the bubble's status on purpose (the transcript keeps the real
+ * `cancelled`), so falling back to `complete` painted the success-toned "Done"
+ * on the one command the operator stopped. Neutral "Stopped" is the honest
+ * reading; a real completion still says Done.
+ */
+const COMMAND_STATUS_CLEARED_LABEL = 'Stopped';
+const COMMAND_STATUS_CLEARED_TONE = 'neutral';
+
+function commandBadge(
+  status: 'running' | 'complete' | 'error' | undefined,
+): { label: string; tone: 'neutral' | 'warning' | 'success' | 'danger' } {
+  if (!status) {
+    return { label: COMMAND_STATUS_CLEARED_LABEL, tone: COMMAND_STATUS_CLEARED_TONE };
+  }
+  return { label: COMMAND_STATUS_LABEL[status], tone: COMMAND_STATUS_TONE[status] };
+}
+
 export const MessageBubble = memo(function MessageBubble({ message, onRetry, onCancel, onResume, onLongPress }: MessageBubbleProps) {
   const tokens = useTokens();
   const { width: windowWidth } = useWindowDimensions();
@@ -60,6 +80,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
   const activitySettled = !!message.streaming;
   const isActivityOpen = activityUserOverride !== null ? activityUserOverride : activitySettled;
   const commandStatus = message.command?.status;
+  const commandBadgeState = commandBadge(commandStatus);
 
   const duration = message.command?.durationMs
     ? `${Math.round(message.command.durationMs / 1000)}s`
@@ -115,8 +136,8 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
                 ) : null}
               </View>
               <Badge
-                label={COMMAND_STATUS_LABEL[commandStatus ?? 'complete']}
-                tone={COMMAND_STATUS_TONE[commandStatus ?? 'complete']}
+                label={commandBadgeState.label}
+                tone={commandBadgeState.tone}
               />
             </View>
           ) : null}
@@ -164,9 +185,16 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
                       </Text>
                     </ScrollView>
                   ) : null}
-                  {message.toolCalls?.map((toolCall, index) => (
-                    <ToolCallCard key={toolCall.id ?? `${toolCall.name}-${index}`} toolCall={toolCall} />
-                  ))}
+                  {toolCallCount > 0 ? (
+                    <ScrollView
+                      style={styles.toolListScroll}
+                      contentContainerStyle={styles.toolListContent}
+                      nestedScrollEnabled>
+                      {message.toolCalls?.map((toolCall, index) => (
+                        <ToolCallCard key={toolCall.id ?? `${toolCall.name}-${index}`} toolCall={toolCall} />
+                      ))}
+                    </ScrollView>
+                  ) : null}
                 </View>
               ) : null}
             </View>
@@ -416,6 +444,16 @@ const styles = StyleSheet.create({
   },
   reasoningScroll: {
     maxHeight: 200,
+  },
+  // A long tool list gets its own viewport inside the 320px card, so extra
+  // cards stay reachable by scrolling instead of painting over the reply.
+  toolListScroll: {
+    flexGrow: 0,
+    flexShrink: 1,
+    maxHeight: 240,
+  },
+  toolListContent: {
+    gap: Spacing.two,
   },
   rawSection: {
     gap: Spacing.two,

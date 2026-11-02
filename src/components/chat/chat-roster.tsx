@@ -1,4 +1,4 @@
-import { memo, useState, useCallback } from 'react';
+import { memo, useState, useCallback, useSyncExternalStore } from 'react';
 import { FlatList, Platform, RefreshControl, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -8,10 +8,12 @@ import { Button, EmptyState, Icon, PressableScale, Skeleton, Text, TextField, ty
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import {
+  botInventoryAvailable,
   botRowSubtitle,
   filterRosterRows,
   rosterCapabilityNotes,
   rosterEmptyView,
+  subscribeBotInventoryAvailable,
   type PublicBot,
   type RosterRow,
 } from '@/lib/gateway/bots';
@@ -258,6 +260,16 @@ function ChatRosterImpl({
   const [refreshing, setRefreshing] = useState(false);
   const tokens = useTokens();
   const insets = useSafeAreaInsets();
+  // Whether the installed client can read a roster at all. A Hermes client
+  // attached without a manifest has no roster call, and the provider answers
+  // its absence with `[]` — read here, that empty list would claim this Gate
+  // has no Bots. The verdict is published by the provider, so the footer can
+  // name the non-answer instead of asserting a count nothing measured.
+  const inventoryAvailable = useSyncExternalStore(
+    subscribeBotInventoryAvailable,
+    botInventoryAvailable,
+    botInventoryAvailable,
+  );
 
   // The spinner holds for a beat even on fast reads so the gesture always
   // feels acknowledged — same floor as the thread surface's refresh.
@@ -365,6 +377,7 @@ function ChatRosterImpl({
     query,
     error,
     connected,
+    inventoryAvailable,
   });
   // Same verdicts that gate the creation rows: a hidden row gets one honest
   // line about why, exactly where the row would have sat.
@@ -540,6 +553,13 @@ function ChatRosterImpl({
               icon={{ ios: 'person.crop.circle', android: 'person', web: 'person' }}
               title="No bots on this gateway"
               description="Named Hermes profiles appear here once the Gate can inventory them."
+            />
+          ) : null}
+          {emptyView.kind === 'uninventoried' ? (
+            <EmptyState
+              icon={{ ios: 'questionmark.circle', android: 'help', web: 'help' }}
+              title="Can't inventory agents"
+              description="This connection has no Bot roster, so the list was never read."
             />
           ) : null}
           {emptyView.kind === 'no-match' ? (

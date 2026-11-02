@@ -61,11 +61,20 @@ export function createVoiceAudit({
   return {
     path,
     record(summary) {
+      // The reducer writes this line on its way out of a call, so a log
+      // directory that cannot be made must not throw out of `end()`: the
+      // socket would never reach its terminal frames or free the call. Skip
+      // the line, keep `ready` false, and let a later call try again.
       if (!ready) {
-        mkdirSync(dirname(path), { recursive: true });
+        try {
+          mkdirSync(dirname(path), { recursive: true });
+        } catch {
+          return false;
+        }
         ready = true;
       }
       appendFile(path, `${JSON.stringify(buildAuditLine(summary, now))}\n`);
+      return true;
     },
   };
 }

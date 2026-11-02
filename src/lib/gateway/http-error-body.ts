@@ -15,6 +15,12 @@ export function messageFromHttpErrorBody(errorText: string, status: number): str
   } catch {
     // not JSON
   }
+  // A web page is not a message. A proxy, captive portal or an SPA catch-all can
+  // answer with HTML; pasting that markup into the operator's caption hides the
+  // real fault. Name the status and the fact that a page came back instead.
+  if (errorText.trim().startsWith('<')) {
+    return `The gateway or something in front of it answered HTTP ${status} with a web page instead of JSON.`;
+  }
   return fallback;
 }
 

@@ -18,6 +18,13 @@ import { codexRealtimeStatus, readCodexAuthMode } from './codex-status.mjs';
 
 const WORKER_DIR = fileURLToPath(new URL('../../../gate/voice-worker', import.meta.url));
 
+/**
+ * How long a model download may wait for the server to answer before the
+ * attempt is refused. It bounds the wait, not the size of the file: a stalled
+ * connection must not leave `voice install` hanging with no error and no exit.
+ */
+export const DOWNLOAD_TIMEOUT_MS = 60_000;
+
 /** Where the venv, python, models and worker live for a platform. */
 export function voicePaths(env = process.env, platform = process.platform) {
   const home = resolveGateHome(env, platform);
@@ -50,8 +57,16 @@ async function sha256Of(path) {
 /**
  * Download `url` to `dest`, resuming `dest.part` and keeping the file only when
  * its SHA-256 matches. Throws `hash_mismatch` and leaves no final file otherwise.
+ * A server that stops answering throws `download_timeout` after `timeoutMs`.
  */
-export async function fetchVerified({ url, sha256, dest, fetchImpl = globalThis.fetch, log = () => {} } = {}) {
+export async function fetchVerified({
+  url,
+  sha256,
+  dest,
+  fetchImpl = globalThis.fetch,
+  log = () => {},
+  timeoutMs = DOWNLOAD_TIMEOUT_MS,
+} = {}) {
   if (existsSync(dest) && sha256 && (await sha256Of(dest)) === sha256) {
     return { path: dest, resumed: false, downloaded: false };
   }
@@ -61,7 +76,33 @@ export async function fetchVerified({ url, sha256, dest, fetchImpl = globalThis.
   mkdirSync(dirname(dest), { recursive: true });
   const from = existsSync(partial) ? statSync(partial).size : 0;
   const headers = from > 0 ? { Range: `bytes=${from}-` } : {};
-  const response = await fetchImpl(url, { headers });
+  const controller = new AbortController();
+  // The fake fetches in the tests, and any override, are raced against the
+  // deadline too: a promise that never settles must still reject.
+  let timer = null;
+  const deadline = timeoutMs > 0
+    ? new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        const error = new Error(`download timed out for ${url} after ${timeoutMs}ms`);
+        error.code = 'download_timeout';
+        error.url = url;
+        reject(error);
+      }, timeoutMs);
+      timer.unref?.();
+    })
+    : null;
+  let response;
+  try {
+    response = await (deadline
+      ? Promise.race([
+        Promise.resolve(fetchImpl(url, { headers, signal: controller.signal })),
+        deadline,
+      ])
+      : fetchImpl(url, { headers, signal: controller.signal }));
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
   if (!response || response.ok === false) {
     throw new Error(`download failed for ${url}: ${response?.status ?? 'no response'}`);
   }
@@ -94,7 +135,15 @@ export function uvRunner(uvPath = process.env.VERSUTUS_UV || 'uv') {
 }
 
 /** Create the venv, install the lock and download every model. Idempotent. */
-export async function installVoice({ paths, cpu = false, runUv, fetch: fetchImpl = globalThis.fetch, log = console.log, lock } = {}) {
+export async function installVoice({
+  paths,
+  cpu = false,
+  runUv,
+  fetch: fetchImpl = globalThis.fetch,
+  log = console.log,
+  lock,
+  downloadTimeoutMs,
+} = {}) {
   mkdirSync(paths.venv, { recursive: true });
   log(`creating the venv at ${paths.venv}`);
   // `--allow-existing` keeps a second install (only new models to fetch) from
@@ -108,7 +157,14 @@ export async function installVoice({ paths, cpu = false, runUv, fetch: fetchImpl
   const downloaded = [];
   for (const [name, entry] of Object.entries(modelsLock.models ?? {})) {
     if (!entry.url) throw new Error(`models.lock.json has no url for ${name}`);
-    await fetchVerified({ url: entry.url, sha256: entry.sha256, dest: join(paths.models, name), fetchImpl, log });
+    await fetchVerified({
+      url: entry.url,
+      sha256: entry.sha256,
+      dest: join(paths.models, name),
+      fetchImpl,
+      log,
+      timeoutMs: downloadTimeoutMs,
+    });
     downloaded.push(name);
   }
   return { venv: paths.venv, models: downloaded, cpu };

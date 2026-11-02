@@ -26,7 +26,7 @@ jest.mock('@/components/ui', () => ({
 jest.mock('@/components/activity/cron-job-sheet', () => ({ CronJobSheet: 'CronJobSheet' }));
 jest.mock('@/components/activity/cron-run-sheet', () => ({ CronRunSheet: 'CronRunSheet' }));
 
-import { createElement } from 'react';
+import { createElement, type ElementType } from 'react';
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 
 import { RoutinesPane } from '@/components/chat/routines-pane';
@@ -61,19 +61,19 @@ async function mount(onCreate: (input: CreateInput) => Promise<unknown>): Promis
   // The create form lives inside the collapsed disclosure; open it the way an
   // operator does.
   await act(async () => {
-    renderer?.root.findByType('DisclosureRow').props.onPress();
+    renderer?.root.findByType('DisclosureRow' as ElementType).props.onPress();
   });
 }
 
 function fields(): ReactTestInstance[] {
   if (!renderer) throw new Error('the pane is not mounted');
-  return renderer.root.findAllByType('TextField');
+  return renderer.root.findAllByType('TextField' as ElementType);
 }
 
 function button(label: string): ReactTestInstance {
   if (!renderer) throw new Error('the pane is not mounted');
   const found = renderer.root
-    .findAllByType('Button')
+    .findAllByType('Button' as ElementType)
     .find((node) => node.props.label === label);
   if (!found) throw new Error(`no ${label} button`);
   return found;

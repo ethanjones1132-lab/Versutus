@@ -76,6 +76,16 @@ function endCall(state, reason) {
   };
 }
 
+/**
+ * Is a running turn still owed a reply? A mute taken while the reply is being
+ * spoken suspends the audio, not the turn: the turn's frames still belong to the
+ * phone, and letting them through is what stops the call hanging in `muted`.
+ */
+function replyOwed(state) {
+  if (state.phase === 'thinking' || state.phase === 'speaking') return true;
+  return state.phase === 'muted' && state.resumePhase === 'speaking';
+}
+
 /** Speak the reply's newly completed sentences, in order. */
 function speakCompleted(state, effects) {
   const remaining = state.reply.slice(state.spoken.length);
@@ -330,7 +340,7 @@ export function reduceVoiceSession(state, event) {
     }
 
     case 'replyDelta': {
-      if (state.phase !== 'thinking' && state.phase !== 'speaking') return stay(state);
+      if (!replyOwed(state)) return stay(state);
       const effects = [];
       let next = state;
       if (state.phase === 'thinking') {
@@ -340,12 +350,24 @@ export function reduceVoiceSession(state, event) {
         next = { ...state, reply: state.reply + event.text };
       }
       effects.push(frameSend({ t: 'reply', turnId: next.turnId, delta: event.text }));
-      next = speakCompleted(next, effects);
+      // A muted reply still reaches the phone, but none of it is spoken: the
+      // sentences are marked as handled so unmuting resumes at the next one
+      // rather than replaying what was said while the mic was shut.
+      next = state.phase === 'muted'
+        ? { ...next, spoken: next.reply }
+        : speakCompleted(next, effects);
       return stay(next, effects);
     }
 
     case 'replyDone': {
-      if (state.phase !== 'thinking' && state.phase !== 'speaking') return stay(state);
+      if (!replyOwed(state)) return stay(state);
+      // The turn is finished even though the audio was muted, so its end frame is
+      // still owed. The call stays muted and the microphone reopens on unmute.
+      if (state.phase === 'muted') {
+        return stay({ ...state, reply: '', spoken: '', resumePhase: 'listening' }, [
+          frameSend({ t: 'turn', turnId: state.turnId, state: 'done' }),
+        ]);
+      }
       if (state.phase === 'thinking') {
         const gen = state.gen + 1;
         return stay({ ...state, phase: 'speaking', gen, reply: FAILED_TURN_LINE, spoken: FAILED_TURN_LINE }, [
@@ -364,7 +386,14 @@ export function reduceVoiceSession(state, event) {
     }
 
     case 'replyFailed': {
-      if (state.phase !== 'thinking' && state.phase !== 'speaking') return stay(state);
+      if (!replyOwed(state)) return stay(state);
+      // A failed turn is the phone's news too; only the spoken failure line is
+      // suppressed while muted.
+      if (state.phase === 'muted') {
+        return stay({ ...state, reply: '', spoken: '', resumePhase: 'listening' }, [
+          frameSend({ t: 'turn', turnId: state.turnId, state: 'failed', error: event.message }),
+        ]);
+      }
       const gen = state.gen + 1;
       return stay({ ...state, phase: 'speaking', gen, reply: FAILED_TURN_LINE, spoken: FAILED_TURN_LINE }, [
         phaseEffect('speaking'),
@@ -379,6 +408,13 @@ export function reduceVoiceSession(state, event) {
       ]);
 
     case 'speechDone': {
+      // Audio started before the mute may still be finishing. Its end is still
+      // the phone's news, but nothing speaks while muted: the call stays muted
+      // and the microphone reopens on unmute.
+      if (state.phase === 'muted') {
+        if (event.gen !== undefined && event.gen !== state.gen) return stay(state);
+        return stay(state, [frameSend({ t: 'speech', gen: state.gen, state: 'end' })]);
+      }
       if (state.phase !== 'speaking') return stay(state);
       if (event.gen !== undefined && event.gen !== state.gen) return stay(state);
       const spoken = frameSend({ t: 'speech', gen: state.gen, state: 'end' });

@@ -63,6 +63,18 @@ export class CredentialVault {
   }
 
   async set(ref, value) {
+    // `String(undefined)` is the nine-letter word "undefined", and
+    // `providers.auth.setApiKey` forwards whatever a client sent. A missing
+    // value used to be encrypted and stored as that word, so the provider then
+    // held a "credential" that no vendor would ever accept, and the operator saw
+    // a key that had been set. A write with nothing to hold is refused, and the
+    // credential already in the vault is left alone.
+    if (value === undefined || value === null) {
+      throw Object.assign(
+        new Error(`credential ${JSON.stringify(String(ref))} was not written: the value is ${value === null ? 'null' : 'undefined'}`),
+        { code: 'credential_value_missing' },
+      );
+    }
     return this.serialize(async () => {
       const protectedValue = await this.backend.protect(Buffer.from(String(value), 'utf8'));
       await mkdir(this.dir, { recursive: true, ...(this.backend?.dirMode ? { mode: this.backend.dirMode } : {}) });
@@ -140,13 +152,31 @@ export class CredentialVault {
     try {
       await access(this.fileFor(ref));
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      // Only ENOENT says the file was never written. EACCES, EPERM and EBUSY —
+      // a directory this account cannot search, an antivirus holding the blob,
+      // a sharing violation on the file — are failures to answer the question.
+      // Answering them `false` filed a credential the Gate holds as one it does
+      // not have, so `credentialPresent` skipped it and the card offered to set
+      // a key that was already there. The refusal is named instead.
+      if (error?.code === 'ENOENT') return false;
+      throw Object.assign(
+        new Error(`the stored credential could not be checked: ${error?.code ?? 'unknown error'}`),
+        { code: 'credential_unreadable', cause: error },
+      );
     }
   }
 
   async inspect(ref) {
-    const present = await this.has(ref);
+    let present;
+    try {
+      present = await this.has(ref);
+    } catch (error) {
+      // A presence check that could not run is not the same answer as a file
+      // that was never written. It is reported the way an unreadable blob is:
+      // the credential is not claimed absent, and the failure carries a code.
+      return { present: true, readable: false, error: { code: error.code, message: error.message } };
+    }
     if (!present) return { present: false, readable: null };
     try {
       await this.get(ref);

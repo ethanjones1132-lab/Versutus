@@ -38,15 +38,35 @@ export function runToneColor(tokens: Tokens, tone: RunStatusTone): string {
 export function RecentRuns({
   runs,
   onOpenRun,
+  runsUnsupported,
 }: {
   runs: ActivityRun[];
   /** A tap on a row opens Runs on that run — found, scrolled to and lit. */
   onOpenRun: (runId: string) => void;
+  /**
+   * The connected gateway whose `agent` capability is explicitly
+   * `unsupported`: it has no run API, so this group can never fill and must not
+   * invite a run. Left undefined for a ready snapshot and for one the gateway
+   * has not reported yet, so those keep today's copy.
+   */
+  runsUnsupported?: { gatewayName: string };
 }) {
   const tokens = useTokens();
   const shown = runsForGlance(runs, RECENT_RUNS_LIMIT);
 
   if (shown.length === 0) {
+    if (runsUnsupported) {
+      // The Runs screen already refuses to promise runs here; the glance names
+      // the same limitation in the same words rather than contradicting it.
+      return (
+        <View style={[styles.group, styles.empty, styles.emptyNote, { backgroundColor: tokens.stagePanel }]}>
+          <Text variant="body">Runs not offered</Text>
+          <Text variant="caption" color="secondary">
+            {`${runsUnsupported.gatewayName} is chat-only (or has no run API). Chat still works; agentic runs need Hermes /v1/runs.`}
+          </Text>
+        </View>
+      );
+    }
     return (
       <View style={[styles.group, styles.empty, { backgroundColor: tokens.stagePanel }]}>
         <Text variant="caption" color="secondary">
@@ -113,6 +133,11 @@ const styles = StyleSheet.create({
   },
   empty: {
     padding: Spacing.three,
+  },
+  // Only the two-line limitation note has more than one child, so the group
+  // with the single "No runs yet" line is laid out exactly as before.
+  emptyNote: {
+    gap: Spacing.one + 2,
   },
   row: {
     flexDirection: 'row',

@@ -1,5 +1,6 @@
 import { redactSensitive, redactSensitiveText } from '../credentials/redaction.mjs';
 import { releaseProfiles } from './profiles/registry.mjs';
+import { credentialRefsFor } from './service.mjs';
 
 /**
  * @param {Object} deps
@@ -110,17 +111,26 @@ export function createProviderRpc({ service, vault, oauth, onChanged }) {
       if (!attempt) throw new Error('unknown attempt');
       return { id: attempt.id, providerId: attempt.providerId, expiresAt: attempt.expiresAt };
     },
-    'providers.auth.disconnect': async ({ id } = {}) => status(async () => {
+    // Disconnecting drops the credential AND the verdict that credential earned.
+    // It used to delete the vault entry and return, so `auth.state: 'ready'` and
+    // readiness `ready` stayed on the record and in the manifest: the card said
+    // "Connected" for a provider with no credential left to send, until some
+    // later check happened to overwrite it.
+    'providers.auth.disconnect': async ({ id } = {}) => statusAndReload(async () => {
       const record = await service.store.get(id);
       if (oauth) {
         await oauth.disconnect(id, {
           oauthProfileId: record?.config.registration?.oauthProfileId,
         });
       }
-      if (record?.config.registration.credentialRef) {
-        await vault.delete(record.config.registration.credentialRef);
+      if (vault) {
+        // The registration decides where its secrets live: `credentialRef` for a
+        // key, `oauth/<id>` for a token, `adapterCredentialRef` for a local
+        // adapter. Reading only the first left the others in the vault.
+        for (const ref of credentialRefsFor(record?.config)) await vault.delete(ref);
       }
       service.forgetAdapter(id);
+      await service.noteCredentialCleared(id);
     }),
   };
 }

@@ -312,6 +312,12 @@ export type RunEvent = {
   type: string;
   data?: Record<string, unknown>;
   timestamp?: number;
+  /**
+   * The Gate's own per-run counter. A live run re-opened after a dropped
+   * socket replays from sequence 0, so this is what tells a replayed frame
+   * from a new one. Optional: older backends and relayed frames carry none.
+   */
+  sequence?: number;
 };
 
 // ─── Skills / Toolsets ─────────────────────────────────────────────

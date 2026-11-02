@@ -208,8 +208,21 @@ export async function listHermesBots(hermesHome, io = {}) {
   let names = [];
   try {
     names = await readdir(join(hermesHome, 'profiles'), { withFileTypes: true });
-  } catch {
-    return bots;
+  } catch (error) {
+    // A host that has never had a profiles directory is honestly the default
+    // Bot alone, and ENOENT is the answer for it. Any other refused read is
+    // not: a locked, shadowed or non-directory `profiles/` used to answer with
+    // that same single Bot, so every named Bot on the host vanished behind a
+    // roster that looked complete — and a write could then "create" a profile
+    // into a directory nobody could list. Absent and unreadable are different
+    // answers, so the failed read is named instead of hidden.
+    if (error?.code === 'ENOENT') return bots;
+    const failure = new Error(
+      `hermes profiles directory could not be read: ${error?.code ?? error?.message}`,
+    );
+    failure.code = 'hermes_profiles_unreadable';
+    failure.status = 503;
+    throw failure;
   }
   for (const entry of names) {
     const name = entry.name ?? entry;

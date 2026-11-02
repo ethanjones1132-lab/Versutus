@@ -163,12 +163,16 @@ export function filterRosterRows(rows: RosterRow[], query: string): RosterRow[] 
 
 /**
  * What the roster's footer may honestly claim when the visible list comes up
- * short. Four truths it must not blur:
+ * short. Five truths it must not blur:
  *   - A FAILED inventory is not "zero bots" — the phone does not know what
  *     the host has, so the failure names itself instead of asserting emptiness.
  *   - An inventory the app could not even attempt (gateway not connected) is
  *     not "zero bots" either — the read never ran, so the footer waits for the
  *     connection instead of reporting a count it never measured.
+ *   - A connection whose client has no roster call at all is the same kind of
+ *     non-answer from the other side: `listBots` answers `[]` for it, so the
+ *     footer must say the connection cannot inventory rather than assert the
+ *     host has no Bots.
  *   - A query that matched group rooms but no agents is not "no match" — the
  *     operator is looking at a match right below the banner.
  *   - A blank query is never "no match" — nothing was filtered.
@@ -176,9 +180,58 @@ export function filterRosterRows(rows: RosterRow[], query: string): RosterRow[] 
 export type RosterEmptyView =
   | { kind: 'none' }
   | { kind: 'zero-bots' }
+  | { kind: 'uninventoried' }
   | { kind: 'load-failed'; reason: string }
   | { kind: 'waiting' }
   | { kind: 'no-match'; query: string };
+
+/**
+ * Whether the live client can inventory Bots at all: a Hermes client attached
+ * without a manifest has no `listBots`, and the provider answers that absence
+ * with `[]` so every reader keeps a list to work from — which makes an unread
+ * roster look exactly like an empty one. The verdict is published here, the
+ * same way `registerCrestFleet` publishes the fleet's tones, because the
+ * roster draws from a module signal rather than from the gateway context.
+ *
+ * True is "no evidence to the contrary": the default before any client is
+ * installed and again once one is torn down, so a disconnected gateway stays
+ * "waiting" instead of claiming it could never inventory.
+ */
+let rosterInventoryAvailable = true;
+const rosterInventoryListeners = new Set<() => void>();
+
+/** Publish the installed client's verdict. Only a real change notifies. */
+export function publishBotInventoryAvailable(available: boolean): void {
+  if (available === rosterInventoryAvailable) return;
+  rosterInventoryAvailable = available;
+  for (const listener of rosterInventoryListeners) listener();
+}
+
+/** Whether the installed client carries a roster call (`useSyncExternalStore` snapshot). */
+export function botInventoryAvailable(): boolean {
+  return rosterInventoryAvailable;
+}
+
+export function subscribeBotInventoryAvailable(listener: () => void): () => void {
+  rosterInventoryListeners.add(listener);
+  return () => {
+    rosterInventoryListeners.delete(listener);
+  };
+}
+
+/** What the probe looks for on a client surface: the roster call itself. */
+export type BotInventorySurface = { listBots?: unknown };
+
+/**
+ * Can this client read a Bot roster at all? Method presence, the same probe
+ * `hasBotManagement` makes below: a manifest client whose document advertises
+ * a bots endpoint implements the call, and a plain Hermes client omits it
+ * entirely.
+ */
+export function hasBotInventory(client?: object | null): boolean {
+  if (!client) return false;
+  return typeof (client as BotInventorySurface).listBots === 'function';
+}
 
 export function rosterEmptyView({
   totalBotRows,
@@ -187,6 +240,7 @@ export function rosterEmptyView({
   query,
   error,
   connected = true,
+  inventoryAvailable = true,
 }: {
   totalBotRows: number;
   visibleBotRows: number;
@@ -199,9 +253,16 @@ export function rosterEmptyView({
    * caller that says nothing is claiming it ran the read.
    */
   connected?: boolean;
+  /**
+   * Whether the live client carries a roster call. Defaults true, so a caller
+   * that says nothing keeps the existing answers; false turns an empty list
+   * into "this connection cannot inventory", never "zero bots".
+   */
+  inventoryAvailable?: boolean;
 }): RosterEmptyView {
   if (totalBotRows <= 0) {
     if (typeof error === 'string' && error.trim()) return { kind: 'load-failed', reason: error };
+    if (!inventoryAvailable) return { kind: 'uninventoried' };
     return connected ? { kind: 'zero-bots' } : { kind: 'waiting' };
   }
   const needle = query.trim();

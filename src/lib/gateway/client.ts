@@ -10,6 +10,7 @@ import {
 import { flattenHermesModelOptions, type HermesModelOptions } from '@/lib/gateway/model-selection';
 import { createMessageId } from '@/lib/gateway/messages';
 import { METHOD_GUIDANCE, METHOD_TO_ROUTE, resolveRoute } from '@/lib/gateway/rpc-routes';
+import { isRunEventFrame } from '@/lib/gateway/runs';
 
 import { streamingFetch } from '@/lib/net/streaming-fetch';
 import type {
@@ -810,8 +811,11 @@ export class HermesGatewayClient {
 
     await this.transport.streamSSE(response, (data) => {
       try {
-        const event = JSON.parse(data) as RunEvent;
-        onEvent(event);
+        const frame: unknown = JSON.parse(data);
+        // A malformed frame must not kill the stream, and a frame that parses
+        // to something other than an event must not become one. Shared with
+        // the manifest client so both treat the wire the same way.
+        if (isRunEventFrame(frame)) onEvent(frame);
       } catch {
         // ignore
       }

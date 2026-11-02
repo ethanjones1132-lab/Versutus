@@ -86,6 +86,15 @@ type SlashCommandContext = {
     prompt: string,
     onEvent?: (event: { type: string; data?: Record<string, unknown>; timestamp?: number }) => void,
   ) => Promise<RunOutcome>;
+  /**
+   * Whether the connected backend offers the run API, from the capability
+   * snapshot's `agent` group (`ready` / `unsupported` / `unknown`). The run
+   * executor exists on every host, so without this signal `/run` reaches a
+   * backend the snapshot already judged run-less and leaves a durable failed
+   * row behind. `unsupported` refuses before dispatch; anything else —
+   * including an absent signal — behaves exactly as today.
+   */
+  agentRunsStatus?: 'ready' | 'unsupported' | 'unknown';
   /** This device's stored workflows, for `/workflow`. */
   workflows?: Workflow[];
   /**
@@ -807,6 +816,14 @@ function runRunCapabilityBlock(context: SlashCommandContext): SlashCommandResult
 async function runTaskCommand(argText: string, context: SlashCommandContext): Promise<SlashCommandResult> {
   const prompt = argText.trim();
   if (!prompt) return textResult('Usage: /run <prompt> — run an agentic task with approval gates', '/run');
+  // A backend the snapshot explicitly judged run-less gets no start request:
+  // the refusal lands in chat, and no Activity row is ever created for a run
+  // this gateway already said it cannot serve. `unknown` and an absent signal
+  // keep today's dispatch, so a host that simply has not reported the run API
+  // is never refused on a guess.
+  if (context.agentRunsStatus === 'unsupported') {
+    return textResult('This gateway does not support agentic runs (the Hermes run API is required).', '/run');
+  }
   if (!context.runTask) {
     return runRunCapabilityBlock(context);
   }

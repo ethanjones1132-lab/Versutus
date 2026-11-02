@@ -178,12 +178,18 @@ export default function RunsScreen() {
     [visibleRuns],
   );
 
-  const runsSupported =
-    status === 'connected' &&
-    capabilitySnapshot.groups.find((group) => group.id === 'agent')?.status === 'ready';
-  const runsUnsupported =
-    status === 'connected' &&
-    capabilitySnapshot.groups.find((group) => group.id === 'agent')?.status === 'unsupported';
+  const agentCapability =
+    capabilitySnapshot.groups.find((group) => group.id === 'agent')?.status;
+  const runsSupported = status === 'connected' && agentCapability === 'ready';
+  const runsUnsupported = status === 'connected' && agentCapability === 'unsupported';
+  // A connected gateway whose capability catalog has not been read yet carries
+  // an `agent` group in the `unknown` state (`buildCapabilitySnapshot`:
+  // "No capability catalog"). That is not the claim "No runs yet": nothing here
+  // has asked the gateway whether it serves the run API, so the empty list may
+  // simply be a list this phone cannot see yet. The variant below says so and
+  // offers the screen's existing refresh.
+  const runsUnknown =
+    status === 'connected' && activeGateway != null && agentCapability === 'unknown';
 
   const startRun = async () => {
     const prompt = runPrompt.trim();
@@ -729,7 +735,7 @@ export default function RunsScreen() {
           surface below the Start-a-run card — the EmptyState is the screen's
           primary message and leads; the Scorecards section (weekly opt-in,
           empty window copy) follows it rather than burying it. */}
-      {activityRunsForActiveGateway.length === 0 ? (
+      {activityRunsForActiveGateway.length === 0 && !runsUnknown ? (
         <EmptyState
           icon={{ ios: 'bolt', android: 'bolt', web: 'bolt' }}
           title={
@@ -766,6 +772,20 @@ export default function RunsScreen() {
                 }
               : undefined
           }
+        />
+      ) : null}
+
+      {/* The one empty variant that is about an unread snapshot rather than an
+          empty list. It keeps the EmptyState idiom and the screen's existing
+          refresh, and names the gateway so the limitation is not mistaken for
+          this device's own failure. */}
+      {activityRunsForActiveGateway.length === 0 && runsUnknown ? (
+        <EmptyState
+          icon={{ ios: 'bolt', android: 'bolt', web: 'bolt' }}
+          title="Run API not reported yet"
+          description={`${activeGateway?.name ?? 'This gateway'} has not reported whether it offers agentic runs yet. Refresh to ask it again.`}
+          actionLabel="Refresh"
+          onAction={() => void onRefresh()}
         />
       ) : null}
 

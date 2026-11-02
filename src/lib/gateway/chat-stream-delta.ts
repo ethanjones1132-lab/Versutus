@@ -1,14 +1,58 @@
 import type { ChatToolCall } from '@/lib/gateway/types';
 
+export type ChatToolStatus = 'running' | 'complete' | 'error';
+
 export type ChatStreamAcc = {
   toolNames: Map<number, string>;
   toolArgs: Map<number, string>;
   toolIds: Map<number, string>;
   toolDetails: Map<number, string>;
+  /**
+   * The last status each tool slot was actually reported with, keyed per slot.
+   *
+   * A provider splits one tool call across frames and only some of them carry a
+   * `status`; the rest say nothing at all. Reading those silent fragments as
+   * "running" put a finished card back into its running state — the turn had
+   * already said the tool completed or failed, and a later fragment of the same
+   * call is not new evidence about it. `complete` and `error` are therefore
+   * sticky: remembered here so a fragment without a status inherits the truth
+   * instead of implying one.
+   */
+  toolStatus: Map<string, ChatToolStatus>;
 };
 
 export function createChatStreamAcc(): ChatStreamAcc {
-  return { toolNames: new Map(), toolArgs: new Map(), toolIds: new Map(), toolDetails: new Map() };
+  return {
+    toolNames: new Map(),
+    toolArgs: new Map(),
+    toolIds: new Map(),
+    toolDetails: new Map(),
+    toolStatus: new Map(),
+  };
+}
+
+function isToolStatus(value: unknown): value is ChatToolStatus {
+  return value === 'running' || value === 'complete' || value === 'error';
+}
+
+/**
+ * Resolve the status for one tool slot and remember it.
+ *
+ * A terminal status reported for a call is not undone by a later fragment:
+ * `complete` is how the card left its spinner, and nothing short of a caller
+ * settling the turn (`finalizeStreamingMessage` / `convertStreamError`) may
+ * take that away. A frame that reports no status at all inherits the last
+ * known one, so it never implies `running` on its own.
+ */
+function resolveToolStatus(acc: ChatStreamAcc, key: string, reported: unknown): ChatToolStatus {
+  const previous = acc.toolStatus.get(key);
+  const explicit = isToolStatus(reported) ? reported : undefined;
+  const status: ChatToolStatus =
+    previous === 'complete' || previous === 'error'
+      ? previous
+      : explicit ?? previous ?? 'running';
+  acc.toolStatus.set(key, status);
+  return status;
 }
 
 export type ChatStreamInterpretation = {
@@ -116,7 +160,7 @@ export function interpretChatStreamChunk(
         (typeof fn?.name === 'string' && fn.name) ||
         (typeof item.name === 'string' && item.name) ||
         '';
-      const status = item.status === 'complete' || item.status === 'error' ? item.status : 'running';
+      const status = resolveToolStatus(acc, `index:${index}`, item.status);
       if (namePart) {
         acc.toolNames.set(index, status === 'running'
           ? (acc.toolNames.get(index) ?? '') + namePart
@@ -167,7 +211,10 @@ export function interpretChatStreamChunk(
               `carried a tool call for "${fallbackName}" — treating it as a tool call.`,
           );
         }
-        toolCalls.push({ name: fallbackName, status: 'running' });
+        toolCalls.push({
+          name: fallbackName,
+          status: resolveToolStatus(acc, `block:${fallbackName}`, item.status),
+        });
         continue;
       }
       const fn = asRecord(item.function);
@@ -175,7 +222,11 @@ export function interpretChatStreamChunk(
         (typeof item.name === 'string' && item.name) ||
         (typeof fn?.name === 'string' && fn.name) ||
         '';
-      if (name) toolCalls.push({ name, status: 'running' });
+      if (name) {
+        const blockKey =
+          typeof item.index === 'number' ? `block-index:${item.index}` : `block:${name}`;
+        toolCalls.push({ name, status: resolveToolStatus(acc, blockKey, item.status) });
+      }
     }
   }
 

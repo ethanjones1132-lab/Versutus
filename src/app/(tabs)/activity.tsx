@@ -43,6 +43,7 @@ export default function ActivityScreen() {
   const {
     activeGateway,
     activityRunsForActiveGateway,
+    capabilitySnapshot,
     gateways,
     settings,
     status,
@@ -102,6 +103,16 @@ export default function ActivityScreen() {
     },
     [requestRunFocus, router],
   );
+
+  // The same reading of the run capability the Runs screen makes
+  // (runs.tsx:181-186): only a connected gateway whose `agent` group is
+  // explicitly `unsupported` is known to have no run API. A `ready` group and
+  // one the gateway has not reported yet both keep today's "No runs yet" line,
+  // because neither lets this screen claim runs are unavailable.
+  const runsUnsupported =
+    status === 'connected' &&
+    activeGateway != null &&
+    capabilitySnapshot?.groups.find((group) => group.id === 'agent')?.status === 'unsupported';
 
   // One reader for mount, retry, and pull-to-refresh: the strict loader
   // rejects on a storage refusal so `failed` is reachable, and `isLive`
@@ -296,7 +307,10 @@ export default function ActivityScreen() {
               glance — what is waiting, what is working, what just finished. */}
           <View style={styles.section}>
             <SectionHeader title="Runs" actionLabel="See all" onAction={() => router.push('/runs')} />
-            <RecentRuns runs={activityRunsForActiveGateway} onOpenRun={openRun} />
+            <RecentRuns runs={activityRunsForActiveGateway}
+              onOpenRun={openRun}
+              runsUnsupported={runsUnsupported && activeGateway ? { gatewayName: activeGateway.name } : undefined}
+            />
           </View>
         </View>
 

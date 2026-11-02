@@ -3,8 +3,6 @@ import assert from 'node:assert/strict';
 
 import { createPushSend } from '../core/push-send.mjs';
 
-const SEND_URL = 'https://exp.host/--/api/v2/push/send';
-
 function message(index) {
   return {
     to: `ExponentPushToken[token-${index}]`,

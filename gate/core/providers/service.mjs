@@ -72,15 +72,35 @@ export class ProviderService {
     return toSnapshot(record.config, record.state);
   }
 
+  /**
+   * Register a provider that is not there yet.
+   *
+   * `create` used to write unconditionally, so registering an id that already
+   * existed silently replaced that provider and reset its state file to the
+   * legacy bootstrap: a second add with the same id (a retried form, a shared
+   * import) dropped the live catalog and the readiness verdict of a provider
+   * that was working. Registering is a decision about a new provider; editing
+   * one already has `update`. The id is answered by name instead of overwriting.
+   */
   async create(input) {
     const validation = validateProviderRegistration(input);
     if (!validation.ok) {
       throw new Error(validation.errors.map((error) => `${error.field}: ${error.message}`).join('; '));
     }
-    await this.store.put(input, {
-      catalog: { source: 'legacy_bootstrap', state: 'unavailable', generation: 0, models: [] },
+    // Same per-provider queue as update/delete: two registrations of one id that
+    // are in flight together must not both see "absent" and both write.
+    return this.commit(input.id, async () => {
+      const existing = await this.store.get(input.id);
+      if (existing) {
+        const error = new Error(`provider "${input.id}" already exists`);
+        error.code = 'provider_exists';
+        throw error;
+      }
+      await this.store.put(input, {
+        catalog: { source: 'legacy_bootstrap', state: 'unavailable', generation: 0, models: [] },
+      });
+      return this.get(input.id);
     });
-    return this.get(input.id);
   }
 
   async update(id, input) {
@@ -131,6 +151,45 @@ export class ProviderService {
     });
   }
 
+  /**
+   * What removing a credential does to the facts the Gate already holds.
+   *
+   * `providers.auth.disconnect` dropped the vault entry and returned, so the
+   * record kept the verdict the credential had earned: `auth.state: 'ready'`
+   * and readiness `ready` — a card saying "Connected" for a provider the Gate
+   * can no longer authenticate, and the manifest advertising it as ready. The
+   * answer here is presence itself, which needs no vendor: whatever the last
+   * check concluded was about a credential that is now gone, so readiness is
+   * left unchecked and the card offers "Check" again.
+   */
+  async noteCredentialCleared(id) {
+    return this.commit(id, async () => {
+      const record = await this.store.get(id);
+      if (!record) return null;
+      // Not simply `present: false`: a provider whose key lives in the legacy
+      // environment variable is still usable with no vault entry at all, and
+      // answering "missing" for it would hide a working provider.
+      const present = await this.credentialPresent(record.config, record);
+      const state = {
+        ...record.state,
+        auth: nextAuthState({
+          mode: record.config.registration?.mode,
+          present,
+          previous: record.state.auth?.state,
+        }),
+        readiness: {
+          state: 'unavailable',
+          ...(present ? {} : { code: ProviderErrorCodes.missing_credentials }),
+          checkedAt: new Date().toISOString(),
+        },
+      };
+      delete state.backoff;
+      delete state.lastError;
+      await this.store.put(record.config, state);
+      return toSnapshot(record.config, state);
+    });
+  }
+
   async delete(id, { resolve } = {}) {
     return this.commit(id, async () => {
       const record = await this.require(id);
@@ -143,7 +202,13 @@ export class ProviderService {
       // goes first and its failure aborts the delete: reporting `deleted` while
       // the secret survived is the lie, and with the record still in place the
       // operator can retry instead of losing the only surface that can name it.
-      const ref = credentialRefFor(record.config);
+      // Every ref this registration can hold a secret under goes with it. A
+      // local-interface provider keeps its adapter credential under
+      // `registration.adapterCredentialRef`, which `credentialRefFor` (the
+      // reader used by credential presence) does not return: the delete removed
+      // the record and left that secret in the vault, where no surface could
+      // name or revoke it.
+      const refs = credentialRefsFor(record.config);
       // The vendor's copy goes with the provider. Without this the refresh
       // token stays valid at the vendor until expiry, and once the record is
       // gone nothing the Gate holds can name or revoke it. `disconnect` reads
@@ -155,7 +220,9 @@ export class ProviderService {
           oauthProfileId: record.config.registration?.oauthProfileId,
         });
       }
-      if (ref && this.vault) await this.vault.delete(ref);
+      if (this.vault) {
+        for (const ref of refs) await this.vault.delete(ref);
+      }
       await this.store.delete(id);
       this.forgetAdapter(id);
       return { deleted: true };
@@ -464,7 +531,17 @@ export class ProviderService {
     const ref = credentialRefFor(config);
     if (ref && this.vault) {
       if (typeof this.vault.has === 'function') {
-        if (await this.vault.has(ref)) return true;
+        try {
+          if (await this.vault.has(ref)) return true;
+        } catch (error) {
+          // The vault no longer answers "absent" for a presence check it could
+          // not run (EACCES, a locked blob). That is a credential this account
+          // may hold but cannot read: report it present, so `unreadableCredential`
+          // names it with its own code, instead of letting the refusal escape
+          // `inspect` and the chat path as an unexplained exception.
+          if (error?.code === 'credential_unreadable') return true;
+          throw error;
+        }
       } else if (await this.vault.get(ref)) {
         return true;
       }
@@ -589,4 +666,23 @@ function reachesElsewhere(before, next) {
 function credentialRefFor(config) {
   if (config.registration?.mode === 'oauth') return `oauth/${config.id}`;
   return config.registration?.credentialRef;
+}
+
+/**
+ * Every vault ref a registration can hold a secret under, so teardown can remove
+ * all of them instead of the one `credentialRefFor` is asked about.
+ *
+ * A local-interface provider stores the credential its adapter sends under
+ * `registration.adapterCredentialRef` (see `factory.resolveCredential`), and an
+ * oauth provider's token is under `oauth/<id>`. Those are independent keys: a
+ * read that answers presence asks about one, but a delete has to clear them all.
+ */
+export function credentialRefsFor(config = {}) {
+  const refs = [];
+  if (config.registration?.mode === 'oauth' && config.id) refs.push(`oauth/${config.id}`);
+  const credentialRef = config.registration?.credentialRef;
+  if (typeof credentialRef === 'string' && credentialRef) refs.push(credentialRef);
+  const adapterRef = config.registration?.adapterCredentialRef;
+  if (typeof adapterRef === 'string' && adapterRef) refs.push(adapterRef);
+  return [...new Set(refs)];
 }

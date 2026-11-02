@@ -831,6 +831,30 @@ export function createOpenCodeBackend({
   }
 
   /**
+   * A route that answered 2xx with a body that is not JSON at all.
+   *
+   * A v2 server's SPA catch-all answers an unknown path with a web page, and a
+   * proxy in between may answer one too. Read as JSON that used to surface an
+   * engine `Unexpected token '<'` sentence, which names neither the route nor
+   * the content type and reads like a bug in the Gate. The body itself is not
+   * quoted: a page can be long, and the useful facts are the route and what the
+   * server called the answer.
+   */
+  function routeNotJsonError(path, response) {
+    const contentType = typeof response?.headers?.get === 'function'
+      ? response.headers.get('content-type')
+      : null;
+    const kind = contentType ? `content type "${contentType}"` : 'no JSON content type';
+    return Object.assign(
+      new Error(
+        `opencode: ${root}${path} answered with ${kind} instead of JSON — ` +
+        'the server may not offer this route',
+      ),
+      { code: 'backend_not_json', status: 502 },
+    );
+  }
+
+  /**
    * One route read, under a ceiling this backend owns.
    *
    * `timeoutMs` is the caller's own bound and defaults to the read ceiling; a
@@ -891,7 +915,14 @@ export function createOpenCodeBackend({
     if (response.status === 204 || response.status === 205) return null;
     const text = await response.text();
     if (!text.trim()) return null;
-    const parsed = JSON.parse(text);
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      // An ok answer that is not JSON is a route that did not answer us: name
+      // it rather than let a parser sentence speak for the server.
+      throw routeNotJsonError(path, response);
+    }
     // v2 wraps every payload in {data: …}; v1 returns it bare.
     if (major >= 2 && unwrap && parsed && typeof parsed === 'object' && 'data' in parsed) {
       return parsed.data;

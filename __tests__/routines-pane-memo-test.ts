@@ -24,7 +24,9 @@ describe('routines pane memo', () => {
     // `SkillsPane` (skills-pane.tsx:14,81) and `ToolsPane`
     // (tools-pane.tsx:14,81).
     const src = readSource('src', 'components', 'chat', 'routines-pane.tsx');
-    expect(src).toMatch(/import \{ memo, useState \} from 'react';/);
+    // `memo` and `useState` still come from react; the import may list more
+    // names (the pane also needs Children/cloneElement) across several lines.
+    expect(src).toMatch(/import \{[^}]*\bmemo\b[^}]*\buseState\b[^}]*\} from 'react';/);
     expect(src).toMatch(/function RoutinesPaneImpl\(/);
     expect(src).toMatch(/export const RoutinesPane = memo\(RoutinesPaneImpl\);/);
     expect(src).toMatch(/RoutinesPane\.displayName = 'RoutinesPane';/);

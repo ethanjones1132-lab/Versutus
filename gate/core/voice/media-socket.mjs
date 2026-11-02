@@ -37,6 +37,11 @@ export const NO_AUDIO_TIMEOUT_MS = 30_000;
 // re-handshaking, a screen unlock, a cell handover — and 20 s ended calls that
 // were seconds from returning, cancelling the turn with them.
 export const RESUME_TIMEOUT_MS = 90_000;
+// How long a socket the call has moved off may take to answer a ping before the
+// Gate frees it. A live phone answers at once and keeps its old connection (it
+// closes it itself); a half-open Tailscale socket never answers, and nothing
+// else would ever close it, so it is terminated after this bound.
+export const SUPERSEDED_SOCKET_GRACE_MS = 10_000;
 // How much speech the call holds for a phone that is not there: 45 s at the
 // output rate, and 1000 control frames. Both are bounds on a replay, not on a
 // call: what cannot fit is dropped oldest-first, and the frames are never the
@@ -132,6 +137,7 @@ export function attachVoiceMediaSocket({
   speculationWindowMs = SPECULATION_WINDOW_MS,
   utteranceHoldMs = UTTERANCE_HOLD_MS,
   continuationMs = CONTINUATION_MS,
+  supersededGraceMs = SUPERSEDED_SOCKET_GRACE_MS,
 } = {}) {
   const wss = new WebSocketServer({ noServer: true });
   const calls = new Map();
@@ -718,8 +724,56 @@ export function attachVoiceMediaSocket({
       }
     };
 
+    /**
+     * Free a socket the call has moved off, once it proves it cannot answer.
+     * A ping separates a live phone (which closes its own old connection) from
+     * a half-open one that would otherwise stay open for the life of the Gate.
+     */
+    const retireSuperseded = (stale) => {
+      let answered = false;
+      const timer = setTimeout(() => {
+        if (answered) return;
+        try {
+          stale.terminate();
+        } catch {
+          // the peer is already gone
+        }
+      }, supersededGraceMs);
+      timer.unref?.();
+      stale.once('pong', () => {
+        answered = true;
+        clearTimeout(timer);
+      });
+      try {
+        stale.ping();
+      } catch {
+        // Already closing or gone: nothing to wait for.
+        answered = true;
+        clearTimeout(timer);
+        try {
+          stale.terminate();
+        } catch {
+          // the peer is already gone
+        }
+      }
+    };
+
     function attach(newWs, { first = false } = {}) {
-      if (ended) return;
+      // A call that has already ended has no loop left to serve a socket; close
+      // the arrival rather than leaving it open with no listeners.
+      if (ended) {
+        try {
+          newWs.close(1000, 'ended');
+        } catch {
+          // the peer is already gone
+        }
+        return;
+      }
+      // A re-attach supersedes the old socket. Take its listeners off first, so
+      // a half-open phone connection can no longer feed the call, then retire
+      // it: the Gate used to leave it open for ever, and on Tailscale that is a
+      // dead socket holding a lease nobody will ever close.
+      const previous = ws;
       ws = newWs;
       clearResumeTimer();
       lastAudioAt = now();
@@ -738,6 +792,15 @@ export function attachVoiceMediaSocket({
       newWs.on('error', () => {
         if (ws === newWs) detach();
       });
+
+      if (previous && previous !== newWs) {
+        // Its message handler must go: a superseded socket must not feed the
+        // call. Its close and error handlers stay — they ignore themselves by
+        // identity — because a socket with no error listener would turn a late
+        // transport error into an exception out of the Gate.
+        previous.off('message', onMessage);
+        retireSuperseded(previous);
+      }
 
       // A first attach is the phone arriving at an engine that may still be
       // loading its models, so it gets the reducer's own `opening` phase and
