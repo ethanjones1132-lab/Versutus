@@ -14,6 +14,15 @@ export function profileIdFor(providerType) {
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 
 export function createProviderAdapter(config, { vault, store, oauth } = {}) {
+  // A local adapter discovers its manifest in the constructor, so building one
+  // per method call put a manifest GET (and its own deadline) in front of every
+  // turn, health check and model listing. It is built once for this wrapper's
+  // registration lifetime instead; `ProviderService.forgetAdapter` drops the
+  // wrapper when an edit or a credential change makes that discovery stale.
+  // One flight is shared so concurrent callers cannot race two discoveries,
+  // and it is cleared on rejection so a transient failure can be retried.
+  let localAdapterFlight = null;
+
   return {
     authenticate: async () => (await materialize()).authenticate(),
     health: async () => (await materialize()).health(),
@@ -28,20 +37,7 @@ export function createProviderAdapter(config, { vault, store, oauth } = {}) {
   async function materialize() {
     const registration = config.registration;
     if (registration.mode === 'local_interface') {
-      let credential;
-      if (registration.adapterCredentialRef && vault) {
-        credential = await vault.get(registration.adapterCredentialRef);
-      }
-      return createLocalProviderAdapter({
-        manifestUrl: registration.manifestUrl,
-        providerId: config.id,
-        credential,
-        // The registration's own budget, for the same reason the remote path
-        // reads it: a local server that accepts the connection and says nothing
-        // used to hold this request — and every later "Check" on the provider —
-        // for the life of the process.
-        timeoutMs: config.requestPolicy?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      });
+      return localAdapter();
     }
 
     const credential = await resolveCredential(config, vault, store, oauth);
@@ -63,6 +59,37 @@ export function createProviderAdapter(config, { vault, store, oauth } = {}) {
       // The registration's own budget, which nothing used to read: a vendor
       // that accepts the connection and never answers held a Gate socket for
       // minutes while the phone had already given up at 30s.
+      timeoutMs: config.requestPolicy?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+  }
+
+  function localAdapter() {
+    if (!localAdapterFlight) {
+      localAdapterFlight = initializeLocalAdapter().catch((error) => {
+        // A rejected discovery is not a permanent verdict: clear the flight so
+        // the next caller discovers again instead of replaying this failure
+        // for the wrapper's whole life.
+        localAdapterFlight = null;
+        throw error;
+      });
+    }
+    return localAdapterFlight;
+  }
+
+  async function initializeLocalAdapter() {
+    const registration = config.registration;
+    let credential;
+    if (registration.adapterCredentialRef && vault) {
+      credential = await vault.get(registration.adapterCredentialRef);
+    }
+    return createLocalProviderAdapter({
+      manifestUrl: registration.manifestUrl,
+      providerId: config.id,
+      credential,
+      // The registration's own budget, for the same reason the remote path
+      // reads it: a local server that accepts the connection and says nothing
+      // used to hold this request — and every later "Check" on the provider —
+      // for the life of the process.
       timeoutMs: config.requestPolicy?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
   }
