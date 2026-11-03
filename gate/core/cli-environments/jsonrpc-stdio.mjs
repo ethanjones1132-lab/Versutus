@@ -1,3 +1,5 @@
+import { StringDecoder } from 'node:string_decoder';
+
 /**
  * Newline-delimited JSON-RPC over a child process's stdio.
  *
@@ -11,8 +13,19 @@ export function createStdioJsonRpc({ child, onNotification, onServerRequest, onD
   let buffer = '';
   let closed = false;
 
-  child.stdout?.on('data', (chunk) => {
-    buffer += String(chunk);
+  // Pipe reads stop at arbitrary byte offsets, so a multi-byte UTF-8 code point
+  // can straddle two chunks. Decoding each Buffer on its own (`String(chunk)`)
+  // turns both halves into U+FFFD before the line is ever parsed, corrupting
+  // long replies and diagnostics. One decoder per pipe holds the incomplete
+  // tail until the bytes that finish it arrive; a chunk that is already a
+  // string is left untouched. The two decoders are independent so stdout and
+  // stderr can interleave without corrupting each other.
+  const stdoutDecoder = new StringDecoder('utf8');
+  const stderrDecoder = new StringDecoder('utf8');
+
+  /** Append decoded stdout text and dispatch every newly completed line. */
+  function readStdout(text) {
+    buffer += text;
     const lines = buffer.split('\n');
     buffer = lines.pop() ?? '';
     for (const line of lines) {
@@ -28,9 +41,20 @@ export function createStdioJsonRpc({ child, onNotification, onServerRequest, onD
       }
       dispatch(message);
     }
-  });
+  }
 
-  child.stderr?.on('data', (chunk) => onDiagnostic?.({ message: String(chunk).trim() }));
+  child.stdout?.on('data', (chunk) => readStdout(stdoutDecoder.write(chunk)));
+  // Flush the last partly decoded code point. Framing is newline-delimited, so
+  // whatever remains in `buffer` was never terminated and is not a message.
+  child.stdout?.on('end', () => readStdout(stdoutDecoder.end()));
+
+  function emitStderr(text) {
+    const trimmed = text.trim();
+    if (trimmed) onDiagnostic?.({ message: trimmed });
+  }
+
+  child.stderr?.on('data', (chunk) => emitStderr(stderrDecoder.write(chunk)));
+  child.stderr?.on('end', () => emitStderr(stderrDecoder.end()));
 
   /**
    * Every way this transport can die ends here. A dying child reports through
