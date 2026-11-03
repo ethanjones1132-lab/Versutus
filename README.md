@@ -87,10 +87,11 @@ adds two client-side approximations rather than the simultaneous
 listen-while-speaking audio a provider-backed realtime session would take:
 **interrupt-by-speaking**, a short on-device voice-onset detector that stops
 playback when you start talking, and **progressive sentence speech**, which
-speaks each completed sentence while later ones are still streaming. It streams
-no audio to any server and offers no verbal backchanneling. Recognition runs on
-the device or the platform's own speech service; only the recognized **text**
-and the ordinary text reply cross the already-paired connection. No backend is
+speaks each completed sentence while later ones are still streaming. It offers
+no verbal backchanneling. Microphone audio is sent as PCM frames to the
+already-paired Gate for the duration of the call; recognition runs on the
+device or the platform's own speech service, and the recognized **text** plus
+the ordinary text reply also cross that same paired connection. No backend is
 named or privileged — every connected text-chat surface can start a call, and
 tool calls still pass through the existing approval machinery.
 
