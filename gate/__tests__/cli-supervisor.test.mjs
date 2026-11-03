@@ -559,6 +559,127 @@ test('a run past lifecycle.maxRunSeconds is stopped by name and frees the slot',
   }
 });
 
+test('a timed-out run holds the slot until the killed child has really exited', async () => {
+  // The watchdog's ownership boundary: a kill request is not an exit. This job
+  // resolves as soon as the kill is issued (as terminate() in the fake above
+  // still does), while the child signals its own exit only when the barrier
+  // below opens. The verdict and the free slot must wait for that signal, so
+  // the next run can never start beside a process this run still owns.
+  let releaseKill;
+  const killed = new Promise((resolve) => { releaseKill = resolve; });
+  let released = false;
+  const hung = new EventEmitter();
+  hung.stdout = new EventEmitter();
+  hung.stderr = new EventEmitter();
+  hung.exitCode = null;
+  hung.signalCode = null;
+  hung.kill = () => { releaseKill(); return true; };
+  const releaseExit = () => {
+    if (released) return;
+    released = true;
+    hung.signalCode = 'SIGTERM';
+    hung.emit('exit', null, 'SIGTERM');
+    hung.emit('close', null, 'SIGTERM');
+  };
+  const keepalive = setInterval(() => {}, 25);
+  let drainedEvents = null;
+  const { service, cleanup } = await makeService({
+    lifecycle: { startup: 'on_demand', idleTimeoutSeconds: 30, maxConcurrentRuns: 1, maxRunSeconds: 1 },
+  }, {
+    jobFactory: () => ({
+      terminated: false,
+      children: [],
+      add(child) { this.children.push(child); },
+      async terminate() {
+        this.terminated = true;
+        for (const child of this.children) child.kill();
+      },
+    }),
+    spawnImpl: (command, args) => {
+      if (/SLEEP:/.test(args.at(-1) ?? '')) return hung;
+      // The run admitted after the boundary is an ordinary, quick CLI.
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.exitCode = null;
+      child.signalCode = null;
+      child.kill = () => true;
+      queueMicrotask(() => {
+        child.exitCode = 0;
+        child.emit('exit', 0, null);
+        child.emit('close', 0, null);
+      });
+      return child;
+    },
+  });
+  try {
+    const handle = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'prompt',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: { prompt: 'SLEEP:30000' },
+    });
+    let drained = false;
+    drainedEvents = collectEvents(service, handle.runId, 'approve').then((events) => {
+      drained = true;
+      return events;
+    });
+    // The watchdog fires at the one-second ceiling and asks for the kill.
+    await killed;
+    // Let the resolved terminate() and the supervisor's continuation run. The
+    // child has not exited, so the run must still own the environment.
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(service.runs.get(handle.runId).done, false, 'the verdict overtook the child exit');
+    assert.equal(drained, false, 'the terminal event overtook the child exit');
+    assert.equal(service.liveRunCount(), 1, 'the slot was freed before the child was gone');
+    await assert.rejects(
+      () => service.startRun({
+        environmentId: 'codex-local',
+        operation: 'status',
+        providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+        workspaceId: 'default',
+        sandbox: 'read_only',
+        input: {},
+      }),
+      (error) => {
+        assert.equal(error.code, 'busy');
+        assert.match(error.message, new RegExp(`task ${handle.runId} has not finished yet`));
+        return true;
+      },
+    );
+    releaseExit();
+    const events = await drainedEvents;
+    const terminal = events.at(-1);
+    assert.equal(terminal.type, 'run.failed');
+    assert.match(terminal.payload.message, /time limit/);
+    assert.equal(
+      events.filter((event) => /^run\.(completed|failed|cancelled)$/.test(event.type)).length,
+      1,
+      'exactly one terminal event for the timed-out run',
+    );
+    assert.equal(hung.signalCode, 'SIGTERM', 'the child is observably dead before the verdict');
+    assert.equal(service.liveRunCount(), 0, 'the observed exit releases the slot');
+    // Only now may the next run start, and it completes normally.
+    const next = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'status',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: {},
+    });
+    const nextEvents = await collectEvents(service, next.runId);
+    assert.equal(nextEvents.at(-1).type, 'run.completed');
+  } finally {
+    releaseExit();
+    await drainedEvents?.catch(() => {});
+    clearInterval(keepalive);
+    await cleanup();
+  }
+});
+
 test('a refused probe names the reason and the path, not a bare state word', async () => {
   const { service, cleanup } = await makeService({
     executable: { path: join(tmpdir(), 'gate-cli-sup-missing', 'no-such-cli.exe') },

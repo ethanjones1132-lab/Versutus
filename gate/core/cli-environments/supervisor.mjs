@@ -802,6 +802,10 @@ export class CliEnvironmentService {
     // could stop. Same shape as stopTimedOutRun below.
     try {
       await run.job.terminate();
+      // A resolved terminate() only says the kill was requested. Ownership of
+      // the child does not end until that child has actually exited, so the
+      // verdict and the freed slot must not overtake it.
+      await this.awaitChildExit(run.child);
     } finally {
       this.finish(run, 'run.cancelled', { reason: 'cancelled' });
     }
@@ -819,6 +823,11 @@ export class CliEnvironmentService {
     run.nativeCancel = true;
     try {
       await run.job.terminate();
+      // Same boundary as cancel(): a killed child is not gone until its exit
+      // is observed. Emitting run.failed or freeing the slot earlier would
+      // claim a teardown that has not happened yet and let the next run start
+      // beside the process this one still owns.
+      await this.awaitChildExit(run.child);
     } finally {
       this.finish(run, 'run.failed', {
         message:
@@ -826,6 +835,39 @@ export class CliEnvironmentService {
           'raise or remove lifecycle.maxRunSeconds on the environment to allow longer tasks',
       });
     }
+  }
+
+  /**
+   * Resolve once this run's own child has really exited.
+   *
+   * `terminate()` stops the tree, but its resolution is the end of the kill
+   * request, not proof that the child is gone: on Windows `taskkill` returns
+   * and `child.kill()` only signals, while the parent's `exit` event (and the
+   * `exitCode`/`signalCode` it carries) arrives on a later loop turn. Waiting
+   * here is what keeps the terminal event and the environment's slot behind
+   * the teardown they claim. `close` is the fallback for a child that failed to
+   * spawn and will never emit `exit`; whichever fires first wins and both
+   * listeners are removed. A run still waiting for approval has no child yet.
+   */
+  async awaitChildExit(child) {
+    if (!child) return;
+    // A real ChildProcess always carries these (null while it runs), and so
+    // must any double that claims to model one. A plain emitter without either
+    // has no exit to observe, so waiting would hang forever rather than prove
+    // anything.
+    if (!('exitCode' in child) && !('signalCode' in child)) return;
+    if (child.exitCode !== null && child.exitCode !== undefined) return;
+    if (child.signalCode !== null && child.signalCode !== undefined) return;
+    if (typeof child.once !== 'function') return;
+    await new Promise((resolve) => {
+      const settle = () => {
+        child.removeListener?.('exit', settle);
+        child.removeListener?.('close', settle);
+        resolve();
+      };
+      child.once('exit', settle);
+      child.once('close', settle);
+    });
   }
 
   async wait(runId) {
