@@ -44,7 +44,7 @@ export const VOICE_ENGINE_ROWS: VoiceEngineRow[] = [
   {
     id: 'phone',
     label: 'This phone only',
-    summary: 'On-device recognition and speech. Audio never leaves the phone.',
+    summary: 'On-device recognition and speech. Recognition can use the platform speech service, so audio is not guaranteed to stay on the phone.',
     disclosure: HANDSFREE_DISCLOSURE,
   },
 ];

@@ -47,6 +47,13 @@ describe('the engine rows Settings and the start sheet share', () => {
     expect(voiceEngineDisclosure('phone')).toBe(HANDSFREE_DISCLOSURE);
   });
 
+  test('the phone summary does not claim audio never leaves the phone', () => {
+    const phone = VOICE_ENGINE_ROWS.find((row) => row.id === 'phone');
+    expect(phone?.summary).not.toContain('never leaves the phone');
+    expect(phone?.summary).toContain('platform speech service');
+    expect(phone?.summary).toContain('not guaranteed to stay on the phone');
+  });
+
   test('an unknown preference still shows the phone disclosure, never a blank', () => {
     expect(voiceEngineDisclosure('grok' as never)).toBe(HANDSFREE_DISCLOSURE);
   });
