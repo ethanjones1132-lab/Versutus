@@ -57,7 +57,8 @@ export type HandsfreeStartResult =
   | 'start-timed-out'
   | 'call-torn-down-while-starting'
   | 'native-session-unavailable'
-  | 'unavailable';
+  | 'native-session-rejected'
+  | 'start-failed-unexpectedly';
 
 export type HandsfreeStartFailure = Exclude<HandsfreeStartResult, 'started'>;
 
@@ -99,7 +100,8 @@ export const HANDSFREE_START_FAILURES: readonly HandsfreeStartFailure[] = [
   'start-timed-out',
   'call-torn-down-while-starting',
   'native-session-unavailable',
-  'unavailable',
+  'native-session-rejected',
+  'start-failed-unexpectedly',
 ];
 
 export type HandsfreeStartEvaluation = {
@@ -198,6 +200,26 @@ function errorCode(error: unknown): string | undefined {
   if (!error || typeof error !== 'object' || !('code' in error)) return undefined;
   const code = error.code;
   return typeof code === 'string' && code.trim() ? code.trim() : undefined;
+}
+
+/**
+ * Map the phone-native start answer. A rejection is not the service answering
+ * `'unavailable'`: one never produced an answer at all. They leave the operator
+ * with different things to try, so they must not share a code.
+ */
+export function mapNativeSessionStartFailure(
+  outcome: 'permission-denied' | 'unavailable',
+  rejected = false,
+  rejection?: unknown,
+): { result: HandsfreeStartFailure; detail?: string } {
+  if (outcome === 'permission-denied') return { result: 'permission-denied' };
+  if (rejected) {
+    return {
+      result: 'native-session-rejected',
+      detail: errorMessage(rejection === undefined ? 'the native start was rejected' : rejection),
+    };
+  }
+  return { result: 'native-session-unavailable' };
 }
 
 /** Map a thrown `voice.session.start` into a named reason. */

@@ -18,6 +18,7 @@ import { HANDSFREE_START_TIMEOUT_MS, isStartTimeout, startDeadline } from '@/lib
 import {
   logHandsfreeStart,
   mapGateSessionStartFailure,
+  mapNativeSessionStartFailure,
   parseVoiceSessionGrant,
   type GateVoiceGrant,
   type HandsfreeStartAttempt,
@@ -248,6 +249,10 @@ export async function openGateVoiceSession(
 
     if (input.startSession) {
       let sessionOutcome: 'started' | 'permission-denied' | 'unavailable';
+      // A rejection is the native call's own failure, not the service answering
+      // `'unavailable'`. Held separately so the two failures get different codes.
+      let sessionRejected = false;
+      let rejection: unknown;
       try {
         nativeInvoked = true;
         sessionOutcome = await deadline.guard(
@@ -257,24 +262,19 @@ export async function openGateVoiceSession(
       } catch (error) {
         // A timeout is rethrown and cancelled once by the outer handler,
         // together with the grant release. A rejection is the native call's
-        // own failure, mapped to unavailable below.
+        // own failure, named below.
         if (isStartTimeout(error)) throw error;
         sessionOutcome = 'unavailable';
+        sessionRejected = true;
+        rejection = error;
       }
       if (sessionOutcome !== 'started') {
         // The start did not take: cancel the exact native attempt so a late
         // answer cannot open a microphone during the retry this refusal invites.
         cancelNativeStart(input.cancelStartSession, startId);
         await stopGrantedSession(input.gatewayRequest, parsed.voiceSessionId, deadline);
-        return finish(
-          {
-            result: sessionOutcome === 'permission-denied'
-              ? 'permission-denied'
-              : 'native-session-unavailable',
-          },
-          log,
-          { engine: parsed.engine },
-        );
+        const native = mapNativeSessionStartFailure(sessionOutcome, sessionRejected, rejection);
+        return finish(native, log, { engine: parsed.engine });
       }
     }
 

@@ -242,7 +242,7 @@ describe('an ended or refused call explains itself', () => {
     expect(new Set(copy).size).toBe(reasons.length);
     expect(new Set([
       handsfreeStartResultCopy('permission-denied'),
-      handsfreeStartResultCopy('unavailable'),
+      handsfreeStartResultCopy('start-failed-unexpectedly'),
       handsfreeStartResultCopy('refused'),
       handsfreeStartResultCopy('identity-unavailable'),
     ]).size).toBe(4);
@@ -253,6 +253,17 @@ describe('an ended or refused call explains itself', () => {
     expect(screen).toContain('handsfreeEndReasonCopy(handsfreeLastEndReason)');
     expect(screen).toMatch(/\[handsfreeCallsEnded, handsfreeLastEndReason\]/);
     expect(screen).toContain('handsfreeStartResultCopy(attempt.result');
+  });
+
+  test('a throw the start path did not name is reported as unexpected, not as an unavailable service', () => {
+    // The sheet used to collapse every unexpected throw into the retired
+    // generic code, which blamed the call service for a bug in Versutus.
+    const at = screen.indexOf('const handleStartCall = useCallback(');
+    const handler = screen.slice(at, screen.indexOf('}, [activeGateway, botVoice', at));
+    const catchBlock = handler.slice(handler.indexOf('} catch'));
+    expect(catchBlock).toContain("handsfreeStartResultCopy('start-failed-unexpectedly'");
+    expect(catchBlock).not.toContain("handsfreeStartResultCopy('unavailable'");
+    expect(handsfreeStartResultCopy('start-failed-unexpectedly')).toMatch(/unexpected/i);
   });
 });
 

@@ -8,7 +8,7 @@
 // used instead (§4.2), so a fallback is never silent.
 
 import { requireDevice } from '../push-rpc.mjs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { codexRealtimeStatus } from './codex-status.mjs';
 
 /**
@@ -272,6 +272,15 @@ function rpcError(message, status, code) {
   return error;
 }
 
+/**
+ * A stable, non-reversible handle for a log line. A raw device id is an
+ * identifier the operator does not need in gate.log, and the same phone must
+ * still be greppable across attempts, so the tag is a fixed hash prefix.
+ */
+function deviceTag(deviceId) {
+  return createHash('sha256').update(String(deviceId)).digest('hex').slice(0, 12);
+}
+
 /** `auto` prefers `local`, then `codex`; `phone` never runs on the Gate. */
 function readyEngines(engines) {
   return ['local', 'codex'].filter((id) => engines[id]?.state === 'ready');
@@ -364,7 +373,21 @@ export function createVoiceRpc({
     },
 
     'voice.session.start': async (params = {}, ctx) => {
+      // The attempt is logged before anything can fail — including the device
+      // grant — so a refused start still says which phone asked for which
+      // engine and thread. The device is a fingerprint, and no token, secret or
+      // raw device id is written.
+      const requested = params?.engine ?? params?.thread?.voiceEngine ?? 'auto';
+      const claimedDevice = ctx?.deviceId ?? params?.deviceId ?? 'unknown';
+      const threadKind = params?.thread?.kind ?? 'unknown';
+      const threadSession = params?.thread?.sessionId ?? 'none';
+      log(
+        `voice.session.start attempt device=${deviceTag(claimedDevice)} engine=${requested} thread=${threadKind} session=${threadSession}`,
+      );
+
       let deviceId = 'unknown';
+      let engineLabel = requested;
+      let voiceSessionId = 'none';
       try {
         deviceId = requireDevice(ctx, params);
         if (!validThread(params.thread)) {
@@ -377,7 +400,6 @@ export function createVoiceRpc({
         const state = decorate(capabilities());
         // `auto` means the Bot's own preference when it carries one (§4.9); an
         // explicit request from the phone still wins.
-        const requested = params.engine ?? params.thread?.voiceEngine ?? 'auto';
         const choice = chooseEngine(requested, state.engines);
         if (!choice) {
           const reason = params.engine && params.engine !== 'auto'
@@ -385,8 +407,11 @@ export function createVoiceRpc({
             : state.engines.local?.reason ?? 'No PC voice engine is installed.';
           throw rpcError(reason, 409, 'no_engine');
         }
+        // What the call actually ran on, so the failure line names the engine
+        // the Gate chose rather than only what the phone asked for.
+        engineLabel = choice.engine;
 
-        const voiceSessionId = makeId();
+        voiceSessionId = makeId();
         const started = registry.create({
           voiceSessionId,
           deviceId,
@@ -407,7 +432,7 @@ export function createVoiceRpc({
           Promise.resolve(lease.backend?.()).catch(() => undefined);
         }
 
-        log(`voice.session.start ok device=${deviceId} engine=${choice.engine} session=${voiceSessionId}`);
+        log(`voice.session.start ok device=${deviceTag(deviceId)} engine=${choice.engine} session=${voiceSessionId}`);
         return {
           voiceSessionId,
           engine: choice.engine,
@@ -417,7 +442,14 @@ export function createVoiceRpc({
           output: { ...OUTPUT },
         };
       } catch (error) {
-        log(`voice.session.start fail device=${deviceId} code=${error.code ?? 'rpc_error'} ${error.message}`);
+        const code = error?.code ?? 'rpc_error';
+        const reason = error?.message ?? String(error);
+        // Before the grant there is no canonical id; the attempt's claim is the
+        // only device this failure can name, and it is hashed either way.
+        const loggedDevice = deviceId === 'unknown' ? claimedDevice : deviceId;
+        log(
+          `voice.session.start fail device=${deviceTag(loggedDevice)} engine=${engineLabel} session=${voiceSessionId} code=${code} reason=${reason}`,
+        );
         throw error;
       }
     },

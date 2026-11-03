@@ -184,7 +184,9 @@ describe('handsfreeStartResultCopy', () => {
       'media-start-failed',
       'call-in-progress',
       'not-paired',
-      'unavailable',
+      'start-timed-out',
+      'call-torn-down-while-starting',
+      'start-failed-unexpectedly',
     ] as const;
     for (const reason of pcReasons) {
       const line = handsfreeStartResultCopy(reason, { transport: 'gate', engine: 'local' });
@@ -194,7 +196,8 @@ describe('handsfreeStartResultCopy', () => {
 
   test('only the on-device recognizer failure mentions a speech recognition service', () => {
     expect(handsfreeStartResultCopy('phone-recognition-unavailable')).toMatch(/speech recognition service/);
-    expect(handsfreeStartResultCopy('unavailable', { transport: 'phone' })).not.toMatch(/speech recognition/i);
+    expect(handsfreeStartResultCopy('native-session-unavailable', { transport: 'phone' })).not.toMatch(/speech recognition/i);
+    expect(handsfreeStartResultCopy('native-session-rejected', { transport: 'phone' })).not.toMatch(/speech recognition/i);
   });
 
   test('carries the Gate’s own reason when it named one', () => {

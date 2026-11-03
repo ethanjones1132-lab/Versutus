@@ -54,6 +54,7 @@ import {
   handsfreeDeviceCanOfferCall,
   handsfreeTransportForCall,
   logHandsfreeStart,
+  mapNativeSessionStartFailure,
   type GateVoiceGrant,
   type HandsfreeStartAttempt,
   type HandsfreeStartResult,
@@ -1414,6 +1415,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       // this start and cannot reach the service a newer retry owns.
       const startId = newHandsfreeStartId();
       let outcome: HandsfreeStartOutcome;
+      // A rejection is the native call's own failure, not the service answering
+      // `'unavailable'`; the two get different codes and different sentences.
+      let nativeRejected = false;
+      let nativeError: unknown;
       try {
         outcome = await deadline.guard(
           'the microphone prompt',
@@ -1438,6 +1443,8 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
           return { result: 'start-timed-out', detail: err.message };
         }
         outcome = 'unavailable';
+        nativeRejected = true;
+        nativeError = err;
       }
       deadline.dispose();
       if (outcome !== 'started') {
@@ -1446,9 +1453,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         targetRef.current = null;
         threadRef.current = undefined;
         dispatch({ type: 'start-refused' });
-        const result = outcome === 'permission-denied' ? 'permission-denied' : 'native-session-unavailable';
-        logHandsfreeStart({ result, transport: 'phone' });
-        return { result };
+        const native = mapNativeSessionStartFailure(outcome, nativeRejected, nativeError);
+        logHandsfreeStart({ ...native, transport: 'phone' });
+        return native;
       }
       if (sessionRef.current.phase !== 'starting') {
         // A fatal event arrived while the session was opening and has already

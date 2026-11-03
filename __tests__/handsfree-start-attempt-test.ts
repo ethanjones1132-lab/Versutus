@@ -164,6 +164,57 @@ describe('openGateVoiceSession against a fake Gate', () => {
     expect(calls).toEqual(['voice.session.start', 'voice.session.stop']);
   });
 
+  // The split this patch exists for: a native start that REJECTED never told
+  // the operator anything, and the sheet called it an unavailable service. A
+  // service that answered `'unavailable'` and a call that threw are different
+  // failures with different sentences, so the rejection must not land on the
+  // same code. The grant is still released and the exact native attempt is
+  // cancelled, exactly as for any other failed start.
+  test('a native start that rejects is named rejected, not an unavailable service', async () => {
+    const calls: string[] = [];
+    const canceled: string[] = [];
+    const attempt = await openGateVoiceSession({
+      gatewayUrl: 'http://127.0.0.1:8760',
+      gatewayToken: 'tok',
+      target,
+      device: { deviceId: 'phone-abc12345' },
+      gatewayRequest: async (method) => {
+        calls.push(method);
+        if (method === 'voice.session.start') return grant;
+        return { stopped: true };
+      },
+      startSession: async () => {
+        throw new Error('the native call service threw');
+      },
+      cancelStartSession: (startId) => {
+        canceled.push(startId);
+      },
+      startGateMedia: async () => true,
+      startId: 'hs-native-reject',
+      log: () => undefined,
+    });
+    expect(attempt.result).toBe('native-session-rejected');
+    expect(attempt.result).not.toBe('native-session-unavailable');
+    expect(attempt.detail).toMatch(/the native call service threw/);
+    expect(canceled).toEqual(['hs-native-reject']);
+    expect(calls).toEqual(['voice.session.start', 'voice.session.stop']);
+  });
+
+  test('a native start that answers unavailable keeps its own code', async () => {
+    const attempt = await openGateVoiceSession({
+      gatewayUrl: 'http://127.0.0.1:8760',
+      gatewayToken: 'tok',
+      target,
+      device: { deviceId: 'phone-abc12345' },
+      gatewayRequest: async (method) => (method === 'voice.session.start' ? grant : { stopped: true }),
+      startSession: async () => 'unavailable',
+      startGateMedia: async () => true,
+      log: () => undefined,
+    });
+    expect(attempt.result).toBe('native-session-unavailable');
+    expect(attempt.detail).toBeUndefined();
+  });
+
   test('a thread with no session never reaches the media socket', async () => {
     const error = Object.assign(new Error('thread must name a session'), { code: 'invalid_request' });
     let media = 0;

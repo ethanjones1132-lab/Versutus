@@ -165,11 +165,11 @@ export function handsfreeStartResultCopy(
     case 'permission-denied':
       return 'Versutus needs the microphone for a call. Allow it in Settings, then start again.';
     case 'identity-unavailable':
-      return DEVICE_IDENTITY_FAILURE;
+      return `${DEVICE_IDENTITY_FAILURE} Restart Versutus, then try again.`;
     case 'refused':
       return 'A call cannot start right now. Reconnect the chat and try again.';
     case 'no-native-module':
-      return 'This build of Versutus cannot open a call on this phone.';
+      return 'This build of Versutus cannot open a call on this phone. Update Versutus, or use a build that includes hands-free calling.';
     case 'availability-unreadable':
       return 'This phone would not say whether it can take a call. Try again.';
     case 'phone-recognition-unavailable':
@@ -177,7 +177,7 @@ export function handsfreeStartResultCopy(
     case 'phone-synthesis-unavailable':
       return 'This phone cannot speak a reply. Check that a text-to-speech engine is installed and enabled.';
     case 'no-gateway-url':
-      return 'Versutus does not have this PC’s address, so it cannot start a call on the host.';
+      return 'Versutus does not have this PC’s address, so it cannot start a call on the host. Reconnect to the PC, then try again.';
     case 'device-params-failed':
       return 'This phone could not name itself to the PC. Try reconnecting, then start again.';
     case 'no-session':
@@ -192,9 +192,12 @@ export function handsfreeStartResultCopy(
         detail,
       );
     case 'session-start-failed':
-      return withDetail('The PC would not open the call.', detail);
+      return withDetail(
+        'The call request to the PC failed. Check the connection to the PC, then try again.',
+        detail,
+      );
     case 'session-grant-incomplete':
-      return 'The PC opened a call without a media path, so this phone could not join it.';
+      return 'The PC opened a call without a media path, so this phone could not join it. Try again.';
     case 'media-start-failed':
       return 'This phone could not open the audio link to the PC. Stay on the same network and try again.';
     case 'start-timed-out':
@@ -208,13 +211,13 @@ export function handsfreeStartResultCopy(
         detail,
       );
     case 'call-torn-down-while-starting':
-      return 'The call ended before it finished opening. The connection dropped or the thread changed.';
+      return 'The call ended before it finished opening. The connection dropped or the thread changed. Start again when you are back on the thread.';
     case 'native-session-unavailable':
-      return 'This phone would not open its call session. Try again.';
-    case 'unavailable':
-      return context.transport === 'gate' || context.engine === 'local' || context.engine === 'codex'
-        ? 'The PC-powered call could not start. Try again; if it keeps failing, check that Versutus on the PC is running.'
-        : 'The call could not start. Try again.';
+      return 'This phone could not open its hands-free call session right now. Bring Versutus to the foreground, then try again.';
+    case 'native-session-rejected':
+      return 'This phone failed to open the call session. Try again, or restart Versutus if it keeps failing.';
+    case 'start-failed-unexpectedly':
+      return 'An unexpected problem in Versutus stopped the call from starting. Try again; if it keeps happening, restart Versutus.';
     default: {
       const _exhaustive: never = result;
       return _exhaustive;

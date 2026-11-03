@@ -228,6 +228,50 @@ test('a session start or failure is written to the Gate log', async () => {
   assert.ok(failing.some((line) => /voice.session.start fail/.test(line) && /no_engine/.test(line)));
 });
 
+// A start that is refused before it can read a session still has to say which
+// phone asked for what. The attempt line is written before the device grant, so
+// a pairing refusal is diagnosable too; the failure line names the engine, the
+// voice session (or none), the code and the Gate's reason.
+test('the start attempt and its failure are logged with engine, session, code and reason', async () => {
+  const lines = [];
+  const { methods } = createVoiceRpc({
+    capabilities: capabilities({ local: 'not-installed', codex: 'disabled' }),
+    log: (line) => lines.push(line),
+  });
+
+  // Refused before any session exists: the attempt line must still be there.
+  await assert.rejects(
+    () => methods['voice.session.start']({ engine: 'auto', thread }, { deviceId: null }),
+    (error) => error.code === 'pairing_required',
+  );
+  await assert.rejects(
+    () => methods['voice.session.start']({ engine: 'auto', thread }, ctx),
+    (error) => error.code === 'no_engine',
+  );
+
+  const attempts = lines.filter((line) => /voice\.session\.start attempt/.test(line));
+  assert.equal(attempts.length, 2, 'one attempt line per start, before anything can fail');
+  assert.match(attempts[0], /engine=auto/);
+  assert.match(attempts[0], /thread=bot/);
+  assert.match(attempts[0], /session=s1/);
+
+  const pairing = lines.find((line) => /voice\.session\.start fail/.test(line) && /code=pairing_required/.test(line));
+  assert.ok(pairing, 'a pairing refusal was not logged');
+  assert.match(pairing, /engine=auto/);
+  assert.match(pairing, /session=none/);
+  assert.match(pairing, /reason=/);
+
+  const engine = lines.find((line) => /voice\.session\.start fail/.test(line) && /code=no_engine/.test(line));
+  assert.ok(engine, 'a missing engine was not logged');
+  assert.match(engine, /engine=auto/);
+  assert.match(engine, /reason=/);
+
+  const startLines = lines.filter((line) => /voice\.session\.start/.test(line));
+  assert.ok(startLines.every((line) => !/tok-|Bearer|token=/i.test(line)));
+  // The device is a stable fingerprint, never the raw identifier the test used.
+  assert.ok(startLines.every((line) => !line.includes('dev-1')));
+});
+
 test('capabilities log the live engine states without a token', async () => {
   const lines = [];
   const { methods } = createVoiceRpc({

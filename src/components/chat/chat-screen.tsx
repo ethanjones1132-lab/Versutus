@@ -173,6 +173,7 @@ import {
 import { pushDeviceParams } from '@/lib/notifications/push-registration';
 import { handsfreeEndReasonCopy, handsfreeStartResultCopy } from '@/lib/voice/handsfree-call-copy';
 import { handsfreeStartBlockerCopy } from '@/lib/voice/handsfree-start-policy';
+import { logHandsfreeStart } from '@/lib/voice/handsfree-start-reason';
 import { loadAppSettings } from '@/lib/settings/app-settings';
 import {
   chooseVoiceEngine,
@@ -1726,8 +1727,16 @@ export function ChatScreen() {
           detail: attempt.detail,
         }),
       );
-    } catch {
-      setCallError(handsfreeStartResultCopy('unavailable', { transport, engine: callEngine?.engine ?? callPreference }));
+    } catch (error) {
+      // The provider names every failure it knows; a throw it did not name is
+      // this screen's to report, and it must not disappear from the phone log.
+      logHandsfreeStart({
+        result: 'start-failed-unexpectedly',
+        transport,
+        engine: callEngine?.engine ?? callPreference,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      setCallError(handsfreeStartResultCopy('start-failed-unexpectedly', { transport, engine: callEngine?.engine ?? callPreference }));
     } finally {
       setCallBusy(false);
     }
