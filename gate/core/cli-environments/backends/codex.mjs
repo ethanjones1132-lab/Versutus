@@ -250,7 +250,7 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeou
       const result = await rpc.request('thread/read', { threadId: sessionId, includeTurns: true });
       const items = collectItems(result);
       const mapped = items.map(toGatewayMessage).filter((m) => m.content.length > 0);
-      return typeof limit === 'number' ? mapped.slice(-limit) : mapped;
+      return typeof limit === 'number' ? (limit === 0 ? [] : mapped.slice(-limit)) : mapped;
     },
 
     async sendMessage(sessionId, { text, model, signal } = {}) {

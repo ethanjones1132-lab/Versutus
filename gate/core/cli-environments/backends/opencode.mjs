@@ -1383,11 +1383,11 @@ export function createOpenCodeBackend({
       if (major >= 2) {
         const messages = await readMessagesV2(sessionId);
         const mapped = messages.map(toGatewayMessageV2);
-        return typeof limit === 'number' ? mapped.slice(-limit) : mapped;
+        return typeof limit === 'number' ? (limit === 0 ? [] : mapped.slice(-limit)) : mapped;
       }
       const messages = await call(`/session/${encodeURIComponent(sessionId)}/message`);
       const mapped = (Array.isArray(messages) ? messages : []).map(toGatewayMessage);
-      return typeof limit === 'number' ? mapped.slice(-limit) : mapped;
+      return typeof limit === 'number' ? (limit === 0 ? [] : mapped.slice(-limit)) : mapped;
     },
 
     /**

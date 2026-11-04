@@ -174,6 +174,11 @@ export class OAuthManager {
    * token keeps the one it already has.
    */
   tokenRecord(payload, previous) {
+    if (typeof payload?.access_token !== 'string' || payload.access_token.length === 0) {
+      const error = new Error('token response is missing access_token');
+      error.code = 'missing_access_token';
+      throw error;
+    }
     return {
       accessToken: payload.access_token,
       refreshToken: payload.refresh_token || previous?.refreshToken,

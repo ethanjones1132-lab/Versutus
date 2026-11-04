@@ -8,6 +8,9 @@ export function groupSessionTitle(name) {
 
 export function validateGroup({ name, memberIds }) {
   if (!name || !String(name).trim()) return { ok: false, error: 'name required' };
+  if (!Array.isArray(memberIds) || memberIds.some((id) => typeof id !== 'string' || id.trim().length === 0)) {
+    return { ok: false, error: 'memberIds must be an array of non-empty strings' };
+  }
   const unique = [...new Set(memberIds ?? [])];
   if (unique.length < 2) return { ok: false, error: 'need at least 2 bots' };
   if (unique.length > 6) return { ok: false, error: 'at most 6 bots' };

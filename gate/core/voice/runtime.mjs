@@ -353,7 +353,14 @@ export function voiceDoctor({ paths, spawnSync = nodeSpawnSync, env = process.en
     checks.push({ name: 'imports', ok: false, detail: (probe.stderr || 'probe failed').trim() });
     return { ok: false, checks };
   }
-  const info = JSON.parse(probe.stdout);
+  let info;
+  try {
+    info = JSON.parse(probe.stdout);
+  } catch {
+    const firstLine = String(probe.stdout ?? '').split(/\r?\n/, 1)[0].trim();
+    checks.push({ name: 'probe', ok: false, detail: firstLine || 'probe returned invalid JSON' });
+    return { ok: false, checks };
+  }
   checks.push({ name: 'imports', ok: !info.error, detail: info.error ?? JSON.stringify(info.versions) });
   try {
     const lock = readModelsLock(paths);

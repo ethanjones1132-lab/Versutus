@@ -6,6 +6,7 @@ import { readJsonFile, writeFileAtomic } from './atomic-file.mjs';
 export class TokenStore {
   #path;
   #cached = null;
+  #corruptQuarantined = false;
 
   constructor(path) {
     this.#path = path;
@@ -24,7 +25,10 @@ export class TokenStore {
       // A corrupt file means the token on the phone no longer matches anything
       // we can recover; minting a replacement is the only way forward, but it
       // must be loud and the original must survive as the recovery path.
-      await this.#quarantineCorrupt(result.error);
+      if (!this.#corruptQuarantined) {
+        this.#corruptQuarantined = true;
+        await this.#quarantineCorrupt(result.error);
+      }
       return null;
     }
     this.#cached = result.value.token;

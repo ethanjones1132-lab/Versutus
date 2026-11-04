@@ -1,4 +1,5 @@
 import { writeFileSync } from 'node:fs';
+import { execPath } from 'node:process';
 
 export const TASK_NAME = 'VersutusGate';
 
@@ -21,7 +22,7 @@ export const TASK_NAME = 'VersutusGate';
 export function buildTaskDefinition({
   user,
   codeRoot = 'C:\\Projects\\Versutus',
-  nodeExe = 'C:\\Program Files\\nodejs\\node.exe',
+  nodeExe = execPath,
   gateHome,
   host,
   port,

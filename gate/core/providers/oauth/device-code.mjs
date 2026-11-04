@@ -26,6 +26,7 @@ export async function pollDeviceToken({ tokenEndpoint, clientId, deviceCode, fet
     const payload = await response.json().catch(() => ({}));
     const error = new Error(payload.error || `device token failed: ${response.status}`);
     error.code = payload.error;
+    error.status = response.status;
     throw error;
   }
   return response.json();
@@ -52,6 +53,10 @@ export async function pollUntilAuthorized({
       }
       if (error.code === 'slow_down') {
         waitMs += 5000;
+        await sleep(waitMs);
+        continue;
+      }
+      if (!error.code || error.status >= 500) {
         await sleep(waitMs);
         continue;
       }

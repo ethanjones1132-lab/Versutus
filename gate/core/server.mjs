@@ -4731,7 +4731,7 @@ export async function createGate(config = {}) {
           return;
         }
         const providerId = matches[0]?.providerId
-          ?? state.providers.find((item) => item.config.models.includes(body?.model))?.id;
+          ?? state.providers.find((item) => (item.config.models || []).includes(body?.model))?.id;
         if (!providerId) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: `No provider declares model "${body?.model}"`, code: 'unknown_model' } }));

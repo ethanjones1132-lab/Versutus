@@ -35,6 +35,7 @@ function validBotIds(value) {
 
 function validQuietHours(value) {
   if (value === undefined) return undefined;
+  if (value === null) return null;
   if (!isRecord(value)
     || !Number.isInteger(value.startMinutes)
     || !Number.isInteger(value.endMinutes)
