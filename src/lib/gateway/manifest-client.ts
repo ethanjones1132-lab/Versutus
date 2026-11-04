@@ -58,11 +58,13 @@ function isBotRow(value: unknown): value is PublicBot {
 /**
  * The rows of a `GET <bots>` answer, or a refusal.
  *
- * The transport hands back the body verbatim when it is not JSON, so an
- * OpenCode 2.x server answering an unknown route with an HTML page used to
- * arrive here as the string `<!doctype html>…` — not an array, no `.data`, and
- * therefore `[]`. The roster painted "No bots" and the remembered copy was
- * overwritten with that emptiness, which is a claim the Gate never made.
+ * An HTML answer never gets here — the transport refuses it first, naming
+ * the request, the status and what the page said (http-transport.ts,
+ * `htmlAnswerError`). This guard is the second line: a body that is not a
+ * list of Bots (a plain-text answer, a JSON envelope holding something
+ * else) must not be read as `[]`. The roster painted "No bots" and the
+ * remembered copy was overwritten with that emptiness, which is a claim the
+ * Gate never made.
  *
  * Only a list of Bots (bare, or in the Gate's `{ object, data }` envelope) is
  * believed. An empty list still is: zero Bots is a real answer, an unreadable

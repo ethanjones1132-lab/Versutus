@@ -1,6 +1,12 @@
 import { GatewayHttpError, isConnectionError, StreamStalledError } from '@/lib/gateway/errors';
 import { hostnameOf, withHostLookupRetry } from '@/lib/gateway/host-lookup';
-import { errorCodeFromHttpBody, messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
+import {
+  errorCodeFromHttpBody,
+  isHtmlAnswer,
+  messageForHtmlAnswer,
+  messageFromHttpErrorBody,
+  pageSnippet,
+} from '@/lib/gateway/http-error-body';
 import { installStreamingFetchHostFallback } from '@/lib/net/streaming-fetch';
 
 export const DEFAULT_TIMEOUT_MS = 30000;
@@ -13,7 +19,8 @@ export type HttpTransportOptions = {
   alternateIpv4?: string[];
   /**
    * Diagnostic hook for the connection monitor: called when a request times
-   * out, fails with a connection error, or a stream stalls. Never throws.
+   * out, fails with a connection error, a stream stalls, or an answer arrives
+   * as a web page instead of JSON. Never throws.
    */
   onNetworkTrouble?: (reason: string) => void;
 };
@@ -115,7 +122,11 @@ export class HttpTransport {
     }
   }
 
-  /** When the gateway last returned any response. Drives liveness. */
+  /**
+   * When the gateway last gave us a real answer. Drives liveness — and a web
+   * page in place of the API is deliberately NOT an answer: a portal or
+   * proxy must not stamp contact and keep the monitor forgiving failed probes.
+   */
   get lastContactAt(): number {
     return this.contactAt;
   }
@@ -136,6 +147,28 @@ export class HttpTransport {
     } catch {
       // A misbehaving hook must not break the request it describes.
     }
+  }
+
+  /**
+   * An answer that is a web page is not the gateway answering: no liveness
+   * credit (a portal must not keep the monitor's failed probes forgiven), the
+   * network-trouble seam is fed so the monitor re-verifies now, and the
+   * refusal names the request, the status and what the page said — with a
+   * next step, never the markup.
+   */
+  private htmlAnswerError(
+    method: string,
+    path: string,
+    status: number,
+    body: string,
+  ): GatewayHttpError {
+    this.noteNetworkTrouble(`${method} ${path} answered HTTP ${status} with a web page instead of JSON`);
+    return new GatewayHttpError(
+      messageForHtmlAnswer(method, path, status, body),
+      status,
+      'html_answer',
+      pageSnippet(body) || undefined,
+    );
   }
 
   async request<T>(
@@ -161,11 +194,21 @@ export class HttpTransport {
             body: body ? JSON.stringify(body) : undefined,
             signal: controller.signal,
           });
-          // Any HTTP response proves the gateway is alive, including a rejection.
-          this.contactAt = Date.now();
+          // Status and content type are validated BEFORE anything parses: a
+          // wrong base URL, an unauthenticated proxy login page, a 404 page
+          // or a captive portal answers this request with HTML, and its body
+          // must never reach JSON.parse (whose parser text is what used to
+          // surface as the operator's error).
+          const contentType = response.headers?.get?.('content-type');
 
           if (!response.ok) {
             const errorText = await response.text().catch(() => '');
+            if (isHtmlAnswer(contentType, errorText)) {
+              throw this.htmlAnswerError(method, path, response.status, errorText);
+            }
+            // Any other HTTP response proves the gateway is alive, including a
+            // rejection: it answered on this address in its own API's dialect.
+            this.contactAt = Date.now();
             throw new GatewayHttpError(
               messageFromHttpErrorBody(errorText, response.status),
               response.status,
@@ -174,6 +217,13 @@ export class HttpTransport {
           }
 
           const text = await response.text();
+          if (isHtmlAnswer(contentType, text)) {
+            throw this.htmlAnswerError(method, path, response.status, text);
+          }
+          // Only a non-page body counts as the gateway answering us. The page
+          // case above earns no contact: stamping it is what kept the header
+          // reading connected while nothing that speaks JSON was reachable.
+          this.contactAt = Date.now();
           try {
             return JSON.parse(text) as T;
           } catch {

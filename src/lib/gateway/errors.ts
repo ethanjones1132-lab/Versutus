@@ -21,6 +21,12 @@ export class GatewayHttpError extends Error {
     message: string,
     readonly status: number,
     readonly code?: string,
+    /**
+     * A short, sanitised excerpt of an answer body that was not the JSON the
+     * app asked for (markup stripped, credential-shaped values redacted). Set
+     * when the refusal quotes what the page said; never a body dump.
+     */
+    readonly bodySnippet?: string,
   ) {
     super(message);
     this.name = 'GatewayHttpError';

@@ -7,11 +7,12 @@ import type { GatewayProfile } from '@/lib/gateway/types';
 /**
  * A roster is a claim about Bots, and only a list of Bots may make it.
  *
- * The transport returns the body verbatim when it is not JSON, so a host that
- * answers its Bot route with an HTML page used to arrive at `listBots` as a
- * string — no array, no `.data`, and therefore `[]`. The roster painted "No
- * bots" and the remembered copy was overwritten with that emptiness even
- * though the Gate never said the roster was empty.
+ * The transport now refuses an HTML answer itself (naming the request, the
+ * status and what the page said), so the shape guard below only ever sees a
+ * body that was not a page — a JSON object where a roster was expected, or
+ * plain text. Either way `listBots` must reject rather than answer `[]`: the
+ * roster painted "No bots" and the remembered copy was overwritten with that
+ * emptiness even though the Gate never said the roster was empty.
  */
 
 const PROFILE: GatewayProfile = {
@@ -82,13 +83,15 @@ describe('ManifestClient bot roster shape', () => {
 
     expect(error).toBeInstanceOf(GatewayHttpError);
     const named = error as GatewayHttpError;
-    expect(named.code).toBe('bot_roster_unreadable');
+    // The transport refuses the page before any roster-shape reading, so the
+    // refusal is its own: it names the request that was answered with markup.
+    expect(named.code).toBe('html_answer');
     // The status is the one the gateway actually answered: it said OK.
     expect(named.status).toBe(200);
     // A neutral sentence: no markup and no parser text leaks to the banner.
     expect(named.message).not.toMatch(/[<>]/);
     expect(named.message).not.toMatch(/unexpected token/i);
-    expect(named.message).toMatch(/Bot list/i);
+    expect(named.message).toContain('GET /v1/bots');
   });
 
   test('a JSON body that is not a roster is refused, not read as zero Bots', async () => {
