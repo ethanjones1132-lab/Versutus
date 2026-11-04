@@ -391,7 +391,12 @@ const PROVIDER_NAMES: Readonly<Record<string, string>> = {
 export function providerDisplayName(provider: string): string {
   const trimmed = provider.trim();
   if (!trimmed) return provider;
-  const known = PROVIDER_NAMES[trimmed.toLowerCase()];
+  // Catalog ids are untrusted, and a bare PROVIDER_NAMES[key] also reads
+  // inherited Object.prototype members ("constructor", "toString",
+  // "__proto__") as if they were known spellings. Only the table's own keys
+  // may match; anything else falls through to the ordinary unknown-id path.
+  const key = trimmed.toLowerCase();
+  const known = Object.hasOwn(PROVIDER_NAMES, key) ? PROVIDER_NAMES[key] : undefined;
   if (known) return known;
   if (trimmed !== trimmed.toLowerCase()) return trimmed;
   return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);

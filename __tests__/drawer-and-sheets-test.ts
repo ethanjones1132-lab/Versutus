@@ -51,6 +51,26 @@ describe('the model sheet', () => {
     expect(providerDisplayName('')).toBe('');
   });
 
+  test('a catalog id that names an Object.prototype member reads as an ordinary unknown id', () => {
+    // Untrusted gateway catalog ids: on a bare PROVIDER_NAMES[key] lookup these
+    // matched inherited Object.prototype members (a function or Object.prototype
+    // itself) instead of falling through to the unknown-id path.
+    expect(providerDisplayName('constructor')).toBe('Constructor');
+    expect(providerDisplayName('toString')).toBe('toString');
+    expect(providerDisplayName('__proto__')).toBe('__proto__');
+    expect(providerDisplayName('valueOf')).toBe('valueOf');
+    for (const id of ['constructor', 'toString', '__proto__', 'valueOf']) {
+      const name = providerDisplayName(id);
+      expect(typeof name).toBe('string');
+      expect(name.length).toBeGreaterThan(0);
+    }
+    // The pre-existing behaviours still hold through the same own-key check.
+    expect(providerDisplayName('DeepSeek')).toBe('DeepSeek'); // an owner's capitals are kept
+    expect(providerDisplayName('  google ')).toBe('Google');
+    expect(providerDisplayName('')).toBe('');
+    expect(providerDisplayName('openai')).toBe('OpenAI');
+  });
+
   test('"Current" in the thread picker is the model the thread runs on, not the Gate default', () => {
     const screen = source('src', 'components', 'chat', 'chat-screen.tsx');
     expect(screen).toContain(
