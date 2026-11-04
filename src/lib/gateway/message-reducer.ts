@@ -88,6 +88,10 @@ export function addStreamingPlaceholder(
       text: '',
       reasoning: undefined,
       toolCalls: undefined,
+      // The replay carries the turn from its first frame, so the activity block
+      // has not appeared yet in THIS text: a stale anchor would place it inside
+      // text that no longer exists.
+      activityAnchor: undefined,
       streaming: true,
       interrupted: false,
       interruptedReason: undefined,
@@ -143,7 +147,7 @@ export function markTurnStreaming(
     interruptedReason: undefined,
     turnId,
     ...(replayFromStart && !stopped
-      ? { text: '', reasoning: undefined, toolCalls: undefined }
+      ? { text: '', reasoning: undefined, toolCalls: undefined, activityAnchor: undefined }
       : {}),
   };
   return copy;
@@ -176,7 +180,19 @@ export function appendReasoningDelta(
   if (idx < 0) return [...messages];
   const copy = [...messages];
   const prev = copy[idx].reasoning ?? '';
-  copy[idx] = { ...copy[idx], reasoning: prev + delta, streaming: !isStoppedTurn(copy[idx]) };
+  // The block first holds something on this delta: this is the text offset the
+  // opener belongs at. Recorded once, so later thoughts and tool cards join the
+  // same block where the FIRST piece of activity arrived.
+  const anchor =
+    copy[idx].activityAnchor === undefined && !prev
+      ? { activityAnchor: copy[idx].text.length }
+      : {};
+  copy[idx] = {
+    ...copy[idx],
+    reasoning: prev + delta,
+    streaming: !isStoppedTurn(copy[idx]),
+    ...anchor,
+  };
   return copy;
 }
 
@@ -190,6 +206,12 @@ export function appendToolCallDelta(
   if (idx < 0) return [...messages];
   const copy = [...messages];
   const existing = copy[idx].toolCalls ?? [];
+  // Two invocations of the same tool are two cards. An id is the only thing
+  // that separates them once the name and arguments are identical: a second
+  // `shell` call used to merge into the first (the reducer matched by name when
+  // no id was carried) and the turn showed one card for two pieces of work.
+  // Without an id a fragment can only be the call already on screen, so the
+  // name match stays.
   const match = existing.findIndex((item) =>
     toolCall.id ? item.id === toolCall.id : !item.id && item.name === toolCall.name,
   );
@@ -210,7 +232,18 @@ export function appendToolCallDelta(
           return merged;
         })
       : [...existing, toolCall];
-  copy[idx] = { ...copy[idx], toolCalls: nextTools, streaming: !isStoppedTurn(copy[idx]) };
+  // The first card is the moment the activity block appears in the reply; the
+  // words already streamed stay above it instead of being pushed below.
+  const anchor =
+    existing.length === 0 && copy[idx].activityAnchor === undefined
+      ? { activityAnchor: copy[idx].text.length }
+      : {};
+  copy[idx] = {
+    ...copy[idx],
+    toolCalls: nextTools,
+    streaming: !isStoppedTurn(copy[idx]),
+    ...anchor,
+  };
   return copy;
 }
 

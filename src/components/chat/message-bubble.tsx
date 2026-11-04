@@ -8,6 +8,7 @@ import { StreamingIndicator } from '@/components/chat/streaming-indicator';
 import { ToolCallCard } from '@/components/chat/tool-call-card';
 import { Badge, Icon, PressableScale, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
+import { splitBodyAroundActivity } from '@/lib/chat/activity-anchor';
 import { bubbleMaxWidth } from '@/lib/motion/bubble-width';
 import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import { entering } from '@/lib/motion/presets';
@@ -94,7 +95,16 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
 
   // One streaming signal: the breathing orb under the reply. The text itself
   // carries no caret glyph.
-  const body = message.text;
+  //
+  // The body is split around the moment the activity block first held anything:
+  // words written BEFORE the tool call stay above the block instead of being
+  // pushed below it by the card. `before` is empty (and `body` is the whole
+  // reply, exactly as before) whenever there is no recorded moment — history
+  // rows, command turns, or a turn whose block led with nothing ahead of it.
+  const { before: bodyBefore, after: body } = splitBodyAroundActivity(
+    message.text,
+    message.activityAnchor,
+  );
   const isInterrupted = !!message.interrupted;
 
   return (
@@ -140,6 +150,12 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
                 tone={commandBadgeState.tone}
               />
             </View>
+          ) : null}
+
+          {/* Text the model wrote before the activity block: it stays above the
+              block, in the order it happened. */}
+          {!isUser && bodyBefore ? (
+            <MarkdownText text={bodyBefore} streaming={false} />
           ) : null}
 
           {!isUser && hasActivity ? (
@@ -191,7 +207,13 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
                       contentContainerStyle={styles.toolListContent}
                       nestedScrollEnabled>
                       {message.toolCalls?.map((toolCall, index) => (
-                        <ToolCallCard key={toolCall.id ?? `${toolCall.name}-${index}`} toolCall={toolCall} />
+                        // The index keeps the key unique even when the same call
+                        // id is reported twice in one turn (the two wire shapes
+                        // for one invocation). Keys never collide across calls.
+                        <ToolCallCard
+                          key={`${toolCall.id ?? toolCall.name}-${index}`}
+                          toolCall={toolCall}
+                        />
                       ))}
                     </ScrollView>
                   ) : null}

@@ -259,6 +259,20 @@ export type ChatMessage = {
   /** Tool calls attached to this message, when the stream exposes them. */
   toolCalls?: ChatToolCall[];
   /**
+   * Where in `text` the activity block (thinking + tool cards) belongs.
+   *
+   * The bubble used to paint the activity block above every word of the reply,
+   * so a turn that streamed a sentence, called a tool, then answered rendered
+   * the card above the sentence that came BEFORE it — the transcript was not in
+   * the order it happened. The reducer records `text.length` at the moment the
+   * block first holds anything (the first tool call or the first thought), and
+   * `splitBodyAroundActivity` uses it to keep that earlier text above the card.
+   *
+   * Absent on history rows and on command turns: with no recorded moment, the
+   * block stays above the answer exactly as it always did.
+   */
+  activityAnchor?: number;
+  /**
    * Image attachments the user sent with this turn (P1). Persisted so the
    * transcript can render them and later turns keep the same content parts.
    */
