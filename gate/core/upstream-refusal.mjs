@@ -13,11 +13,22 @@
  *
  * Only a message that IS this shape is a refusal. A real reply that merely
  * MENTIONS "HTTP 400" inside prose is a reply and is never rewritten — so the
- * status line has to be the claim. What it may be introduced by is narrow: a
- * lead-in that reports what a named upstream said, which is the same wording
- * core/model-fault.mjs already treats as evidence the provider produced it.
+ * status line has to be the claim, and the claim has to start the message.
+ * What may stand in front of the status is narrow: the status itself at
+ * position 0, or a lead-in that reports what a named upstream said — the same
+ * wording core/model-fault.mjs already treats as evidence the provider
+ * produced it — with the status behind it an error code (4xx/5xx), plus the
+ * one sentence the gateway writes around a custom endpoint that never
+ * answered. That lead-in phrase was not enough on its own: with an optional
+ * `[\s\S]*` in front of it, the last clause of a real answer — "The endpoint
+ * returned HTTP 200: OK" inside "I called the endpoint twice. The endpoint
+ * returned HTTP 200: OK on the first try." — was read as the claim (VS-004,
+ * quality scan 2026-11-04), so an ordinary reported success was rewritten as
+ * a failed turn. Anchor the forms at the start and let reported successes
+ * through: a wrapper texts an error, not a 2xx.
  */
-const UPSTREAM_REFUSAL = /^(?:[\s\S]*\b(?:provider|upstream|endpoint|server|api)\s+(?:said|reported|returned|responded|answered)\b[:\s]*)?HTTP \d{3}: .+$/i;
+const UPSTREAM_REFUSAL =
+  /^(?:HTTP \d{3}: .+|(?:Custom endpoint didn['’]t answer after \d+ attempts\. )?(?:The )?(?:provider|upstream|endpoint|server|api)\s+(?:said|reported|returned|responded|answered)[:\s]*HTTP [45]\d{2}: .+)$/i;
 
 export function backendUpstreamRefusal(text) {
   const trimmed = String(text ?? '').trim();
