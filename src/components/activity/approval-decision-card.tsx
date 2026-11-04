@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
@@ -31,9 +31,16 @@ export function ApprovalDecisionCard({
   // hand-off so the gateway never sees stray whitespace.
   const [feedbackText, setFeedbackText] = useState('');
   const locked = useRef(false);
+  const decisionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scale = useSharedValue(1);
   const opacity = useSharedValue(1);
   const borderProgress = useSharedValue(0);
+
+  useEffect(() => {
+    return () => {
+      if (decisionTimer.current) clearTimeout(decisionTimer.current);
+    };
+  }, [runId]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
@@ -69,7 +76,8 @@ export function ApprovalDecisionCard({
     const trimmed = feedbackText.trim();
     const feedback = approved ? undefined : trimmed;
     const duration = approvalExitDuration(next);
-    setTimeout(() => onResolve(approved, feedback), duration);
+    if (decisionTimer.current) clearTimeout(decisionTimer.current);
+    decisionTimer.current = setTimeout(() => onResolve(approved, feedback), duration);
   };
 
   const busy = exit !== 'idle';

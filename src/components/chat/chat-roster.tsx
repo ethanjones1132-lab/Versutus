@@ -96,13 +96,13 @@ export type ChatRosterProps = {
  * the routing verdict. An unroutable Bot always reads its verdict — the fix is
  * one tap away and the operator must see why before they tap.
  */
-function botPurpose(bot: PublicBot): string {
+export function botPurpose(bot: PublicBot): string {
   if (!botReportedRoutable(bot)) return botRowSubtitle(bot);
   const description = bot.description?.trim();
   if (!description) return botRowSubtitle(bot);
   // The first sentence is the Bot's job title; the rest belongs to its panel.
   // A job title reads without its full stop; a question or exclamation keeps its mark.
-  const first = description.match(/^[^.!?]+[.!?]?/)?.[0] ?? description;
+  const first = description.match(/^.*?(?:[.!?](?=\s|$)|$)/)?.[0] ?? description;
   return first.trim().replace(/\.$/, '');
 }
 

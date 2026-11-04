@@ -49,7 +49,7 @@ export function PairingPanel({
 }) {
   const tokens = useTokens();
   const [copied, setCopied] = useState<CopyKind | null>(null);
-  const approveCommand = pairingDetails?.requestId
+  const approveCommand = pairingDetails?.requestId && /^[A-Za-z0-9_-]+$/.test(pairingDetails.requestId)
     ? `openclaw devices approve ${pairingDetails.requestId}`
     : 'openclaw devices approve <requestId>';
 

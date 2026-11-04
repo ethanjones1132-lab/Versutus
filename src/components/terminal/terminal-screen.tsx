@@ -182,6 +182,7 @@ export function TerminalScreen() {
       // A 404 means the gateway no longer knows this session — the stream is
       // gone. Any other failure (network blip, 500) leaves the session alive.
       if (message.includes('404')) {
+        sessionRef.current = null;
         setTerminalConnected(false);
       }
     }

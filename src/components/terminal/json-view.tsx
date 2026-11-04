@@ -1,5 +1,5 @@
 import * as Clipboard from 'expo-clipboard';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/ui';
@@ -33,6 +33,9 @@ export function JsonView({ value, maxDepth = 2 }: Props) {
     [root, maxDepth],
   );
   const [expanded, setExpanded] = useState<Set<string>>(() => initial);
+  useEffect(() => {
+    setExpanded(initial);
+  }, [initial]);
   const rows = useMemo(() => flattenJsonTreeRows(root, expanded), [root, expanded]);
 
   const toggle = (path: string) => {

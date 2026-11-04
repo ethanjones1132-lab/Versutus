@@ -576,7 +576,7 @@ export async function executeGatewaySlashCommand(
     return runAdvancedFamilyCommand(commandName, args, context);
   }
   if (commandName === '/session' && context.currentSessionId?.trim() && isLocalSessionRead(args)) {
-    return runSessionCommand(args, context);
+    return runSessionCommand(args, context, trimmed);
   }
   if (commandName === '/device' && (args.length === 0 || args[0]?.toLowerCase() === 'repair')) {
     return runApprovalsDevicesCommand(commandName, args, context);
@@ -625,7 +625,7 @@ export async function executeGatewaySlashCommand(
   }
 
   if (commandName === '/session') {
-    return runSessionCommand(args, context);
+    return runSessionCommand(args, context, trimmed);
   }
 
   if (commandName === '/channel') {
@@ -1415,7 +1415,7 @@ async function runSessionSpendCommand(
   }
 }
 
-async function runSessionCommand(args: string[], context: SlashCommandContext): Promise<SlashCommandResult> {
+async function runSessionCommand(args: string[], context: SlashCommandContext, rawInput?: string): Promise<SlashCommandResult> {
   const sub = (args[0] || '').toLowerCase();
   const id = args[1];
 
@@ -1459,7 +1459,7 @@ async function runSessionCommand(args: string[], context: SlashCommandContext): 
   }
 
   if (sub === 'new') {
-    const title = args[1]?.trim() || undefined;
+    const title = rawInput?.replace(/^\/session\s+new\b/i, '').trim() || undefined;
     if (context.createNewSession) {
       await context.createNewSession(title);
       return textResult(

@@ -16,6 +16,7 @@ import {
 import { keyValueStorage } from '@/lib/storage/key-value';
 
 const MAX_RECENTS = 8;
+const writeQueues = new Map<string, Promise<unknown>>();
 
 function storageKey(gatewayId: string): string {
   return `recent-commands:${gatewayId}`;
@@ -37,12 +38,21 @@ export async function loadRecentCommands(gatewayId: string): Promise<string[]> {
 }
 
 export async function pushRecentCommand(gatewayId: string, input: string): Promise<string[]> {
-  const now = Date.now();
-  const next = recordUsage(await readUsage(gatewayId, now), input, now);
+  const previous = writeQueues.get(gatewayId) ?? Promise.resolve();
+  const operation = previous.catch(() => undefined).then(async () => {
+    const now = Date.now();
+    const next = recordUsage(await readUsage(gatewayId, now), input, now);
+    try {
+      await keyValueStorage.setItem(storageKey(gatewayId), JSON.stringify(next));
+    } catch {
+      // best-effort: recents must never break command execution
+    }
+    return rankCommands(next, now, MAX_RECENTS);
+  });
+  writeQueues.set(gatewayId, operation);
   try {
-    await keyValueStorage.setItem(storageKey(gatewayId), JSON.stringify(next));
-  } catch {
-    // best-effort: recents must never break command execution
+    return await operation;
+  } finally {
+    if (writeQueues.get(gatewayId) === operation) writeQueues.delete(gatewayId);
   }
-  return rankCommands(next, now, MAX_RECENTS);
 }
