@@ -263,12 +263,13 @@ test('a second read answers from the Gate\'s own copy while Hermes is taking 5 s
     assert.equal(second.status, 200);
     assert.deepEqual(second.body.data.map((row) => row.id), ['ses_1', 'ses_2']);
     assert.equal(second.body.index.stale, true, 'and it says the copy is stale');
-    // The live read behind the refill is still parked on the hold, so an answer
-    // that is already here came from the copy: had it waited on Hermes it would
-    // still be waiting, and this test would run out of time rather than pass.
+    // The live read behind the refill is still parked on the hold, so this warm
+    // answer must come from the copy, not from a timing threshold. If the cache
+    // path joins or awaits Hermes, this assertion cannot pass before release.
     assert.equal(hermes.outstanding(), true, 'the warm list answered while the backend read was still open');
 
-    // Two screens opening on a stale copy must cost ONE background read.
+    // A second screen opening on the same stale copy must also answer before the
+    // held backend is released; the two screens together cost ONE background read.
     await listSessions(gate, '&limit=20');
     assert.equal(hermes.outstanding(), true, 'the second warm list answered while the backend read was still open');
     assert.equal(hermes.reads().length, 2, 'one live read plus one refill, not one per screen');
@@ -728,10 +729,9 @@ test('the tap validation is answered from the Gate\'s own copy, not a fresh cata
     assert.equal((await listSessions(gate, '&limit=20')).status, 200);
     assert.equal(hermes.reads().length, 1);
 
-    // A catalogue read costs 150 ms plus whatever the hold adds, so the hold is
-    // the causal proof: a restore that asked the catalogue again would park on
-    // it and run past this test's own timeout, and a restore that answers at all
-    // answered from the copy.
+    // Keep the backend read open while the tap answers: a restore that asks the
+    // catalogue again cannot answer until this hold is released. The read count
+    // below separately ensures the tap did not start another catalogue read.
     held = hermes.hold();
     const restored = await rpc(gate, 'session.restore', { sessionId: 'ses_1', backendId: environmentId });
     assert.equal(restored.status, 200, JSON.stringify(restored.body));

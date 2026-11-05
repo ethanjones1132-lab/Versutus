@@ -447,9 +447,20 @@ test('gzip that returns a Promise does not stall a sibling request', async () =>
   // A sync gzip in end() holds the loop for the whole compress. An async one
   // must still gzip the answer, and a concurrent /health must be answered
   // while that compress is in flight.
+  let resolveCompress;
+  let signalCompressStarted;
+  let compressResolved = false;
+  const compress = new Promise((resolve) => { resolveCompress = resolve; });
+  const compressStarted = new Promise((resolve) => { signalCompressStarted = resolve; });
   const server = createServer((req, res) => {
     enableJsonCompression(req, res, {
-      gzip: (body) => new Promise((resolve) => setTimeout(() => resolve(gzipSync(body)), 80)),
+      gzip: (body) => {
+        signalCompressStarted();
+        return compress.then(() => {
+          compressResolved = true;
+          return gzipSync(body);
+        });
+      },
     });
     if (req.url === '/health') {
       res.end(JSON.stringify({ status: 'ok' }));
@@ -461,13 +472,12 @@ test('gzip that returns a Promise does not stall a sibling request', async () =>
   try {
     const port = server.address().port;
     const bigP = rawRequest(port, '/models', { headers: { 'Accept-Encoding': 'gzip' } });
-    await new Promise((resolve) => setTimeout(resolve, 15));
-    const started = Date.now();
+    await compressStarted;
     const health = await rawRequest(port, '/health', { headers: { 'Accept-Encoding': 'gzip' } });
-    const healthMs = Date.now() - started;
     assert.equal(health.status, 200);
     assert.equal(JSON.parse(health.body.toString()).status, 'ok');
-    assert.ok(healthMs < 40, `health took ${healthMs}ms during an 80ms gzip`);
+    assert.equal(compressResolved, false, '/health answered before the pending gzip resolved');
+    resolveCompress();
     const big = await bigP;
     assert.equal(big.status, 200);
     assert.equal(big.headers['content-encoding'], 'gzip');
