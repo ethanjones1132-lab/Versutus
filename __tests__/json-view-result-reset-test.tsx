@@ -7,7 +7,8 @@ describe('JsonView expansion resets for a new result', () => {
 
   it('resets expansion only when the memoized defaults change', () => {
     expect(src).toMatch(/const \[expanded, setExpanded\] = useState<Set<string>>\(\(\) => initial\);/);
-    expect(src).toMatch(/useEffect\(\(\) => \{\s*setExpanded\(initial\);\s*\}, \[initial\]\);/);
+    expect(src).toMatch(/if \(initial !== previousInitial\) \{\s*setPreviousInitial\(initial\);\s*setExpanded\(initial\);\s*\}/);
+    expect(src).not.toContain('useEffect');
     expect(src).toContain('collectJsonTreeContainerPaths(root, maxDepth)');
   });
 

@@ -1,14 +1,21 @@
-declare const __dirname: string;
-const fs = jest.requireActual('fs') as { readFileSync(path: string, encoding: string): string };
-const SEP = __dirname.includes('\\') ? '\\' : '/';
+import { executeGatewaySlashCommand } from '@/lib/gateway/slash-commands';
 
 describe('/session new title parsing', () => {
-  const src = fs.readFileSync([__dirname, '..', 'src', 'lib', 'gateway', 'slash-commands.ts'].join(SEP), 'utf8');
+  it.each([
+    ['/session new Fresh talk', 'Fresh talk'],
+    ['/session new "Fresh talk"', 'Fresh talk'],
+    ['/session new ""', undefined],
+    ['/session new', undefined],
+  ] as const)('for %s forwards the parsed title', async (input, expectedTitle) => {
+    const createNewSession = jest.fn();
+    await executeGatewaySlashCommand(input, {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      createNewSession,
+    });
 
-  it('uses the raw remainder after /session new, with the optional no-title path', () => {
-    expect(src).toMatch(/runSessionCommand\(args, context, trimmed\)/);
-    expect(src).toContain("const title = rawInput?.replace(/^\\/session\\s+new\\b/i, '').trim() || undefined;");
-    expect(src).toContain('context.createNewSession(title)');
-    expect(src).toContain("'New session opened — the thread starts fresh'");
+    expect(createNewSession).toHaveBeenCalledTimes(1);
+    expect(createNewSession).toHaveBeenCalledWith(expectedTitle);
   });
 });
