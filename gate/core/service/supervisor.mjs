@@ -54,6 +54,7 @@ export class Supervisor {
 
     this._status = 'starting';
     this._child = null;
+    this._childGeneration = 0;
     this._childPid = null;
     this._childStartedAt = null;
     this._restarts = 0;
@@ -129,6 +130,7 @@ export class Supervisor {
     this._status = this._restarts === 0 && this._failures === 0 ? 'starting' : 'restarting';
     const child = this._spawnGate();
     this._child = child;
+    this._childGeneration += 1;
     this._childPid = child?.pid ?? null;
     this._childStartedAt = this._now();
     this._status = 'running';
@@ -160,13 +162,19 @@ export class Supervisor {
 
   async _probeLoop(fails) {
     if (this._stopping || !this._child) return;
+    const child = this._child;
+    const generation = this._childGeneration;
     let healthy = false;
+    let probeError = null;
+    let probeFailed = false;
     try {
       healthy = Boolean(await this._probe());
     } catch (error) {
-      this._log(`health probe failed: ${error?.message ?? error}`);
+      probeFailed = true;
+      probeError = error;
     }
-    if (this._stopping || !this._child) return;
+    if (this._stopping || this._child !== child || this._childGeneration !== generation) return;
+    if (probeFailed) this._log(`health probe failed: ${probeError?.message ?? probeError}`);
     if (healthy) {
       this._lastHealthyAt = this._now();
       this._emitState();
