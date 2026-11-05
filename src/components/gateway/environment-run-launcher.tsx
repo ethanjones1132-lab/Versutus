@@ -23,6 +23,17 @@ type Client = ReturnType<typeof createEnvironmentClient>;
 
 const TERMINAL_EVENT = /^run\.(completed|failed|cancelled)$/;
 
+type RunTicket = {
+  environmentId: string;
+  token: number;
+  runId: string | null;
+  startPromise: Promise<string> | null;
+  cancelRequested: boolean;
+  cancelPromise: Promise<void> | null;
+  cancelSucceeded: boolean;
+  disowned: boolean;
+};
+
 // The log cap lives with the fold it protects (environment-run-view.ts); the
 // launcher keeps re-exporting it for the sheet's tests.
 export { capRunEvents, MAX_RUN_EVENTS };
@@ -97,6 +108,8 @@ export function EnvironmentRunLauncher({
   // compare against it and do nothing once it has moved on, so a stream that
   // outlives its sheet can never write into the next run's bubble.
   const runTokenRef = useRef(0);
+  // Cancellation exclusion is scoped to this identity, not the mounted sheet.
+  const ticketRef = useRef<RunTicket | null>(null);
   const lastEventTypeRef = useRef<string | null>(null);
 
   const view = useMemo(() => environmentRunView(events), [events]);
@@ -169,6 +182,8 @@ export function EnvironmentRunLauncher({
    */
   const dismiss = useCallback((): void => {
     retire();
+    if (ticketRef.current) ticketRef.current.disowned = true;
+    ticketRef.current = null;
     lastEventTypeRef.current = null;
     setEvents([]);
     setApproval(null);
@@ -189,6 +204,8 @@ export function EnvironmentRunLauncher({
   const [streamedFor, setStreamedFor] = useState(sheetKey);
   if (streamedFor !== sheetKey) {
     setStreamedFor(sheetKey);
+    if (ticketRef.current) ticketRef.current.disowned = true;
+    ticketRef.current = null;
     setEvents([]);
     setApproval(null);
     setActiveRunId(null);
@@ -245,53 +262,138 @@ export function EnvironmentRunLauncher({
     // Retire any earlier run before claiming the sheet: the second start used
     // to overwrite abortRef and leave the first stream unreachable.
     const token = retire();
+    if (ticketRef.current) ticketRef.current.disowned = true;
+    const ticket: RunTicket = {
+      environmentId: environment.id,
+      token,
+      runId: null,
+      startPromise: null,
+      cancelRequested: false,
+      cancelPromise: null,
+      cancelSucceeded: false,
+      disowned: false,
+    };
+    ticketRef.current = ticket;
     setError(null);
     setEvents([]);
     setApproval(null);
+    setActiveRunId(null);
+    setDetached(false);
     setRunning(true);
     try {
-      const { runId } = await client.startRun(environment.id, {
+      ticket.startPromise = client.startRun(ticket.environmentId, {
         operation: effectiveOperation,
         input: operationNeedsPromptInput(effectiveOperation) ? { prompt } : {},
+      }).then(({ runId }) => {
+        ticket.runId = runId;
+        return runId;
       });
-      if (runTokenRef.current !== token) return;
+      const runId = await ticket.startPromise;
+      if (ticket.cancelRequested) {
+        await cancelTicket(ticket);
+        return;
+      }
+      if (ticket.disowned || ticketRef.current !== ticket || runTokenRef.current !== token) return;
       setActiveRunId(runId);
-      await follow(environment.id, runId, token);
+      await follow(ticket.environmentId, runId, token);
     } catch (caught) {
-      if (runTokenRef.current !== token) return;
+      if (ticket.disowned || ticketRef.current !== ticket) return;
       setError(caught instanceof Error ? caught.message : String(caught));
       setRunning(false);
+    }
+  }
+
+  /** Resolve one captured ticket's start, then cancel its run at most once. */
+  async function cancelTicket(ticket: RunTicket): Promise<void> {
+    if (ticket.cancelSucceeded) return;
+    if (ticket.cancelPromise) return ticket.cancelPromise;
+    if (!ticket.runId) return;
+
+    const runId = ticket.runId;
+    const pending = (async () => {
+      try {
+        await client.cancelRun(ticket.environmentId, runId);
+        ticket.cancelSucceeded = true;
+        if (ticketRef.current === ticket && !ticket.disowned) {
+          setRunning(false);
+          setDetached(false);
+          setActiveRunId(null);
+          setError(null);
+          refreshRuns();
+        }
+      } catch (caught) {
+        if (ticketRef.current === ticket && !ticket.disowned) {
+          setError(caught instanceof Error ? caught.message : String(caught));
+          // The Gate refused to stop a run we know is still present. Keep the
+          // Cancel action available as a deliberate retry, and label it detached.
+          setDetached(true);
+          setRunning(true);
+        }
+      }
+    })();
+    ticket.cancelPromise = pending;
+    try {
+      await pending;
+    } finally {
+      // A ticket owns its own in-flight exclusion; old finally blocks can never
+      // release a newer ticket's guard.
+      if (ticket.cancelPromise === pending) ticket.cancelPromise = null;
     }
   }
 
   /** Reattach to a known run: the replay folds into the same reply bubble. */
   async function attach(runId: string) {
     if (!environment || running) return;
+    if (ticketRef.current) ticketRef.current.disowned = true;
+    const token = retire();
+    const ticket: RunTicket = {
+      environmentId: environment.id,
+      token,
+      runId,
+      startPromise: Promise.resolve(runId),
+      cancelRequested: false,
+      cancelPromise: null,
+      cancelSucceeded: false,
+      disowned: false,
+    };
+    ticketRef.current = ticket;
     setError(null);
     setEvents([]);
     setApproval(null);
     setActiveRunId(runId);
-    await follow(environment.id, runId, retire());
+    await follow(ticket.environmentId, runId, token);
   }
 
   async function cancel() {
-    // Retire first so the dying stream cannot keep appending, then ask the Gate
-    // to stop the run itself — the only place a Gate-side cancel belongs.
+    const ticket = ticketRef.current;
+    if (!ticket || ticket.disowned || ticket.cancelSucceeded) return;
+    // Retire the local follow immediately. The captured ticket retains its
+    // environment and start promise even if the sheet is dismissed meanwhile.
+    ticket.cancelRequested = true;
     retire();
-    if (environment && activeRunId) {
-      await client.cancelRun(environment.id, activeRunId).catch(() => undefined);
+    try {
+      const runId = ticket.runId ?? (ticket.startPromise ? await ticket.startPromise : null);
+      if (runId) {
+        ticket.runId = runId;
+        await cancelTicket(ticket);
+      }
+    } catch {
+      // start() owns the visible start refusal; a rejected start has no run id
+      // and therefore must never be turned into a phantom Gate cancellation.
     }
-    setRunning(false);
-    refreshRuns();
   }
 
   async function decide(decision: 'approve' | 'deny') {
     if (!environment || !activeRunId || !approval) return;
+    const ticket = ticketRef.current;
+    if (!ticket || ticket.disowned) return;
     try {
       await client.approveRun(environment.id, activeRunId, approval.id, decision);
-      setApproval(null);
+      if (ticketRef.current === ticket && !ticket.disowned) setApproval(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      if (ticketRef.current === ticket && !ticket.disowned) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
     }
   }
 
