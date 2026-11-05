@@ -56,7 +56,8 @@ export async function pollUntilAuthorized({
         await sleep(waitMs);
         continue;
       }
-      if (!error.code || error.status >= 500) {
+      // Keep device-code-transient-retry.test.mjs transport retries distinct from oauth-token-path.test.mjs HTTP failures.
+      if (error.code === undefined && error.status === undefined) {
         await sleep(waitMs);
         continue;
       }
