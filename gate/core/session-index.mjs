@@ -423,7 +423,11 @@ export function createSessionIndex({
         if (at === -1) return;
         const row = current.sessions[at];
         const next = current.sessions.slice();
-        next.splice(at, 1, { ...row, title, preview: row.preview ?? title });
+        next.splice(at, 1, {
+          ...row,
+          title,
+          preview: row.preview == null || row.preview === row.title ? title : row.preview,
+        });
         entries.set(key, { ...current, sessions: next });
         note(key, () => api.rename(key, sessionId, title));
         schedule(key);
