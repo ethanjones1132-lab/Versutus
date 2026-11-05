@@ -23,9 +23,14 @@ export function ConnectedToast() {
   const tokens = useTokens();
   const insets = useSafeAreaInsets();
   const { status, activeGateway, activeHello } = useGateway();
-  const [visible, setVisible] = useState(false);
+  const [ceremonyActive, setVisible] = useState(false);
   const [label, setLabel] = useState('Gateway online');
   const prevRef = useRef<ConnectionStatus | null>(null);
+  const metadataRef = useRef({ activeGateway, activeHello });
+
+  useEffect(() => {
+    metadataRef.current = { activeGateway, activeHello };
+  }, [activeGateway, activeHello]);
 
   const opacity = useSharedValue(0);
   const translateY = useSharedValue(-16);
@@ -39,14 +44,18 @@ export function ConnectedToast() {
 
     setLabel(
       formatConnectedToastLabel({
-        gatewayName: activeGateway?.name,
-        version: activeHello?.server?.version,
+        gatewayName: metadataRef.current.activeGateway?.name,
+        version: metadataRef.current.activeHello?.server?.version,
       }),
     );
     setVisible(true);
     const timer = setTimeout(() => setVisible(false), HOLD_MS);
     return () => clearTimeout(timer);
-  }, [activeGateway, activeHello, status]);
+  }, [status]);
+
+  // Hide as soon as the gateway leaves `connected`, without a second setState.
+  // The hold timer still owns the ceremony; a drop retires it on this render.
+  const visible = ceremonyActive && status === 'connected';
 
   useEffect(() => {
     opacity.value = withTiming(visible ? 1 : 0, {
@@ -55,7 +64,7 @@ export function ConnectedToast() {
     translateY.value = withTiming(visible ? 0 : -16, {
       duration: visible ? Motion.duration.normal : Motion.duration.fast,
     });
-  }, [opacity, translateY, visible]);
+  }, [opacity, visible, translateY]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,
