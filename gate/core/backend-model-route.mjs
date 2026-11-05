@@ -226,7 +226,7 @@ export function createBackendModelRouter({
     // again on the next turn: routing asks on every turn, and re-parking on the
     // same dead read is what the short bound was for.
     const failedAt = unreadable.get(entry.id);
-    if (failedAt !== undefined && now() - failedAt < ttlMs) return [];
+    if (failedAt !== undefined && now() - failedAt < ttlMs) return cached?.models ?? [];
     return loadCatalogue(entry) ?? [];
   }
 
@@ -250,8 +250,8 @@ export function createBackendModelRouter({
         unreadable.delete(entry.id);
         return outcome.models;
       }
-      if (cache.has(entry.id)) return cache.get(entry.id).models;
       unreadable.set(entry.id, now());
+      if (cache.has(entry.id)) return cache.get(entry.id).models;
       return null;
     });
   }
