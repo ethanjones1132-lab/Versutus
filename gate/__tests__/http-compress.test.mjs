@@ -483,7 +483,10 @@ test('gzip that returns a Promise does not stall a sibling request', async () =>
     assert.equal(big.headers['content-encoding'], 'gzip');
     assert.deepEqual(JSON.parse(gunzipSync(big.body).toString()), JSON.parse(BIG_JSON));
   } finally {
-    server.close();
+    // Do not leave the deliberately held response/socket behind if an
+    // assertion fails before the normal release below.
+    resolveCompress();
+    await new Promise((resolve) => server.close(resolve));
   }
 });
 

@@ -721,7 +721,7 @@ test('an unknown Bot is refused once, on every conversation route', async () => 
 // such call, so the copy is the only cheap answer there is.
 
 test('the tap validation is answered from the Gate\'s own copy, not a fresh catalogue read', async () => {
-  const { gate, hermes, environmentId } = await makeGate({ listDelayMs: 150 });
+  const { gate, hermes, environmentId } = await makeGate();
   hermes.setRows([ROW('ses_1', { source: 'api_server' })]);
   let held = null;
   try {
@@ -737,6 +737,9 @@ test('the tap validation is answered from the Gate\'s own copy, not a fresh cata
     assert.equal(restored.status, 200, JSON.stringify(restored.body));
     assert.equal(restored.body.result.id, 'ses_1');
     assert.equal(restored.body.result.source, 'api_server');
+    // Let work queued alongside the response reach the backend seam before
+    // checking ownership. This is an event-loop barrier, not a timing window.
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(hermes.outstanding(), true, 'the tap answered while the catalogue read was still open');
     assert.equal(
       hermes.reads().length,
@@ -750,7 +753,7 @@ test('the tap validation is answered from the Gate\'s own copy, not a fresh cata
 });
 
 test('a Bot\'s own copy answers the tap validation for that Bot', async () => {
-  const { gate, hermes } = await makeGate({ listDelayMs: 150 });
+  const { gate, hermes } = await makeGate();
   hermes.setRows([ROW('ses_bot', { source: 'api_server' })]);
   try {
     // The list the sheet reads is Bot-scoped, so the copy is keyed by the Bot.
