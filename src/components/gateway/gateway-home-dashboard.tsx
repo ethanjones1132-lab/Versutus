@@ -61,6 +61,7 @@ export function GatewayHomeDashboard() {
   // can reject on the storage write, so both used to fire a promise nobody
   // handled: an unhandled rejection, no navigation, and no word on screen.
   const [connectFailure, setConnectFailure] = useState<unknown>(null);
+  const [discoveredSaveFailure, setDiscoveredSaveFailure] = useState<string | null>(null);
   const [deleteFailure, setDeleteFailure] = useState<string | null>(null);
   const [deletePending, setDeletePending] = useState(false);
   // The in-flight write, in a ref: two taps inside one frame come off the same
@@ -115,13 +116,20 @@ export function GatewayHomeDashboard() {
     async (beaconId: string) => {
       const beacon = discovery.gateways.find((item) => item.id === beaconId);
       if (!beacon) return;
-      const profile = await addGateway({
-        name: beacon.name,
-        url: beacon.url,
-        tlsFingerprint: beacon.tlsFingerprint,
-        discoverySource: beacon.source === 'local' ? 'local' : 'tailscale',
-      });
+      setDiscoveredSaveFailure(null);
       setConnectFailure(null);
+      let profile: GatewayProfile;
+      try {
+        profile = await addGateway({
+          name: beacon.name,
+          url: beacon.url,
+          tlsFingerprint: beacon.tlsFingerprint,
+          discoverySource: beacon.source === 'local' ? 'local' : 'tailscale',
+        });
+      } catch (error) {
+        setDiscoveredSaveFailure(error instanceof Error ? error.message : String(error));
+        return;
+      }
       try {
         await connectGateway(profile);
       } catch (error) {
@@ -179,6 +187,15 @@ export function GatewayHomeDashboard() {
             retry control for this failure (one retry per failure). */}
         {model.showTroubleshooting ? (
           <ErrorCard {...humanizeGatewayError(lastError)} />
+        ) : null}
+
+        {discoveredSaveFailure ? (
+          <ErrorCard
+            cause={`Could not save discovered gateway: ${discoveredSaveFailure}`}
+            affected="gateway profile"
+            next="Check storage and try adding the gateway again."
+            onDismiss={() => setDiscoveredSaveFailure(null)}
+          />
         ) : null}
 
         {model.showTroubleshooting ? (

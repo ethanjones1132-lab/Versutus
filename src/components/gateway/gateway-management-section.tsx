@@ -30,6 +30,7 @@ export function GatewayManagementSection() {
     cancelDelete,
     connectFailure,
     clearConnectFailure,
+    discoveredSaveFailure,
     deleteFailure,
     deletePending,
   } = useGatewaySettingsScreen();
@@ -108,6 +109,13 @@ export function GatewayManagementSection() {
       )}
 
       <Divider />
+      {discoveredSaveFailure ? (
+        <ErrorCard
+          cause={`Could not save discovered gateway: ${discoveredSaveFailure}`}
+          affected="gateway profile"
+          next="Check storage and try adding the gateway again."
+        />
+      ) : null}
       <View style={styles.sectionHeader}>
         <View style={styles.sectionTitle}>
           <Text variant="eyebrow" color="tertiary" style={styles.eyebrow}>

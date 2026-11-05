@@ -53,6 +53,7 @@ export function useGatewaySettingsScreen() {
   // fire a promise nobody handled: no navigation, no dismissal, and no word on
   // screen. The screen's own surface carries both.
   const [connectFailure, setConnectFailure] = useState<unknown>(null);
+  const [discoveredSaveFailure, setDiscoveredSaveFailure] = useState<string | null>(null);
   const [deleteFailure, setDeleteFailure] = useState<string | null>(null);
   const [deletePending, setDeletePending] = useState(false);
   // The in-flight write, in a ref: two taps inside one frame come off the same
@@ -121,13 +122,20 @@ export function useGatewaySettingsScreen() {
     async (beaconId: string) => {
       const beacon = discovery.gateways.find((item) => item.id === beaconId);
       if (!beacon) return;
-      const profile = await addGateway({
-        name: beacon.name,
-        url: beacon.url,
-        tlsFingerprint: beacon.tlsFingerprint,
-        discoverySource: beacon.source === 'local' ? 'local' : 'tailscale',
-      });
+      setDiscoveredSaveFailure(null);
       setConnectFailure(null);
+      let profile: GatewayProfile;
+      try {
+        profile = await addGateway({
+          name: beacon.name,
+          url: beacon.url,
+          tlsFingerprint: beacon.tlsFingerprint,
+          discoverySource: beacon.source === 'local' ? 'local' : 'tailscale',
+        });
+      } catch (error) {
+        setDiscoveredSaveFailure(error instanceof Error ? error.message : String(error));
+        return;
+      }
       const outcome = await connectThenOpenChat(profile, connectGateway, () =>
         router.push('/chat'),
       );
@@ -159,6 +167,7 @@ export function useGatewaySettingsScreen() {
     cancelDelete,
     connectFailure,
     clearConnectFailure,
+    discoveredSaveFailure,
     deleteFailure,
     deletePending,
     router,

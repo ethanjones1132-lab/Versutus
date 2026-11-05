@@ -57,13 +57,15 @@ describe('Home empty discovered gateways offer Add', () => {
     expect(src).toMatch(/connectGateway,\s*addGateway,/);
     const handler = readHandleAddDiscovered();
     expect(handler).toContain('const beacon = discovery.gateways.find((item) => item.id === beaconId);');
-    expect(handler).toContain('const profile = await addGateway({');
+    expect(handler).toMatch(/try\s*\{\s*profile = await addGateway\(\{/);
     expect(handler).toContain('name: beacon.name,');
     expect(handler).toContain('url: beacon.url,');
     expect(handler).toContain('tlsFingerprint: beacon.tlsFingerprint,');
     expect(handler).toContain("discoverySource: beacon.source === 'local' ? 'local' : 'tailscale',");
-    expect(handler).toContain('await connectGateway(profile);');
-    expect(handler).toContain("router.push('/chat')");
+    expect(handler).toMatch(/catch \(error\) \{\s*setDiscoveredSaveFailure\(error instanceof Error \? error\.message : String\(error\)\);\s*return;/);
+    expect(handler).toMatch(/await addGateway\([\s\S]*?\}\s*catch \(error\)[\s\S]*?return;[\s\S]*?await connectGateway\(profile\);[\s\S]*?router\.push\('\/chat'\);/);
+    expect(handler).toMatch(/try \{\s*await connectGateway\(profile\);\s*\} catch \(error\) \{\s*setConnectFailure\(error\);\s*return;/);
+    expect(src).toContain('cause={`Could not save discovered gateway: ${discoveredSaveFailure}`}');
   });
 
   test('HomeStatusCard still wires retryAutoConnect', () => {
@@ -88,7 +90,7 @@ describe('Home empty discovered gateways offer Add', () => {
     expect(src).toContain('<Button label={model.setupLabel} variant="secondary" />');
   });
 
-  test("Gate setup's discovered rows and handleAddDiscovered stay byte-identical", () => {
+  test("Gate setup's discovered add handles save failure before connecting", () => {
     const section = readSource('src', 'components', 'gateway', 'gateway-management-section.tsx');
     expect(section).toMatch(/discovery\.gateways\.map\(\(gateway\) => \(/);
     expect(section).toMatch(/<DiscoveredGatewayRow\b/);
@@ -98,14 +100,13 @@ describe('Home empty discovered gateways offer Add', () => {
     const hook = readSource('src', 'hooks', 'use-gateway-settings-screen.ts');
     expect(hook).toContain('const handleAddDiscovered = useCallback(');
     expect(hook).toContain('const beacon = discovery.gateways.find((item) => item.id === beaconId);');
-    expect(hook).toContain('const profile = await addGateway({');
-    // This one moved: the connect is routed through `connectThenOpenChat`, so a
-    // refusal is returned for the screen to name and the push is conditional on
-    // a connection that answered. The path it pins — add, connect, open Chat —
-    // is the same; the unhandled-rejection hole is closed.
-    expect(hook).toContain('await connectThenOpenChat(profile, connectGateway, () =>');
-    expect(hook).toContain("router.push('/chat')");
-    expect(hook).not.toMatch(/await connectGateway\(profile\);\s*\n\s*router\.push/);
+    expect(hook).toMatch(/try\s*\{\s*profile = await addGateway\(\{/);
+    expect(hook).toMatch(/catch \(error\) \{\s*setDiscoveredSaveFailure\(error instanceof Error \? error\.message : String\(error\)\);\s*return;/);
+    expect(hook).toMatch(/await addGateway\([\s\S]*?\}\s*catch \(error\)[\s\S]*?return;[\s\S]*?await connectThenOpenChat\(profile, connectGateway, \(\) =>\s*router\.push\('\/chat'\),?\s*\);/);
+    expect(hook).toContain('if (!outcome.ok) setConnectFailure(outcome.error);');
+    expect(hook).toMatch(/export async function connectThenOpenChat\([\s\S]*?try \{\s*await connectGateway\(gateway\);\s*\} catch \(error\) \{\s*return \{ ok: false, error \};\s*\}\s*openChat\(\);/);
+    expect(hook).toContain('discoveredSaveFailure,');
+    expect(section).toMatch(/\{discoveredSaveFailure \? \([\s\S]*?Could not save discovered gateway:[\s\S]*?\) : null\}/);
   });
 
   test('the nearby caption still names auto-connect', () => {
