@@ -51,6 +51,7 @@ import { runBackendTurn, modelReport } from './voice/turn-runner.mjs';
 import { resolveVoiceBackend, startVoiceBackendLease } from './voice/voice-backend.mjs';
 import { ScriptedEngine, scriptedEngineEnabled } from './voice/engines/scripted-engine.mjs';
 import { verifySignedAccessRequest, ReplayCache } from './signature.mjs';
+import { handlePublicRoute } from './routes/public.mjs';
 import { describeAuthFailure } from './auth-failure.mjs';
 import { selectDefaultBackend, unresolvedBackendResponse } from './backend-resolution.mjs';
 import {
@@ -69,11 +70,8 @@ import * as anthropicFlavor from '../flavors/anthropic.mjs';
 
 const FLAVOR_MODULES = { openai: openaiFlavor, anthropic: anthropicFlavor };
 
-// Body size limits (see readJsonBody): the unauthenticated access endpoint
-// gets a tight cap — anyone who can reach the port can POST to it — while
-// authenticated routes get a generous one, because chat turns can carry
+// Authenticated routes get a generous body cap because chat turns can carry
 // base64 images.
-const ACCESS_MAX_BODY_BYTES = 16 * 1024;
 const AUTH_MAX_BODY_BYTES = 64 * 1024 * 1024;
 
 // A phone that names its turn can detach from it: a backgrounded app has its
@@ -2493,110 +2491,18 @@ export async function createGate(config = {}) {
     }
 
     try {
-      // Health endpoint (unauthenticated). Also served under each provider
-      // base path so a child profile whose baseUrl is /p/{id} can probe
-      // relative /health successfully.
-      const healthMatch = pathname === '/health' || /^\/p\/[^/]+\/health$/.test(pathname);
-      if (healthMatch && method === 'GET') {
-        res.writeHead(200);
-        res.end(JSON.stringify({
-          status: 'ok',
-          timestamp: new Date().toISOString(),
-        }));
-        return;
-      }
-
-      // Manifest endpoint (unauthenticated)
-      if (pathname === '/.well-known/gateway.json' && method === 'GET') {
-        res.writeHead(200);
-        res.end(JSON.stringify(state.manifest));
-        return;
-      }
-
-      // Pairing/access endpoint (unauthenticated). The tight limit is the
-      // point: this route is reachable by anyone who can hit the port, and a
-      // signed access request is a few hundred bytes.
-      if (pathname === '/.well-known/gateway/access' && method === 'POST') {
-        const body = await readJsonBody(req, { maxBytes: ACCESS_MAX_BODY_BYTES });
-        const device = body?.device;
-        if (!body || !device?.id || !device?.publicKey || !body.signature || typeof body.signedAtMs !== 'number') {
-          res.writeHead(400);
-          res.end(JSON.stringify({ status: 'denied', reason: 'Malformed access request.' }));
-          return;
-        }
-
-        const verification = verifySignedAccessRequest(
-          {
-            deviceId: device.id,
-            publicKeyB64Url: device.publicKey,
-            clientId: device.clientId,
-            role: body.role ?? 'operator',
-            scopes: Array.isArray(body.scopes) ? body.scopes : [],
-            signedAtMs: body.signedAtMs,
-            signature: body.signature,
-          },
-          { replayCache },
-        );
-
-        if (!verification.ok) {
-          // The same signed body retried after a lost answer is a replay, and
-          // a body that crossed a plain-HTTP pairing leg (or a log, or a
-          // proxy) is not a secret: answering it with the device token would
-          // hand that token to whoever captured the body. The pending answer
-          // carries no secret and stays idempotent; a grant does, so the
-          // replay is told to sign again — the device holds the key and can.
-          if (verification.replay) {
-            const existing = await deviceTokens.list();
-            const already = existing.find((entry) => entry.deviceId === device.id && !entry.revoked);
-            if (already) {
-              res.writeHead(409);
-              res.end(JSON.stringify({
-                status: 'signature-used',
-                reason: 'This signed request was already answered. Sign a fresh request.',
-              }));
-              return;
-            }
-            const pending = (await pairing.listPending()).find((entry) => entry.deviceId === device.id);
-            if (pending) {
-              res.writeHead(202);
-              res.end(JSON.stringify({ status: 'pending', requestId: pending.requestId }));
-              return;
-            }
-          }
-          res.writeHead(403);
-          res.end(JSON.stringify({ status: 'denied', reason: verification.reason }));
-          return;
-        }
-
-        const existing = await deviceTokens.list();
-        const already = existing.find((entry) => entry.deviceId === device.id && !entry.revoked);
-        if (already) {
-          res.writeHead(200);
-          res.end(JSON.stringify({ status: 'granted', token: already.token, role: already.role, scopes: already.scopes }));
-          return;
-        }
-
-        const role = body.role ?? 'operator';
-        const scopes = Array.isArray(body.scopes) ? body.scopes : [];
-
-        if (await pairing.isWindowOpen()) {
-          const grantedToken = await deviceTokens.issue(device.id, { role, scopes });
-          res.writeHead(200);
-          res.end(JSON.stringify({ status: 'granted', token: grantedToken, role, scopes }));
-          return;
-        }
-
-        const requestId = await pairing.addPending({
-          deviceId: device.id,
-          publicKeyB64Url: device.publicKey,
-          clientId: device.clientId,
-          role,
-          scopes,
-        });
-        res.writeHead(202);
-        res.end(JSON.stringify({ status: 'pending', requestId }));
-        return;
-      }
+      if (await handlePublicRoute({
+        req,
+        res,
+        pathname,
+        method,
+        state,
+        replayCache,
+        deviceTokens,
+        pairing,
+        verifySignedAccessRequest,
+        readJsonBody,
+      })) return;
 
       // Check if route exists before requiring authentication
       // This allows us to return 404 for unknown routes
