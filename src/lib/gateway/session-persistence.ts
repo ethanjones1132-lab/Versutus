@@ -210,6 +210,14 @@ export function mergeOfflineQueueItems(
   return merged;
 }
 
+/** Remove queued messages owned by gateway profiles that are being deleted. */
+export function removeOfflineQueueItemsForGateways(
+  items: OfflineQueueItem[],
+  gatewayIds: ReadonlySet<string>,
+): OfflineQueueItem[] {
+  return items.filter((item) => !gatewayIds.has(item.gatewayId));
+}
+
 export async function saveOfflineQueue(items: OfflineQueueItem[]): Promise<void> {
   if (items.length === 0) {
     await keyValueStorage.removeItem(OFFLINE_QUEUE_KEY);

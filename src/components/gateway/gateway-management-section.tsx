@@ -5,7 +5,7 @@ import { DiscoveredGatewayRow } from '@/components/discovered-gateway-row';
 import { CompactGatewayList } from '@/components/gateway/compact-gateway-list';
 import { Button, Card, ConfirmSheet, Divider, ErrorCard, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
-import { useGatewaySettingsScreen } from '@/hooks/use-gateway-settings-screen';
+import { gatewayRemovalMessage, useGatewaySettingsScreen } from '@/hooks/use-gateway-settings-screen';
 import { useTokens } from '@/hooks/use-tokens';
 import { connectionErrorShown } from '@/lib/connection/stale-error';
 import { humanizeGatewayError } from '@/lib/gateway/error-humanizer';
@@ -33,9 +33,15 @@ export function GatewayManagementSection() {
     discoveredSaveFailure,
     deleteFailure,
     deletePending,
+    deleteQueueCount,
+    deleteQueueRead,
+    deleteQueueReading,
   } = useGatewaySettingsScreen();
 
-  const removeMessage = `${deleteCandidate?.name ?? 'This gateway'} will stay available if discovered again.`;
+  const removeMessage = gatewayRemovalMessage(deleteCandidate?.name ?? 'This gateway', true, 0);
+  const deleteMessage = deleteQueueReading
+    ? removeMessage
+    : gatewayRemovalMessage(deleteCandidate?.name ?? 'This gateway', deleteQueueRead, deleteQueueCount);
   // The same rule the Home dashboard's cards follow (stale-error.ts): a gateway
   // that is answering has refused nothing, so a refusal the live connection has
   // disproved is not shown here either. This is the only gateway error on this
@@ -157,7 +163,7 @@ export function GatewayManagementSection() {
         message={
           deleteFailure
             ? `${deleteCandidate?.name ?? 'This gateway'} is still saved. ${deleteFailure}`
-            : removeMessage
+            : deleteMessage
         }
         confirmLabel="Remove"
         danger

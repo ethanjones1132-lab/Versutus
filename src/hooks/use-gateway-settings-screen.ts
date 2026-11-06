@@ -8,6 +8,27 @@ import type { GatewayProfile } from '@/lib/gateway/types';
 
 export type ConnectOutcome = { ok: true } | { ok: false; error: unknown };
 
+export function gatewayRemovalMessage(
+  gatewayName: string,
+  queueRead: boolean,
+  queuedCount: number | null,
+): string {
+  const base = `${gatewayName} will stay available if discovered again.`;
+  if (!queueRead) return `${base} The unsent message count could not be read.`;
+  if (!queuedCount) return base;
+  return `${base} ${queuedCount} unsent message${queuedCount === 1 ? '' : 's'} will be deleted with this gateway.`;
+}
+
+/** The profile ids `removeGateway(id)` deletes: the profile and its provider child profiles. */
+export function gatewayIdsRemovedWith(
+  gatewayId: string,
+  gateways: readonly Pick<GatewayProfile, 'id' | 'parentId'>[],
+): Set<string> {
+  const ids = new Set<string>([gatewayId]);
+  for (const gateway of gateways) if (gateway.parentId === gatewayId) ids.add(gateway.id);
+  return ids;
+}
+
 /**
  * Connect, and open the chat only over a connection that answered.
  *
@@ -56,6 +77,9 @@ export function useGatewaySettingsScreen() {
   const [discoveredSaveFailure, setDiscoveredSaveFailure] = useState<string | null>(null);
   const [deleteFailure, setDeleteFailure] = useState<string | null>(null);
   const [deletePending, setDeletePending] = useState(false);
+  const [deleteQueueCount, setDeleteQueueCount] = useState<number | null>(0);
+  const [deleteQueueRead, setDeleteQueueRead] = useState(true);
+  const [deleteQueueReading, setDeleteQueueReading] = useState(false);
   // The in-flight write, in a ref: two taps inside one frame come off the same
   // rendered closure, and `setDeletePending` has not re-rendered anything yet,
   // so the state read alone cannot tell the second press from the first.
@@ -85,10 +109,29 @@ export function useGatewaySettingsScreen() {
     [connectGateway, gateways, router],
   );
 
-  const handleDelete = useCallback((gatewayId: string) => {
+  const handleDelete = useCallback(async (gatewayId: string) => {
     setDeleteFailure(null);
-    setDeleteCandidateId(gatewayId);
-  }, []);
+    setDeleteCandidateId(null);
+    setDeleteQueueReading(true);
+    try {
+      // Loaded on demand: importing the queue store at module load pulls
+      // AsyncStorage into every test that renders the settings screen.
+      const { loadOfflineQueueFromStore } = await import('@/lib/gateway/session-persistence');
+      const load = await loadOfflineQueueFromStore();
+      setDeleteQueueRead(load.read);
+      // The delete cascades to provider child profiles (`removeGateway`), so
+      // their queued sends are deleted too and belong in the count.
+      const removed = gatewayIdsRemovedWith(gatewayId, gateways);
+      setDeleteQueueCount(load.read ? load.items.filter((item) => removed.has(item.gatewayId)).length : null);
+      setDeleteCandidateId(gatewayId);
+    } catch {
+      setDeleteQueueRead(false);
+      setDeleteQueueCount(null);
+      setDeleteCandidateId(gatewayId);
+    } finally {
+      setDeleteQueueReading(false);
+    }
+  }, [gateways]);
 
   const confirmDelete = useCallback(async () => {
     const id = deleteCandidateId;
@@ -170,6 +213,9 @@ export function useGatewaySettingsScreen() {
     discoveredSaveFailure,
     deleteFailure,
     deletePending,
+    deleteQueueCount,
+    deleteQueueRead,
+    deleteQueueReading,
     router,
   };
 }

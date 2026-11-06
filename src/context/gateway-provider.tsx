@@ -173,6 +173,7 @@ import {
   loadActivityRunsFromStore,
   loadOfflineQueueFromStore,
   mergeOfflineQueueItems,
+  removeOfflineQueueItemsForGateways,
   resurfaceOfflineQueue,
   saveActivityRuns,
   saveOfflineQueue,
@@ -4390,6 +4391,21 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       Promise.all([...removedIds].map((removedId) => clearCachedForGateway(removedId))),
       Promise.all([...removedIds].map((removedId) => clearRecentBotShortcutsForGateway(removedId))),
       Promise.all([...removedIds].map((removedId) => clearLastSeen(removedId))),
+      (async () => {
+        const load = await loadOfflineQueueFromStore();
+        if (!load.read) return;
+        const owed = flushingOwedRef.current ?? [];
+        offlineQueueRef.current = removeOfflineQueueItemsForGateways(
+          mergeOfflineQueueItems(load.items, offlineQueueRef.current),
+          removedIds,
+        );
+        if (flushingOwedRef.current) {
+          for (const item of owed) {
+            if (removedIds.has(item.gatewayId)) flushingOwedRef.current.delete(item);
+          }
+        }
+        await saveOfflineQueue(durableQueueRows(offlineQueueRef.current, flushingOwedRef.current ?? []));
+      })(),
     ]);
 
     // Cascade removes child profiles too — tear down if the active gateway

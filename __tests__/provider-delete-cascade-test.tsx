@@ -11,6 +11,7 @@ import type { ConnectionStatus, GatewayProfile, HermesSession, SessionMessage } 
 import type { PortalClient, PortalClientCallbacks } from '@/lib/portal/adapters';
 import type { GatewayManifest } from '@/lib/portal/manifest';
 import { keyValueStorage } from '@/lib/storage/key-value';
+import { loadOfflineQueue, saveOfflineQueue, type OfflineQueueItem } from '@/lib/gateway/session-persistence';
 
 // Deleting a gateway cascades into four stores (transcripts, session labels,
 // the cached pages and the last-seen stamps). They were awaited as four
@@ -432,5 +433,31 @@ describe('PROV-9: one refusing store cannot skip the delete teardown', () => {
 
     expect(gatewayApi().activeGateway).toBeNull();
     expect(mockState.activeId).toBeNull();
+  });
+
+  test('deleting a gateway removes its durable queued messages and preserves another gateway queue', async () => {
+    const row = (id: string, gatewayId: string): OfflineQueueItem => ({
+      id,
+      text: `message ${id}`,
+      gatewayId,
+      createdAt: 1,
+    });
+    // Nothing connects, so no flush can drain the queue: only the delete may
+    // remove alpha's rows (an active, connected alpha would send them instead).
+    mockState.gateways = [
+      profile({ id: 'alpha', url: 'http://alpha.test:8642' }),
+      profile({ id: 'beta', url: 'http://beta.test:8642' }),
+    ];
+    mockState.activeId = null;
+    mockState.settings = { ...mockState.settings, autoConnect: false };
+    await saveOfflineQueue([row('a1', 'alpha'), row('a2', 'alpha'), row('b1', 'beta')]);
+    await mount();
+    expect(await loadOfflineQueue()).toHaveLength(3);
+
+    await act(async () => {
+      await gatewayApi().deleteGateway('alpha');
+    });
+
+    expect(await loadOfflineQueue()).toEqual([row('b1', 'beta')]);
   });
 });

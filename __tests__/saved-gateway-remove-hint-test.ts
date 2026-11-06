@@ -76,9 +76,13 @@ describe('saved-gateway remove hint', () => {
     // profile is STILL saved when that write refuses, and the sheet stays up.
     const src = readSectionSource();
     expect(src).toMatch(/title="Remove gateway\?"/);
-    expect(src).toContain(
-      "const removeMessage = `${deleteCandidate?.name ?? 'This gateway'} will stay available if discovered again.`;",
-    );
+    // The base wording moved into gatewayRemovalMessage (which appends the
+    // unsent-queue count when there is one); the sentence itself is unchanged.
+    expect(src).toContain("gatewayRemovalMessage(deleteCandidate?.name ?? 'This gateway'");
+    const hook = nodeFs
+      .readFileSync([__dirname, '..', 'src', 'hooks', 'use-gateway-settings-screen.ts'].join(SEP), 'utf8')
+      .replace(/\r\n/g, '\n');
+    expect(hook).toContain('const base = `${gatewayName} will stay available if discovered again.`;');
     expect(src).toMatch(/is still saved\. \$\{deleteFailure\}/);
     expect(src).toMatch(/confirmLabel="Remove"/);
     expect(src).toMatch(/danger\s*\n\s*busy=\{deletePending\}\s*\n\s*onCancel=/);
