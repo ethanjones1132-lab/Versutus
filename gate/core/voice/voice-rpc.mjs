@@ -200,6 +200,14 @@ export class VoiceSessionRegistry {
       return null;
     }
 
+    /** Count live reservations, releasing expired/abandoned calls as we inspect them. */
+    liveCount() {
+      for (const deviceId of this._liveByDevice.keys()) this.liveForDevice(deviceId);
+      let count = 0;
+      for (const ids of this._liveByDevice.values()) count += ids.size;
+      return count;
+    }
+
   /**
    * Who hears about a session the registry ends — the media socket, so a call
    * whose reservation was released (as abandoned, or by a `voice.session.stop`
@@ -398,6 +406,11 @@ export function createVoiceRpc({
           throw rpcError('This device already has a live voice call', 409, 'call_in_progress');
         }
         const state = decorate(capabilities());
+        const maxConcurrentCalls = state.limits?.maxConcurrentCalls;
+        if (Number.isFinite(maxConcurrentCalls) && maxConcurrentCalls >= 0
+          && registry.liveCount() >= maxConcurrentCalls) {
+          throw rpcError('Another device is on a call with this Gate.', 409, 'voice_busy');
+        }
         // `auto` means the Bot's own preference when it carries one (§4.9); an
         // explicit request from the phone still wins.
         const choice = chooseEngine(requested, state.engines);
