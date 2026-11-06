@@ -48,6 +48,48 @@ function noticeKey(jobId: string): string {
  * whatever earlier collisions left behind.
  */
 const syncTails = new Map<string, Promise<void>>();
+const rearmTails = new Map<string, Promise<void>>();
+
+function scopeKey(scope: string): string {
+  return `versutus:routine-notification-scope:${scope}`;
+}
+
+/** Ids last read in a scope; null only when storage could not be read (retire nothing). */
+async function readScopeJobs(scope: string): Promise<Set<string> | null> {
+  let stored: string | null;
+  try {
+    stored = await keyValueStorage.getItem(scopeKey(scope));
+  } catch {
+    return null;
+  }
+  if (stored === null) return new Set();
+  try {
+    const parsed: unknown = JSON.parse(stored);
+    if (Array.isArray(parsed) && parsed.every((id) => typeof id === 'string')) return new Set(parsed);
+  } catch {
+    // fall through: a corrupt record is replaced by this read rather than disabling retirement forever
+  }
+  return new Set();
+}
+
+async function writeScopeJobs(scope: string, jobs: readonly string[]): Promise<void> {
+  try {
+    await keyValueStorage.setItem(scopeKey(scope), JSON.stringify(jobs));
+  } catch {
+    // Best-effort: inability to remember a read must not reject its caller.
+  }
+}
+
+function serialiseRearm(scope: string, work: () => Promise<void>): Promise<void> {
+  const queued = rearmTails.get(scope) ?? Promise.resolve();
+  const run = queued.then(work, work);
+  const tail = run.then(() => undefined, () => undefined);
+  rearmTails.set(scope, tail);
+  void tail.then(() => {
+    if (rearmTails.get(scope) === tail) rearmTails.delete(scope);
+  });
+  return run;
+}
 
 /**
  * Run one routine's work behind whatever that job is already syncing.
@@ -245,7 +287,7 @@ export async function cancelRoutineNotification(jobId: string): Promise<void> {
 }
 
 /**
- * Re-arm every unpaused routine's notice from one fresh gateway read.
+ * Re-arm routine notices from one fresh gateway read.
  *
  * A routine whose cron is not one of the two repeating shapes is scheduled as
  * a one-shot DATE at the next fire the GATEWAY reported (§1a) — a trigger
@@ -256,13 +298,27 @@ export async function cancelRoutineNotification(jobId: string): Promise<void> {
  * of a notice that is already waiting, and the reconcile that closes the
  * re-arm retires whatever an EARLIER overlap left behind.
  *
- * Paused jobs are skipped rather than cancelled: the pause already retired
- * their notice, and a stale OR re-armed notice for a paused routine is the
- * lie this module exists to avoid. Best-effort throughout — sync never
- * rejects, so a re-arm is safe to fire and forget.
+ * Paused jobs are passed through the per-job cancel path because a pause made
+ * on another device may not have retired this phone's notice. The read scope's
+ * persisted ids also let a disappeared job be retired without touching jobs
+ * outside that scope. Best-effort throughout — a re-arm never rejects.
  */
-export async function rearmRoutineNotifications(jobs: RoutineJob[]): Promise<void> {
-  const live = jobs.filter((job) => !job.paused);
-  await Promise.all(live.map((job) => syncRoutineNotification(job)));
-  await reconcileRoutineNotices(live.map((job) => job.id));
+export async function rearmRoutineNotifications(jobs: RoutineJob[], scope: string): Promise<void> {
+  await serialiseRearm(scope, async () => {
+    try {
+      const previousIds = await readScopeJobs(scope);
+      const currentIds = new Set(jobs.map((job) => job.id));
+      const live = jobs.filter((job) => !job.paused);
+      await Promise.all(jobs.map((job) => syncRoutineNotification(job)));
+      if (previousIds) {
+        await Promise.all(
+          [...previousIds].filter((jobId) => !currentIds.has(jobId)).map(cancelRoutineNotification),
+        );
+      }
+      await reconcileRoutineNotices(live.map((job) => job.id));
+      if (previousIds) await writeScopeJobs(scope, [...currentIds]);
+    } catch {
+      // Re-arming is best-effort even if an unexpected storage or runtime error occurs.
+    }
+  });
 }

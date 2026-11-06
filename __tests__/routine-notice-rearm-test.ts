@@ -73,7 +73,7 @@ async function storedIdFor(jobId: string): Promise<string | null> {
 }
 
 describe('re-arming routine notices as the connection comes up', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.clearAllMocks();
     mockSchedule.mockResolvedValue('notif-1');
     mockCancel.mockResolvedValue(undefined);
@@ -82,10 +82,11 @@ describe('re-arming routine notices as the connection comes up', () => {
     // Nothing is queued on the phone unless a case says so, so the reconcile
     // every re-arm closes with reads an empty queue by default.
     mockScheduled.mockResolvedValue([]);
+    await keyValueStorage.removeItem('versutus:routine-notification-scope:test-gateway');
   });
 
   test('a one-shot whose gateway fire has passed holds nothing until the gateway names a fresh one', async () => {
-    await rearmRoutineNotifications([sweep(FIRED)]);
+    await rearmRoutineNotifications([sweep(FIRED)], 'test-gateway');
 
     // The cron is beyond the two repeating shapes and the only fire the
     // gateway named is behind us: scheduling nothing is the honest landing —
@@ -99,7 +100,7 @@ describe('re-arming routine notices as the connection comes up', () => {
     await syncRoutineNotification(sweep(FIRED));
     expect(mockSchedule).not.toHaveBeenCalled();
 
-    await rearmRoutineNotifications([sweep(DUE)]);
+    await rearmRoutineNotifications([sweep(DUE)], 'test-gateway');
 
     expect(mockSchedule).toHaveBeenCalledTimes(1);
     expect(mockSchedule.mock.calls[0][0].trigger).toEqual({ type: 'date', date: Date.parse(DUE) });
@@ -107,7 +108,7 @@ describe('re-arming routine notices as the connection comes up', () => {
   });
 
   test('a re-arm whose read names no next fire leaves the held one-shot in place', async () => {
-    await rearmRoutineNotifications([sweep(DUE)]);
+    await rearmRoutineNotifications([sweep(DUE)], 'test-gateway');
     expect(mockSchedule).toHaveBeenCalledTimes(1);
     mockSchedule.mockClear();
     mockCancel.mockClear();
@@ -118,7 +119,7 @@ describe('re-arming routine notices as the connection comes up', () => {
     // fresh fire, or a pause, may replace or drop it.
     await rearmRoutineNotifications([
       { id: 'job-sweep', name: '[bot:scout] Minute sweep', schedule: '*/5 * * * *' },
-    ]);
+    ], 'test-gateway');
 
     expect(mockSchedule).not.toHaveBeenCalled();
     expect(mockCancel).not.toHaveBeenCalled();
@@ -128,8 +129,8 @@ describe('re-arming routine notices as the connection comes up', () => {
   test('re-arming replaces the held notice — one identifier survives, never a second copy', async () => {
     mockSchedule.mockResolvedValueOnce('notif-old').mockResolvedValueOnce('notif-new');
 
-    await rearmRoutineNotifications([briefing]);
-    await rearmRoutineNotifications([briefing]);
+    await rearmRoutineNotifications([briefing], 'test-gateway');
+    await rearmRoutineNotifications([briefing], 'test-gateway');
 
     expect(mockCancel).toHaveBeenCalledWith('notif-old');
     expect(mockCancel).not.toHaveBeenCalledWith('notif-new');
@@ -137,7 +138,7 @@ describe('re-arming routine notices as the connection comes up', () => {
   });
 
   test('a paused routine is not re-armed — its notice stays retired', async () => {
-    await rearmRoutineNotifications([{ ...briefing, id: 'job-paused', paused: true }]);
+    await rearmRoutineNotifications([{ ...briefing, id: 'job-paused', paused: true }], 'test-gateway');
 
     expect(mockSchedule).not.toHaveBeenCalled();
     expect(mockCancel).not.toHaveBeenCalled();
@@ -145,7 +146,7 @@ describe('re-arming routine notices as the connection comes up', () => {
   });
 
   test('a mixed read re-arms only the unpaused routines', async () => {
-    await rearmRoutineNotifications([briefing, { ...sweep(DUE), paused: true }]);
+    await rearmRoutineNotifications([briefing, { ...sweep(DUE), paused: true }], 'test-gateway');
 
     expect(mockSchedule).toHaveBeenCalledTimes(1);
     // The re-armed notice still names the Bot its routine belongs to.
@@ -157,7 +158,7 @@ describe('re-arming routine notices as the connection comes up', () => {
   });
 
   test('an empty read arms nothing', async () => {
-    await rearmRoutineNotifications([]);
+    await rearmRoutineNotifications([], 'test-gateway');
 
     expect(mockSchedule).not.toHaveBeenCalled();
     expect(mockCancel).not.toHaveBeenCalled();
@@ -176,8 +177,8 @@ describe('the provider re-arms as the connection comes up', () => {
     // read has already landed for this gateway, it is that list, not a second
     // `listJobs` for the same facts on the same connect (SPD-4).
     expect(rearm).toContain('routineJobsFromList(landed ? read.jobs : await botJobs.list())');
-    expect(rearm).toContain("read.status === 'ready' && read.gatewayId === activeGatewayRef.current?.id");
-    expect(rearm).toContain('await rearmRoutineNotifications(jobs)');
+    expect(rearm).toContain("read.status === 'ready' && read.gatewayId === gatewayId && landedScope !== undefined");
+    expect(rearm).toContain('await rearmRoutineNotifications(jobs, scope)');
     // Best-effort: a failed re-arm never breaks the connection flow.
     expect(rearm).toContain('} catch {');
   });
@@ -203,13 +204,15 @@ describe('the Bot Chat re-arms from the routine read only it can make', () => {
   test("the pane's fresh routine read re-arms that Bot's notices", () => {
     const src = screen();
     const effect = src.match(
-      /useEffect\(\(\) => \{\n    if \(!botSurfaceId \|\| status !== 'connected'\) return;[\s\S]*?\n  \}, \[botSurfaceId, status, botJobs, foldRoutineRead\]\);/,
+      /useEffect\(\(\) => \{\n    if \(!botSurfaceId \|\| !activeGateway\?\.id \|\| status !== 'connected'\) return;[\s\S]*?\n  \}, \[activeGateway\?\.id, botSurfaceId, status, botJobs, foldRoutineRead\]\);/,
     )?.[0];
     expect(effect).toBeDefined();
     // One read, not two: the same parsed list feeds the pane and the re-arm.
     expect(effect).toContain('const read = routineJobsFromList(jobs);');
     expect(effect).toContain('foldRoutineRead(botSurfaceId, { ok: true, jobs: read })');
-    expect(effect).toContain('void rearmRoutineNotifications(read).catch(() => undefined);');
+    expect(effect).toContain(
+      'void rearmRoutineNotifications(read, routineReadScope(activeGateway.id, { botId: botSurfaceId })).catch(',
+    );
     expect((effect?.match(/botJobs\s*\n?\s*\.list\(\)/g) ?? []).length).toBe(1);
   });
 });

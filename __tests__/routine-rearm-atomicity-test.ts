@@ -13,8 +13,8 @@
 //   queue forever. The per-job chain plus the record-before-retire order leave
 //   exactly one queued notice.
 // - nothing ever enumerated the queue, so the orphans earlier collisions left
-//   were never retired. The reconcile that closes a re-arm does, scoped to the
-//   jobs that read names — a Bot Chat's read carries only its own Bot's jobs.
+//   were never retired. Reconciliation closes each re-arm over its named jobs,
+//   while persisted per-scope ids retire jobs that disappeared from that read.
 
 type RoutineSync = typeof import('@/lib/notifications/routine-sync');
 type NotificationsMock = {
@@ -179,7 +179,7 @@ describe('the permission gate a routine re-arm goes through', () => {
     notifications.requestPermissionsAsync.mockResolvedValue(GRANTED);
 
     await sync.syncRoutineNotification(job('a'));
-    await sync.rearmRoutineNotifications([job('a'), job('b')]);
+    await sync.rearmRoutineNotifications([job('a'), job('b')], 'test-gateway');
 
     // One read answers for the whole process until the refusal's TTL expires:
     // re-asking a settled permission is what the re-ask-per-routine did.
@@ -294,7 +294,7 @@ describe('reconciling the queue the OS is still holding', () => {
     notifications.__queue.set('notif-orphan', 'job-1');
     notifications.cancelScheduledNotificationAsync.mockClear();
 
-    await sync.rearmRoutineNotifications([job('job-1')]);
+    await sync.rearmRoutineNotifications([job('job-1')], 'test-gateway');
 
     // The re-arm armed a fresh notice and then swept what no mapping named.
     expect(notifications.__queue.size).toBe(1);
@@ -308,7 +308,7 @@ describe('reconciling the queue the OS is still holding', () => {
     notifications.getAllScheduledNotificationsAsync.mockRejectedValue(new Error('tray unavailable'));
 
     await expect(sync.reconcileRoutineNotices(['job-1'])).resolves.toBeUndefined();
-    await expect(sync.rearmRoutineNotifications([job('job-1')])).resolves.toBeUndefined();
+    await expect(sync.rearmRoutineNotifications([job('job-1')], 'test-gateway')).resolves.toBeUndefined();
 
     // The arm still landed — the reconcile is the last step, not a gate on it.
     expect(notifications.scheduleNotificationAsync).toHaveBeenCalledTimes(1);

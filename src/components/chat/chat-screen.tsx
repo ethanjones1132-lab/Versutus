@@ -57,6 +57,7 @@ import {
   rearmRoutineNotifications,
   syncRoutineNotification,
 } from '@/lib/notifications/routine-sync';
+import { routineReadScope } from '@/lib/notifications/routine-scope';
 import { resolvePullRefreshAction } from '@/lib/gateway/messages';
 import { openSessionById } from '@/lib/gateway/session-open-by-id';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
@@ -2167,7 +2168,7 @@ export function ChatScreen() {
     [botSurfaceId, botJobs, foldRoutineRead, routineJobsFromList],
   );
   useEffect(() => {
-    if (!botSurfaceId || status !== 'connected') return;
+    if (!botSurfaceId || !activeGateway?.id || status !== 'connected') return;
     let cancelled = false;
     void botJobs
       .list()
@@ -2182,7 +2183,9 @@ export function ChatScreen() {
         // helper and same must-still as the provider's connected re-arm, and
         // the same guarded fire-and-forget: the fan-out rejects with the first
         // job that does (NOTIF-9).
-        void rearmRoutineNotifications(read).catch(() => undefined);
+        void rearmRoutineNotifications(read, routineReadScope(activeGateway.id, { botId: botSurfaceId })).catch(
+          () => undefined,
+        );
       })
       .catch((caught) => {
         if (cancelled) return;
@@ -2194,7 +2197,7 @@ export function ChatScreen() {
     return () => {
       cancelled = true;
     };
-  }, [botSurfaceId, status, botJobs, foldRoutineRead]);
+  }, [activeGateway?.id, botSurfaceId, status, botJobs, foldRoutineRead]);
 
   const handleSkillsRetry = useCallback(() => {
     if (!botSurfaceId || status !== 'connected') return;

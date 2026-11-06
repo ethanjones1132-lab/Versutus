@@ -198,6 +198,7 @@ import { syncRunActivities } from '@/lib/notifications/run-activity-device';
 import { pendingRunFocus, type RunFocus } from '@/lib/notifications/run-focus';
 import { inFlightRunIds, runProgressNotice } from '@/lib/notifications/run-progress';
 import { rearmRoutineNotifications } from '@/lib/notifications/routine-sync';
+import { routineReadScope } from '@/lib/notifications/routine-scope';
 import type {
   ChatMessage,
   CommandTranscriptEntry,
@@ -6920,6 +6921,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * the state itself — can reuse the list the cron read already produced.
    */
   const routineReadRef = useRef<FleetRoutineRead>({ jobs: [], status: 'unreported' });
+  // The Bot/environment scope the landed cron read was REQUESTED under: a Bot
+  // switch re-scopes the live client without a reconnect, so the scope at
+  // re-arm time may not be the one the read answered for.
+  const routineReadScopeRef = useRef<string | undefined>(undefined);
 
   // Re-arm routine notices on app open while connected. A routine whose cron
   // is not one of the two repeating shapes is scheduled as a one-shot DATE at
@@ -6931,15 +6936,25 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   // the two can never disagree about which jobs exist or when they fire next.
   const rearmRoutineNotices = useCallback(async () => {
     try {
+      const gatewayId = activeGatewayRef.current?.id;
+      if (!gatewayId) return;
       // The cron read has already listed this gateway's routines by the time
       // this runs, through a different route to the same facts — so a second
       // `listJobs` on the same connect is the duplicate this seam removes. Only
       // a gateway whose cron read never landed (no cron capability, or it
       // failed) still owes the read.
       const read = routineReadRef.current;
-      const landed = read.status === 'ready' && read.gatewayId === activeGatewayRef.current?.id;
+      const landedScope = routineReadScopeRef.current;
+      const landed = read.status === 'ready' && read.gatewayId === gatewayId && landedScope !== undefined;
+      const scope =
+        landed && landedScope
+          ? landedScope
+          : routineReadScope(gatewayId, {
+              botId: selectedBotIdRef.current,
+              backendId: selectedBackendIdRef.current,
+            });
       const jobs = routineJobsFromList(landed ? read.jobs : await botJobs.list());
-      await rearmRoutineNotifications(jobs);
+      await rearmRoutineNotifications(jobs, scope);
     } catch {
       // best-effort: a failed routine read re-arms nothing and breaks no
       // connection flow; the next connected transition tries again
@@ -7005,8 +7020,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       cancelRead = scheduleConnectedRead(CONNECTED_ROUTINE_LIST_DELAY_MS, () => {
         void (async () => {
           try {
+            const readScope = routineReadScope(gatewayId, {
+              botId: selectedBotIdRef.current,
+              backendId: selectedBackendIdRef.current,
+            });
             const jobs = await cron.list();
             if (!live) return;
+            routineReadScopeRef.current = readScope;
             routineReadRef.current = { gatewayId, jobs, status: 'ready' };
             setRoutineRead({ gatewayId, jobs, status: 'ready' });
           } catch {
