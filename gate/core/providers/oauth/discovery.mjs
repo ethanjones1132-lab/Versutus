@@ -1,6 +1,6 @@
 const DEFAULT_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 
-export async function discoverIssuer(issuerUrl, { allowedHosts, fetchImpl = fetch } = {}) {
+export async function discoverIssuer(issuerUrl, { allowedHosts, fetchImpl = fetch, signal } = {}) {
   const issuer = new URL(issuerUrl);
   const allowed = new Set(allowedHosts ?? DEFAULT_HOSTS);
   if (!allowed.has(issuer.hostname)) {
@@ -8,7 +8,11 @@ export async function discoverIssuer(issuerUrl, { allowedHosts, fetchImpl = fetc
   }
 
   const wellKnown = new URL('/.well-known/oauth-authorization-server', issuer);
-  const response = await fetchImpl(wellKnown);
+  signal?.throwIfAborted();
+  const response = signal
+    ? await fetchImpl(wellKnown, { signal })
+    : await fetchImpl(wellKnown);
+  signal?.throwIfAborted();
   if (!response.ok) throw new Error(`issuer discovery failed: ${response.status}`);
   const metadata = await response.json();
 

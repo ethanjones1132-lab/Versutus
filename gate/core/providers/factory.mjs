@@ -27,20 +27,20 @@ export function createProviderAdapter(config, { vault, store, oauth } = {}) {
     authenticate: async () => (await materialize()).authenticate(),
     health: async () => (await materialize()).health(),
     listModels: async () => (await materialize()).listModels(),
-    chat: async (request, signal) => (await materialize()).chat(request, signal),
+    chat: async (request, signal) => (await materialize(signal)).chat(request, signal),
     disconnect: async () => {
       const inner = await materialize().catch(() => null);
       return inner?.disconnect?.();
     },
   };
 
-  async function materialize() {
+  async function materialize(signal) {
     const registration = config.registration;
     if (registration.mode === 'local_interface') {
       return localAdapter();
     }
 
-    const credential = await resolveCredential(config, vault, store, oauth);
+    const credential = await resolveCredential(config, vault, store, oauth, signal);
     const profileId = profileIdFor(config.providerType);
     const profile = getProfile(profileId);
     const origin = new URL(registration.baseUrl || registration.resourceBaseUrl).origin;
@@ -95,7 +95,7 @@ export function createProviderAdapter(config, { vault, store, oauth } = {}) {
   }
 }
 
-async function resolveCredential(config, vault, store, oauth) {
+async function resolveCredential(config, vault, store, oauth, signal) {
   const registration = config.registration;
   // An `oauth` registration is forbidden a `credentialRef` by the schema, so the
   // token a sign-in stored under `oauth/<id>` is the only credential it can
@@ -108,6 +108,7 @@ async function resolveCredential(config, vault, store, oauth) {
     // instance id made a valid registration unable to refresh an expired grant.
     const tokens = await oauth.getAccess(config.id, {
       oauthProfileId: registration.oauthProfileId,
+      ...(signal ? { signal } : {}),
     });
     // `getAccess` returns `{accessToken, refreshToken, expiresAt, tokenType}`.
     // Profiles interpolate `Bearer ${credential}`, so handing the record

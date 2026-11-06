@@ -87,12 +87,34 @@ export class OAuthManager {
     return { cancelled: true };
   }
 
-  async getAccess(providerId, { oauthProfileId } = {}) {
-    const existing = this.inflight.get(providerId);
-    if (existing) return existing;
-    const pending = this.refreshIfNeeded(providerId, { oauthProfileId }).finally(() => this.inflight.delete(providerId));
-    this.inflight.set(providerId, pending);
-    return pending;
+  async getAccess(providerId, { oauthProfileId, signal } = {}) {
+    signal?.throwIfAborted();
+    let flight = this.inflight.get(providerId);
+    if (!flight) {
+      flight = { controller: new AbortController(), waiters: 0, settled: false };
+      this.inflight.set(providerId, flight);
+      flight.promise = this.refreshIfNeeded(providerId, {
+        oauthProfileId,
+        signal: flight.controller.signal,
+      }).finally(() => {
+        flight.settled = true;
+        if (this.inflight.get(providerId) === flight) this.inflight.delete(providerId);
+      });
+    }
+    flight.waiters += 1;
+    try {
+      return await raceWithSignal(flight.promise, signal);
+    } finally {
+      flight.waiters -= 1;
+      // A caller only owns its wait, not the shared refresh. Cancel the shared
+      // I/O only after every waiter has left, using the flight's own signal.
+      if (signal?.aborted && flight.waiters === 0 && !flight.settled) {
+        // Unlist the cancelled flight at once: a caller arriving before its
+        // promise settles must start a fresh refresh, not inherit this abort.
+        if (this.inflight.get(providerId) === flight) this.inflight.delete(providerId);
+        flight.controller.abort(signal.reason);
+      }
+    }
   }
 
   async disconnect(providerId, { oauthProfileId } = {}) {
@@ -122,8 +144,10 @@ export class OAuthManager {
     return { disconnected: true, remote };
   }
 
-  async refreshIfNeeded(providerId, { oauthProfileId } = {}) {
+  async refreshIfNeeded(providerId, { oauthProfileId, signal } = {}) {
+    signal?.throwIfAborted();
     const stored = await this.readTokens(providerId);
+    signal?.throwIfAborted();
     if (!stored) {
       const error = new Error('needs_reauth');
       error.code = 'needs_reauth';
@@ -138,22 +162,29 @@ export class OAuthManager {
     if (!profile) {
       throw new Error(`this Gate ships no OAuth profile for provider "${profileId}"`);
     }
-    const metadata = await discoverIssuer(profile.issuer, { fetchImpl: this.fetchImpl });
+    const metadata = await discoverIssuer(profile.issuer, {
+      fetchImpl: this.fetchImpl,
+      ...(signal ? { signal } : {}),
+    });
     const response = await this.fetchImpl(metadata.token_endpoint, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      ...(signal ? { signal } : {}),
       body: new URLSearchParams({
         grant_type: 'refresh_token',
         refresh_token: stored.refreshToken,
         client_id: profile.clientId,
       }),
     });
+    signal?.throwIfAborted();
     // The status first, the way `discovery.mjs` reads it. A vendor, a proxy or a
     // captive portal answers a refusal with an HTML error page, an empty body or
     // plain text, and `response.json()` on those rejects with `SyntaxError:
     // Unexpected token '<'` before the branch below ever ran -- so an
     // `invalid_grant` did not delete the refresh token it had just invalidated.
     if (!response.ok) {
+      // No abort check from here on: the endpoint has answered, so an
+      // invalidated grant is deleted whatever the caller does next.
       const payload = await response.json().catch(() => ({}));
       if (payload.error === 'invalid_grant') {
         await this.vault.delete(`oauth/${providerId}`);
@@ -162,6 +193,9 @@ export class OAuthManager {
       error.code = payload.error === 'invalid_grant' ? 'needs_reauth' : payload.error;
       throw error;
     }
+    // The endpoint has issued tokens. Store them even if every waiter has
+    // stopped: a provider that rotates refresh tokens has already invalidated
+    // the stored one, and dropping this answer would force a fresh sign-in.
     const payload = await response.json();
     const next = this.tokenRecord(payload, stored);
     await this.storeTokens(providerId, next);
@@ -200,4 +234,21 @@ export class OAuthManager {
     const raw = await this.vault.get(`oauth/${providerId}`);
     return raw ? JSON.parse(raw) : undefined;
   }
+}
+
+function raceWithSignal(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => { cleanup(); resolve(value); },
+      (error) => { cleanup(); reject(error); },
+    );
+  });
 }
