@@ -217,7 +217,7 @@ export function AppLockGate({ children }: { children: React.ReactNode }) {
     <>
       {children}
       <Modal
-        visible={phase === 'locked'}
+        visible={phase !== 'open'}
         transparent
         // No animation: a fade would leave the app legible under the cover for
         // the length of the fade, which is the leak the lock is for.

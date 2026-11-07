@@ -225,8 +225,10 @@ describe('the gate and its switch', () => {
     // cost the router, the deep-link listeners and the notification router.
     expect(src).toContain('{children}');
     expect(src).toMatch(/<Modal/);
-    // The cover is drawn on the one answer that means locked.
-    expect(src).toContain("visible={phase === 'locked'}");
+    // The cover is drawn on every answer except the one that means open, so an
+    // unresolved answer is covered too (fail-closed; see
+    // app-lock-fail-closed-test.tsx for the mounted behavior).
+    expect(src).toContain("visible={phase !== 'open'}");
   });
 
   test('the cover is presented the way a sheet is, so it outranks one', () => {

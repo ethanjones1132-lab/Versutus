@@ -258,8 +258,10 @@ describe('an answer that has not landed', () => {
 
     await mount();
 
-    // Unresolved is its own phase: no cover drawn from a guess ...
-    expect(covered()).toBe(false);
+    // The unresolved verdict is fail-closed: the cover is already up while
+    // the device answer is pending, over children that remain mounted.
+    expect(covered()).toBe(true);
+    expect(protectedRenders).toBe(1);
     // ... and nothing disposed of either — no dismissal, no re-open, no
     // accounting that could turn the presented route into the operator's own.
     expect(routerMocks.dismissAll).not.toHaveBeenCalled();
@@ -281,6 +283,35 @@ describe('an answer that has not landed', () => {
     await unlock();
     expect(covered()).toBe(false);
     expect(routerMocks.push).toHaveBeenCalledWith('/chat');
+  });
+
+  test('the pending cover lifts when the resolved verdict says the lock is off', async () => {
+    let settleFlag: (raw: string | null) => void = () => undefined;
+    storage.getItem.mockReset();
+    storage.getItem.mockImplementation(
+      () =>
+        new Promise<string | null>((resolve) => {
+          settleFlag = resolve;
+        }),
+    );
+
+    await mount();
+
+    expect(covered()).toBe(true);
+    expect(protectedRenders).toBe(1);
+    expect(routerMocks.dismissAll).not.toHaveBeenCalled();
+    expect(routerMocks.push).not.toHaveBeenCalled();
+    expect(device.authenticateAsync).not.toHaveBeenCalled();
+
+    await act(async () => {
+      settleFlag(null);
+    });
+
+    expect(covered()).toBe(false);
+    expect(protectedRenders).toBe(1);
+    expect(routerMocks.dismissAll).not.toHaveBeenCalled();
+    expect(routerMocks.push).not.toHaveBeenCalled();
+    expect(device.authenticateAsync).not.toHaveBeenCalled();
   });
 });
 
