@@ -9,6 +9,9 @@ import {
   describeStartFailure,
   resolveStartPort,
   startFailureExitCode,
+  classifyBindHost,
+  resolvePlaintextAck,
+  plaintextBindError,
 } from '../core/cli-helpers.mjs';
 
 test('validateId accepts lowercase alphanumeric with hyphens', () => {
@@ -188,4 +191,36 @@ test('resolveStartHost takes --host over VERSUTUS_GATE_HOST and accepts IP liter
   assert.equal(isLoopbackHost('127.0.0.1'), true);
   assert.equal(isLoopbackHost('::1'), true);
   assert.equal(isLoopbackHost('0.0.0.0'), false);
+});
+
+test('classifyBindHost: loopback addresses stay on this machine', () => {
+  for (const host of ['127.0.0.1', '127.8.9.10', '::1', 'localhost']) {
+    assert.equal(classifyBindHost(host), 'loopback', host);
+  }
+});
+
+test('classifyBindHost: Tailscale addresses are tailnet, at the range boundaries', () => {
+  for (const host of ['100.64.0.0', '100.101.102.103', '100.127.255.255', 'fd7a:115c:a1e0::1', 'FD7A:115C:A1E0::ABCD', 'fd7a:115c:a1e0:0:0:0:0:2']) {
+    assert.equal(classifyBindHost(host), 'tailnet', host);
+  }
+});
+
+test('classifyBindHost: wildcard, LAN and public addresses are plaintext, including the CGNAT boundaries', () => {
+  for (const host of ['0.0.0.0', '::', '192.168.1.5', '10.0.0.1', '8.8.8.8', '100.63.255.255', '100.128.0.0', 'fd7a:115c:a1e1::1', '2001:db8::1']) {
+    assert.equal(classifyBindHost(host), 'plaintext', host);
+  }
+});
+
+test('resolvePlaintextAck accepts the flag or VERSUTUS_GATE_ALLOW_PLAINTEXT=1 only', () => {
+  assert.equal(resolvePlaintextAck(['--allow-plaintext'], {}), true);
+  assert.equal(resolvePlaintextAck([], { VERSUTUS_GATE_ALLOW_PLAINTEXT: '1' }), true);
+  assert.equal(resolvePlaintextAck([], { VERSUTUS_GATE_ALLOW_PLAINTEXT: 'true' }), false);
+  assert.equal(resolvePlaintextAck([], {}), false);
+});
+
+test('plaintextBindError names the host, the flag, and Tailscale', () => {
+  const message = plaintextBindError('0.0.0.0');
+  assert.match(message, /0\.0\.0\.0/);
+  assert.match(message, /--allow-plaintext/);
+  assert.match(message, /Tailscale/);
 });

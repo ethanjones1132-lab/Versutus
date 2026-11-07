@@ -7,7 +7,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PairingStore } from './core/pairing.mjs';
 import { DeviceTokenStore } from './core/device-tokens.mjs';
-import { validateId, buildInstanceConfigTemplate, getKindTemplate, describeStartFailure, resolveStartPort, resolveStartHost, isLoopbackHost, startFailureExitCode } from './core/cli-helpers.mjs';
+import { validateId, buildInstanceConfigTemplate, getKindTemplate, describeStartFailure, resolveStartPort, resolveStartHost, isLoopbackHost, startFailureExitCode, classifyBindHost, plaintextBindError, resolvePlaintextAck } from './core/cli-helpers.mjs';
 import { resolveGateHome } from './core/paths.mjs';
 import { ProviderStore } from './core/providers/store.mjs';
 import { migrateLegacyProviders } from './core/providers/migrate-v1.mjs';
@@ -374,6 +374,13 @@ async function handleStart(args = []) {
     process.exit(78);
   }
 
+  // Refused before the lock and the port, but after the dependency check so a
+  // Gate that cannot start at all still reports that first.
+  if (classifyBindHost(host) === 'plaintext' && !resolvePlaintextAck(args, process.env)) {
+    console.error(`Error: ${plaintextBindError(host)}`);
+    process.exit(1);
+  }
+
   console.log(`Starting ${gateName}...`);
   const gateHome = resolveGateHome();
   let lock;
@@ -426,7 +433,7 @@ async function handleStart(args = []) {
     console.log(bootstrapTokenLine(gate.token));
     console.log(`Listening on ${host.includes(':') ? `[${host}]` : host}:${gate.port}`);
     if (isLoopbackHost(host)) {
-      console.log('  loopback only: expose it with Tailscale Serve, or set VERSUTUS_GATE_HOST=0.0.0.0 (or --host) to accept tailnet/LAN connections directly');
+      console.log('  loopback only: expose it with Tailscale Serve, or bind a Tailscale address with --host (a 0.0.0.0 bind also needs --allow-plaintext)');
     }
     console.log(`Manifest: http://127.0.0.1:${gate.port}/.well-known/gateway.json`);
 
@@ -660,6 +667,10 @@ async function serviceInstall(args = []) {
     console.error(`Error: ${portResolution.error}`);
     process.exit(1);
   }
+  if (classifyBindHost(hostResolution.host) === 'plaintext' && !resolvePlaintextAck(args, process.env)) {
+    console.error(`Error: ${plaintextBindError(hostResolution.host)}`);
+    process.exit(1);
+  }
   const hostGiven = args.includes('--host') || Boolean(process.env.VERSUTUS_GATE_HOST?.trim());
   const portGiven = args.includes('--port') || Boolean(process.env.VERSUTUS_GATE_PORT);
   const paths = servicePaths();
@@ -668,6 +679,7 @@ async function serviceInstall(args = []) {
     codeRoot: SERVICE_CODE_ROOT,
     host: hostGiven ? hostResolution.host : undefined,
     port: portGiven ? portResolution.port : undefined,
+    allowPlaintext: resolvePlaintextAck(args, process.env),
   });
   if (args.includes('--dry-run')) {
     // The Windows counterpart of runLaunchdService's dry run: show the task
@@ -736,12 +748,27 @@ async function serviceRun(args = []) {
   // the Gate, not the thing that watches over it.)
   installProcessGuards({ log: say, exit: () => {} });
 
+  // This task is revived every 5 minutes, so it must never refuse: a refusal
+  // here is a silent outage. A plaintext bind without acknowledgement is
+  // warned about loudly and the Gate still starts. The child `start` gets
+  // --allow-plaintext for that reason, since it would otherwise refuse.
+  const plaintext = classifyBindHost(listen.host) === 'plaintext';
+  const acknowledged = resolvePlaintextAck(args, process.env);
+  if (plaintext && !acknowledged) {
+    const warning = `WARNING: ${plaintextBindError(listen.host)} Continuing anyway because this supervisor must not refuse.`;
+    console.error(warning);
+    say(warning);
+  }
+
   const spawnGate = () => {
     const child = spawn(
       process.execPath,
       // Explicit flags keep the child on exactly the address probed below;
       // resolving both from the same source makes it what `start` would pick.
-      [join(SERVICE_CODE_ROOT, 'gate', 'cli.mjs'), 'start', '--host', listen.host, '--port', String(listen.port)],
+      [
+        join(SERVICE_CODE_ROOT, 'gate', 'cli.mjs'), 'start', '--host', listen.host, '--port', String(listen.port),
+        ...(plaintext ? ['--allow-plaintext'] : []),
+      ],
       { cwd: SERVICE_CODE_ROOT, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true },
     );
     // Separate stream keys: a half line held from stdout must never be glued
@@ -941,7 +968,24 @@ async function handleDoctor(args = []) {
     diagnoseBotGroupStore(gateHome),
     probeLocalGate(`${listen}/.well-known/gateway.json`),
   ]);
-  const findings = [...environmentFindings, ...storeFindings];
+  // The bind address the Gate is configured for: a flag or env var wins, else
+  // the installed task's arguments, else the Gate's default. Informational only.
+  const installed = installedServiceListen(servicePaths());
+  const explicit = args.includes('--host') || process.env.VERSUTUS_GATE_HOST?.trim();
+  const hostResolution = resolveStartHost(args);
+  const configuredHost = explicit || !installed.host ? hostResolution.host : installed.host;
+  const acknowledged = resolvePlaintextAck(args, process.env) || installed.allowPlaintext === true;
+  const bindFindings = configuredHost && classifyBindHost(configuredHost) === 'plaintext'
+    ? [{
+      severity: 'warn',
+      environment: null,
+      message: `bind ${configuredHost} exposes bearer tokens over plain HTTP`
+        + (acknowledged
+          ? ' (acknowledged with --allow-plaintext)'
+          : ' without --allow-plaintext; use a Tailscale address or Tailscale Serve instead'),
+    }]
+    : [];
+  const findings = [...environmentFindings, ...storeFindings, ...bindFindings];
   const vaultCheck = await checkCredentialBackend(vault.backend);
   console.log(doctor({
     user,

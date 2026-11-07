@@ -150,15 +150,17 @@ Providers live at `gate/registry/<id>.json`, scaffolded with `node cli.mjs add <
 - **Windows:** a per-user Scheduled Task (hidden, logon + every-5-minute triggers) that launches the `service run` supervisor.
 - **macOS:** a per-user LaunchAgent, `~/Library/LaunchAgents/com.versutus.gate.plist`, loaded into `gui/<uid>`. launchd is the supervisor: it starts `gate/cli.mjs start` at login (`RunAtLoad`), restarts it if it crashes (`KeepAlive`, 10 s throttle) and writes `gate.out.log` / `gate.err.log` under `~/.local/share/Versutus/Gate/logs`. There is no `service run` on macOS.
   - `install` writes the plist, checks it with `plutil -lint` and runs `launchctl bootstrap`. An agent already loaded under the label is booted out and reloaded, and a plist it replaces is saved as `<gate home>/service/com.versutus.gate.plist.previous`.
-  - The Gate binds `127.0.0.1` by default. **To keep phone/tailnet access, install with `--host 0.0.0.0`** (or a tailnet IP), or set `VERSUTUS_GATE_HOST` when you run `install`. Either way it is written into the agent's `EnvironmentVariables`. `--port` / `VERSUTUS_GATE_PORT` and `VERSUTUS_GATE_HOME` pass through the same way, and `--node <path>` picks the node binary (by default, the one running the command).
+  - The Gate binds `127.0.0.1` by default. **To keep phone/tailnet access, install with a Tailscale IP** (`--host 100.x.y.z`, no acknowledgement needed), or set `VERSUTUS_GATE_HOST` when you run `install`. A `0.0.0.0` bind sends bearer tokens over plain HTTP, so `install` refuses it unless you add `--allow-plaintext` (or set `VERSUTUS_GATE_ALLOW_PLAINTEXT=1`), which is written into the agent's `EnvironmentVariables`. The bind address is written there too. `--port` / `VERSUTUS_GATE_PORT` and `VERSUTUS_GATE_HOME` pass through the same way, and `--node <path>` picks the node binary (by default, the one running the command).
+  - **Upgrading an agent installed with `--host 0.0.0.0`:** launchd runs `start` directly, so an agent installed before the plaintext acknowledgement existed will refuse to start and `KeepAlive` will retry in a loop. Re-run `install` with `--allow-plaintext` (or a Tailscale IP) once after pulling. The Windows task is not affected: its `service run` supervisor warns and passes the acknowledgement to the Gate it starts.
   - `--dry-run` prints the plist and the `launchctl` commands and changes nothing.
   - `uninstall` boots the agent out and deletes the plist. `stop` boots it out but keeps the plist, so it comes back at the next login or on `service start`. `restart` is `launchctl kickstart -k`.
   - `status` reads `launchctl print gui/<uid>/com.versutus.gate` and probes the manifest. It exits 1 unless the agent is running and the Gate answers.
 - **Linux:** not supported yet. `service` says so; run `node gate/cli.mjs start` under your own process manager.
 
 ```bash
-node gate/cli.mjs service install --host 0.0.0.0 --dry-run   # inspect first
-node gate/cli.mjs service install --host 0.0.0.0
+node gate/cli.mjs service install --host 100.x.y.z --dry-run   # inspect first (Tailscale IP, no acknowledgement)
+node gate/cli.mjs service install --host 100.x.y.z
+node gate/cli.mjs service install --host 0.0.0.0 --allow-plaintext   # LAN/every interface: tokens cross the network unencrypted
 node gate/cli.mjs service status
 ```
 

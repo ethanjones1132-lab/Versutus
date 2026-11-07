@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { posix } from 'node:path';
 
-import { resolveStartHost, resolveStartPort } from '../cli-helpers.mjs';
+import { classifyBindHost, plaintextBindError, resolvePlaintextAck, resolveStartHost, resolveStartPort } from '../cli-helpers.mjs';
 import { resolveGateHome } from '../paths.mjs';
 import { TOKEN_REDACTION_ENV } from './rotating-log.mjs';
 
@@ -76,6 +76,7 @@ export function buildLaunchAgent({
   host,
   port,
   path,
+  allowPlaintext = false,
 } = {}) {
   if (!nodeExe || !posix.isAbsolute(nodeExe)) throw new Error('nodeExe must be an absolute path to node');
   if (!codeRoot || !posix.isAbsolute(codeRoot)) throw new Error('codeRoot must be an absolute path to the Versutus checkout');
@@ -94,6 +95,7 @@ export function buildLaunchAgent({
   };
   if (gateHome) environment.VERSUTUS_GATE_HOME = gateHome;
   if (host) environment.VERSUTUS_GATE_HOST = host;
+  if (allowPlaintext) environment.VERSUTUS_GATE_ALLOW_PLAINTEXT = '1';
   if (port !== undefined && port !== null) environment.VERSUTUS_GATE_PORT = String(port);
 
   const s = (value) => `<string>${escapePlistString(value)}</string>`;
@@ -160,6 +162,7 @@ export function parseLaunchctlPrint(text = '') {
     path: first(/^\s*path = (.+)$/m),
     host: first(/^\s*VERSUTUS_GATE_HOST => (.+)$/m),
     port: first(/^\s*VERSUTUS_GATE_PORT => (\d+)\s*$/m),
+    ...(first(/^\s*VERSUTUS_GATE_ALLOW_PLAINTEXT => (.+)$/m) === '1' ? { allowPlaintext: true } : {}),
   };
 }
 
@@ -451,6 +454,8 @@ export async function runLaunchdService(sub, args = [], {
       if (portResolution.error) return fail(portResolution.error);
       const hostGiven = args.includes('--host') || Boolean(env.VERSUTUS_GATE_HOST?.trim());
       const portGiven = args.includes('--port') || Boolean(env.VERSUTUS_GATE_PORT);
+      const allowPlaintext = resolvePlaintextAck(args, env);
+      if (classifyBindHost(hostResolution.host) === 'plaintext' && !allowPlaintext) return fail(plaintextBindError(hostResolution.host));
       const nodeIndex = args.indexOf('--node');
       let nodePath = nodeExe;
       if (nodeIndex !== -1) {
@@ -467,6 +472,7 @@ export async function runLaunchdService(sub, args = [], {
         gateHome,
         host: hostGiven ? hostResolution.host : undefined,
         port: portGiven ? portResolution.port : undefined,
+        allowPlaintext,
       });
       const result = await installLaunchAgent({ agent, plistPath, backupPath, uid, dryRun, run, out, ...(sleep ? { sleep } : {}) });
       if (!result.ok) return fail(result.message);

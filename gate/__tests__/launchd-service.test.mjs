@@ -225,6 +225,33 @@ test('generated plist is valid for plutil and round-trips escaped values (macOS)
   });
 });
 
+test('the plaintext acknowledgement is written to and read back from the agent environment', () => {
+  const acked = buildLaunchAgent({ nodeExe: '/n', codeRoot: '/c', home: '/h', host: '0.0.0.0', allowPlaintext: true });
+  assert.equal(acked.environment.VERSUTUS_GATE_ALLOW_PLAINTEXT, '1');
+  assert.match(acked.plist, /<key>VERSUTUS_GATE_ALLOW_PLAINTEXT<\/key>\s*<string>1<\/string>/);
+  const plain = buildLaunchAgent({ nodeExe: '/n', codeRoot: '/c', home: '/h', host: '0.0.0.0' });
+  assert.equal(plain.environment.VERSUTUS_GATE_ALLOW_PLAINTEXT, undefined);
+  const info = parseLaunchctlPrint(PRINT_RUNNING.replace(
+    'VERSUTUS_GATE_HOST => 0.0.0.0',
+    'VERSUTUS_GATE_HOST => 0.0.0.0\n\t\tVERSUTUS_GATE_ALLOW_PLAINTEXT => 1',
+  ));
+  assert.equal(info.allowPlaintext, true);
+  assert.equal(parseLaunchctlPrint(PRINT_RUNNING).allowPlaintext, undefined);
+});
+
+test('install refuses a plaintext bind without acknowledgement, and records the acknowledgement when given', async () => {
+  await withTemp(async (dir) => {
+    const plistPath = join(dir, 'LaunchAgents', 'com.versutus.gate.plist');
+    const refused = deps(dir, { run: statefulLaunchctl().run });
+    assert.equal(await runLaunchdService('install', ['--host', '0.0.0.0'], refused.opts), 1);
+    assert.match(refused.errors.join('\n'), /refusing to bind 0\.0\.0\.0/);
+    assert.equal(existsSync(plistPath), false, 'a refused install writes nothing');
+    const acked = deps(dir, { run: statefulLaunchctl().run });
+    assert.equal(await runLaunchdService('install', ['--host', '0.0.0.0', '--allow-plaintext'], acked.opts), 0, acked.errors.join('\n'));
+    assert.match(readFileSync(plistPath, 'utf8'), /<key>VERSUTUS_GATE_ALLOW_PLAINTEXT<\/key>\s*<string>1<\/string>/);
+  });
+});
+
 test('LaunchAgent path is ~/Library/LaunchAgents/<label>.plist', () => {
   assert.equal(launchAgentPath({ home: '/Users/ethan' }), '/Users/ethan/Library/LaunchAgents/com.versutus.gate.plist');
   assert.equal(launchAgentPath({ agentsDir: '/tmp/x' }), '/tmp/x/com.versutus.gate.plist');
@@ -253,7 +280,7 @@ test('install --dry-run prints the plist and launchctl commands and changes noth
   await withTemp(async (dir) => {
     const { run, calls } = fakeRun();
     const d = deps(dir, { run });
-    const code = await runLaunchdService('install', ['--dry-run', '--host', '0.0.0.0'], d.opts);
+    const code = await runLaunchdService('install', ['--dry-run', '--host', '0.0.0.0', '--allow-plaintext'], d.opts);
     assert.equal(code, 0, d.errors.join('\n'));
     assert.deepEqual(calls, [], 'dry run must not run launchctl or plutil');
     assert.equal(existsSync(join(dir, 'LaunchAgents')), false, 'dry run must not write the plist');
@@ -301,7 +328,7 @@ test('install passes --host through, and VERSUTUS_GATE_HOST when no flag is give
     assert.match(xml, /<key>VERSUTUS_GATE_PORT<\/key>\s*<string>8790<\/string>/);
 
     const second = deps(dir, { run: statefulLaunchctl().run });
-    second.opts.env = { ...second.opts.env, VERSUTUS_GATE_HOST: '0.0.0.0' };
+    second.opts.env = { ...second.opts.env, VERSUTUS_GATE_HOST: '0.0.0.0', VERSUTUS_GATE_ALLOW_PLAINTEXT: '1' };
     assert.equal(await runLaunchdService('install', [], second.opts), 0, second.errors.join('\n'));
     xml = readFileSync(plistPath, 'utf8');
     assert.match(xml, /<key>VERSUTUS_GATE_HOST<\/key>\s*<string>0\.0\.0\.0<\/string>/);
@@ -605,7 +632,7 @@ test('CLI: `service install --dry-run` prints a plist on macOS, the task on Wind
   await withTemp(async (dir) => {
     const home = join(dir, 'home');
     const { code, stdout, stderr } = await new Promise((resolve) => {
-      const proc = spawn(process.execPath, [cliPath, 'service', 'install', '--dry-run', '--host', '0.0.0.0'], {
+      const proc = spawn(process.execPath, [cliPath, 'service', 'install', '--dry-run', '--host', '0.0.0.0', '--allow-plaintext'], {
         cwd: dir,
         env: { ...process.env, HOME: home, VERSUTUS_GATE_HOME: join(dir, 'gate-home') },
         stdio: ['ignore', 'pipe', 'pipe'],

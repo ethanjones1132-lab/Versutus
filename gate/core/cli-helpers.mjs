@@ -129,6 +129,57 @@ export function isLoopbackHost(host) {
   return host === 'localhost' || host === '::1' || /^127\./.test(String(host));
 }
 
+/** Tailscale's CGNAT range (100.64.0.0/10) and its IPv6 prefix (fd7a:115c:a1e0::/48). */
+const TAILNET_V6_HEXTETS = [0xfd7a, 0x115c, 0xa1e0];
+
+/** The eight 16-bit groups of an IPv6 literal, or null when it is not one we expand. */
+function ipv6Hextets(address) {
+  if (address.includes('.')) return null;
+  const halves = address.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const groups = halves.length === 2
+    ? [...head, ...Array(8 - head.length - tail.length).fill('0'), ...tail]
+    : head;
+  if (groups.length !== 8) return null;
+  const values = groups.map((group) => (/^[0-9a-f]{1,4}$/.test(group) ? parseInt(group, 16) : NaN));
+  return values.some(Number.isNaN) ? null : values;
+}
+
+/**
+ * How a bind address reaches the network. `loopback` never leaves this
+ * machine; `tailnet` is a Tailscale address, so WireGuard already encrypts
+ * the traffic; `plaintext` is anything else (0.0.0.0, ::, LAN, public), where
+ * bearer tokens would cross the wire unencrypted.
+ */
+export function classifyBindHost(host) {
+  const raw = String(host ?? '').trim().replace(/^\[(.*)\]$/, '$1').toLowerCase();
+  if (isLoopbackHost(raw)) return 'loopback';
+  const family = isIP(raw);
+  if (family === 4) {
+    const [first, second] = raw.split('.').map(Number);
+    if (first === 100 && second >= 64 && second <= 127) return 'tailnet';
+  } else if (family === 6) {
+    const hextets = ipv6Hextets(raw);
+    if (hextets && TAILNET_V6_HEXTETS.every((value, index) => hextets[index] === value)) return 'tailnet';
+  }
+  return 'plaintext';
+}
+
+/** Whether the operator acknowledged serving bearer tokens over plain HTTP. */
+export function resolvePlaintextAck(args = [], env = process.env) {
+  return args.includes('--allow-plaintext') || env?.VERSUTUS_GATE_ALLOW_PLAINTEXT === '1';
+}
+
+/** The refusal printed when a plaintext bind has no acknowledgement. */
+export function plaintextBindError(host) {
+  return `refusing to bind ${host}: the Gate speaks plain HTTP with no TLS, so its bearer tokens would cross the network unencrypted. `
+    + 'Choose one: bind a Tailscale address with --host <100.x address> (Tailscale encrypts that traffic); '
+    + 'keep the Gate on loopback and expose it through Tailscale Serve; '
+    + 'or acknowledge the risk with --allow-plaintext (or VERSUTUS_GATE_ALLOW_PLAINTEXT=1).';
+}
+
 /** Source text for a newly-scaffolded kind.mjs — the required fields
  *  as empty holes, matching how `add` scaffolds a provider config's holes. */
 export function getKindTemplate(kindId, label, family) {

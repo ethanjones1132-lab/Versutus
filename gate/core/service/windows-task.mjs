@@ -17,7 +17,8 @@ export const TASK_NAME = 'VersutusGate';
  * (a flag or VERSUTUS_GATE_HOST/PORT): the task launches the supervisor with
  * no console and no environment block, so the supervisor's own arguments are
  * the only way the operator's bind address reaches it. Read them back with
- * `taskRunArgs()`.
+ * `taskRunArgs()`. `allowPlaintext` records that the operator acknowledged
+ * serving the Gate over plain HTTP on a non-loopback, non-tailnet address.
  */
 export function buildTaskDefinition({
   user,
@@ -26,6 +27,7 @@ export function buildTaskDefinition({
   gateHome,
   host,
   port,
+  allowPlaintext = false,
 } = {}) {
   if (!user || /^system$/i.test(user) || /\\system$/i.test(user)) {
     throw new Error('Scheduled Task must run as the logged-in user, not SYSTEM');
@@ -38,7 +40,7 @@ export function buildTaskDefinition({
     logonType: 'InteractiveToken',
     runLevel: 'LeastPrivilege',
     codeRoot,
-    xml: taskXml({ user, nodeExe, codeRoot, cli, host, port }),
+    xml: taskXml({ user, nodeExe, codeRoot, cli, host, port, allowPlaintext }),
   };
 }
 
@@ -67,6 +69,7 @@ export function taskRunArgs(xml) {
   return {
     ...(host ? { host } : {}),
     ...(Number.isInteger(port) ? { port } : {}),
+    ...(args.includes('--allow-plaintext') ? { allowPlaintext: true } : {}),
   };
 }
 
@@ -79,11 +82,12 @@ function escapeXml(value) {
     .replace(/'/g, '&apos;');
 }
 
-function taskXml({ user, nodeExe, codeRoot, cli, host, port }) {
+function taskXml({ user, nodeExe, codeRoot, cli, host, port, allowPlaintext = false }) {
   const command = 'C:\\Windows\\System32\\conhost.exe';
   const supervisor = ['service', 'run'];
   if (host) supervisor.push('--host', host);
   if (port !== undefined && port !== null) supervisor.push('--port', String(port));
+  if (allowPlaintext) supervisor.push('--allow-plaintext');
   const args = `--headless "${nodeExe}" "${cli}" ${supervisor.join(' ')}`;
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">

@@ -32,6 +32,25 @@ async function runCli(args, env = {}) {
   });
 }
 
+test('task XML carries the plaintext acknowledgement only when given, and reads it back', () => {
+  const plain = buildTaskDefinition({ user: 'ETHANSPC\\ethan', host: '0.0.0.0', port: 9500 });
+  const acked = buildTaskDefinition({ user: 'ETHANSPC\\ethan', host: '0.0.0.0', port: 9500, allowPlaintext: true });
+  assert.match(acked.xml, /service run --host 0\.0\.0\.0 --port 9500 --allow-plaintext/);
+  assert.deepEqual(taskRunArgs(acked.xml), { host: '0.0.0.0', port: 9500, allowPlaintext: true });
+  assert.doesNotMatch(plain.xml, /allow-plaintext/);
+  assert.deepEqual(taskRunArgs(plain.xml), { host: '0.0.0.0', port: 9500 });
+  const absent = buildTaskDefinition({ user: 'ETHANSPC\\ethan', host: '127.0.0.1', port: 9500 });
+  const explicitFalse = buildTaskDefinition({ user: 'ETHANSPC\\ethan', host: '127.0.0.1', port: 9500, allowPlaintext: false });
+  assert.equal(explicitFalse.xml, absent.xml);
+});
+
+test('CLI: start refuses a plaintext bind without acknowledgement', async () => {
+  const { code, stderr } = await runCli(['start', '--host', '0.0.0.0'], { VERSUTUS_GATE_ALLOW_PLAINTEXT: '' });
+  assert.equal(code, 1);
+  assert.match(stderr, /Error: refusing to bind 0\.0\.0\.0/);
+  assert.match(stderr, /--allow-plaintext/);
+});
+
 test('service installation refuses SYSTEM identity', () => {
   assert.throws(() => buildTaskDefinition({ user: 'SYSTEM' }), /logged-in user/i);
 });
@@ -103,7 +122,7 @@ test('a dry-run install writes no task file and names what it would register', {
   const dir = await mkdtemp(join(tmpdir(), 'gate-service-dry-run-'));
   try {
     const { code, stdout, stderr } = await runCli(
-      ['service', 'install', '--dry-run', '--host', '0.0.0.0', '--port', '9500'],
+      ['service', 'install', '--dry-run', '--host', '0.0.0.0', '--port', '9500', '--allow-plaintext'],
       { VERSUTUS_GATE_HOME: dir },
     );
     assert.equal(code, 0, stderr);
