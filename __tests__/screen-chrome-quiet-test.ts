@@ -138,6 +138,9 @@ describe('the stage every Screen mounts is one lamp, not busy art', () => {
     expect(native).toContain('governorAdvance(');
     // Skia on Android draws into a TextureView so the scale and transforms (and later the Veil) composite; `opaque` would switch it to a SurfaceView, which ignores them.
     expect(native).not.toContain('opaque');
+    // Importing react-native-worklets whole pulls its native module into every jest suite that renders a Screen (they mock Reanimated only); the UI-to-JS hop is Reanimated's runOnJS.
+    expect(native).not.toContain('react-native-worklets');
+    expect(native).toContain('runOnJS(setLevel)(');
     expect(native).toContain('clock.setActive(running)');
     // The tilt sensor exists only while the lamp is running.
     expect(native).toContain('{running ? <TiltSource');

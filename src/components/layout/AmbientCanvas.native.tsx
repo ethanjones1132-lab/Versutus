@@ -8,13 +8,13 @@ import {
   useAnimatedReaction,
   useAnimatedSensor,
   useDerivedValue,
+  runOnJS,
   useFrameCallback,
   useReducedMotion,
   useSharedValue,
   withTiming,
   type SharedValue,
 } from 'react-native-reanimated';
-import { scheduleOnRN } from 'react-native-worklets';
 
 import {
   STAGE_GAIN,
@@ -215,7 +215,9 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
     const dt = info.timeSincePreviousFrame ?? 0;
     // The state object lives on the UI thread and is advanced in place: a frame allocates nothing.
     const g = governor.get();
-    if (governorAdvance(g, info.timestamp, dt)) scheduleOnRN(setLevel, g.level);
+    // `runOnJS` from Reanimated, not worklets' `scheduleOnRN`: importing the worklets package whole pulls
+    // its native module into every jest suite that renders a Screen, and those suites mock Reanimated only.
+    if (governorAdvance(g, info.timestamp, dt)) runOnJS(setLevel)(g.level);
     const hz = GOVERNOR_LEVELS[g.level].fieldHz;
     if (hz === 0) return;
     pending.set(pending.get() + dt);
