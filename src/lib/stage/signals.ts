@@ -16,6 +16,8 @@ export type StageSignalState = {
   sendCount: number;
   /** A Bot is replying right now. */
   speaking: boolean;
+  /** A tool or command is running right now (the room breathes while it works). */
+  working: boolean;
   /** The active Gate's connection; undefined when there is no Gate yet. */
   connection: ConnectionStatus | undefined;
   /** The last time the operator touched the app (ms, `Date.now()`). */
@@ -25,13 +27,14 @@ export type StageSignalState = {
 type Listener = () => void;
 
 const listeners = new Set<Listener>();
-let state: StageSignalState = { sendCount: 0, speaking: false, connection: undefined, touchedAt: 0 };
+let state: StageSignalState = { sendCount: 0, speaking: false, working: false, connection: undefined, touchedAt: 0 };
 
 function update(patch: Partial<StageSignalState>): void {
   const next = { ...state, ...patch };
   if (
     next.sendCount === state.sendCount &&
     next.speaking === state.speaking &&
+    next.working === state.working &&
     next.connection === state.connection &&
     next.touchedAt === state.touchedAt
   ) {
@@ -62,6 +65,11 @@ export function signalSpeaking(speaking: boolean): void {
   update({ speaking });
 }
 
+/** A tool or command started or stopped running. */
+export function signalWorking(working: boolean): void {
+  update({ working });
+}
+
 export function signalConnection(connection: ConnectionStatus | undefined): void {
   update({ connection });
 }
@@ -77,6 +85,6 @@ export function signalTouched(now: number = Date.now()): void {
 
 /** Test seam: back to a quiet room. */
 export function resetStageSignals(): void {
-  state = { sendCount: 0, speaking: false, connection: undefined, touchedAt: 0 };
+  state = { sendCount: 0, speaking: false, working: false, connection: undefined, touchedAt: 0 };
   for (const listener of listeners) listener();
 }
