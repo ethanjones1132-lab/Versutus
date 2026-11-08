@@ -204,7 +204,7 @@ import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
 import { BRAND_TONE, type StageRoom } from '@/lib/stage/lamp';
 import { useBotCrest } from '@/hooks/use-crest-fleet';
-import { signalSent, signalSpeaking } from '@/lib/stage/signals';
+import { signalSent, signalSpeaking, signalWorking } from '@/lib/stage/signals';
 import { chatTranscriptContentPaddingBottom } from '@/lib/motion/chat-transcript-insets';
 import { chatJumpBottom } from '@/lib/motion/chat-jump-inset';
 
@@ -1210,12 +1210,14 @@ export function ChatScreen() {
   // time for a number. One memoised pass answers both.
   const transcriptAnswers = useMemo(() => {
     let streaming = false;
+    let working = false;
     let queued = 0;
     for (const message of messages) {
       if (message.streaming) streaming = true;
+      if (message.command?.status === 'running') working = true;
       if (message.queued) queued += 1;
     }
-    return { streaming, queued };
+    return { streaming, working, queued };
   }, [messages]);
   const isStreaming = isSending || transcriptAnswers.streaming;
   // While a Bot is replying the room is a little brighter; it settles after.
@@ -1223,6 +1225,12 @@ export function ChatScreen() {
     signalSpeaking(isStreaming);
   }, [isStreaming]);
   useEffect(() => () => signalSpeaking(false), []);
+  // While a tool or command runs the room breathes; it settles when it ends.
+  const isWorking = transcriptAnswers.working;
+  useEffect(() => {
+    signalWorking(isWorking);
+  }, [isWorking]);
+  useEffect(() => () => signalWorking(false), []);
   const queuedCount = transcriptAnswers.queued;
   const showPairingSheet = status === 'pairing' && !!deviceId && dismissedPairingKey !== pairingKey;
   // Dismiss hides the sheet without ending pairing — this banner is the way

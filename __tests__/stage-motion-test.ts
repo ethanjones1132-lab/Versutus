@@ -28,7 +28,7 @@ import {
 const SURFACE = { width: 430, height: 932, pixelRatio: 1 };
 const LOBBY = stageLightsFor({ kind: 'lobby' });
 const FORGE = stageLightsFor({ kind: 'bot', botId: 'forge' });
-const QUIET: StageSignalState = { sendCount: 0, speaking: false, connection: 'connected', touchedAt: 0 };
+const QUIET: StageSignalState = { sendCount: 0, speaking: false, working: false, connection: 'connected', touchedAt: 0 };
 
 beforeEach(() => resetStageSignals());
 
