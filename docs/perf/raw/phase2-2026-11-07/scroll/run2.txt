@@ -1,0 +1,101 @@
+Applications Graphics Acceleration Info:
+Uptime: 42051209 Realtime: 55670802
+
+** Graphics info for pid 5722 [com.versutus.perfc] **
+
+Stats since: 42039495818199ns
+Total frames rendered: 1119
+Janky frames: 106 (9.47%)
+Janky frames (legacy): 237 (21.18%)
+50th percentile: 10ms
+90th percentile: 29ms
+95th percentile: 34ms
+99th percentile: 44ms
+Number Missed Vsync: 4
+Number High input latency: 1972
+Number Slow UI thread: 30
+Number Slow bitmap uploads: 0
+Number Slow issue draw commands: 102
+Number Frame deadline missed: 106
+Number Frame deadline missed (legacy): 77
+HISTOGRAM: 5ms=60 6ms=83 7ms=84 8ms=57 9ms=99 10ms=210 11ms=97 12ms=60 13ms=40 14ms=16 15ms=32 16ms=15 17ms=14 18ms=18 19ms=24 20ms=17 21ms=7 22ms=6 23ms=11 24ms=7 25ms=10 26ms=9 27ms=12 28ms=13 29ms=12 30ms=15 31ms=9 32ms=20 34ms=11 36ms=15 38ms=20 40ms=4 42ms=0 44ms=3 46ms=0 48ms=3 53ms=1 57ms=1 61ms=0 65ms=1 69ms=0 73ms=2 77ms=0 81ms=0 85ms=0 89ms=0 93ms=1 97ms=0 101ms=0 105ms=0 109ms=0 113ms=0 117ms=0 121ms=0 125ms=0 129ms=0 133ms=0 150ms=0 200ms=0 250ms=0 300ms=0 350ms=0 400ms=0 450ms=0 500ms=0 550ms=0 600ms=0 650ms=0 700ms=0 750ms=0 800ms=0 850ms=0 900ms=0 950ms=0 1000ms=0 1050ms=0 1100ms=0 1150ms=0 1200ms=0 1250ms=0 1300ms=0 1350ms=0 1400ms=0 1450ms=0 1500ms=0 1550ms=0 1600ms=0 1650ms=0 1700ms=0 1750ms=0 1800ms=0 1850ms=0 1900ms=0 1950ms=0 2000ms=0 2050ms=0 2100ms=0 2150ms=0 2200ms=0 2250ms=0 2300ms=0 2350ms=0 2400ms=0 2450ms=0 2500ms=0 2550ms=0 2600ms=0 2650ms=0 2700ms=0 2750ms=0 2800ms=0 2850ms=0 2900ms=0 2950ms=0 3000ms=0 3050ms=0 3100ms=0 3150ms=0 3200ms=0 3250ms=0 3300ms=0 3350ms=0 3400ms=0 3450ms=0 3500ms=0 3550ms=0 3600ms=0 3650ms=0 3700ms=0 3750ms=0 3800ms=0 3850ms=0 3900ms=0 3950ms=0 4000ms=0 4050ms=0 4100ms=0 4150ms=0 4200ms=0 4250ms=0 4300ms=0 4350ms=0 4400ms=0 4450ms=0 4500ms=0 4550ms=0 4600ms=0 4650ms=0 4700ms=0 4750ms=0 4800ms=0 4850ms=0 4900ms=0 4950ms=0
+50th gpu percentile: 6ms
+90th gpu percentile: 24ms
+95th gpu percentile: 4950ms
+99th gpu percentile: 4950ms
+GPU HISTOGRAM: 1ms=0 2ms=65 3ms=173 4ms=127 5ms=157 6ms=171 7ms=85 8ms=53 9ms=32 10ms=29 11ms=25 12ms=7 13ms=9 14ms=15 15ms=12 16ms=12 17ms=5 18ms=1 19ms=4 20ms=7 21ms=11 22ms=3 23ms=4 24ms=6 25ms=8 4950ms=98
+
+Pipeline=Skia (OpenGL)
+Memory policy:
+  Max surface area: 2527200
+  Max resource usage: 121.31MB (x48)
+  Background retention: 50% (altUiHidden = true)
+  GPU Context timeout: 10
+Contexts: 1 (stopped = 0)
+CPU Caches:
+  Glyph Cache: 1.17 MB (1 entry)
+  Glyph Count: 68 
+Total CPU memory usage:
+  1226950 bytes, 1.17 MB (0.00 bytes is purgeable)
+GPU Caches:
+  Other:
+    TextBlobCache: 302.03 KB (1 entry)
+    Buffer Object: 11.50 KB (5 entries)
+    StencilAttachment: 31.00 KB (5 entries)
+  Image:
+    Texture: 5.02 MB (9 entries)
+  Scratch:
+    RenderTarget: 46.25 MB (70 entries)
+    Texture: 2.00 MB (2 entries)
+    Buffer Object: 78.03 KB (3 entries)
+Layer Info:
+    GlLayer size 574x1204
+    GlLayer size 394x394
+  Layers Total         3305.98 KB (numLayers = 2)
+Total GPU memory usage:
+  56287420 bytes, 53.68 MB (15.95 MB is purgeable)
+TextureView: 574x1204
+TextureView: 394x394
+
+GraphicBufferAllocator buffers:
+            Handle |         Size |     W (Stride) x H | Layers |   Format |      Usage | Requestor
+0xb400007bce50cc10 |  9945.00 KiB | 1080 (1088) x 2340 |      1 |        1 | 0x40000000000b00 | VRI[MainActivity]@b9507db#0(BLAST Consumer)0
+0xb400007bce50dd90 |  9945.00 KiB | 1080 (1088) x 2340 |      1 |        1 | 0x40000000000b00 | VRI[MainActivity]@b9507db#0(BLAST Consumer)0
+0xb400007bce50f450 |  9945.00 KiB | 1080 (1088) x 2340 |      1 |        1 | 0x40000000000b00 | VRI[MainActivity]@b9507db#0(BLAST Consumer)0
+0xb400007bce50fed0 |  9945.00 KiB | 1080 (1088) x 2340 |      1 |        1 | 0x40000000000b00 | VRI[MainActivity]@b9507db#0(BLAST Consumer)0
+0xb400007bce5fb4d0 |   615.62 KiB |  394 ( 400) x  394 |      1 |        1 | 0x40000000000300 | SurfaceTexture-0-5722-5
+0xb400007bce610310 |  2709.00 KiB |  574 ( 576) x 1204 |      1 |        1 | 0x40000000000300 | SurfaceTexture-0-5722-4
+0xb400007bce61a090 |  2709.00 KiB |  574 ( 576) x 1204 |      1 |        1 | 0x40000000000300 | SurfaceTexture-0-5722-4
+Total allocated by GraphicBufferAllocator (estimate): 45813.62 KB
+Imported gralloc buffers:
++ name:SurfaceTexture-0-5722-4, id:3693671897454, size:2736.75KiB, w/h:574x1204, usage: 0x40000000000300, req fmt:1, fourcc/mod:875708993/0, dataspace: 0x0, compressed: false
+	planes: R/G/B/A:	 w/h:576x1216, stride:2304 bytes, size:2802432
++ name:SurfaceTexture-0-5722-5, id:3693671897453, size:625.75KiB, w/h:394x394, usage: 0x40000000000300, req fmt:1, fourcc/mod:875708993/0, dataspace: 0x0, compressed: false
+	planes: R/G/B/A:	 w/h:400x400, stride:1600 bytes, size:640768
++ name:SurfaceTexture-0-5722-4, id:3693671897452, size:2736.75KiB, w/h:574x1204, usage: 0x40000000000300, req fmt:1, fourcc/mod:875708993/0, dataspace: 0x0, compressed: false
+	planes: R/G/B/A:	 w/h:576x1216, stride:2304 bytes, size:2802432
++ name:VRI[MainActivity]@b9507db#0(BLAST Consumer)0, id:3693671897433, size:9996.75KiB, w/h:1080x2340, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/0, dataspace: 0x8810000, compressed: false
+	planes: R/G/B/A:	 w/h:1088x2352, stride:4352 bytes, size:10236672
++ name:VRI[MainActivity]@b9507db#0(BLAST Consumer)0, id:3693671897434, size:9996.75KiB, w/h:1080x2340, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/0, dataspace: 0x8810000, compressed: false
+	planes: R/G/B/A:	 w/h:1088x2352, stride:4352 bytes, size:10236672
++ name:VRI[MainActivity]@b9507db#0(BLAST Consumer)0, id:3693671897435, size:9996.75KiB, w/h:1080x2340, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/0, dataspace: 0x8810000, compressed: false
+	planes: R/G/B/A:	 w/h:1088x2352, stride:4352 bytes, size:10236672
++ name:VRI[MainActivity]@b9507db#0(BLAST Consumer)0, id:3693671897432, size:9996.75KiB, w/h:1080x2340, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/0, dataspace: 0x8810000, compressed: false
+	planes: R/G/B/A:	 w/h:1088x2352, stride:4352 bytes, size:10236672
+Total imported by gralloc: 46086.25KiB
+
+Profile data in ms:
+
+	com.versutus.perfc/com.versutus.app.MainActivity/android.view.ViewRootImpl@98af693 (visibility=0)
+View hierarchy:
+
+  com.versutus.perfc/com.versutus.app.MainActivity/android.view.ViewRootImpl@98af693
+  85 views, 178.49 kB of render nodes
+
+
+Total ViewRootImpl   : 1
+Total attached Views : 85
+Total RenderNode     : 178.49 kB (used) / 599.30 kB (capacity)
+
+  ProcessConfig={1.1 311mcc480mnc [en_US] ldltr sw384dp w384dp h832dp 450dpi nrml long compactNeeded port finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 1080, 2340) mAppBounds=Rect(0, 0 - 1080, 2340) mMaxBounds=Rect(0, 0 - 1080, 2340) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0 mStageConfig=undefined mPopOver=off mOverlappingWithCutout=false} s.1519 fontWeightAdjustment=0 ff=0 bf=-1 bts=0 cst=1.0 nightDim=0 themeSeq=0}
+  Application ResourcesConfig={1.1 311mcc480mnc [en_US] ldltr sw384dp w384dp h832dp 450dpi nrml long compactNeeded port finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 1080, 2340) mAppBounds=Rect(0, 0 - 1080, 2340) mMaxBounds=Rect(0, 0 - 1080, 2340) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0 mStageConfig=undefined mPopOver=off mOverlappingWithCutout=false} s.1519 fontWeightAdjustment=0 ff=0 bf=-1 bts=0 cst=1.0 nightDim=0 themeSeq=0}

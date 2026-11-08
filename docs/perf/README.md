@@ -48,3 +48,9 @@ Unpaired test builds (`com.versutus.perfa` baseline, `com.versutus.perfc` phase 
 | phase 1 (a783d12) | fling | in budget 69% worst run; p50 12 ms, p95 42 ms; 50 frames at 34 ms or more (worst run); 535-693 frames per 10 s | FAIL | |
 | baseline (master 594e501) | drawer | in budget 0% worst run; p50 81 ms, p95 109 ms; 414 frames at 34 ms or more (worst run); 343-418 frames per 10 s | FAIL | |
 | phase 1 (a783d12) | drawer | in budget 65% worst run; p50 13 ms, p95 38 ms; 45 frames at 34 ms or more (worst run); 601-717 frames per 10 s | FAIL | |
+| phase 2 (2188494) | idle | in budget 41% worst run; p50 19 ms, p95 40 ms; 44 frames at 34 ms or more (worst run); 420-430 frames per 10 s | FAIL | |
+| phase 2 (2188494) | scroll | in budget 55% worst run; p50 15 ms, p95 34 ms; 62 frames at 34 ms or more (worst run); 498-1119 frames per 10 s | FAIL | |
+| phase 2 (2188494) | fling | in budget 56% worst run; p50 15 ms, p95 32 ms; 30 frames at 34 ms or more (worst run); 521-685 frames per 10 s | FAIL | |
+| phase 2 (2188494) | drawer | in budget 61% worst run; p50 14 ms, p95 36 ms; 41 frames at 34 ms or more (worst run); 636-719 frames per 10 s | FAIL | |
+
+**Phase 2 did not beat phase 1 on this measurement.** Idle fell from 73-80% in budget to 41-49%, and the share of GPU frames over 16 ms went from 7% to 39% (idle run 1). Frames per 10 s rose from about 345 to about 425. Memory is the same. So the added layers (full-screen Veil, oversize field wrapper, Glint canvas) cost GPU time; cause not yet isolated. Phase 1 numbers were taken earlier in the same session, not alongside.
