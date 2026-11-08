@@ -1,12 +1,12 @@
 // tokens.ts only needs Easing for Motion curves; reanimated's native
 // worklet unpackers cannot load under jest-expo.
+import { Palette } from '@/constants/tokens';
+
 jest.mock('react-native-reanimated', () => ({
   Easing: { bezier: () => (value: number) => value, elastic: () => (value: number) => value },
 }));
 
 declare const __dirname: string;
-
-import { Palette } from '@/constants/tokens';
 
 /**
  * Contract test for the quiet shared-chrome pass (CHARTER priority 1,
@@ -132,7 +132,12 @@ describe('the stage every Screen mounts is one lamp, not busy art', () => {
     // Native: the clock runs while focused, motion is allowed and someone is here.
     expect(native).toContain('useIsFocused()');
     expect(native).toContain('useReducedMotion()');
-    expect(native).toMatch(/const running = focused && !reduced && awake;/);
+    // The air no longer sleeps after idle (Ethan, 2026-11-07); the governor is the safety valve.
+    expect(native).toMatch(/const running = focused && !reduced;/);
+    expect(native).not.toContain('idleAfterMs');
+    expect(native).toContain('governorAdvance(');
+    // Skia on Android draws into a TextureView so the scale and transforms (and later the Veil) composite; `opaque` would switch it to a SurfaceView, which ignores them.
+    expect(native).not.toContain('opaque');
     expect(native).toContain('clock.setActive(running)');
     // The tilt sensor exists only while the lamp is running.
     expect(native).toContain('{running ? <TiltSource');

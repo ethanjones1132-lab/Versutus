@@ -14,6 +14,7 @@ import {
   withTiming,
   type SharedValue,
 } from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
 
 import {
   STAGE_GAIN,
@@ -25,7 +26,9 @@ import {
   tintBlend,
   tintDipGain,
 } from '@/lib/stage/choreography';
+import { GOVERNOR_LEVELS, governorAdvance, initialGovernor, type GovernorState } from '@/lib/stage/governor';
 import { mixLights, type StageLights } from '@/lib/stage/lamp';
+import { scaledCanvasSize, upscaleFactor, type Box } from '@/lib/stage/render-scale';
 import { STAGE_SHADER_SKSL } from '@/lib/stage/shader';
 import { getStageSignals, subscribeStageSignals } from '@/lib/stage/signals';
 import { useStageLights } from '@/lib/stage/use-stage-lights';
@@ -101,9 +104,10 @@ function TiltSource({ tiltX, tiltY }: { tiltX: SharedValue<number>; tiltY: Share
  * runtime effect, driven on the UI thread by Reanimated. The same curves as
  * the web renderer (src/lib/stage/choreography.ts), on shared values.
  *
- * It only moves while it is seen: the air's clock runs while the screen is
- * focused, motion is allowed and the operator has touched the app recently;
- * otherwise nothing changes and Skia draws nothing new.
+ * It renders at a fraction of the screen's resolution and is scaled back up,
+ * redraws at the governor's field rate (24 a second by default), and never
+ * sleeps while the screen is focused and motion is allowed: the governor
+ * (src/lib/stage/governor.ts) steps it down if the phone cannot keep up.
  */
 function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; lights: StageLights; parallaxY: number }) {
   const focused = useIsFocused();
@@ -111,6 +115,10 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
   const pixelRatio = PixelRatio.get();
 
   const size = useSharedValue({ width: 1, height: 1 });
+  const renderScale = useSharedValue<number>(GOVERNOR_LEVELS[0].scale);
+  const governor = useSharedValue<GovernorState>(initialGovernor());
+  const [box, setBox] = useState<Box | null>(null);
+  const [level, setLevel] = useState(0);
   const time = useSharedValue(STILL_TIME_SEC);
   const pending = useSharedValue(0);
   const from = useSharedValue<StageLights>(lights);
@@ -124,7 +132,6 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
   const scroll = useSharedValue(0);
   const tiltX = useSharedValue(0);
   const tiltY = useSharedValue(0);
-  const [awake, setAwake] = useState(true);
 
   // The first light of the session.
   useEffect(() => {
@@ -155,15 +162,14 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
     scroll.set(withTiming(Math.max(-1, Math.min(1, parallaxY)), { duration: STAGE_TIMING.scrollTau * 2 }));
   }, [parallaxY, scroll]);
 
-  // What the room reacts to: sends, a Bot speaking, the Gate, a touch.
+  // What the room reacts to: sends, a Bot speaking, the Gate. `apply` runs on every signal update (a touch
+  // is one, about once a second while scrolling), so a timing only starts when its own value really changed:
+  // a running timing writes its shared value every frame and would redraw the shader at display rate.
   useEffect(() => {
-    let sendCount = getStageSignals().sendCount;
-    let idleTimer: ReturnType<typeof setTimeout> | undefined;
-    const rearm = () => {
-      setAwake(true);
-      if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => setAwake(false), STAGE_TIMING.idleAfterMs);
-    };
+    const initial = getStageSignals();
+    let sendCount = initial.sendCount;
+    let lastSpeaking = false;
+    let lastConnection = initial.connection;
     const apply = () => {
       const signals = getStageSignals();
       if (signals.sendCount !== sendCount) {
@@ -173,36 +179,47 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
           swell.set(withTiming(1, { duration: STAGE_TIMING.swellMs, easing: Easing.linear }));
         }
       }
-      const target = signals.speaking ? STAGE_GAIN.speaking : 1;
-      speaking.set(
-        withTiming(target, {
-          duration: (signals.speaking ? STAGE_TIMING.speakRiseTau : STAGE_TIMING.speakFallTau) * 2.2,
-          easing: Easing.out(Easing.cubic),
-        }),
-      );
-      connection.set(
-        withTiming(connectionGain(signals.connection), {
-          duration: STAGE_TIMING.connectionTau * 2.2,
-          easing: Easing.out(Easing.cubic),
-        }),
-      );
-      rearm();
+      if (signals.speaking !== lastSpeaking) {
+        lastSpeaking = signals.speaking;
+        speaking.set(
+          withTiming(signals.speaking ? STAGE_GAIN.speaking : 1, {
+            duration: (signals.speaking ? STAGE_TIMING.speakRiseTau : STAGE_TIMING.speakFallTau) * 2.2,
+            easing: Easing.out(Easing.cubic),
+          }),
+        );
+      }
+      if (signals.connection !== lastConnection) {
+        lastConnection = signals.connection;
+        connection.set(
+          withTiming(connectionGain(signals.connection), {
+            duration: STAGE_TIMING.connectionTau * 2.2,
+            easing: Easing.out(Easing.cubic),
+          }),
+        );
+      }
     };
-    rearm();
-    const unsubscribe = subscribeStageSignals(apply);
-    return () => {
-      unsubscribe();
-      if (idleTimer) clearTimeout(idleTimer);
-    };
+    return subscribeStageSignals(apply);
   }, [focused, reduced, swell, speaking, connection]);
 
-  // The air's clock: advanced on the UI thread, but only handed to the shader
-  // at the drift rate — it moves too slowly for more frames to show.
-  const running = focused && !reduced && awake;
+  // The governor's level changes arrive from the UI thread through `setLevel`. The scale the uniforms
+  // use follows the committed level, so the shader's resolution and the canvas size always agree.
+  useEffect(() => {
+    renderScale.set(GOVERNOR_LEVELS[level].scale);
+  }, [level, renderScale]);
+
+  // The air's clock: advanced on the UI thread at the governor's field rate.
+  // The same callback feeds the governor the frame gaps it judges.
+  const running = focused && !reduced;
   const clock = useFrameCallback((info) => {
     'worklet';
-    pending.set(pending.get() + (info.timeSincePreviousFrame ?? 0));
-    if (pending.get() >= STAGE_TIMING.driftFrameMs) {
+    const dt = info.timeSincePreviousFrame ?? 0;
+    // The state object lives on the UI thread and is advanced in place: a frame allocates nothing.
+    const g = governor.get();
+    if (governorAdvance(g, info.timestamp, dt)) scheduleOnRN(setLevel, g.level);
+    const hz = GOVERNOR_LEVELS[g.level].fieldHz;
+    if (hz === 0) return;
+    pending.set(pending.get() + dt);
+    if (pending.get() >= 1000 / hz) {
       time.set(time.get() + Math.min(pending.get(), 100) / 1000);
       pending.set(0);
     }
@@ -215,8 +232,9 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
     const t = tintBlend(blend.get() * tintMs.get(), tintMs.get());
     const swellElapsed = swell.get() < 1 ? swell.get() * STAGE_TIMING.swellMs : null;
     return stageUniforms({
-      width: size.get().width,
-      height: size.get().height,
+      // The shader works in canvas units, so it is told the canvas's own (scaled) size.
+      width: size.get().width * renderScale.get(),
+      height: size.get().height * renderScale.get(),
       pixelRatio,
       timeSec: time.get(),
       lights: mixLights(from.get(), to.get(), t),
@@ -234,17 +252,34 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
 
   const onLayout = (event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
-    size.set({ width: Math.max(1, width), height: Math.max(1, height) });
+    const next = { width: Math.max(1, width), height: Math.max(1, height) };
+    size.set(next);
+    setBox(next);
   };
+
+  const canvas = box ? scaledCanvasSize(box, GOVERNOR_LEVELS[level].scale) : null;
 
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill} onLayout={onLayout}>
       {running ? <TiltSource tiltX={tiltX} tiltY={tiltY} /> : null}
-      <Canvas style={StyleSheet.absoluteFill}>
-        <Fill>
-          <Shader source={effect} uniforms={uniforms} />
-        </Fill>
-      </Canvas>
+      {box && canvas ? (
+        // A smaller surface, scaled back up from the top-left to fill the stage.
+        <Canvas
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            width: canvas.width,
+            height: canvas.height,
+            transformOrigin: 'top left',
+            transform: [{ scale: upscaleFactor(box, canvas) }],
+          }}
+        >
+          <Fill>
+            <Shader source={effect} uniforms={uniforms} />
+          </Fill>
+        </Canvas>
+      ) : null}
     </View>
   );
 }
