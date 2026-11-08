@@ -11,11 +11,11 @@ function runClean(state: ReturnType<typeof initialGovernor>, from: number, until
 }
 
 describe('stage governor', () => {
-  test('the level table: 24 Hz at half size, then 12 Hz, then a smaller field, then rest', () => {
-    expect(GOVERNOR_LEVELS[0]).toEqual({ fieldHz: 24, scale: 0.5 });
-    expect(GOVERNOR_LEVELS[1]).toEqual({ fieldHz: 12, scale: 0.5 });
+  test('the level table: 24 Hz at a quarter size, then 12 Hz, then a smaller field, then rest', () => {
+    expect(GOVERNOR_LEVELS[0]).toEqual({ fieldHz: 24, scale: 0.25 });
+    expect(GOVERNOR_LEVELS[1]).toEqual({ fieldHz: 12, scale: 0.25 });
     expect(GOVERNOR_LEVELS[2].fieldHz).toBe(12);
-    expect(GOVERNOR_LEVELS[2].scale).toBeLessThan(0.5);
+    expect(GOVERNOR_LEVELS[2].scale).toBeLessThan(0.25);
     expect(GOVERNOR_LEVELS[3].fieldHz).toBe(0);
   });
 

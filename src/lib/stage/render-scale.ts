@@ -5,8 +5,11 @@
  * 2026-11-07-ambient-redesign-design.md section 3.
  */
 
-/** The fraction of the screen's resolution the lamp renders at by default. */
-export const STAGE_RENDER_SCALE = 0.5;
+/**
+ * The fraction of the screen's resolution the lamp renders at by default: a quarter (Ethan, 2026-11-08,
+ * after the A54 runs showed the shader draw itself is the cost; the shader is not changed).
+ */
+export const STAGE_RENDER_SCALE = 0.25;
 
 /** The field is drawn this much larger than the stage on every side (dp), so parallax and tilt can move it by transform without showing an edge. */
 export const STAGE_OVERSIZE_DP = 12;

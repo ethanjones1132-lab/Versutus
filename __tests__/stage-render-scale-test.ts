@@ -7,8 +7,8 @@ import {
 } from '@/lib/stage/render-scale';
 
 describe('stage render scale', () => {
-  test('the shipped scale is one half', () => {
-    expect(STAGE_RENDER_SCALE).toBe(0.5);
+  test('the shipped scale is a quarter', () => {
+    expect(STAGE_RENDER_SCALE).toBe(0.25);
   });
 
   test('a canvas is the box times the scale, rounded, never under one pixel', () => {

@@ -9,6 +9,8 @@
  * and mutates its state in place, so a frame allocates nothing.
  */
 
+import { STAGE_RENDER_SCALE } from './render-scale';
+
 export const GOVERNOR = {
   /** A frame gap at or over this is a dropped frame (about two frames at 60 Hz). */
   dropFrameMs: 25,
@@ -24,12 +26,15 @@ export const GOVERNOR = {
   maxUpWaitMs: 120_000,
 } as const;
 
-/** Index = level. The scale is the fraction of screen resolution the field renders at. */
+/**
+ * Index = level. The scale is the fraction of screen resolution the field renders at: the default
+ * (a quarter), then smaller still on the "smaller field" rung.
+ */
 export const GOVERNOR_LEVELS = [
-  { fieldHz: 24, scale: 0.5 },
-  { fieldHz: 12, scale: 0.5 },
-  { fieldHz: 12, scale: 0.33 },
-  { fieldHz: 0, scale: 0.33 },
+  { fieldHz: 24, scale: STAGE_RENDER_SCALE },
+  { fieldHz: 12, scale: STAGE_RENDER_SCALE },
+  { fieldHz: 12, scale: 0.2 },
+  { fieldHz: 0, scale: 0.2 },
 ] as const;
 
 export type GovernorState = {
