@@ -54,3 +54,13 @@ Unpaired test builds (`com.versutus.perfa` baseline, `com.versutus.perfc` phase 
 | phase 2 (2188494) | drawer | in budget 61% worst run; p50 14 ms, p95 36 ms; 41 frames at 34 ms or more (worst run); 636-719 frames per 10 s | FAIL | |
 
 **Phase 2 did not beat phase 1 on this measurement.** Idle fell from 73-80% in budget to 41-49%, and the share of GPU frames over 16 ms went from 7% to 39% (idle run 1). Frames per 10 s rose from about 345 to about 425. Memory is the same. So the added layers (full-screen Veil, oversize field wrapper, Glint canvas) cost GPU time; cause not yet isolated. Phase 1 numbers were taken earlier in the same session, not alongside.
+
+## Bisect of the phase-2 idle regression (2026-11-08)
+
+Idle, 3 runs each, builds alternated in opposite orders across passes (labels `bisect<pass>-<build>`). Findings:
+- Removing the Veil, the Glint canvas, or the wrapper's transform does NOT restore phase-1 numbers (phase 2: 38-48% in budget; no Veil 35-39%; no Glint 44-52%).
+- Phase 1 plus ONLY the phase-2 shader inputs (constant gain 1.14, no swell, scroll and tilt fixed at 0) is the worst build: 7-10% in budget, about 212 frames per 10 s, 83-88% of GPU frames over 16 ms.
+- Phase-2 geometry with the phase-1 shader inputs restored is as good as phase 1 (60-74%).
+- So the layers are not the cost. When the shader's inputs change only on the 24-per-second clock, each draw shows as an expensive GPU frame (about 30 ms); when tilt and scroll keep nudging the inputs, the same app shows cheaper frames. The idle metric is therefore flattered by the tilt writes and cannot be read alone. The real cost is the shader draw itself.
+- The phone warms during a session: phase 1 drifted from 79-85% to 62-77% in later passes. Always compare builds run in the same session, in balanced order.
+
