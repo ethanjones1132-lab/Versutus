@@ -1,14 +1,15 @@
 import { Canvas, Fill, Shader, Skia, type SkRuntimeEffect } from '@shopify/react-native-skia';
 import { useIsFocused } from 'expo-router';
-import { Component, useEffect, useLayoutEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
+import { Component, useEffect, useLayoutEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { PixelRatio, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
-import {
+import Animated, {
   Easing,
   SensorType,
+  runOnJS,
   useAnimatedReaction,
   useAnimatedSensor,
+  useAnimatedStyle,
   useDerivedValue,
-  runOnJS,
   useFrameCallback,
   useReducedMotion,
   useSharedValue,
@@ -28,12 +29,21 @@ import {
 } from '@/lib/stage/choreography';
 import { GOVERNOR_LEVELS, governorAdvance, initialGovernor, type GovernorState } from '@/lib/stage/governor';
 import { mixLights, type StageLights } from '@/lib/stage/lamp';
-import { scaledCanvasSize, upscaleFactor, type Box } from '@/lib/stage/render-scale';
+import { FIELD_GAIN, LAYER_TIMING, breathGain, lightCss, stageBaseCss, veilOpacity } from '@/lib/stage/layers';
+import {
+  STAGE_OVERSIZE_DP,
+  oversizedBox,
+  scaledCanvasSize,
+  upscaleFactor,
+  type Box,
+} from '@/lib/stage/render-scale';
 import { STAGE_SHADER_SKSL } from '@/lib/stage/shader';
 import { getStageSignals, subscribeStageSignals } from '@/lib/stage/signals';
 import { useStageLights } from '@/lib/stage/use-stage-lights';
+import { useBreath } from '@/lib/motion/breath';
 
 import { AmbientFallback, type AmbientCanvasProps } from './ambient-fallback';
+import { StageGlint } from './StageGlint.native';
 
 class SkiaAmbientBoundary extends Component<
   { children: ReactNode; fallback: ReactNode },
@@ -115,6 +125,7 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
   const pixelRatio = PixelRatio.get();
 
   const size = useSharedValue({ width: 1, height: 1 });
+  const heightValue = useSharedValue(1);
   const renderScale = useSharedValue<number>(GOVERNOR_LEVELS[0].scale);
   const governor = useSharedValue<GovernorState>(initialGovernor());
   const [box, setBox] = useState<Box | null>(null);
@@ -132,6 +143,8 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
   const scroll = useSharedValue(0);
   const tiltX = useSharedValue(0);
   const tiltY = useSharedValue(0);
+  const workingFlag = useSharedValue(0);
+  const [working, setWorking] = useState(getStageSignals().working);
 
   // The first light of the session.
   useEffect(() => {
@@ -178,7 +191,7 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
         sendCount = signals.sendCount;
         if (!reduced && focused) {
           swell.set(0);
-          swell.set(withTiming(1, { duration: STAGE_TIMING.swellMs, easing: Easing.linear }));
+          swell.set(withTiming(1, { duration: LAYER_TIMING.swellMs, easing: Easing.linear }));
         }
       }
       if (signals.speaking !== applied.current.speaking) {
@@ -199,6 +212,7 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
           }),
         );
       }
+      setWorking(signals.working);
     };
     return subscribeStageSignals(apply);
   }, [focused, reduced, swell, speaking, connection]);
@@ -212,6 +226,13 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
   // The air's clock: advanced on the UI thread at the governor's field rate.
   // The same callback feeds the governor the frame gaps it judges.
   const running = focused && !reduced;
+  // The tool-work breath rides the shared clock, which runs only while something breathes.
+  const breath = useBreath(working && running);
+  // The flag follows `running` too: under Reduce Motion the breath clock never starts and sits at 0,
+  // which `breathGain` would read as a 4.4% dimmer room for the whole tool run.
+  useEffect(() => {
+    workingFlag.set(working && running ? 1 : 0);
+  }, [working, running, workingFlag]);
   // At rest nothing may write the shader's inputs: the tilt sensor writes every sample and would keep the
   // shader redrawing at the sensor rate, which would make the last rung costlier than the one above it.
   const tiltOn = running && GOVERNOR_LEVELS[level].fieldHz !== 0;
@@ -235,58 +256,97 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
     clock.setActive(running);
   }, [clock, running]);
 
+  // The field is drawn at one fixed brightness at the oversize box. Brightness is the Veil, the swell
+  // is a layer, parallax and tilt move the field by transform: none of them redraw the shader.
   const uniforms = useDerivedValue(() => {
     const t = tintBlend(blend.get() * tintMs.get(), tintMs.get());
-    const swellElapsed = swell.get() < 1 ? swell.get() * STAGE_TIMING.swellMs : null;
     return stageUniforms({
-      // The shader works in canvas units, so it is told the canvas's own (scaled) size.
-      width: size.get().width * renderScale.get(),
-      height: size.get().height * renderScale.get(),
+      width: (size.get().width + 2 * STAGE_OVERSIZE_DP) * renderScale.get(),
+      height: (size.get().height + 2 * STAGE_OVERSIZE_DP) * renderScale.get(),
       pixelRatio,
       timeSec: time.get(),
       lights: mixLights(from.get(), to.get(), t),
-      gain:
-        lampOnGain(lampOn.get() < 1 ? lampOn.get() * STAGE_TIMING.lampOnMs : null) *
-        connection.get() *
-        speaking.get() *
-        tintDipGain(t),
-      swellElapsedMs: swellElapsed,
-      scroll: scroll.get(),
-      tiltX: tiltX.get(),
-      tiltY: tiltY.get(),
+      gain: FIELD_GAIN,
+      swellElapsedMs: null,
+      scroll: 0,
+      tiltX: 0,
+      tiltY: 0,
     });
   });
+
+  // Everything that used to scale the lamp's gain now darkens it from above.
+  const veilStyle = useAnimatedStyle(() => {
+    const t = tintBlend(blend.get() * tintMs.get(), tintMs.get());
+    const breathing = workingFlag.get() === 1 ? breathGain(breath.get()) : 1;
+    const gain =
+      lampOnGain(lampOn.get() < 1 ? lampOn.get() * STAGE_TIMING.lampOnMs : null) *
+      connection.get() *
+      speaking.get() *
+      tintDipGain(t) *
+      breathing;
+    return { opacity: veilOpacity(gain) };
+  });
+
+  // Parallax and tilt as a transform of the field layer: at most 10 dp in total, inside the 12 dp oversize.
+  const fieldStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: tiltX.get() * 10 },
+      { translateY: -scroll.get() * 6 + tiltY.get() * 4 },
+    ],
+  }));
+
+  const veilColor = useMemo(() => stageBaseCss(), []);
+  const swellCore = useMemo(() => lightCss(lights.key.core, 0.5), [lights]);
+  const swellClear = useMemo(() => lightCss(lights.key.core, 0), [lights]);
 
   const onLayout = (event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
     const next = { width: Math.max(1, width), height: Math.max(1, height) };
     size.set(next);
+    heightValue.set(next.height);
     setBox(next);
   };
 
-  const canvas = box ? scaledCanvasSize(box, GOVERNOR_LEVELS[level].scale) : null;
+  const fieldBox = box ? oversizedBox(box) : null;
+  const canvas = fieldBox ? scaledCanvasSize(fieldBox, GOVERNOR_LEVELS[level].scale) : null;
 
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill} onLayout={onLayout}>
       {tiltOn ? <TiltSource tiltX={tiltX} tiltY={tiltY} /> : null}
-      {box && canvas ? (
-        // A smaller surface, scaled back up from the top-left to fill the stage.
-        <Canvas
-          style={{
-            position: 'absolute',
-            left: 0,
-            top: 0,
-            width: canvas.width,
-            height: canvas.height,
-            transformOrigin: 'top left',
-            transform: [{ scale: upscaleFactor(box, canvas) }],
-          }}
+      {fieldBox && canvas ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            {
+              position: 'absolute',
+              left: -STAGE_OVERSIZE_DP,
+              top: -STAGE_OVERSIZE_DP,
+              width: fieldBox.width,
+              height: fieldBox.height,
+            },
+            fieldStyle,
+          ]}
         >
-          <Fill>
-            <Shader source={effect} uniforms={uniforms} />
-          </Fill>
-        </Canvas>
+          {/* A smaller surface, scaled back up from the top-left to fill the oversize field. */}
+          <Canvas
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              width: canvas.width,
+              height: canvas.height,
+              transformOrigin: 'top left',
+              transform: [{ scale: upscaleFactor(fieldBox, canvas) }],
+            }}
+          >
+            <Fill>
+              <Shader source={effect} uniforms={uniforms} />
+            </Fill>
+          </Canvas>
+        </Animated.View>
       ) : null}
+      <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: veilColor }, veilStyle]} />
+      <StageGlint swell={swell} stageHeight={heightValue} core={swellCore} clear={swellClear} />
     </View>
   );
 }

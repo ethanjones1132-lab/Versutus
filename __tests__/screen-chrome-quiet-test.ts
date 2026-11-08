@@ -149,6 +149,12 @@ describe('the stage every Screen mounts is one lamp, not busy art', () => {
     // The eased levels are latched in a ref that survives the signals effect re-running.
     expect(native).toContain('applied.current.speaking');
     expect(native).toContain('applied.current.connection');
+    // Brightness is the Veil; the field is rendered at one fixed level and never redraws for it.
+    expect(native).toContain('veilOpacity(');
+    expect(native).toContain('gain: FIELD_GAIN');
+    expect(native).toContain('swellElapsedMs: null');
+    expect(native).toContain('<StageGlint');
+    expect(native).toContain('useBreath(');
     // Web: one context app-wide; asleep when hidden, offscreen, idle or reduced.
     expect(gpu).toContain('document.hidden');
     expect(gpu).toContain('IntersectionObserver');
