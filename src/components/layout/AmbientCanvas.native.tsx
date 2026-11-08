@@ -1,6 +1,6 @@
 import { Canvas, Fill, Shader, Skia, type SkRuntimeEffect } from '@shopify/react-native-skia';
 import { useIsFocused } from 'expo-router';
-import { Component, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
+import { Component, useEffect, useLayoutEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { PixelRatio, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import {
   Easing,
@@ -162,14 +162,16 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
     scroll.set(withTiming(Math.max(-1, Math.min(1, parallaxY)), { duration: STAGE_TIMING.scrollTau * 2 }));
   }, [parallaxY, scroll]);
 
+  // The levels the room's two eased lights were last sent toward. A ref, not locals of the effect below: that
+  // effect re-runs when focus or Reduce Motion change, and must not forget where the lamp really is (a latch
+  // reseeded from the signal would swallow the next real change).
+  const applied = useRef({ speaking: false, connection: getStageSignals().connection });
+
   // What the room reacts to: sends, a Bot speaking, the Gate. `apply` runs on every signal update (a touch
   // is one, about once a second while scrolling), so a timing only starts when its own value really changed:
   // a running timing writes its shared value every frame and would redraw the shader at display rate.
   useEffect(() => {
-    const initial = getStageSignals();
-    let sendCount = initial.sendCount;
-    let lastSpeaking = false;
-    let lastConnection = initial.connection;
+    let sendCount = getStageSignals().sendCount;
     const apply = () => {
       const signals = getStageSignals();
       if (signals.sendCount !== sendCount) {
@@ -179,8 +181,8 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
           swell.set(withTiming(1, { duration: STAGE_TIMING.swellMs, easing: Easing.linear }));
         }
       }
-      if (signals.speaking !== lastSpeaking) {
-        lastSpeaking = signals.speaking;
+      if (signals.speaking !== applied.current.speaking) {
+        applied.current.speaking = signals.speaking;
         speaking.set(
           withTiming(signals.speaking ? STAGE_GAIN.speaking : 1, {
             duration: (signals.speaking ? STAGE_TIMING.speakRiseTau : STAGE_TIMING.speakFallTau) * 2.2,
@@ -188,8 +190,8 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
           }),
         );
       }
-      if (signals.connection !== lastConnection) {
-        lastConnection = signals.connection;
+      if (signals.connection !== applied.current.connection) {
+        applied.current.connection = signals.connection;
         connection.set(
           withTiming(connectionGain(signals.connection), {
             duration: STAGE_TIMING.connectionTau * 2.2,
@@ -203,13 +205,16 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
 
   // The governor's level changes arrive from the UI thread through `setLevel`. The scale the uniforms
   // use follows the committed level, so the shader's resolution and the canvas size always agree.
-  useEffect(() => {
+  useLayoutEffect(() => {
     renderScale.set(GOVERNOR_LEVELS[level].scale);
   }, [level, renderScale]);
 
   // The air's clock: advanced on the UI thread at the governor's field rate.
   // The same callback feeds the governor the frame gaps it judges.
   const running = focused && !reduced;
+  // At rest nothing may write the shader's inputs: the tilt sensor writes every sample and would keep the
+  // shader redrawing at the sensor rate, which would make the last rung costlier than the one above it.
+  const tiltOn = running && GOVERNOR_LEVELS[level].fieldHz !== 0;
   const clock = useFrameCallback((info) => {
     'worklet';
     const dt = info.timeSincePreviousFrame ?? 0;
@@ -263,7 +268,7 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
 
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill} onLayout={onLayout}>
-      {running ? <TiltSource tiltX={tiltX} tiltY={tiltY} /> : null}
+      {tiltOn ? <TiltSource tiltX={tiltX} tiltY={tiltY} /> : null}
       {box && canvas ? (
         // A smaller surface, scaled back up from the top-left to fill the stage.
         <Canvas

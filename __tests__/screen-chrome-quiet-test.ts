@@ -143,7 +143,12 @@ describe('the stage every Screen mounts is one lamp, not busy art', () => {
     expect(native).toContain('runOnJS(setLevel)(');
     expect(native).toContain('clock.setActive(running)');
     // The tilt sensor exists only while the lamp is running.
-    expect(native).toContain('{running ? <TiltSource');
+    // ...and not at the governor's last rung: rest must stop every writer of the shader's inputs.
+    expect(native).toContain('const tiltOn = running && GOVERNOR_LEVELS[level].fieldHz !== 0;');
+    expect(native).toContain('{tiltOn ? <TiltSource');
+    // The eased levels are latched in a ref that survives the signals effect re-running.
+    expect(native).toContain('applied.current.speaking');
+    expect(native).toContain('applied.current.connection');
     // Web: one context app-wide; asleep when hidden, offscreen, idle or reduced.
     expect(gpu).toContain('document.hidden');
     expect(gpu).toContain('IntersectionObserver');
