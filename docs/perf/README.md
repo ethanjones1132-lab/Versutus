@@ -1,10 +1,15 @@
 # Performance runs (A54)
 
 The bar (spec section 7): per scenario, 3 runs of 10 s. Every run needs at least 95% of frames in budget,
-janky frames under 5%, p95 frame time under 16.7 ms (whole milliseconds, so 16 or less) and zero dropped
-frames. The new layers add under 8 MB. An idle screen runs zero Reanimated animations apart from the
-24-per-second drift. The thresholds live in `scripts/perf/gfxinfo.mjs` (`THRESHOLDS`); change them there
-and say why in the commit.
+p95 frame time under 16.7 ms (whole milliseconds, so 16 or less) and zero dropped frames. The new layers
+add under 8 MB. An idle screen runs zero Reanimated animations apart from the 24-per-second drift. The
+thresholds live in `scripts/perf/gfxinfo.mjs` (`THRESHOLDS`); change them there and say why in the commit.
+
+**The A54 runs at 120 Hz**, so gfxinfo's own "Janky frames" counts every frame over 8.3 ms and calls a
+smooth 60 fps lamp 80% janky. The verdict therefore uses the frame-time HISTOGRAM instead: "in budget" is
+the buckets at or under 16 ms, and a "dropped" frame is one in a bucket at or over 34 ms (two or more
+missed 60 Hz frames). gfxinfo's janky % is still reported in the JSON but is not judged. (2026-11-08: the
+first runs were judged on janky % and failed everything, including a build that was fine at 60 fps.)
 
 ## Run one scenario
 
@@ -31,6 +36,15 @@ gfxinfo and meminfo. Record each phase's numbers in the table below.
 
 ## Record
 
-| Label | Scenario | Frames / janky % / p95 (worst run) | Verdict | Notes |
+Unpaired test builds (`com.versutus.perfa` baseline, `com.versutus.perfc` phase 1), release, A54 at 120 Hz, 2026-11-08, whatever screen an unpaired app opens (no Gate, no long thread). Phase 1 here is before the tilt and scroll writers move to a transform (task 2.5).
+
+| Build | Scenario | Result (worst run unless stated) | Verdict | Notes |
 |---|---|---|---|---|
-| | | | | |
+| baseline (master 594e501) | idle | in budget 0% worst run; p50 97 ms, p95 105 ms; 309 frames at 34 ms or more (worst run); 307-312 frames per 10 s | FAIL | |
+| phase 1 (a783d12) | idle | in budget 73% worst run; p50 13 ms, p95 30 ms; 15 frames at 34 ms or more (worst run); 345-348 frames per 10 s | FAIL | |
+| baseline (master 594e501) | scroll | in budget 0% worst run; p50 77 ms, p95 101 ms; 351 frames at 34 ms or more (worst run); 331-351 frames per 10 s | FAIL | |
+| phase 1 (a783d12) | scroll | in budget 64% worst run; p50 14 ms, p95 48 ms; 56 frames at 34 ms or more (worst run); 355-561 frames per 10 s | FAIL | |
+| baseline (master 594e501) | fling | in budget 0% worst run; p50 81 ms, p95 105 ms; 402 frames at 34 ms or more (worst run); 332-402 frames per 10 s | FAIL | |
+| phase 1 (a783d12) | fling | in budget 69% worst run; p50 12 ms, p95 42 ms; 50 frames at 34 ms or more (worst run); 535-693 frames per 10 s | FAIL | |
+| baseline (master 594e501) | drawer | in budget 0% worst run; p50 81 ms, p95 109 ms; 414 frames at 34 ms or more (worst run); 343-418 frames per 10 s | FAIL | |
+| phase 1 (a783d12) | drawer | in budget 65% worst run; p50 13 ms, p95 38 ms; 45 frames at 34 ms or more (worst run); 601-717 frames per 10 s | FAIL | |

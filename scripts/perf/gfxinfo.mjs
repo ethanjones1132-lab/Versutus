@@ -12,12 +12,17 @@ import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 /**
- * The bar, in one place. gfxinfo reports percentiles in whole milliseconds, so
- * a p95 under 16.7 ms reads as 16 or less.
+ * The bar, in one place. It judges frames against 60 fps (16.7 ms), not against
+ * the display: the A54 runs at 120 Hz, so gfxinfo's own "janky frames" counts
+ * anything over 8.3 ms and would fail a perfectly smooth 60 fps lamp. The
+ * frame-time HISTOGRAM is used instead: its buckets are whole milliseconds, so
+ * "in budget" is the buckets at or under 16 ms, and a "dropped" frame is one in
+ * a bucket at or over 34 ms (two or more missed 60 Hz frames).
  */
 export const THRESHOLDS = Object.freeze({
   minInBudgetPct: 95,
-  maxJankyPct: 5,
+  budgetBucketMs: 16,
+  droppedBucketMs: 34,
   maxP95Ms: 16.7,
   maxDroppedFrames: 0,
 });
@@ -30,6 +35,16 @@ function intAfter(text, label) {
 function percentileMs(text, label) {
   const match = text.match(new RegExp(`${label} percentile:\\s*(\\d+)ms`));
   return match ? Number(match[1]) : null;
+}
+
+/** The frame-time histogram as [[ms, count], ...]; empty when the text has none. */
+export function parseHistogram(text) {
+  const line = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .find((l) => l.startsWith('HISTOGRAM:'));
+  if (!line) return [];
+  return [...line.matchAll(/(\d+)ms=(\d+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
 }
 
 export function parseGfxinfo(text) {
@@ -47,25 +62,28 @@ export function parseGfxinfo(text) {
     missedVsync: intAfter(text, 'Number Missed Vsync') ?? 0,
     slowUiThread: intAfter(text, 'Number Slow UI thread') ?? 0,
     deadlineMissed: intAfter(text, 'Number Frame deadline missed') ?? 0,
+    histogram: parseHistogram(text),
   };
 }
 
 export function evaluate(run, thresholds = THRESHOLDS) {
-  const inBudgetPct = run.totalFrames === 0 ? 100 : 100 * (1 - run.jankyFrames / run.totalFrames);
-  // The two counters overlap heavily; the larger one is the dropped-frame count.
-  const droppedFrames = Math.max(run.missedVsync, run.deadlineMissed);
+  const histogram = run.histogram ?? [];
+  const total = histogram.reduce((sum, [, count]) => sum + count, 0);
+  const inBudget = histogram.filter(([ms]) => ms <= thresholds.budgetBucketMs).reduce((sum, [, count]) => sum + count, 0);
+  const droppedFrames = histogram.filter(([ms]) => ms >= thresholds.droppedBucketMs).reduce((sum, [, count]) => sum + count, 0);
+  const inBudgetPct = total === 0 ? 100 : (100 * inBudget) / total;
   const failures = [];
+  if (histogram.length === 0 && run.totalFrames > 0) {
+    failures.push('no frame-time histogram in the gfxinfo output: cannot judge the bar');
+  }
   if (inBudgetPct < thresholds.minInBudgetPct) {
     failures.push(`frames in budget ${inBudgetPct.toFixed(1)}% is under ${thresholds.minInBudgetPct}%`);
-  }
-  if (run.jankyPct > thresholds.maxJankyPct) {
-    failures.push(`janky frames ${run.jankyPct}% is over ${thresholds.maxJankyPct}%`);
   }
   if (run.p95Ms !== null && run.p95Ms > thresholds.maxP95Ms) {
     failures.push(`p95 frame time ${run.p95Ms} ms is over ${thresholds.maxP95Ms} ms`);
   }
   if (droppedFrames > thresholds.maxDroppedFrames) {
-    failures.push(`${droppedFrames} dropped frames (limit ${thresholds.maxDroppedFrames})`);
+    failures.push(`${droppedFrames} dropped frames of ${total} (limit ${thresholds.maxDroppedFrames})`);
   }
   return { inBudgetPct, droppedFrames, pass: failures.length === 0, failures };
 }
