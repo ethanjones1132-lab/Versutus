@@ -675,7 +675,13 @@ type GatewayContextValue = {
   sessionSelector: { visible: boolean };
   openSessionSelector: () => void;
   closeSessionSelector: () => void;
-  selectSession: (sessionId: string) => void;
+  /**
+   * Open a thread. An explicit scope is the row's proven owner (Activity's feed
+   * carries it): the tap validates and switches to exactly that backend and
+   * Bot, and a missing botId means no Bot. Calls without a scope keep using
+   * the conversation's current selection.
+   */
+  selectSession: (sessionId: string, scope?: { backendId: string; botId?: string }) => void;
   sessionList: any[];
   /** Set when the last session-list read failed. Empty is not the same fact. */
   sessionListError?: string;
@@ -6760,7 +6766,30 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     [activeGateway, closeModelPicker, persistGateway, sendChatInput, selectedBackendId, selectedBotId],
   );
 
-  const selectSession = useCallback(async (sessionId: string) => {
+  /**
+   * Make a feed row's proven scope the conversation's scope before its thread
+   * opens. A missing Bot means no Bot: inheriting the one still selected for
+   * another thread is what made a bare row open inside a Bot Chat.
+   */
+  const adoptThreadScope = useCallback((scope: { backendId?: string; botId?: string }) => {
+    const previous = {
+      backendId: selectedBackendIdRef.current,
+      botId: selectedBotIdRef.current,
+    };
+    const client = clientRef.current;
+    client?.setBackendId?.(scope.backendId);
+    client?.setBotId?.(scope.botId);
+    selectedBackendIdRef.current = scope.backendId;
+    selectedBotIdRef.current = scope.botId;
+    setSelectedBackendId(scope.backendId);
+    setSelectedBotId(scope.botId);
+    rememberScopeGateway(activeGatewayRef.current ?? activeGateway);
+    // Returned so a refused history read can put the selection back with the
+    // transcript still on screen.
+    return previous;
+  }, [activeGateway, rememberScopeGateway]);
+
+  const selectSession = useCallback(async (sessionId: string, scope?: { backendId: string; botId?: string }) => {
     closeSessionSelector();
     // The ladder reloads the thread its interrupted turn belonged to; a switch
     // away from it leaves that thread behind, so nothing it still holds is
@@ -6777,20 +6806,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // so it is refused instead; the sheet it came from went with the switch.
     const generation = clientGenerationRef.current;
     // The slash path reads `session.restore` and switches only after it
-    // resolves; the tap used to pin first and fail at the history read
-    // after. Validate through the same read ahead of the pin: a DEFINITE
-    // miss names the failure and keeps the current thread, while anything
-    // the read could not be sure about proceeds and lets the history read
-    // report the real failure. Where the method is not dispatched on this
-    // path (no client) the switch stays instant.
-    //
-    // The read is scoped to the thread's own environment and Bot: unscoped,
-    // the Gate resolved it against whichever environment sorted first, which
-    // reported a healthy in-app session as `Session not found`.
+    // resolves. Validate ahead of the pin so only a DEFINITE miss blocks;
+    // anything uncertain lets the history read report the real failure.
+    // The read carries the row's own environment and Bot, never a guess.
     const validation = await validateThreadSwitch(
       client?.rpcRequest.bind(client),
       sessionId,
-      { backendId: selectedBackendIdRef.current, botId: selectedBotIdRef.current },
+      scope ?? { backendId: selectedBackendIdRef.current, botId: selectedBotIdRef.current },
     );
     if (clientGenerationRef.current !== generation) return;
     if (!validation.ok) {
@@ -6809,6 +6831,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
       return;
     }
+    // The row's proven backend/Bot is adopted before the read, so history and
+    // every later turn are asked in the environment that actually holds it.
+    const previousScope = scope ? adoptThreadScope(scope) : undefined;
     // The thread the operator is leaving, kept so a history read that cannot
     // answer can put the identity back with the transcript already on screen.
     const previousSessionId = sessionIdRef.current;
@@ -6838,6 +6863,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // rather than the header naming a thread the operator has never seen.
         sessionIdRef.current = previousSessionId;
         setCurrentSessionId(previousSessionId);
+        // The selection belongs with the conversation still on screen.
+        if (previousScope) adoptThreadScope(previousScope);
         if (client) {
           const restored = pinLiveSession({
             client,
@@ -6855,7 +6882,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // The thread that was just opened may have a turn running on the Gate that
     // this phone never saw start — the same read the foreground edge makes.
     resumeRunningTurnsRef.current('thread');
-  }, [clearInterruptedRecovery, closeSessionSelector, activeGateway, persistGateway, reloadHistoryFor]);
+  }, [adoptThreadScope, clearInterruptedRecovery, closeSessionSelector, activeGateway, persistGateway, reloadHistoryFor]);
 
   useEffect(() => {
     selectSessionRef.current = selectSession;
@@ -7020,16 +7047,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   const activityFeed = useMemo(() => ({
     readActivity: (options: { since: string; backendId?: string }) => {
-      const client = clientRef.current as (PortalClient & {
-        getActivityFeed?: (since: string, backendId?: string) => Promise<ActivityFeed>;
-      }) | null;
+      // The contract is on PortalClient now, so a real Gate's ManifestClient
+      // answers it; only a client that genuinely lacks the read is refused.
+      const client = clientRef.current;
       if (!client?.getActivityFeed) throw new Error('This gateway cannot report activity.');
       return client.getActivityFeed(options.since, options.backendId);
     },
     readRoutines: (options?: { backendId?: string }) => {
-      const client = clientRef.current as (PortalClient & {
-        getRoutineFeed?: (backendId?: string) => Promise<RoutineFeed>;
-      }) | null;
+      const client = clientRef.current;
       if (!client?.getRoutineFeed) throw new Error('This gateway cannot report activity.');
       return client.getRoutineFeed(options?.backendId);
     },

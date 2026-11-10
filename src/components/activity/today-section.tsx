@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { AppState, ScrollView, StyleSheet, View } from 'react-native';
 
-import { ActivityRow } from '@/components/activity/activity-row';
+import { ActivityRow, type ActivitySessionTarget } from '@/components/activity/activity-row';
 import { ApprovalDecisionCard } from '@/components/activity/approval-decision-card';
 import { ApprovalInbox } from '@/components/activity/approval-inbox';
 import { RecentRuns } from '@/components/activity/recent-runs';
@@ -26,36 +26,121 @@ export function TodaySection({
 }: {
   reloadSignal: number;
   onOpenRun: (runId: string) => void;
-  onOpenSession: (sessionId: string) => void;
+  onOpenSession: (target: ActivitySessionTarget) => void;
 }) {
-  const { activityFeed, status, activityRunsForActiveGateway, pendingApprovals, pendingRunApproval, resolveRunApproval, listBots } = useGateway();
-  const [state, setState] = useState<ActivityState>(EMPTY_ACTIVITY_STATE);
+  const { activeGateway, activityFeed, status, activityRunsForActiveGateway, pendingApprovals, pendingRunApproval, resolveRunApproval, listBots } = useGateway();
+  // The feed, roster, filter and every open read belong to one Gate. Keying
+  // the rendered state to this id is what stops a late answer from the Gate we
+  // just left painting under the one on screen.
+  const gatewayId = activeGateway?.id;
+  // The day the read covers, re-derived at local midnight and on resume rather
+  // than frozen at whichever day the screen happened to mount.
+  const [since, setSince] = useState(() => todaySince());
+  const [ownedState, setOwnedState] = useState<{ gatewayId?: string; state: ActivityState }>({
+    gatewayId,
+    state: EMPTY_ACTIVITY_STATE,
+  });
+  const state = ownedState.gatewayId === gatewayId ? ownedState.state : EMPTY_ACTIVITY_STATE;
   const [bots, setBots] = useState<PublicBot[]>([]);
   const [backendFilter, setBackendFilter] = useState<string | undefined>();
   const requestId = useRef(0);
-  const inFlight = useRef<{ settled: boolean; promise: Promise<void> } | null>(null);
+  const inFlight = useRef<{
+    settled: boolean;
+    promise: Promise<void>;
+    since: string;
+    gatewayId?: string;
+  } | null>(null);
   const mounted = useRef(true);
+  const gatewayIdRef = useRef(gatewayId);
+
+  const dayTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armDayTimerRef = useRef<() => void>(() => undefined);
+  const armDayTimer = useCallback(() => {
+    if (dayTimer.current) clearTimeout(dayTimer.current);
+    const now = new Date();
+    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    // One timer to the next local midnight, then re-armed from its own
+    // callback so it keeps running without a polling loop.
+    dayTimer.current = setTimeout(() => {
+      dayTimer.current = null;
+      setSince(todaySince());
+      armDayTimerRef.current();
+    }, Math.max(0, next.getTime() - now.getTime()) + 1_000);
+  }, []);
+  useEffect(() => {
+    armDayTimerRef.current = armDayTimer;
+  }, [armDayTimer]);
+
+  // A Gate switch is a change of owner for every row: retire the read still
+  // in flight so the new Gate cannot join it, and clear what the previous one
+  // left on screen. Deferred a tick because a loader effect that writes state
+  // synchronously trips react-hooks/set-state-in-effect.
+  useEffect(() => {
+    gatewayIdRef.current = gatewayId;
+    requestId.current += 1;
+    inFlight.current = null;
+    const timer = setTimeout(() => {
+      if (gatewayIdRef.current !== gatewayId) return;
+      setOwnedState({ gatewayId, state: EMPTY_ACTIVITY_STATE });
+      setBots([]);
+      setBackendFilter(undefined);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [gatewayId]);
 
   useEffect(() => {
     mounted.current = true;
-    void listBots().then((result) => { if (mounted.current) setBots(result); }).catch(() => undefined);
-    return () => { mounted.current = false; };
-  }, [listBots]);
+    const gateId = gatewayId;
+    // Deferred so the switch's clear runs first; otherwise a fast roster read
+    // could land before the clear and be wiped by it.
+    const timer = setTimeout(() => {
+      void listBots()
+        .then((result) => {
+          // The roster is the Gate's too: a reply from the one we left must
+          // not name its Bots under the new Gate's rows.
+          if (mounted.current && gatewayIdRef.current === gateId) setBots(result);
+        })
+        .catch(() => undefined);
+    }, 0);
+    return () => {
+      mounted.current = false;
+      clearTimeout(timer);
+    };
+  }, [gatewayId, listBots]);
 
   const read = useCallback((): Promise<void> => {
     if (status !== 'connected') return Promise.resolve();
+    const gateId = gatewayId;
     const active = inFlight.current;
-    if (active && !active.settled) return active.promise;
+    // Join a read only when it covers the same Gate and the same day: a read
+    // opened before midnight cannot answer the new day's question.
+    if (active && !active.settled && active.since === since && active.gatewayId === gatewayId) {
+      return active.promise;
+    }
     const id = ++requestId.current;
-    const ticket = { settled: false, promise: Promise.resolve() };
+    const ticket = { settled: false, promise: Promise.resolve(), since, gatewayId };
     inFlight.current = ticket;
     ticket.promise = (async () => {
       try {
-        const feed = await activityFeed.readActivity({ since: todaySince() });
-        if (mounted.current && id === requestId.current) setState((previous) => applyActivityRead(previous, { ok: true, feed }));
+        const feed = await activityFeed.readActivity({ since });
+        if (mounted.current && id === requestId.current && gateId === gatewayIdRef.current) {
+          setOwnedState((previous) => ({
+            gatewayId: gateId,
+            state: applyActivityRead(
+              previous.gatewayId === gateId ? previous.state : EMPTY_ACTIVITY_STATE,
+              { ok: true, feed },
+            ),
+          }));
+        }
       } catch (caught) {
-        if (mounted.current && id === requestId.current) {
-          setState((previous) => applyActivityRead(previous, { ok: false, error: caught instanceof Error ? caught.message : String(caught) }));
+        if (mounted.current && id === requestId.current && gateId === gatewayIdRef.current) {
+          setOwnedState((previous) => ({
+            gatewayId: gateId,
+            state: applyActivityRead(
+              previous.gatewayId === gateId ? previous.state : EMPTY_ACTIVITY_STATE,
+              { ok: false, error: caught instanceof Error ? caught.message : String(caught) },
+            ),
+          }));
         }
       } finally {
         ticket.settled = true;
@@ -63,15 +148,38 @@ export function TodaySection({
       }
     })();
     return ticket.promise;
-  }, [activityFeed, status]);
+  }, [activityFeed, gatewayId, since, status]);
 
   useEffect(() => {
     const timer = setTimeout(() => { void read(); }, 0);
     return () => clearTimeout(timer);
   }, [read, reloadSignal]);
 
+  // The boundary is device-local: a phone that slept past midnight, or moved
+  // timezone, is showing yesterday under a "Today" heading until this re-reads.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (next) => {
+      if (next !== 'active') return;
+      armDayTimer();
+      const boundary = todaySince();
+      if (boundary !== since) {
+        setSince(boundary);
+        return;
+      }
+      void read();
+    });
+    return () => subscription.remove();
+  }, [armDayTimer, read, since]);
+
+  useEffect(() => {
+    armDayTimer();
+    return () => {
+      if (dayTimer.current) clearTimeout(dayTimer.current);
+      dayTimer.current = null;
+    };
+  }, [armDayTimer]);
+
   const feed = state.feed;
-  const since = todaySince();
   useEffect(() => {
     if (backendFilter && feed && !feed.backends.some((backend) => backend.id === backendFilter)) setBackendFilter(undefined);
   }, [backendFilter, feed]);

@@ -240,7 +240,9 @@ export function coverageNotice(coverage: ActivityCoverage): string | undefined {
 
 export function readFailureKind(error: unknown): 'unsupported' | 'unauthorized' | 'offline' | 'failed' {
   if (error instanceof GatewayHttpError) {
-    if (error.status === 404) return 'unsupported';
+    // 404 is an older Gate with no route; 405 is a host that has the path but
+    // not this method. Both mean "this gateway cannot report activity".
+    if (error.status === 404 || error.status === 405) return 'unsupported';
     if (error.status === 401 || error.status === 403) return 'unauthorized';
     return 'failed';
   }
