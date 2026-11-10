@@ -6969,8 +6969,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               botId: selectedBotIdRef.current,
               backendId: selectedBackendIdRef.current,
             });
-      const jobs = routineJobsFromList(landed ? read.jobs : await botJobs.list());
-      await rearmRoutineNotifications(jobs, scope);
+      const rawJobs = landed ? read.jobs : await botJobs.list();
+      const jobs = routineJobsFromList(rawJobs);
+      await rearmRoutineNotifications(jobs, scope, Array.isArray(rawJobs) && jobs.length === rawJobs.length);
     } catch {
       // best-effort: a failed routine read re-arms nothing and breaks no
       // connection flow; the next connected transition tries again

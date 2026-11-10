@@ -176,9 +176,12 @@ describe('the provider re-arms as the connection comes up', () => {
     // disagree about which jobs exist or when they fire next — and when the cron
     // read has already landed for this gateway, it is that list, not a second
     // `listJobs` for the same facts on the same connect (SPD-4).
-    expect(rearm).toContain('routineJobsFromList(landed ? read.jobs : await botJobs.list())');
+    expect(rearm).toContain('const rawJobs = landed ? read.jobs : await botJobs.list()');
+    expect(rearm).toContain('const jobs = routineJobsFromList(rawJobs)');
     expect(rearm).toContain("read.status === 'ready' && read.gatewayId === gatewayId && landedScope !== undefined");
-    expect(rearm).toContain('await rearmRoutineNotifications(jobs, scope)');
+    expect(rearm).toContain(
+      'await rearmRoutineNotifications(jobs, scope, Array.isArray(rawJobs) && jobs.length === rawJobs.length)',
+    );
     // Best-effort: a failed re-arm never breaks the connection flow.
     expect(rearm).toContain('} catch {');
   });

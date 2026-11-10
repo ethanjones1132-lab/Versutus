@@ -237,27 +237,33 @@ export async function syncRoutineNotification(job: RoutineJob): Promise<void> {
  * left behind, one per collision, duplicated at the fire time and retired by
  * nothing.
  *
- * Scoped to the jobs this read names, on purpose: a Bot Chat's routine read
- * carries only that Bot's environment's jobs, so sweeping the whole queue
- * against it would cancel another Bot's live notice. An orphan always belongs
- * to a job that IS being re-armed, so nothing an earlier collision leaked
- * escapes this.
+ * Scoped to the active and explicitly retired ids, on purpose: a Bot Chat's
+ * routine read carries only that Bot's environment's jobs, so sweeping the
+ * whole queue against it would cancel another Bot's live notice.
  */
-export async function reconcileRoutineNotices(liveJobIds: readonly string[]): Promise<void> {
+export async function reconcileRoutineNotices(
+  liveJobIds: readonly string[],
+  retireJobIds: readonly string[] = [],
+): Promise<void> {
   try {
     const live = new Map<string, string>();
     for (const jobId of liveJobIds) {
       const knownId = await readKnownNotice(jobId);
       if (knownId) live.set(jobId, knownId);
     }
+    const retire = new Set(retireJobIds);
     const scheduled = await Notifications.getAllScheduledNotificationsAsync();
     await Promise.all(
       scheduled.flatMap((request) => {
         const jobId = routineNoticeJobId(request);
         // A notice for a job this read never named, or the one that job is
         // persisted under, is somebody else's business.
-        if (jobId === null || !live.has(jobId)) return [];
-        if (live.get(jobId) === request.identifier) return [];
+        if (jobId === null) return [];
+        if (live.has(jobId)) {
+          if (live.get(jobId) === request.identifier) return [];
+        } else if (!retire.has(jobId)) {
+          return [];
+        }
         return [Notifications.cancelScheduledNotificationAsync(request.identifier)];
       }),
     );
@@ -299,23 +305,35 @@ export async function cancelRoutineNotification(jobId: string): Promise<void> {
  * re-arm retires whatever an EARLIER overlap left behind.
  *
  * Paused jobs are passed through the per-job cancel path because a pause made
- * on another device may not have retired this phone's notice. The read scope's
+ * on another device may not have retired this phone's notice. Only an
+ * authoritative list may retire paused or disappeared jobs; an incomplete read
+ * is a no-op so it cannot wipe a notice based on missing data. The read scope's
  * persisted ids also let a disappeared job be retired without touching jobs
  * outside that scope. Best-effort throughout — a re-arm never rejects.
  */
-export async function rearmRoutineNotifications(jobs: RoutineJob[], scope: string): Promise<void> {
+export async function rearmRoutineNotifications(
+  jobs: RoutineJob[],
+  scope: string,
+  authoritative = true,
+): Promise<void> {
   await serialiseRearm(scope, async () => {
     try {
-      const previousIds = await readScopeJobs(scope);
       const currentIds = new Set(jobs.map((job) => job.id));
-      const live = jobs.filter((job) => !job.paused);
+      const activeIds = jobs.filter((job) => !job.paused).map((job) => job.id);
       await Promise.all(jobs.map((job) => syncRoutineNotification(job)));
-      if (previousIds) {
-        await Promise.all(
-          [...previousIds].filter((jobId) => !currentIds.has(jobId)).map(cancelRoutineNotification),
-        );
+      // An incomplete read still re-arms the jobs it did name, but retires
+      // nothing: a job missing from it may only have failed to parse.
+      if (!authoritative) {
+        await reconcileRoutineNotices(activeIds);
+        return;
       }
-      await reconcileRoutineNotices(live.map((job) => job.id));
+      const previousIds = await readScopeJobs(scope);
+      const retiredIds = new Set(jobs.filter((job) => job.paused).map((job) => job.id));
+      if (previousIds) {
+        for (const jobId of previousIds) if (!currentIds.has(jobId)) retiredIds.add(jobId);
+        await Promise.all([...retiredIds].map(cancelRoutineNotification));
+      }
+      await reconcileRoutineNotices(activeIds, [...retiredIds]);
       if (previousIds) await writeScopeJobs(scope, [...currentIds]);
     } catch {
       // Re-arming is best-effort even if an unexpected storage or runtime error occurs.
