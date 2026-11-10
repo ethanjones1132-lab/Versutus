@@ -1,0 +1,23 @@
+{
+  "object": "hermes.run",
+  "run_id": "run_0123456789abcdef",
+  "status": "completed",
+  "session_id": "api_1793923200_00000000",
+  "model": "hermes-agent",
+  "output": "The build passed.",
+  "usage": {
+    "input_tokens": 50,
+    "output_tokens": 200,
+    "total_tokens": 250,
+    "cache_read_tokens": 40,
+    "cache_write_tokens": 0
+  },
+  "runtime": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4-flash",
+    "route_source": "global"
+  },
+  "created_at": 1793923200.0,
+  "updated_at": 1793923260.5,
+  "last_event": "run.completed"
+}

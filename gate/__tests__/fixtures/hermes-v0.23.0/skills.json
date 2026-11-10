@@ -1,0 +1,12 @@
+[
+  {
+    "name": "github-pr-workflow",
+    "description": "Open and review pull requests.",
+    "category": "git"
+  },
+  {
+    "name": "release-notes",
+    "description": "Draft release notes from merged changes.",
+    "category": "writing"
+  }
+]

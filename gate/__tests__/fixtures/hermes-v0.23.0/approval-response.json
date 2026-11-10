@@ -1,0 +1,6 @@
+{
+  "object": "hermes.run.approval_response",
+  "run_id": "run_0123456789abcdef",
+  "choice": "once",
+  "resolved": 1
+}

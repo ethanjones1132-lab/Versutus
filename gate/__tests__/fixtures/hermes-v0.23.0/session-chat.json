@@ -1,0 +1,21 @@
+{
+  "message": {
+    "id": "msg_9",
+    "role": "assistant",
+    "content": "The build passed."
+  },
+  "usage": {
+    "input_tokens": 10,
+    "output_tokens": 4,
+    "total_tokens": 14
+  },
+  "runtime": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4-flash",
+    "route_source": "raw_request",
+    "requested": {
+      "provider": "opencode-go",
+      "model": "longcat-2.0"
+    }
+  }
+}

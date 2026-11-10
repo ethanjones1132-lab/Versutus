@@ -1,0 +1,24 @@
+[
+  {
+    "name": "core",
+    "label": "Core",
+    "description": "File and shell tools.",
+    "enabled": true,
+    "configured": true,
+    "tools": [
+      "read_file",
+      "write_file",
+      "terminal"
+    ]
+  },
+  {
+    "name": "web",
+    "label": "Web",
+    "description": "Search and fetch.",
+    "enabled": false,
+    "configured": true,
+    "tools": [
+      "web_search"
+    ]
+  }
+]

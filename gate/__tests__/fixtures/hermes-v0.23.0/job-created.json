@@ -1,0 +1,17 @@
+{
+  "id": "job_0003",
+  "name": "[bot:researcher] Morning brief",
+  "prompt": "Write the morning brief.",
+  "schedule": "0 7 * * *",
+  "schedule_display": "Every day at 07:00",
+  "next_run_at": "2026-11-11T07:00:00+00:00",
+  "last_run_at": null,
+  "last_status": null,
+  "failure_streak": 0,
+  "enabled": true,
+  "paused_at": null,
+  "enabled_toolsets": [
+    "core"
+  ],
+  "latest_execution": null
+}
