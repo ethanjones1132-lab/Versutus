@@ -1,0 +1,34 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "api_1793923200_00000000",
+      "source": "api_server",
+      "user_id": null,
+      "model": "anthropic/claude-sonnet-4",
+      "title": "Release notes",
+      "started_at": 1793923200.0,
+      "ended_at": 1793923260.5,
+      "end_reason": "completed",
+      "message_count": 12,
+      "tool_call_count": 3,
+      "input_tokens": 1200,
+      "output_tokens": 300,
+      "cache_read_tokens": 100,
+      "cache_write_tokens": 20,
+      "reasoning_tokens": 15,
+      "estimated_cost_usd": 0.0123,
+      "actual_cost_usd": null,
+      "api_call_count": 5,
+      "parent_session_id": null,
+      "last_active": 1793923260.5,
+      "preview": "Draft reply",
+      "has_system_prompt": true,
+      "has_model_config": true
+    },
+    {
+      "id": "api_1793923100_11111111",
+      "started_at": 1793923100.0
+    }
+  ]
+}

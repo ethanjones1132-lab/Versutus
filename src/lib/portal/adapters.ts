@@ -151,6 +151,13 @@ export interface PortalClient {
   listCronJobs?(): Promise<import('@/lib/gateway/cron').CronJob[]>;
   cronRuns?(jobId: string): Promise<import('@/lib/gateway/cron').CronRun[]>;
   cronTranscript?(runId: string, limit?: number): Promise<import('@/lib/gateway/cron').CronTurn[]>;
+  /**
+   * Activity's universal read. Optional: a direct host or an older Gate that
+   * does not serve /v1/activity omits it, and the caller reports that honestly
+   * rather than showing an empty feed as if the day held nothing.
+   */
+  getActivityFeed?(since: string, backendId?: string): Promise<import('@/lib/gateway/activity-feed').ActivityFeed>;
+  getRoutineFeed?(backendId?: string): Promise<import('@/lib/gateway/activity-feed').RoutineFeed>;
   listJobs?(): Promise<{ id: string; name?: string; paused?: boolean }[]>;
   createJob?(input: { name: string; prompt: string; schedule: string }): Promise<{ id: string; name?: string }>;
   runJob?(jobId: string): Promise<void>;

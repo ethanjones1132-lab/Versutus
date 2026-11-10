@@ -284,11 +284,12 @@ export default function ActivityScreen() {
             <TodaySection
               reloadSignal={todayReloadSignal}
               onOpenRun={openRun}
-              onOpenSession={(sessionId) => {
+              onOpenSession={({ sessionId, backendId, botId }) => {
                 // The same door the session sheet uses: validate, switch the
-                // thread, then show it. A tap that only opened Chat would land
-                // the operator on whatever conversation was already selected.
-                selectSession(sessionId);
+                // thread, then show it. The row's own backend and Bot travel
+                // with the tap so it opens that exact scope, never the
+                // conversation that happened to be selected.
+                selectSession(sessionId, { backendId, botId });
                 router.push('/chat');
               }}
             />

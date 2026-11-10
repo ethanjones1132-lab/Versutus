@@ -1,0 +1,33 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "msg_1",
+      "role": "user",
+      "content": "Summarize the overnight build.",
+      "timestamp": 1793923201.0
+    },
+    {
+      "id": "msg_2",
+      "role": "assistant",
+      "content": "",
+      "timestamp": 1793923202.0,
+      "tool_calls": [
+        {
+          "id": "call_1",
+          "type": "function",
+          "function": {
+            "name": "terminal",
+            "arguments": "{\"command\":\"git status\"}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_3",
+      "role": "assistant",
+      "content": "The build passed.",
+      "timestamp": 1793923203.0
+    }
+  ]
+}

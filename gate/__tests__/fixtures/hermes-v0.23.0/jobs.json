@@ -1,0 +1,47 @@
+[
+  {
+    "id": "job_0001",
+    "name": "[bot:researcher] Nightly review",
+    "prompt": "Summarize the overnight build.",
+    "schedule": "0 3 * * *",
+    "schedule_display": "Every day at 03:00",
+    "next_run_at": "2026-11-11T03:00:00+00:00",
+    "last_run_at": "2026-11-10T03:00:00+00:00",
+    "last_status": "ok",
+    "last_error": null,
+    "last_delivery_error": null,
+    "failure_streak": 0,
+    "state": "scheduled",
+    "enabled": true,
+    "paused_at": null,
+    "paused_reason": null,
+    "cooldown_until": null,
+    "cooldown_reason": null,
+    "model": "anthropic/claude-sonnet-4",
+    "provider": "anthropic",
+    "enabled_toolsets": [
+      "core",
+      "web"
+    ],
+    "workdir": null,
+    "deliver": "origin",
+    "origin": "api_server",
+    "latest_execution": {
+      "status": "running",
+      "started_at": 1793923200.0
+    }
+  },
+  {
+    "id": "job_0002",
+    "name": "Weekly digest",
+    "prompt": "Write the weekly digest.",
+    "schedule": "0 9 * * 1",
+    "enabled": false,
+    "paused_at": "2026-11-09T09:00:00+00:00",
+    "paused_reason": "paused by operator",
+    "failure_streak": 2,
+    "last_status": "error",
+    "last_error": "provider authentication failed",
+    "latest_execution": null
+  }
+]

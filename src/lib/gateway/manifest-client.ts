@@ -1,3 +1,9 @@
+import {
+  parseActivityFeed,
+  parseRoutineFeed,
+  type ActivityFeed,
+  type RoutineFeed,
+} from '@/lib/gateway/activity-feed';
 import type { PublicBot } from '@/lib/gateway/bots';
 import type { ChatContentPart } from '@/lib/gateway/chat-parts';
 import type { CronJob, CronRun, CronTurn } from '@/lib/gateway/cron';
@@ -498,6 +504,28 @@ export class ManifestClient implements PortalClient {
         ? { rpcMethods: this.identity.manifest.rpcMethods.filter((m): m is string => typeof m === 'string') }
         : {}),
     };
+  }
+
+  /**
+   * Today's activity across every backend, from the Gate's own /v1 route.
+   *
+   * The route is Gate-level, so it rides the root transport even when this
+   * client was attached through a child /p/{id} profile. The parsers are the
+   * same ones the Hermes client uses: a malformed answer becomes one named
+   * failure here rather than a screen full of holes, and the per-backend
+   * coverage rows keep a partial read distinguishable from an empty one.
+   */
+  async getActivityFeed(since: string, backendId?: string): Promise<ActivityFeed> {
+    const query = `since=${encodeURIComponent(since)}${backendId?.trim() ? `&backendId=${encodeURIComponent(backendId)}` : ''}`;
+    const raw = await this.rootTransport.request<unknown>('GET', `/v1/activity?${query}`);
+    return parseActivityFeed(raw);
+  }
+
+  /** The same coverage contract for routines: no routines stays distinct from no list. */
+  async getRoutineFeed(backendId?: string): Promise<RoutineFeed> {
+    const query = backendId?.trim() ? `?backendId=${encodeURIComponent(backendId)}` : '';
+    const raw = await this.rootTransport.request<unknown>('GET', `/v1/routines${query}`);
+    return parseRoutineFeed(raw);
   }
 
   /** First model this gate advertises, if any. */

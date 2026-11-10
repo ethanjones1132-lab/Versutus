@@ -1,0 +1,43 @@
+{
+  "providers": [
+    {
+      "slug": "nous",
+      "name": "Nous Portal",
+      "authenticated": true,
+      "source": "built-in",
+      "is_user_defined": false,
+      "is_current": true,
+      "aliases": [],
+      "models": [
+        "vendor/model:free"
+      ]
+    },
+    {
+      "slug": "kilo",
+      "name": "KiloCode",
+      "authenticated": true,
+      "source": "user-config",
+      "is_user_defined": true,
+      "is_current": false,
+      "aliases": [
+        "custom:kilo",
+        "kilo"
+      ],
+      "models": [
+        "kilo-auto/free"
+      ]
+    },
+    {
+      "slug": "qwen-oauth",
+      "name": "Qwen",
+      "authenticated": false,
+      "source": "built-in",
+      "is_user_defined": false,
+      "is_current": false,
+      "aliases": [],
+      "models": [
+        "qwen3"
+      ]
+    }
+  ]
+}

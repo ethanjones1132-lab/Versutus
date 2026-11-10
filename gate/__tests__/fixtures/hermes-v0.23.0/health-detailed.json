@@ -1,0 +1,29 @@
+{
+  "status": "ok",
+  "platform": "hermes-agent",
+  "version": "0.23.0",
+  "gateway_state": "running",
+  "platforms": {
+    "api_server": {
+      "connected": true
+    }
+  },
+  "readiness": {
+    "ready": true,
+    "checks": {
+      "config": {
+        "status": "ok"
+      },
+      "state_db": {
+        "status": "ok"
+      },
+      "model": {
+        "status": "ok"
+      },
+      "disk": {
+        "status": "ok"
+      }
+    }
+  },
+  "active_runs": 0
+}

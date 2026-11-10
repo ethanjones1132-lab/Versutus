@@ -7,6 +7,13 @@ const ATTENTION_STATES = ['waiting-approval', 'waiting', 'pending', 'required', 
 const LIVE_STATES = ['active', 'in_progress', 'running'];
 const FAILED_STATES = ['failed', 'error', 'cancelled'];
 
+/** The exact owner a tapped row proved, so the tap cannot open another's thread. */
+export type ActivitySessionTarget = {
+  sessionId: string;
+  backendId: string;
+  botId?: string;
+};
+
 /**
  * One line of today's history. The subtitle carries only the metrics the Gate
  * actually reported: an unknown count is absent, never 0.
@@ -22,7 +29,7 @@ export function ActivityRow({
 }: {
   item: ActivityItem;
   onOpenRun?: (runId: string) => void;
-  onOpenSession?: (sessionId: string) => void;
+  onOpenSession?: (target: ActivitySessionTarget) => void;
 }) {
   const tokens = useTokens();
   const date = new Date(item.startedAt);
@@ -45,7 +52,11 @@ export function ActivityRow({
         : tokens.statusConnected;
   const sessionId = item.sessionId;
   const onPress = item.kind === 'session' && sessionId && onOpenSession
-    ? () => onOpenSession(sessionId)
+    ? () => onOpenSession({
+        sessionId,
+        backendId: item.backendId,
+        ...(item.botId ? { botId: item.botId } : {}),
+      })
     : undefined;
 
   return (
