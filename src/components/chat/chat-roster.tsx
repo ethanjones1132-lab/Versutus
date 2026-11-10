@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BotAvatar, GroupAvatar } from '@/components/chat/bot-avatar';
 import { PulsingDot, statusColor } from '@/components/connection-badge';
-import { Button, EmptyState, Icon, PressableScale, Skeleton, Text, TextField, type IconName } from '@/components/ui';
+import { Button, Chip, EmptyState, Icon, PressableScale, Skeleton, Text, TextField, type IconName } from '@/components/ui';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import {
@@ -23,6 +23,7 @@ import {
   type BotGroupRoom,
 } from '@/lib/gateway/groups';
 import { botReportedRoutable, rosterBotTap } from '@/lib/gateway/roster-tap';
+import { filterRosterBots, rosterBackendFilters } from '@/lib/gateway/roster-filter';
 import type { ConnectionStatus } from '@/lib/gateway/types';
 import { haptics } from '@/lib/haptics';
 import { gateLineFor, greetingFor } from '@/lib/home/greeting';
@@ -257,6 +258,11 @@ function ChatRosterImpl({
   onRefresh,
 }: ChatRosterProps) {
   const [query, setQuery] = useState('');
+  // The backend chip a user picked, remembered with the gateway it was picked on: a
+  // different gateway reads as "All" without resetting state in an effect.
+  const [backendSelection, setBackendSelection] = useState<{ gateway: typeof gatewayName; runtime: string | null }>(
+    () => ({ gateway: gatewayName, runtime: null }),
+  );
   const [refreshing, setRefreshing] = useState(false);
   const tokens = useTokens();
   const insets = useSafeAreaInsets();
@@ -270,6 +276,15 @@ function ChatRosterImpl({
     botInventoryAvailable,
     botInventoryAvailable,
   );
+
+  const backendFilters = rosterBackendFilters(rows.flatMap((row) => row.kind === 'bot' ? [row.bot] : []));
+  const activeRuntime =
+    backendSelection.gateway === gatewayName &&
+    backendFilters.length > 1 &&
+    backendFilters.some((filter) => filter.id === backendSelection.runtime)
+      ? backendSelection.runtime
+      : null;
+  const selectRuntime = (runtime: string | null) => setBackendSelection({ gateway: gatewayName, runtime });
 
   // The spinner holds for a beat even on fast reads so the gesture always
   // feels acknowledged — same floor as the thread surface's refresh.
@@ -363,7 +378,8 @@ function ChatRosterImpl({
     );
   }
 
-  const visibleRows = filterRosterRows(rows, query);
+  const backendRows = filterRosterBots(rows, activeRuntime);
+  const visibleRows = filterRosterRows(backendRows, query);
   const visibleGroups = filterGroupRooms(groups, query);
   const visibleBotCount = visibleRows.filter((row) => row.kind === 'bot').length;
   const totalBotCount = rows.filter((row) => row.kind === 'bot').length;
@@ -486,6 +502,19 @@ function ChatRosterImpl({
               Your team
             </Text>
           ) : null}
+          {backendFilters.length > 1 ? (
+            <View accessibilityRole="radiogroup" accessibilityLabel="Filter Bots by backend" style={styles.backendFilters}>
+              <Chip label="All" selected={activeRuntime === null} onPress={() => selectRuntime(null)} />
+              {backendFilters.map((filter) => (
+                <Chip
+                  key={filter.id}
+                  label={filter.label}
+                  selected={activeRuntime === filter.id}
+                  onPress={() => selectRuntime(filter.id)}
+                />
+              ))}
+            </View>
+          ) : null}
         </View>
       }
       ListFooterComponent={
@@ -603,6 +632,7 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   sectionLabel: { marginTop: Spacing.two, marginBottom: Spacing.one, paddingHorizontal: Spacing.one },
+  backendFilters: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two, paddingHorizontal: Spacing.one, marginBottom: Spacing.two },
   member: {
     flexDirection: 'row',
     alignItems: 'center',
