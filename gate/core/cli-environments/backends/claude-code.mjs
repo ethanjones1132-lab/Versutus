@@ -3,6 +3,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 import { spawnCommand } from '../adapters/shared.mjs';
 import { scanAgentDirs } from '../claude-agents.mjs';
@@ -44,6 +45,19 @@ const READ_CONCURRENCY = 4;
  * turn completes.
  */
 const RESERVATION_TTL_MS = 5 * 60_000;
+
+/**
+ * The MCP server each permission-checked turn points Claude Code at.
+ *
+ * Resolved from this module's own URL, not the working directory: the Gate is
+ * started from wherever the operator was, and the CLI's cwd is the environment's
+ * workspace, so a relative path would name a file that does not exist.
+ */
+const PERMISSION_TOOL_PATH = fileURLToPath(new URL('../claude-permission-tool.mjs', import.meta.url));
+
+/** The MCP server name and tool the CLI is told to call for a ruling. */
+const PERMISSION_SERVER_NAME = 'gate-permissions';
+const PERMISSION_PROMPT_TOOL = `mcp__${PERMISSION_SERVER_NAME}__approve`;
 
 /** Map a transcript entry onto the app's message shape. */
 export function toGatewayMessage(entry) {
@@ -172,6 +186,9 @@ export function createClaudeCodeBackend({
   spawnImpl = nodeSpawn,
   jobFactory = createWindowsJob,
   permissionMode = 'default',
+  // When present, the turn's tool calls are put in front of the operator: an
+  // MCP server posting to this bridge is what `--permission-prompt-tool` names.
+  permissionBridge,
   // Injectable so a suite can walk a reservation past its lifetime.
   now = Date.now,
 } = {}) {
@@ -270,6 +287,28 @@ export function createClaudeCodeBackend({
     if (agent) args.push('--agent', agent);
     const chosen = model?.modelId ?? defaultModel;
     if (chosen) args.push('--model', chosen);
+    // Without a bridge the argv is exactly what it was before approvals
+    // existed: no MCP server, no permission prompt tool, the CLI's own prompt.
+    if (permissionBridge) {
+      args.push(
+        '--mcp-config', JSON.stringify({
+          mcpServers: {
+            [PERMISSION_SERVER_NAME]: {
+              type: 'stdio',
+              // The same Node that runs the Gate runs the tool: it needs no
+              // PATH lookup and no shell, and the CLI is told the exact script.
+              command: process.execPath,
+              args: [PERMISSION_TOOL_PATH],
+              env: {
+                GATE_PERMISSION_URL: permissionBridge.url,
+                GATE_PERMISSION_SECRET: permissionBridge.secret,
+              },
+            },
+          },
+        }),
+        '--permission-prompt-tool', PERMISSION_PROMPT_TOOL,
+      );
+    }
     args.push(text ?? '');
 
     const { command, prefix } = spawnCommand(executablePath);

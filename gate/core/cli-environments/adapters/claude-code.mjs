@@ -18,11 +18,14 @@ export const claudeCodeAdapter = {
    */
   server: { transport: 'per-turn' },
 
-  createBackend({ record, claudeHome = join(homedir(), '.claude') } = {}) {
+  createBackend({ record, claudeHome = join(homedir(), '.claude'), permissionBridge } = {}) {
     return createClaudeCodeBackend({
       executablePath: record.executable.path,
       cwd: record.workspacePolicy?.defaultRoot,
       claudeHome,
+      // Only the manager builds one, and only for an environment with an
+      // approval inbox behind it; absent here means the CLI's own prompt.
+      permissionBridge,
     });
   },
   operations: {

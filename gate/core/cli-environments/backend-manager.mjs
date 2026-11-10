@@ -1,6 +1,7 @@
 import { createNativeServer } from './native-server.mjs';
 import { createStdioServer } from './stdio-server.mjs';
 import { isApprovalRequest } from './backends/codex.mjs';
+import { createPermissionBridge } from './claude-permissions.mjs';
 
 // How long a backend whose server will not start stays unretried. The first
 // cold read after a Gate restart otherwise pays the supervisor's whole start
@@ -59,6 +60,13 @@ export function createBackendManager({
   // One cold create in flight per environment. Concurrent lookups share that
   // vault read and the server it publishes. Cleared in stopAll with the rest.
   const opening = new Map();
+  // Claude Code answers a permission prompt through an MCP tool that posts to a
+  // loopback bridge, so an environment that has an inbox behind it gets exactly
+  // one. Both the bridge and the promise that creates it are cached: two turns
+  // opening at once must not start two listeners, or one turn would carry a URL
+  // the inbox never answers.
+  const permissionBridges = new Map();
+  const permissionBridgeOpening = new Map();
 
   return { get, list, describe, methodsOf, stopAll, isBackendCapable, subscribe };
 
@@ -167,7 +175,16 @@ export function createBackendManager({
     if (adapter.server?.transport === 'per-turn') {
       const cached = backends.get(environmentId);
       if (cached) return cached.backend;
-      const backend = adapter.createBackend({ record });
+      // A per-turn CLI's approval prompt is the CLI's own unless there is an
+      // inbox for it to reach. Claude Code is the one whose prompt can be
+      // bridged; every other adapter is built exactly as before.
+      const permissionBridge = record.adapterId === 'claude-code' && approvals
+        ? await openPermissionBridge(environmentId)
+        : undefined;
+      const backend = adapter.createBackend({
+        record,
+        ...(permissionBridge ? { permissionBridge } : {}),
+      });
       backends.set(environmentId, { key: 'per-turn', backend });
       return backend;
     }
@@ -337,6 +354,36 @@ export function createBackendManager({
   }
 
   /**
+   * The bridge an environment's turns post their permission prompts to.
+   *
+   * Cached twice for the same reason a server is cached once: concurrent cold
+   * calls all miss the map, and without the in-flight promise they would each
+   * bind a listener, so a turn could be handed a URL nobody answers. A failure
+   * is not cached — the next turn is allowed to retry rather than inherit a
+   * broken port for the life of the process.
+   */
+  function openPermissionBridge(environmentId) {
+    const settled = permissionBridges.get(environmentId);
+    if (settled) return Promise.resolve(settled);
+    const openingBridge = permissionBridgeOpening.get(environmentId);
+    if (openingBridge) return openingBridge;
+    const pending = createPermissionBridge({
+      approvals,
+      environmentId,
+      timeoutMs: approvalTimeoutMs,
+    }).then((bridge) => {
+      permissionBridges.set(environmentId, bridge);
+      return bridge;
+    }).finally(() => {
+      // Only this attempt is in flight while it settles, so the entry is its
+      // own: a failed create clears the way for the next turn to try again.
+      permissionBridgeOpening.delete(environmentId);
+    });
+    permissionBridgeOpening.set(environmentId, pending);
+    return pending;
+  }
+
+  /**
    * Remember a server that would not start, with the window before the next
    * attempt. The supervisor's own start timeout (30s for an HTTP server) is paid
    * once per window instead of once per request, and the refusal the caller sees
@@ -384,6 +431,13 @@ export function createBackendManager({
   async function stopAll() {
     for (const server of servers.values()) await server.stop().catch(() => undefined);
     servers.clear();
+    // A bridge still being opened belongs to an environment this stop has just
+    // forgotten; await it first, so its listener is closed rather than leaked
+    // and the cache below is not repopulated behind the clear.
+    await Promise.all([...permissionBridgeOpening.values()].map((pending) => pending.catch(() => null)));
+    for (const bridge of permissionBridges.values()) await bridge.close().catch(() => undefined);
+    permissionBridges.clear();
+    permissionBridgeOpening.clear();
     backends.clear();
     credentialsByEnvironment.clear();
     opening.clear();
