@@ -1623,20 +1623,50 @@ export async function createGate(config = {}) {
   // store turns an unreachable roster into its own honest refusal. The
   // backendManager binding is declared below; resolution happens per write,
   // long after setup finishes.
+  // A Bot id two environments both use is logged the first time it is seen and
+  // not again: the phone refetches the roster on every visit, and one hidden Bot
+  // would otherwise write the same line for the life of the Gate. The roster's
+  // `warnings` carries it every time; the log exists so the id can be grepped
+  // after the fact. Gate scope, because the route table is rebuilt per request.
+  const reportedBotIdClashes = new Set();
   const botGroups = createBotGroupStore(gateHome, {
     listBotIds: async () => {
+      // Every environment that can list Bots answers, not just the first: a Bot
+      // on the second environment is still one this Gate can address. The union
+      // keeps the first environment's ids first and drops repeats; an
+      // environment that throws is skipped, but if none answered the write is
+      // still refused rather than guessed at.
+      const ids = new Set();
+      let answered = false;
+      let firstError = null;
       for (const entry of await backendManager.list()) {
         if (!await backendCanServe(entry, 'listBots')) continue;
-        const backend = await backendManager.get(entry.id).catch(() => null);
-        if (backend && typeof backend.listBots === 'function') {
+        const backend = await backendManager.get(entry.id).catch((error) => {
+          // A backend that will not build is as much a failure to answer as one
+          // whose roster read throws; keep the cause for the refusal below.
+          firstError ??= error;
+          return null;
+        });
+        if (!backend || typeof backend.listBots !== 'function') continue;
+        try {
           // listBots speaks the wire shape ({ object: 'list', data: [...] });
           // a bare array is accepted too, but never guessed from anything else.
           const roster = await backend.listBots();
           const rows = Array.isArray(roster) ? roster : Array.isArray(roster?.data) ? roster.data : [];
-          return rows.map((bot) => String(bot?.id ?? '')).filter(Boolean);
+          for (const row of rows) {
+            const id = String(row?.id ?? '');
+            if (id) ids.add(id);
+          }
+          answered = true;
+        } catch (error) {
+          // One unreachable roster cannot deny the environments that answered.
+          // Its failure is kept for the case where none did, so the refusal
+          // names the real cause instead of a generic "no backend".
+          firstError ??= error;
         }
       }
-      throw new Error('no attached backend can list bots');
+      if (!answered) throw firstError ?? new Error('no attached backend can list bots');
+      return [...ids];
     },
   });
   // Live Hermes-kind run streams are teed here so a finished run still
@@ -3051,11 +3081,14 @@ export async function createGate(config = {}) {
        * A failure beside rows that did answer is now named in `warnings` on the
        * same envelope; a failure with nothing to show is reported instead of
        * turning into an empty list.
+       *
+       * A Bot id two environments both use is a clash rather than a duplicate:
+       * first-wins still decides which row is shown, but the hidden row is named
+       * in `warnings` and in the Gate log instead of vanishing.
        */
       async function mergedBotRoster() {
         const listed = [];
-        const warnings = [];
-        let firstError = null;
+        const warnings = [];        let firstError = null;
         for (const entry of await backendManager.list()) {
           if (!await backendCanServe(entry, 'listBots')) continue;
           const backend = await backendManager.get(entry.id).catch((error) => {
@@ -3080,12 +3113,30 @@ export async function createGate(config = {}) {
         // about, so its own answer goes out verbatim.
         if (listed.length === 1 && warnings.length === 0) return { roster: listed[0].roster };
         const seen = new Set();
+        const owners = new Map();
         const data = [];
         for (const { id, kind, rows } of listed) {
           for (const row of rows) {
             const rowId = String(row?.id ?? '');
-            if (!rowId || seen.has(rowId)) continue;
+            if (!rowId) continue;
+            if (seen.has(rowId)) {
+              // First-wins is the rule, and the kept environment is the one
+              // findBotOwner must resolve to: both walks read
+              // backendManager.list() in that same order, and a backend's
+              // roster and forBot() describe the same profiles. The clash is
+              // said out loud so the hidden Bot is not simply gone.
+              const keptId = owners.get(rowId);
+              const message = `Bot "${rowId}" from ${id} is hidden by ${keptId}: two environments use the same Bot id, and only the first is shown. Rename one to see both.`;
+              warnings.push({ backendId: id, code: 'bot_id_conflict', message });
+              const clashKey = `${id}\u0000${keptId}\u0000${rowId}`;
+              if (!reportedBotIdClashes.has(clashKey)) {
+                reportedBotIdClashes.add(clashKey);
+                console.warn(message);
+              }
+              continue;
+            }
             seen.add(rowId);
+            owners.set(rowId, id);
             data.push({ ...row, backendId: id, runtime: row.runtime ?? kind });
           }
         }

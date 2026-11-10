@@ -27,7 +27,7 @@ function auth(gate) {
 }
 
 /** A CLI adapter whose "native server" is entirely in-process. */
-function adapterFor(adapterId, { listBots, startFails } = {}) {
+function adapterFor(adapterId, { listBots, startFails, forBot, getBot } = {}) {
   return {
     adapterId,
     adapterRevision: '1',
@@ -40,7 +40,12 @@ function adapterFor(adapterId, { listBots, startFails } = {}) {
       // A start failure is indistinguishable from an unknown capability before
       // the backend is built, so this adapter is asked and then fails.
       if (startFails) throw startFails;
-      return { async listBots() { return listBots(); } };
+      const backend = { async listBots() { return listBots(); } };
+      // Optional so a test can pin which environment owns a Bot-scoped read:
+      // the Gate asks forBot() who owns the id, then the route asks getBot().
+      if (forBot) backend.forBot = (botId) => forBot(botId);
+      if (getBot) backend.getBot = (botId) => getBot(botId);
+      return backend;
     },
   };
 }
@@ -215,6 +220,168 @@ test('when nothing answered, the first failure is reported instead of an empty r
         code: 'environment_start_failed',
       },
     });
+  } finally {
+    await gate.close();
+  }
+});
+
+// ─── Two environments using one Bot id ────────────────────────────────────
+// A Hermes profile and the built-in Codex Bot can share an id. First-wins kept
+// the first and silently dropped the second, so one Bot vanished with no trace.
+// These tests pin that the clash is named (in the list and in the log), that
+// ownership resolves to the row that was kept, and that group membership checks
+// see Bots on every environment rather than only the first.
+
+/** Two environments that both answer to a Bot called `researcher`. */
+function clashingRoster() {
+  const rows = [{ id: 'researcher', displayName: 'researcher', routable: true }];
+  return {
+    registry: registryOf(
+      adapterFor('hermescli', {
+        listBots: () => ({ object: 'list', data: rows }),
+        forBot: async () => ({ id: 'researcher' }),
+        getBot: async () => ({ id: 'researcher', soul: 'from-a-hermes' }),
+      }),
+      adapterFor('codexcli', {
+        listBots: () => ({ object: 'list', data: rows }),
+        forBot: async () => ({ id: 'researcher' }),
+        getBot: async () => ({ id: 'researcher', soul: 'from-b-codex' }),
+      }),
+    ),
+    environments: [
+      { id: 'a-hermes', adapterId: 'hermescli' },
+      { id: 'b-codex', adapterId: 'codexcli' },
+    ],
+  };
+}
+
+test('a Bot id two environments both use is named instead of silently hidden', async () => {
+  const gate = await makeGate(clashingRoster());
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/bots`, { headers: auth(gate) });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    // First-wins is unchanged: the first environment's row is the one shown.
+    assert.deepEqual(body.data, [{
+      id: 'researcher',
+      displayName: 'researcher',
+      routable: true,
+      backendId: 'a-hermes',
+      runtime: 'hermescli',
+    }]);
+    // The dropped row is not gone without a trace.
+    assert.equal(body.warnings.length, 1);
+    assert.equal(body.warnings[0].backendId, 'b-codex');
+    assert.equal(body.warnings[0].code, 'bot_id_conflict');
+    const message = body.warnings[0].message;
+    assert.match(message, /researcher/);
+    assert.match(message, /a-hermes/);
+    assert.match(message, /b-codex/);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('the Gate log names a clash once, while the API warns every time', async () => {
+  // The phone refetches the roster on every visit; a persistent clash would
+  // otherwise write the same line for the life of the Gate. The log is for
+  // grepping after the fact, so it says it once; the payload never goes quiet.
+  const gate = await makeGate(clashingRoster());
+  const warned = [];
+  const original = console.warn;
+  console.warn = (...args) => { warned.push(args.join(' ')); };
+  try {
+    for (let i = 0; i < 2; i += 1) {
+      const response = await fetch(`http://127.0.0.1:${gate.port}/v1/bots`, { headers: auth(gate) });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).warnings[0].code, 'bot_id_conflict');
+      const clashLines = warned.filter((line) => line.includes('researcher') && line.includes('b-codex'));
+      assert.equal(clashLines.length, Math.min(i + 1, 1), `after fetch ${i + 1}`);
+    }
+  } finally {
+    console.warn = original;
+    await gate.close();
+  }
+});
+
+test('a group write names the real reason the roster could not be read', async () => {
+  // Every environment failing to build is not "no backend lists bots": the
+  // operator needs the cause, not a generic refusal, or the 502 is untraceable.
+  const startFailure = Object.assign(new Error('environment a-broken could not start'), {
+    code: 'environment_start_failed',
+    status: 502,
+  });
+  const gate = await makeGate({
+    registry: registryOf(adapterFor('startfailcli', { startFails: startFailure })),
+    environments: [{ id: 'a-broken', adapterId: 'startfailcli' }],
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/bot-groups`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ name: 'crew', memberIds: ['researcher', 'scout'] }),
+    });
+    const body = await response.json();
+    assert.equal(response.status, 502, JSON.stringify(body));
+    assert.equal(body.error.code, 'roster_unavailable');
+    assert.match(body.error.message, /could not start/);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('ownership resolves to the environment whose row was kept', async () => {
+  const gate = await makeGate(clashingRoster());
+  try {
+    // The roster keeps a-hermes, so a Bot-scoped read must be served by
+    // a-hermes too. If these disagreed, a Bot would list but answer from (or
+    // 404 on) the environment the roster never showed.
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/bots/researcher`, {
+      headers: auth(gate),
+    });
+    assert.equal(response.status, 200);
+    const bot = await response.json();
+    assert.equal(bot.soul, 'from-a-hermes');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('group membership sees Bots on every environment, not just the first', async () => {
+  const gate = await makeGate({
+    registry: registryOf(
+      adapterFor('hermescli', { listBots: () => ({ object: 'list', data: [{ id: 'researcher', routable: true }] }) }),
+      adapterFor('codexcli', { listBots: () => ({ object: 'list', data: [{ id: 'scout', routable: true }] }) }),
+      adapterFor('brokencli', { listBots: () => { throw brokenRoster(); } }),
+    ),
+    environments: [
+      { id: 'a-hermes', adapterId: 'hermescli' },
+      { id: 'b-codex', adapterId: 'codexcli' },
+      { id: 'c-broken', adapterId: 'brokencli' },
+    ],
+  });
+  const base = `http://127.0.0.1:${gate.port}`;
+  try {
+    // `scout` lives on the SECOND environment, so only the union of every
+    // roster can confirm it; the third environment failing must not sink that.
+    const created = await fetch(`${base}/v1/bot-groups`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ name: 'crew', memberIds: ['researcher', 'scout'] }),
+    });
+    assert.equal(created.status, 200);
+    assert.deepEqual((await created.json()).memberIds, ['researcher', 'scout']);
+
+    // A genuinely unknown id still dies at the door with 400.
+    const refused = await fetch(`${base}/v1/bot-groups`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ name: 'ghosts', memberIds: ['researcher', 'nobody'] }),
+    });
+    assert.equal(refused.status, 400);
+    const body = await refused.json();
+    assert.equal(body.error.code, 'unknown_member');
+    assert.match(body.error.message, /nobody/);
   } finally {
     await gate.close();
   }
