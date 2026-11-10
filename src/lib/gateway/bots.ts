@@ -38,14 +38,103 @@ export type PublicBot = {
 };
 
 /**
+ * The families a Bot's `runtime` can name. The Gate reports adapter ids
+ * (`claude-code`, `codex`), but the app only ever needs the family — the
+ * label, the roster order and the feature surface all key on it, so one
+ * spelling of the id cannot make a Claude Code Bot look like an unknown.
+ * `hermes` covers absent/blank too: a Bot with no reported runtime is what a
+ * Bot has always been (ADR 0016).
+ */
+export type BotRuntimeFamily = 'hermes' | 'opencode' | 'claude-code' | 'codex' | 'other';
+
+/** The family a runtime id belongs to, normalised for case and whitespace. */
+export function botRuntimeFamily(runtime?: string | null): BotRuntimeFamily {
+  const id = runtime?.trim().toLowerCase();
+  if (!id || id.startsWith('hermes')) return 'hermes';
+  if (id.startsWith('opencode')) return 'opencode';
+  if (id.startsWith('claude')) return 'claude-code';
+  if (id.startsWith('codex')) return 'codex';
+  return 'other';
+}
+
+/**
  * The runtime's name for a roster row, or '' for Hermes and for a Gate that
  * does not say — Hermes is what a Bot has always been, so it earns no tag.
+ * Claude Code and Codex Bots are fixed Gate Bots (VS-093) and still earn one.
  */
 export function botRuntimeLabel(runtime?: string | null): string {
-  const id = runtime?.trim().toLowerCase();
-  if (!id || id === 'hermes' || id.startsWith('hermes')) return '';
-  if (id === 'opencode' || id.startsWith('opencode')) return 'OpenCode';
-  return runtime!.trim();
+  const trimmed = runtime?.trim();
+  if (!trimmed) return '';
+  switch (botRuntimeFamily(trimmed)) {
+    case 'hermes':
+      return '';
+    case 'opencode':
+      return 'OpenCode';
+    case 'claude-code':
+      return 'Claude Code';
+    case 'codex':
+      return 'Codex';
+    default:
+      return trimmed;
+  }
+}
+
+/**
+ * The Hermes-profile features a Bot's runtime carries. Chat, sessions and the
+ * roster are universal; every flag here is something read from a Hermes
+ * profile's own file tree (ADR 0016) and refused by name elsewhere. Modelled
+ * as one object so every pane asks the same question instead of each surface
+ * inventing its own "not OpenCode" test that the next runtime forgets.
+ */
+export type BotProfileFeatures = {
+  /** The Bot's own Hermes API-server credential (multiplex). */
+  listenKey: boolean;
+  /** MEMORY.md / USER.md under the profile. */
+  memory: boolean;
+  /** skills.list and skill invocation. */
+  skills: boolean;
+  /** `[bot:<name>]` cron routines. */
+  routines: boolean;
+};
+
+const HERMES_PROFILE_FEATURES: BotProfileFeatures = {
+  listenKey: true,
+  memory: true,
+  skills: true,
+  routines: true,
+};
+
+const REDUCED_PROFILE_FEATURES: BotProfileFeatures = {
+  listenKey: false,
+  memory: false,
+  skills: false,
+  routines: false,
+};
+
+/**
+ * The features this Bot's runtime can honestly serve. Only a Hermes Bot —
+ * runtime absent or `hermes` — has the profile tree these need; OpenCode,
+ * Claude Code and Codex Bots get the reduced surface rather than a pane that
+ * offers a request the Gate will refuse.
+ */
+export function botProfileFeatures(runtime?: string | null): BotProfileFeatures {
+  return botRuntimeFamily(runtime) === 'hermes' ? HERMES_PROFILE_FEATURES : REDUCED_PROFILE_FEATURES;
+}
+
+/** Whether this Bot is a Hermes profile (runtime absent or `hermes`). */
+export function botHasHermesFeatures(runtime?: string | null): boolean {
+  return botRuntimeFamily(runtime) === 'hermes';
+}
+
+/**
+ * Whether this Bot's runtime lets the phone write it. Claude Code and Codex
+ * Bots are fixed by the Gate (VS-093): the phone cannot create or edit them,
+ * so the edit affordances hide rather than inviting a refusal. Hermes,
+ * OpenCode and a runtime the app does not know keep the form they always had.
+ */
+export function botRuntimeWritable(runtime?: string | null): boolean {
+  const family = botRuntimeFamily(runtime);
+  return family !== 'claude-code' && family !== 'codex';
 }
 
 /**

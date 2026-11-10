@@ -32,6 +32,18 @@ function isOpenCode(backend: GatewayBackend): boolean {
   return (backend.adapterId ?? backend.id).toLowerCase().startsWith('opencode');
 }
 
+/**
+ * Environments that serve fixed Bots the phone cannot create. Claude Code and
+ * Codex Bots are Gate-defined (VS-093): the environments answer `bots` so their
+ * Bots can be listed and chatted with, but neither implements create, so they
+ * must never appear in the New Agent sheet — offering one would invite the
+ * refusal the sheet exists to prevent.
+ */
+function servesFixedBotsOnly(backend: GatewayBackend): boolean {
+  const id = (backend.adapterId ?? backend.id).toLowerCase();
+  return id.startsWith('claude') || id.startsWith('codex');
+}
+
 function runtimeLabel(backend: GatewayBackend): string {
   if (isOpenCode(backend)) return 'OpenCode';
   const adapter = (backend.adapterId ?? '').toLowerCase();
@@ -44,6 +56,10 @@ function runtimeLabel(backend: GatewayBackend): string {
  * been). Fewer than two means there is nothing to choose between and the sheet
  * keeps its single-runtime form.
  *
+ * A `bots` capability is not enough: the fixed Claude Code / Codex environments
+ * advertise it so their Bots can be listed, but they cannot create one, so they
+ * are dropped here (see servesFixedBotsOnly).
+ *
  * The free-only rule is the Gate's to enforce; this only keeps the picker
  * honest by listing the rows the Gate flagged `free`, so nobody pins a model the
  * Gate is going to refuse.
@@ -52,7 +68,9 @@ export function botRuntimes(
   backends: GatewayBackend[] | undefined,
   catalog: CatalogRow[] | undefined,
 ): BotRuntimeOption[] {
-  const capable = (backends ?? []).filter((backend) => (backend.capabilities ?? []).includes('bots'));
+  const capable = (backends ?? []).filter(
+    (backend) => (backend.capabilities ?? []).includes('bots') && !servesFixedBotsOnly(backend),
+  );
   const ordered = [...capable].sort((a, b) => Number(isOpenCode(a)) - Number(isOpenCode(b)));
   return ordered.map((backend) => {
     if (!isOpenCode(backend)) {

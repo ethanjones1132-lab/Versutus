@@ -8,7 +8,14 @@ import { BaseSheet, Button, Divider, ListRow, PressableScale, Skeleton, Text } f
 import { Spacing } from '@/constants/tokens';
 import { haptics } from '@/lib/haptics';
 import { describeBotDetail } from '@/lib/gateway/bot-detail';
-import { botSoulCopy, EMPTY_BOT_SOUL, type BotSoulState, type PublicBot } from '@/lib/gateway/bots';
+import {
+  botProfileFeatures,
+  botRuntimeWritable,
+  botSoulCopy,
+  EMPTY_BOT_SOUL,
+  type BotSoulState,
+  type PublicBot,
+} from '@/lib/gateway/bots';
 
 export type BotDetailSheetProps = {
   /** The Bot to describe; null renders nothing (sheet dismissed). */
@@ -80,6 +87,12 @@ export function BotDetailSheet({
   if (!held) return null;
   const shown = bot ?? held;
   const detail = describeBotDetail(shown);
+  // Memory files are a Hermes profile's own tree (ADR 0016). An OpenCode,
+  // Claude Code or Codex Bot has none, so the pane is not drawn at all — a
+  // panel that only ever answers "could not be read" is a refusal with extra
+  // steps.
+  const features = botProfileFeatures(shown.runtime);
+  const writable = botRuntimeWritable(shown.runtime);
   const soulState = soul ?? EMPTY_BOT_SOUL;
   const soulNote = botSoulCopy(soulState);
 
@@ -140,7 +153,7 @@ export function BotDetailSheet({
         <BotApprovalPolicyRow botId={shown.id} />
 
         {/* P2: the Bot's memory, read on demand from the Gate host. */}
-        <BotMemoryPane botId={shown.id} />
+        {features.memory ? <BotMemoryPane botId={shown.id} /> : null}
 
         <View style={styles.fact}>
           <Text variant="micro" color="tertiary">
@@ -202,7 +215,7 @@ export function BotDetailSheet({
           chevron={false}
           onPress={() => void handleCopyId()}
         />
-        {onEdit && detail.editable ? (
+        {onEdit && detail.editable && writable ? (
           <ListRow
             title="Edit agent"
             subtitle="Description, soul, and model pin"

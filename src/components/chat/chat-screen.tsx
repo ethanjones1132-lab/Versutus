@@ -68,6 +68,8 @@ import { handoffShareAvailable, shareBotHandoff } from '@/lib/gateway/handoff-sh
 import { shareRefusalCopy } from '@/lib/gateway/transcript-export';
 import {
   applyBotSoulRead,
+  botProfileFeatures,
+  botRuntimeWritable,
   botSoulReadFromUnknown,
   botToEditInput,
   buildBotUpdatePatch,
@@ -821,6 +823,24 @@ export function ChatScreen() {
   // The active Bot, named once for every Bot-keyed surface below (its skills,
   // its tools, and the voice its replies are read in).
   const botSurfaceId = surface.kind === 'bot' ? surface.botId : undefined;
+  // The roster's record for the Bot this thread talks to, when it has been
+  // read: the header's name, the Bot panel and the empty-thread welcome all
+  // draw from it.
+  const activeBotRow = useMemo(
+    () =>
+      surface.kind === 'bot'
+        ? rosterRows.find(
+            (row): row is Extract<RosterRow, { kind: 'bot' }> =>
+              row.kind === 'bot' && row.bot.id === surface.botId,
+          )?.bot
+        : undefined,
+    [rosterRows, surface],
+  );
+  // What this Bot's runtime can honestly serve. Memory, skills and routines
+  // are a Hermes profile's own tree (ADR 0016); every other runtime — OpenCode,
+  // Claude Code, Codex — gets the reduced surface instead of panes that only
+  // ever answer a refusal. Runtime absent stays Hermes, as it always was.
+  const activeBotFeatures = botProfileFeatures(activeBotRow?.runtime);
   // The speaker is one conversation's own opt-in (B2), held in this device's
   // store beside a Bot's voice, so the flag is read and written here and the
   // gateway is asked nothing. Whether this device has a voice to read a reply
@@ -2076,7 +2096,9 @@ export function ChatScreen() {
     });
   }, []);
   const handleRoutinesRetry = useCallback(() => {
-    if (!botSurfaceId || status !== 'connected') return;
+    // Routines are Hermes-profile crons (ADR 0016): another runtime has none,
+    // so the pane is not drawn and no read is owed.
+    if (!botSurfaceId || !activeBotFeatures.routines || status !== 'connected') return;
     const target = botSurfaceId;
     void botJobs
       .list()
@@ -2098,7 +2120,7 @@ export function ChatScreen() {
           };
         }),
       );
-  }, [botSurfaceId, status, botJobs]);
+  }, [botSurfaceId, status, botJobs, activeBotFeatures.routines]);
   // The routine actions that RoutinesPane takes as props must keep the
   // same identity across re-renders so the pane's `React.memo` wrapper can
   // hold: chat-screen ticks that do not change `surface.botId`, `botJobs`,
@@ -2176,7 +2198,9 @@ export function ChatScreen() {
     [botSurfaceId, botJobs, foldRoutineRead, routineJobsFromList],
   );
   useEffect(() => {
-    if (!botSurfaceId || !activeGateway?.id || status !== 'connected') return;
+    // Only a Hermes Bot has routines to read; a reduced runtime is answered no
+    // request at all rather than an error the pane would have to show.
+    if (!botSurfaceId || !activeBotFeatures.routines || !activeGateway?.id || status !== 'connected') return;
     let cancelled = false;
     void botJobs
       .list()
@@ -2205,10 +2229,12 @@ export function ChatScreen() {
     return () => {
       cancelled = true;
     };
-  }, [activeGateway?.id, botSurfaceId, status, botJobs, foldRoutineRead]);
+  }, [activeGateway?.id, botSurfaceId, status, botJobs, foldRoutineRead, activeBotFeatures.routines]);
 
   const handleSkillsRetry = useCallback(() => {
-    if (!botSurfaceId || status !== 'connected') return;
+    // Skills live in the Hermes profile (ADR 0016); the pane is absent for
+    // every other runtime, so there is no read to retry.
+    if (!botSurfaceId || !activeBotFeatures.skills || status !== 'connected') return;
     const target = botSurfaceId;
     const fold = (read: Parameters<typeof applySkillsRead>[1]) => {
       setSkillsState((prev) => {
@@ -2225,10 +2251,12 @@ export function ChatScreen() {
           error: caught instanceof Error ? caught.message : String(caught),
         }),
       );
-  }, [botSurfaceId, status, gatewayRequest]);
+  }, [botSurfaceId, status, gatewayRequest, activeBotFeatures.skills]);
 
   useEffect(() => {
-    if (!botSurfaceId || status !== 'connected') return;
+    // Same rule as routines: skills are read from the Hermes profile only, so
+    // a reduced runtime is never asked.
+    if (!botSurfaceId || !activeBotFeatures.skills || status !== 'connected') return;
     let cancelled = false;
     void gatewayRequest('skills.list')
       .then((payload) => {
@@ -2257,7 +2285,7 @@ export function ChatScreen() {
     return () => {
       cancelled = true;
     };
-  }, [botSurfaceId, status, gatewayRequest]);
+  }, [botSurfaceId, status, gatewayRequest, activeBotFeatures.skills]);
 
   const handleToolsetsRetry = useCallback(() => {
     if (!toolsSurfaceKey || status !== 'connected') return;
@@ -2555,20 +2583,6 @@ export function ChatScreen() {
   // Day dividers are decided here, once per message-array change, instead of
   // inside renderItem — renderMessage then depends on the stable callback set
   // only and keeps one identity for the whole streamed turn.
-  // The roster's record for the Bot this thread talks to, when it has been
-  // read: the header's name, the Bot panel and the empty-thread welcome all
-  // draw from it.
-  const activeBotRow = useMemo(
-    () =>
-      surface.kind === 'bot'
-        ? rosterRows.find(
-            (row): row is Extract<RosterRow, { kind: 'bot' }> =>
-              row.kind === 'bot' && row.bot.id === surface.botId,
-          )?.bot
-        : undefined,
-    [rosterRows, surface],
-  );
-
   // The row fold is pure and lives in `@/lib/chat/transcript-items`: it carries
   // an untouched bubble's row object forward, so a streamed flush gives
   // `renderItem` a new object only for the bubble it changed. The ref mirrors
@@ -2957,14 +2971,16 @@ export function ChatScreen() {
           voiceRefinements={botVoiceKey ? botVoiceRefinements : undefined}
           onVoiceRefine={botVoiceKey ? handleBotVoiceRefine : undefined}
         >
-          <SkillsPane
-            skills={skillsState.botId === surface.botId ? skillsState.skills : []}
-            loaded={skillsState.botId === surface.botId ? skillsState.loaded : false}
-            failed={skillsState.botId === surface.botId ? skillsState.failed : false}
-            error={skillsState.botId === surface.botId ? skillsState.error : undefined}
-            onInvoke={handleSkillInvoke}
-            onRetry={handleSkillsRetry}
-          />
+          {activeBotFeatures.skills ? (
+            <SkillsPane
+              skills={skillsState.botId === surface.botId ? skillsState.skills : []}
+              loaded={skillsState.botId === surface.botId ? skillsState.loaded : false}
+              failed={skillsState.botId === surface.botId ? skillsState.failed : false}
+              error={skillsState.botId === surface.botId ? skillsState.error : undefined}
+              onInvoke={handleSkillInvoke}
+              onRetry={handleSkillsRetry}
+            />
+          ) : null}
           {toolsetsVisibleOn(surface) ? (
             <ToolsPane
               toolsets={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.toolsets : []}
@@ -2974,6 +2990,7 @@ export function ChatScreen() {
               onRetry={handleToolsetsRetry}
             />
           ) : null}
+          {activeBotFeatures.routines ? (
           <RoutinesPane
             jobs={routineState.botId === surface.botId ? routineState.jobs : []}
             loaded={routineState.botId === surface.botId ? routineState.loaded : false}
@@ -2984,6 +3001,7 @@ export function ChatScreen() {
             onTogglePause={handleRoutineTogglePause}
             onChanged={handleRoutinesRetry}
           />
+          ) : null}
         </BotChrome>
         </BotPanelSheet>
       ) : toolsetsVisibleOn(surface) ? (
@@ -3352,7 +3370,7 @@ export function ChatScreen() {
           setOverflowVisible(false);
         }}
         onEditAgent={
-          surface.kind === 'bot' && hasBotManagement
+          surface.kind === 'bot' && hasBotManagement && botRuntimeWritable(activeBotRow?.runtime)
             ? () => {
                 const row = rosterRows.find(
                   (candidate): candidate is Extract<RosterRow, { kind: 'bot' }> =>
