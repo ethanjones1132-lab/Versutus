@@ -239,25 +239,26 @@ afterEach(async () => {
   jest.clearAllMocks();
 });
 
-describe('Home separates gateway connectivity from chat readiness', () => {
+describe('Home states the connection and never claims chat readiness', () => {
   test('a connected gateway with no readiness evidence never promises ready chat', async () => {
     const tree = await mountDashboard();
     const shown = renderedText(tree);
 
-    // The connection itself is stated plainly...
-    expect(shown).toContain('Connected to your gateway.');
-    // ...and chat readiness is not inferred from it.
-    expect(shown).toContain('Chat readiness is unknown');
+    // The connection itself is stated plainly, and that is the whole sentence:
+    // an unknown readiness is not narrated (spec §2 — "unknown" is not a state
+    // worth a sentence, and naming it read as a warning in a happy state).
+    expect(shown).toContain('Connected.');
+    expect(shown).not.toContain('Chat readiness');
     expect(shown).not.toMatch(/ready for chat/i);
 
     // The operator has the route that configures a provider...
-    expect(buttonLabels(tree)).toContain('Providers & gateways');
+    expect(buttonLabels(tree)).toContain('Model setup');
     expect(mockLinkHrefs).toContain(SETUP_ROUTE);
     // ...and pressing it reaches `/gateway/setup`, the route chat's setup
     // action already opens.
     const setupButton = tree.root
       .findAllByType(BUTTON)
-      .find((node) => node.props.label === 'Providers & gateways');
+      .find((node) => node.props.label === 'Model setup');
     expect(setupButton).toBeDefined();
     await act(async () => {
       setupButton?.props.onPress();
@@ -283,7 +284,7 @@ describe('Home separates gateway connectivity from chat readiness', () => {
       const tree = await mountDashboard();
       const shown = renderedText(tree);
 
-      expect(shown).toContain('Chat readiness is unknown');
+      expect(shown).not.toContain('Chat readiness');
       expect(shown).not.toMatch(/ready for chat/i);
       expect(mockLinkHrefs).toContain(SETUP_ROUTE);
 
@@ -306,9 +307,10 @@ describe('Home separates gateway connectivity from chat readiness', () => {
     const shown = renderedText(tree);
 
     expect(badgeLabels(tree)).toContain('Disconnected');
-    expect(shown).toContain('Saved locally. Select a reachable gateway to activate it.');
+    expect(shown).toMatch(/Saved on this device\. Connect when it/);
     expect(shown).not.toMatch(/ready for chat/i);
-    expect(shown).not.toContain('Chat readiness is unknown');
+    expect(shown).not.toContain('Chat readiness');
+    expect(shown).not.toContain('Connected.');
     // A provider is not the first thing to fix while there is no connection.
     expect(mockLinkHrefs).not.toContain(SETUP_ROUTE);
   });

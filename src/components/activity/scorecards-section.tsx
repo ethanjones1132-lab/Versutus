@@ -379,7 +379,7 @@ export function ScorecardsSection({
         <Switch
           value={weeklyReport}
           onValueChange={handleWeeklyReport}
-          trackColor={{ true: tokens.accent, false: tokens.border }}
+          trackColor={{ true: tokens.accent, false: tokens.controlTrackOff }}
           thumbColor={tokens.textPrimary}
           accessibilityLabel={WEEKLY_REPORT_OPT_IN_LABEL}
           accessibilityState={{ checked: weeklyReport }}

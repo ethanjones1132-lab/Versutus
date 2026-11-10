@@ -50,6 +50,14 @@ gateway-hosts.local.json
 coverage/
 .jest-cache/
 
+# Playwright: reports and traces are generated, baselines under
+# e2e/__screenshots__ are reviewed like code and stay committed.
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+dist-showcase/
+
 example
 
 # generated native folders

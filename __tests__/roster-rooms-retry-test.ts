@@ -53,7 +53,7 @@ describe('roster rooms retry', () => {
     const src = readChatRosterSource();
     const failed = src.match(/emptyView\.kind === 'load-failed'[\s\S]*?\) : null/)?.[0];
     expect(failed).toBeDefined();
-    expect(failed).toMatch(/title="Couldn't load agents"/);
+    expect(failed).toMatch(/title="Couldn't load your Bots"/);
     expect(failed).toMatch(/actionLabel="Retry"/);
     expect(failed).toMatch(/onAction=\{handleRefresh\}/);
   });

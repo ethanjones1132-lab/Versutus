@@ -192,7 +192,7 @@ export function GatewayHomeDashboard() {
         {discoveredSaveFailure ? (
           <ErrorCard
             cause={`Could not save discovered gateway: ${discoveredSaveFailure}`}
-            affected="gateway profile"
+            affected="saved gateway"
             next="Check storage and try adding the gateway again."
             onDismiss={() => setDiscoveredSaveFailure(null)}
           />
@@ -316,22 +316,19 @@ export function GatewayHomeDashboard() {
         </View>
         {/* A live connection is not a promise that chat can run. The Gate
             accepted this phone, but a turn still needs a model provider whose
-            credential is usable. The only provider readiness this screen can
-            see rides the manifest's `providers[]`, which may be a cached copy
-            and carries no timestamp — and the capability counts tally slash
-            commands when no provider is declared — so it cannot prove a model
-            is ready to answer right now. Say what is known (connected), name
-            that chat readiness is unknown, and point at the one route that
-            configures a provider. */}
+            credential is usable, and no readiness signal here proves one is.
+            Say the one fact that was measured (connected) and stop: "unknown"
+            is not a state worth a sentence, and the configured provider lives
+            one tap away. */}
         <Text variant="body" style={styles.onGlassSecondary}>
           {connected
-            ? 'Connected to your gateway. Chat readiness is unknown — if a model provider needs setup, open Settings > Providers & gateways.'
-            : 'Saved locally. Select a reachable gateway to activate it.'}
+            ? 'Connected.'
+            : 'Saved on this device. Connect when it’s online.'}
         </Text>
         {connected ? (
           <Link href="/gateway/setup" asChild>
             <Button
-              label="Providers & gateways"
+              label="Model setup"
               variant="secondary"
               size="sm"
               style={styles.providerAction}

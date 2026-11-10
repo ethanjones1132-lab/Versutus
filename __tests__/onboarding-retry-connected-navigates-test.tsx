@@ -191,7 +191,7 @@ function pendingCycle(phaseWhenDone: string): () => void {
 /** Runs a retry from the failed screen up to the point its ladder ends. */
 async function startRetry(): Promise<void> {
   await act(async () => {
-    button('Retry')?.onPress?.();
+    button('Try again')?.onPress?.();
   });
   await settle();
   await commitPhase('searching');
@@ -235,8 +235,8 @@ describe('VS-042: a retry that succeeds takes the operator into the app', () => 
     // A successful retry is a connect, not a failure: no error card, and no
     // Retry left behind to imply the cycle did not take.
     expect(renderer.root.findAllByType(ERROR_CARD)).toHaveLength(0);
-    expect(button('Retry')).toBeUndefined();
-    expect(button('Retrying…')).toBeUndefined();
+    expect(button('Try again')).toBeUndefined();
+    expect(button('Trying again…')).toBeUndefined();
 
     // The retry state is cleared with the verdict: further phase churn on the
     // same screen must not stack a second chat entry on the router.
@@ -282,10 +282,10 @@ describe('VS-042: a retry that succeeds takes the operator into the app', () => 
     const cards = renderer.root.findAllByType(ERROR_CARD);
     expect(cards).toHaveLength(1);
     expect(cards[0].props.cause).toBe('no gateway found');
-    expect(cards[0].props.affected).toBe('gateway connection');
+    expect(cards[0].props.affected).toBe('Connection');
     // A retry that failed again keeps the operator on the screen that can ask
     // for an address, and does not pretend the journey is over.
     expect(mockRouter.replace).not.toHaveBeenCalled();
-    expect(button('Retry')?.disabled).toBeFalsy();
+    expect(button('Try again')?.disabled).toBeFalsy();
   });
 });

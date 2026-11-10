@@ -175,7 +175,7 @@ export function CommandHistorySection() {
               <Switch
                 value={includeRaw}
                 onValueChange={setIncludeRaw}
-                trackColor={{ true: tokens.accent, false: tokens.border }}
+                trackColor={{ true: tokens.accent, false: tokens.controlTrackOff }}
                 thumbColor={tokens.textPrimary}
                 accessibilityLabel="Include raw output"
                 accessibilityState={{ checked: includeRaw }}

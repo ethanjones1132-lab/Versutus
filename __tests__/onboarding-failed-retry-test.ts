@@ -39,7 +39,7 @@ describe('onboarding failed auto-connect retry', () => {
     // ONB-1: the button used to fire `void retryAutoConnect()` — a cycle with
     // no `catch` inside it, with no busy state and no result on screen. The
     // handler now says while it runs and what came of it.
-    expect(src).toContain("label={retrying ? 'Retrying…' : 'Retry'}");
+    expect(src).toContain("label={retrying ? 'Trying again…' : 'Try again'}");
     expect(src).toContain('onPress={() => void handleRetry()}');
     expect(src).toContain('disabled={retrying}');
     expect(src).toContain('await retryAutoConnect();');
@@ -76,7 +76,7 @@ describe('onboarding failed auto-connect retry', () => {
 
   test('the API-key field keeps its label and secure entry', () => {
     const src = readScreen();
-    expect(src).toContain('Gateway API key');
+    expect(src).toContain('Gateway key');
     expect(src).toContain('secureTextEntry');
   });
 

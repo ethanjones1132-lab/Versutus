@@ -162,7 +162,7 @@ describe('the import screen and its entry', () => {
 
   test('the roster footer offers the Import row and the screen routes to it', () => {
     expect(roster()).toContain('onImportAgent');
-    expect(roster()).toContain('Import handoff');
+    expect(roster()).toContain('Import a Bot');
     expect(chatScreen()).toContain("'/gateway/import'");
     expect(rootLayout()).toContain('name="gateway/import"');
   });

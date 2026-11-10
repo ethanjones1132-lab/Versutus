@@ -32,17 +32,18 @@ describe('onboarding custom gateway URL affordance', () => {
     expect(src).toContain('accessibilityRole="button"');
   });
 
-  test('the copy names a custom URL with a scheme example', () => {
+  test('the copy points at a full address, with no protocol jargon', () => {
     const src = readScreen();
-    expect(src).toContain('custom URL');
-    expect(src).toContain('ws://');
+    expect(src).toContain('Enter a full gateway address');
+    // Spec §2: the link used to spell `ws://`/`http://` at a first-run user.
+    expect(src).not.toContain('Using a custom URL');
   });
 
-  test('the link lives in the form card, after the API-key field and before the status cards', () => {
+  test('the link lives in the form card, after the gateway-key field and before the status cards', () => {
     const src = readScreen();
     const linkAt = src.indexOf("router.push('/gateway/add')");
     expect(linkAt).toBeGreaterThanOrEqual(0);
-    const apiKeyFieldAt = src.indexOf('Optional when the gateway is configured without authentication.');
+    const apiKeyFieldAt = src.indexOf('Leave blank if your gateway');
     const statusCardAt = src.indexOf('probeMessage && !busy');
     expect(apiKeyFieldAt).toBeGreaterThanOrEqual(0);
     expect(statusCardAt).toBeGreaterThanOrEqual(0);

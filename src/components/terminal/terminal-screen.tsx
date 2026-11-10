@@ -216,7 +216,7 @@ export function TerminalScreen() {
           setCommandOutput(summary);
           setCommandLog(summary);
         } else {
-          if (!command.method) throw new Error('Command has no RPC method');
+          if (!command.method) throw new Error('This command is not available on this gateway.');
           const result = await gatewayRequest(command.method, command.params ?? {});
           const summary = summarizeCommandResult(command, result);
           setCommandOutput(summary);
@@ -258,7 +258,7 @@ export function TerminalScreen() {
     );
   }
 
-  const modeLabel = mode === 'shell' ? 'Shell' : mode === 'rpc' ? 'Gateway RPC' : 'Agent';
+  const modeLabel = mode === 'shell' ? 'Shell' : mode === 'rpc' ? 'Commands' : 'Agent';
 
   return (
     <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })} parallaxY={parallaxY}>
@@ -317,7 +317,7 @@ export function TerminalScreen() {
           <EmptyState
             icon={{ ios: 'terminal', android: 'terminal', web: 'terminal' }}
             {...describeShellUnavailable(shellSupport, activeGateway.name)}
-            actionLabel="Use Gateway RPC"
+            actionLabel="Use Commands"
             onAction={() => setMode('rpc')}
           />
         </View>
@@ -422,7 +422,7 @@ export function TerminalScreen() {
           keyExtractor={() => 'result'}
           ListHeaderComponent={
             <GatewayCommandPanel
-              title={mode === 'rpc' ? 'Gateway RPC' : 'Agent commands'}
+              title={mode === 'rpc' ? 'Commands' : 'Bot commands'}
               commands={commandList}
               runningCommandId={runningCommandId}
               lastSummary={commandOutput || undefined}
@@ -444,8 +444,7 @@ export function TerminalScreen() {
             status === 'connected' ? (
               <EmptyState
                 icon={{ ios: 'terminal', android: 'terminal', web: 'terminal' }}
-                title="No commands yet"
-                description="Run a command to inspect or control the live gateway."
+                title="Choose a command above"
               />
             ) : (
               // Same shape as the Activity 'Connect to start runs' empty: the

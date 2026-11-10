@@ -36,6 +36,11 @@ export const Palette = {
   // The current item in a list inside a sheet: a soft lift of light, with a
   // violet light bar at its edge — light, never a violet fill.
   rowSelected: 'rgba(245, 247, 250, 0.07)',
+  // A control's "off" track. The hairline `border` token is 0.08 — under 2:1
+  // against a card, so an off switch read as decoration rather than a control.
+  // This step composites over the card to about #636366, 3:1 against it, which
+  // is the AA floor for a non-text UI boundary (WCAG 1.4.11).
+  controlTrackOff: 'rgba(245, 247, 250, 0.36)',
 
   // Glass tiers (cool translucent; flat-panel + hairline first)
   glass: 'rgba(20, 20, 22, 0.82)',

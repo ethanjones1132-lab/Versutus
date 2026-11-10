@@ -100,9 +100,13 @@ export function GatewayCommandPanel({
         })}
       </Card>
 
-      <Text variant="caption" color={lastSummary ? 'secondary' : 'tertiary'} style={styles.summary}>
-        {lastSummary ?? 'Run a safe gateway command to inspect the live setup.'}
-      </Text>
+      {/* The panel's own last result, never a second instruction: the empty
+          state below already says what to do. */}
+      {lastSummary ? (
+        <Text variant="caption" color="secondary" style={styles.summary}>
+          {lastSummary}
+        </Text>
+      ) : null}
     </View>
   );
 }

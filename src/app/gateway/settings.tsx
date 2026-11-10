@@ -684,7 +684,7 @@ export default function GatewaySettingsScreen() {
                   <Switch
                     value={appLock}
                     onValueChange={handleAppLock}
-                    trackColor={{ true: tokens.accentDeep, false: tokens.backgroundRaised }}
+                    trackColor={{ true: tokens.accentDeep, false: tokens.controlTrackOff }}
                     thumbColor={tokens.textPrimary}
                     accessibilityLabel={APP_LOCK_LABEL}
                     accessibilityState={{ checked: appLock }}
@@ -701,7 +701,7 @@ export default function GatewaySettingsScreen() {
                 <Switch
                   value={hideWidgetResult}
                   onValueChange={handleWidgetPrivacy}
-                  trackColor={{ true: tokens.accentDeep, false: tokens.backgroundRaised }}
+                  trackColor={{ true: tokens.accentDeep, false: tokens.controlTrackOff }}
                   thumbColor={tokens.textPrimary}
                   accessibilityLabel={WIDGET_PRIVACY_LABEL}
                   accessibilityState={{ checked: hideWidgetResult }}
@@ -714,9 +714,9 @@ export default function GatewaySettingsScreen() {
         <View style={styles.section}>
           <SectionHeader title="Voice" />
           <Card variant="stage" padding={Spacing.three} style={styles.card}>
-            <Text variant="headline">Power hands-free with</Text>
+            <Text variant="headline">Voice calls</Text>
             <Text variant="caption" color="secondary">
-              Where a call&apos;s audio goes, and which machine runs the speech models.
+              Choose where speech is processed.
             </Text>
             {voiceCheckState === 'failed' ? (
               <ErrorCard

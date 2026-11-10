@@ -62,6 +62,7 @@
     "ws": "8.21.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.0",
     "@react-native/jest-preset": "^0.86.3",
     "@types/jest": "29.5.14",
     "@types/react": "~19.2.2",
@@ -87,6 +88,8 @@
     "test:coverage": "jest --coverage --maxWorkers=4",
     "test:gate": "cd gate && node --import ./__tests__/fixtures/isolate-credential-vault.mjs --test \"__tests__/*.test.mjs\" \"../scripts/__tests__/*.test.mjs\"",
     "test:voice-worker": "node gate/voice-worker/run-tests.mjs",
+    "test:visual": "playwright test",
+    "test:visual:update": "playwright test --update-snapshots",
     "smoke:gateway-commands": "tsx ./scripts/smoke-gateway-commands.mts",
     "smoke:portal": "tsx ./scripts/smoke-portal.mts",
     "smoke:live": "tsx ./scripts/smoke-live-gateway.mts",

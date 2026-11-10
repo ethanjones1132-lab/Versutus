@@ -30,6 +30,10 @@ export const SHOWCASE_BOTS: PublicBot[] = [
     id: 'aria',
     displayName: 'Aria',
     routable: true,
+    // One of each runtime, so the roster's backend chips (ADR 0016) have all
+    // four families to show. Scout reports nothing, which is what an untagged
+    // Bot looks like on a single-runtime Gate.
+    runtime: 'hermes',
     description: 'Chief of staff. Reads the whole fleet and briefs you on what changed.',
     model: { default: 'claude-opus-5-5', provider: null },
   },
@@ -37,6 +41,7 @@ export const SHOWCASE_BOTS: PublicBot[] = [
     id: 'forge',
     displayName: 'Forge',
     routable: true,
+    runtime: 'opencode',
     description: 'Engineering. Ships fixes against your repositories with review gates.',
     model: { default: 'gpt-5.5-codex', provider: null },
   },
@@ -44,6 +49,7 @@ export const SHOWCASE_BOTS: PublicBot[] = [
     id: 'ledger',
     displayName: 'Ledger',
     routable: true,
+    runtime: 'claude-code',
     description: 'Finance. Watches spend, budgets and invoices across every provider.',
     model: { default: 'claude-sonnet-5', provider: null },
   },
@@ -51,6 +57,7 @@ export const SHOWCASE_BOTS: PublicBot[] = [
     id: 'sentinel',
     displayName: 'Sentinel',
     routable: true,
+    runtime: 'codex',
     description: 'Security and operations. Audits access and pages you when it matters.',
     model: { default: 'gemini-3-pro', provider: null },
   },
@@ -58,6 +65,7 @@ export const SHOWCASE_BOTS: PublicBot[] = [
     id: 'muse',
     displayName: 'Muse',
     routable: true,
+    runtime: 'opencode',
     description: 'Research and writing. Drafts memos, decks and briefs in your voice.',
     model: { default: 'claude-opus-5-5', provider: null },
   },

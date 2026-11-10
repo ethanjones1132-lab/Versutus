@@ -206,7 +206,7 @@ export function NotificationsSection() {
             <Switch
               value={prefs.enabled}
               onValueChange={(value) => void setEnabled(value)}
-              trackColor={{ true: tokens.accent, false: tokens.border }}
+              trackColor={{ true: tokens.accent, false: tokens.controlTrackOff }}
               thumbColor={tokens.textPrimary}
               disabled={saving || !synced}
               accessibilityLabel="Push notifications from this Gate"
@@ -244,7 +244,7 @@ export function NotificationsSection() {
               <Switch
                 value={prefs.richBody}
                 onValueChange={(value) => void setPatch({ richBody: value })}
-                trackColor={{ true: tokens.accent, false: tokens.border }}
+                trackColor={{ true: tokens.accent, false: tokens.controlTrackOff }}
                 thumbColor={tokens.textPrimary}
                 disabled={saving || !synced}
                 accessibilityLabel="Include message text in notifications"
@@ -259,7 +259,7 @@ export function NotificationsSection() {
               <Switch
                 value={prefs.widgetUpdates}
                 onValueChange={(value) => void setPatch({ widgetUpdates: value })}
-                trackColor={{ true: tokens.accent, false: tokens.border }}
+                trackColor={{ true: tokens.accent, false: tokens.controlTrackOff }}
                 thumbColor={tokens.textPrimary}
                 disabled={saving || !synced}
                 accessibilityLabel="Send data-only widget updates"
@@ -310,7 +310,7 @@ export function NotificationsSection() {
               <Switch
                 value={prefs.quietHoursAllowApprovals}
                 onValueChange={(value) => void setPatch({ quietHoursAllowApprovals: value })}
-                trackColor={{ true: tokens.accent, false: tokens.border }}
+                trackColor={{ true: tokens.accent, false: tokens.controlTrackOff }}
                 thumbColor={tokens.textPrimary}
                 disabled={saving || !synced}
                 accessibilityLabel="Let approval notices through during quiet hours"
@@ -343,7 +343,7 @@ export function NotificationsSection() {
                 <Switch
                   value={row.enabled}
                   onValueChange={(value) => saveBotFilter(filterRows)(row.botId, value)}
-                  trackColor={{ true: tokens.accent, false: tokens.border }}
+                  trackColor={{ true: tokens.accent, false: tokens.controlTrackOff }}
                   thumbColor={tokens.textPrimary}
                   disabled={saving || !synced}
                   accessibilityLabel={`Allow ${row.kind === 'bot' ? row.displayName : row.botId} notifications`}

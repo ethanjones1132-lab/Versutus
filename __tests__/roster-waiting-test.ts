@@ -77,13 +77,13 @@ describe('the roster admits an unread inventory instead of claiming zero bots', 
 
   test('a gateway that never connected waits — the read has not run', async () => {
     renderer = await mount({ connected: false });
-    expect(emptyStateTitles(renderer)).toEqual(['Waiting for connection']);
-    expect(emptyStateTitles(renderer)).not.toContain('No bots on this gateway');
+    expect(emptyStateTitles(renderer)).toEqual(['Connecting…']);
+    expect(emptyStateTitles(renderer)).not.toContain('No Bots yet');
   });
 
   test('a completed clean read still claims its honest zero', async () => {
     renderer = await mount({ connected: true, loading: false });
-    expect(emptyStateTitles(renderer)).toEqual(['No bots on this gateway']);
+    expect(emptyStateTitles(renderer)).toEqual(['No Bots yet']);
   });
 
   test('a down gateway never contradicts a last-good inventory either', async () => {

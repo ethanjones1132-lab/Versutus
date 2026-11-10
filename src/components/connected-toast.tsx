@@ -88,7 +88,6 @@ export function ConnectedToast() {
           {
             backgroundColor: tokens.backgroundRaised,
             borderColor: tokens.statusConnectedMuted,
-            shadowColor: tokens.overlay,
           },
         ]}>
         <View style={[styles.dot, { backgroundColor: tokens.statusConnected }]} />
@@ -120,10 +119,10 @@ const styles = StyleSheet.create({
     borderRadius: Radius.full,
     borderWidth: StyleSheet.hairlineWidth,
     maxWidth: '88%',
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 8,
+    // The lift that makes the toast float over the roster. `boxShadow` is the
+    // current API (the `shadow*` props and `elevation` are deprecated, and RN
+    // 0.86 warns about them on web at every boot).
+    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.25)',
   },
   dot: {
     width: 8,

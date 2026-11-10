@@ -116,7 +116,7 @@ function GatewayRow({
             </Text>
           </PressableScale>
           <Text variant="caption" numberOfLines={1} style={styles.onGlassTertiary}>
-            {secureLabel} - {gateway.sessionKey}
+            {secureLabel}
           </Text>
         </View>
 

@@ -49,11 +49,11 @@ describe('roster render cost', () => {
     const list = src.match(/\n {4}<FlatList<RosterItem>[\s\S]*?\n {4}\/>/)?.[0];
     expect(list).toBeDefined();
     // Header carries the search input, the agent error, and the rooms error.
-    expect(list).toMatch(/ListHeaderComponent=\{[\s\S]*?placeholder="Search your team"/);
+    expect(list).toMatch(/ListHeaderComponent=\{[\s\S]*?placeholder="Search Bots and groups"/);
     expect(list).toMatch(/ListHeaderComponent=\{[\s\S]*?styles\.error/);
     // Footer carries the New Agent / New Group Room rows + capability notes.
-    expect(list).toMatch(/ListFooterComponent=\{[\s\S]*?title="New Agent"/);
-    expect(list).toMatch(/ListFooterComponent=\{[\s\S]*?title="New Group Room"/);
+    expect(list).toMatch(/ListFooterComponent=\{[\s\S]*?title="New Bot"/);
+    expect(list).toMatch(/ListFooterComponent=\{[\s\S]*?title="New group"/);
     // The old unbounded JSX map into the ScrollView is gone — rows are now
     // built into the windowed `items` array (visibleRows.map(...) returns
     // RosterItem objects, not <ListRow>), and renderItem is the only place

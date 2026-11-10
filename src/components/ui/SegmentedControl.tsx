@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
-import Animated, { useAnimatedStyle, withSpring } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
@@ -38,6 +38,11 @@ export function SegmentedControl<T extends string>({
 }: SegmentedControlProps<T>) {
   const tokens = useTokens();
   const [trackWidth, setTrackWidth] = useState(0);
+  // Where the thumb is, in pixels from the track's left padding. It is a shared
+  // value rather than a derived style because the first position must be set
+  // without a spring: see handleLayout.
+  const offset = useSharedValue(0);
+  const measured = useRef(false);
 
   const selectedIndex = Math.max(
     options.findIndex((option) => option.key === selectedKey),
@@ -47,16 +52,39 @@ export function SegmentedControl<T extends string>({
   const innerWidth = Math.max(0, trackWidth - Spacing.half * 2);
   const segmentWidth = innerWidth > 0 ? innerWidth / options.length : 0;
 
+  /**
+   * The first measurement says where the thumb already is, not where it should
+   * fly in from. Animating from the first segment made every visit to Tools
+   * show "Shell" selected for a quarter of a second before the pill slid over
+   * to "Gateway RPC" — the reported wrong-pill defect.
+   */
+  const handleLayout = (width: number) => {
+    setTrackWidth(width);
+    const inner = Math.max(0, width - Spacing.half * 2);
+    if (inner <= 0) return;
+    const target = selectedIndex * (inner / options.length);
+    offset.value = measured.current ? withSpring(target, springSnappy) : target;
+    measured.current = true;
+  };
+
+  useEffect(() => {
+    if (!measured.current || segmentWidth <= 0) return;
+    offset.value = withSpring(selectedIndex * segmentWidth, springSnappy);
+  }, [offset, segmentWidth, selectedIndex]);
+
   const indicatorStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: withSpring(selectedIndex * segmentWidth, springSnappy) }],
+    transform: [{ translateX: offset.value }],
     width: segmentWidth,
   }));
 
   return (
     <GlassSurface variant="inset" radius={Radius.full} padding={0} style={[styles.track, style]}>
-      <View style={styles.inner} onLayout={(event) => setTrackWidth(event.nativeEvent.layout.width)}>
+      <View
+        style={styles.inner}
+        onLayout={(event) => handleLayout(event.nativeEvent.layout.width)}>
         {segmentWidth > 0 ? (
           <Animated.View
+            testID="segmented-indicator"
             style={[
               styles.indicator,
               { backgroundColor: tokens.rowSelected, borderTopColor: tokens.specular },
@@ -69,6 +97,7 @@ export function SegmentedControl<T extends string>({
           return (
             <Pressable
               key={option.key}
+              testID={`segment-${option.key}`}
               onPress={async () => {
                 if (selected) return;
                 await haptics.selection();

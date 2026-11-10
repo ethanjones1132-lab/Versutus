@@ -178,11 +178,11 @@ export function OnboardingScreen() {
           <Animated.View entering={entering.fadeIn}>
             <Card variant="hero" padding={Spacing.four} style={styles.hero}>
               <Animated.View entering={entering.fadeIn.delay(80)}>
-                <VersutusLogotype tagline="A precise mobile console for your AI gateway." />
+                <VersutusLogotype tagline="Your agents, on your own machine." />
               </Animated.View>
               <View style={[styles.rule, { backgroundColor: tokens.accentMuted }]} />
               <Text variant="eyebrow" color="tertiary" style={styles.eyebrow}>
-                {busy ? 'DISCOVERING YOUR GATEWAY · 02' : 'FIRST CONNECTION · 01'}
+                {busy ? 'FINDING YOUR GATEWAY · 02' : 'CONNECT YOUR PC · 01'}
               </Text>
 
               <View style={styles.scanSection}>
@@ -196,13 +196,13 @@ export function OnboardingScreen() {
                   <View style={styles.scanMessage}>
                     <ActivityIndicator size="small" color={tokens.accent} />
                     <Text variant="caption" color="secondary" numberOfLines={2} style={styles.scanText}>
-                      {probeMessage ?? 'Scanning Tailscale, local discovery, and saved profiles in order…'}
+                      {probeMessage ?? 'Looking for your gateway…'}
                     </Text>
                   </View>
                 ) : (
                   <View style={styles.scanMessage}>
                     <Text variant="caption" color="tertiary" numberOfLines={2} style={styles.scanText}>
-                      Enter your PC or gateway address below, or let Versutus find it on your tailnet.
+                      Enter your PC address below, or let Versutus find it.
                     </Text>
                   </View>
                 )}
@@ -211,15 +211,14 @@ export function OnboardingScreen() {
           </Animated.View>
 
           <Card variant="surface" padding={Spacing.four} style={[styles.formCard, cta.locked && styles.formDimmed]}>
-            <Text variant="title">Connect your gateway</Text>
+            <Text variant="title">Connect your PC</Text>
             <Text color="secondary" style={styles.lead}>
-              Give Versutus the address and API key for the gateway running on your PC. Your credentials are stored in
-              secure device storage.
+              Enter your PC&rsquo;s address and gateway key. Your key stays in secure storage on this device.
             </Text>
 
             <View style={styles.field}>
               <Text variant="caption" color="secondary">
-                PC or gateway address
+                PC address
               </Text>
               <TextField
                 value={pcAddress}
@@ -244,18 +243,18 @@ export function OnboardingScreen() {
 
             <View style={styles.field}>
               <Text variant="caption" color="secondary">
-                Gateway API key
+                Gateway key
               </Text>
               <TextField
                 value={token}
                 onChangeText={setToken}
-                placeholder="Paste API_SERVER_KEY"
+                placeholder="Paste your gateway key"
                 autoCapitalize="none"
                 autoCorrect={false}
                 secureTextEntry
               />
               <Text variant="micro" color="tertiary">
-                Optional when the gateway is configured without authentication.
+                Leave blank if your gateway doesn&rsquo;t use a key.
               </Text>
             </View>
 
@@ -269,7 +268,7 @@ export function OnboardingScreen() {
               accessibilityRole="button"
               accessibilityLabel="Add a custom gateway URL">
               <Text variant="link" color="accent">
-                Using a custom URL (ws:// or http://)? Add it manually
+                Enter a full gateway address
               </Text>
             </Pressable>
 
@@ -297,7 +296,7 @@ export function OnboardingScreen() {
               // instant it was tapped — taking its "Retrying…" label with it.
               // Every other situation still hides on `busy` as before.
               <Button
-                label={retrying ? 'Retrying…' : 'Retry'}
+                label={retrying ? 'Trying again…' : 'Try again'}
                 onPress={() => void handleRetry()}
                 disabled={retrying}
               />
@@ -306,8 +305,8 @@ export function OnboardingScreen() {
             {error ? (
               <ErrorCard
                 cause={error}
-                affected="gateway connection"
-                next="Check the address and API key, then try again."
+                affected="Connection"
+                next="Check the address and key, then try again."
                 onRetry={() => void handleContinue()}
                 retryLabel="Try again"
               />
@@ -321,8 +320,7 @@ export function OnboardingScreen() {
           </Card>
 
           <Text color="tertiary" variant="caption" style={styles.footnote}>
-            Versutus tries secure Tailscale, local discovery, and saved gateway profiles in order. You approve this
-            device only when the gateway asks for it.
+            Versutus checks nearby networks and saved gateways. You approve this device only when your gateway asks.
           </Text>
         </ScrollView>
       </KeyboardAvoidingView>

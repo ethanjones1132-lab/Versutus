@@ -575,6 +575,11 @@ export function ChatScreen() {
   const openPalette = useCallback(() => setPaletteVisible(true), [setPaletteVisible]);
   const [actionMessage, setActionMessage] = useState<ChatMessage | null>(null);
   const [jumpVisible, setJumpVisible] = useState(false);
+  // Whether the transcript has scrolled under the chat header. The bar is flat
+  // at its rest edge and gains a quiet surface only while something is passing
+  // beneath it (spec §4: a scroll-edge surface, not decoration).
+  const [headerScrolled, setHeaderScrolled] = useState(false);
+  const headerScrolledRef = useRef(false);
   const [refreshing, setRefreshing] = useState(false);
   const [surface, setSurface] = useState<ChatSurface>({ kind: 'roster' });
   const [rosterRows, setRosterRows] = useState<RosterRow[]>([{ kind: 'configurable' }]);
@@ -1855,6 +1860,11 @@ export function ChatScreen() {
     const distanceFromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
     pinnedRef.current = distanceFromBottom < PIN_THRESHOLD_PX;
     atTopRef.current = contentOffset.y <= AT_TOP_PX;
+    const scrolled = contentOffset.y > AT_TOP_PX;
+    if (scrolled !== headerScrolledRef.current) {
+      headerScrolledRef.current = scrolled;
+      setHeaderScrolled(scrolled);
+    }
     const shouldShowJump = distanceFromBottom > JUMP_PILL_THRESHOLD_PX;
     if (shouldShowJump !== jumpVisibleRef.current) {
       jumpVisibleRef.current = shouldShowJump;
@@ -2646,6 +2656,7 @@ export function ChatScreen() {
   return (
     <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })} parallaxY={parallaxY} room={stageRoom}>
       <ChatHeader
+        scrolled={headerScrolled}
         gatewayName={settings.pcName ?? activeGateway.name}
         statusDetail={status === 'connected' ? undefined : statusDetail || probeMessage}
         modelLabel={threadSurface ? modelLabel : undefined}

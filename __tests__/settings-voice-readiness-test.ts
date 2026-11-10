@@ -16,7 +16,7 @@ function readSettings(): string {
 /** The Voice card, from its headline to the next sibling section. */
 function readVoiceCard(): string {
   const src = readSettings();
-  const start = src.indexOf('Power hands-free with');
+  const start = src.indexOf('Voice calls');
   expect(start).toBeGreaterThanOrEqual(0);
   const end = src.indexOf('<NotificationsSection', start);
   expect(end).toBeGreaterThan(start);

@@ -458,7 +458,7 @@ function ChatRosterImpl({
                 disabled={!onGatePress}
                 hitSlop={8}
                 accessibilityRole={onGatePress ? 'button' : undefined}
-                accessibilityLabel={onGatePress ? `${gateLine}. Open the Gate.` : gateLine}
+                accessibilityLabel={onGatePress ? `${gateLine}. Open gateway settings.` : gateLine}
                 style={styles.gateLine}>
                 <PulsingDot
                   color={statusColor(tokens, status)}
@@ -479,7 +479,7 @@ function ChatRosterImpl({
             <TextField
               value={query}
               onChangeText={setQuery}
-              placeholder="Search your team"
+              placeholder="Search Bots and groups"
               returnKeyType="search"
               style={[styles.search, { backgroundColor: tokens.stageGlass, borderTopColor: tokens.specular }]}
             />
@@ -524,8 +524,8 @@ function ChatRosterImpl({
           {emptyView.kind === 'load-failed' ? (
             <EmptyState
               icon={{ ios: 'exclamationmark.triangle', android: 'warning', web: 'warning' }}
-              title="Couldn't load agents"
-              description="The roster could not read this gateway's agent inventory — the reason is named above."
+              title="Couldn't load your Bots"
+              description="Check the connection, then try again."
               actionLabel="Retry"
               onAction={handleRefresh}
             />
@@ -537,8 +537,8 @@ function ChatRosterImpl({
               </Text>
               {onNewAgent ? (
                 <RosterAction
-                  title="New Agent"
-                  subtitle="Name, soul, keys, and model pin"
+                  title="New Bot"
+                  subtitle="A name, a model and how it should behave."
                   icon={{ ios: 'plus', android: 'add', web: 'add' }}
                   onPress={onNewAgent}
                 />
@@ -547,8 +547,8 @@ function ChatRosterImpl({
                   refuses Create — hiding the row only hid that honest copy. */}
               {onNewGroup ? (
                 <RosterAction
-                  title="New Group Room"
-                  subtitle="2–6 bots reply in rounds to one message"
+                  title="New group"
+                  subtitle="2–6 Bots take turns replying."
                   icon={{ ios: 'person.3', android: 'groups', web: 'groups' }}
                   onPress={onNewGroup}
                 />
@@ -557,8 +557,8 @@ function ChatRosterImpl({
                   here. Offered only where the gateway can create the Bot it names. */}
               {onImportAgent ? (
                 <RosterAction
-                  title="Import handoff"
-                  subtitle="Create a Bot from an exported packet"
+                  title="Import a Bot"
+                  subtitle="Create one from an exported handoff."
                   icon={{ ios: 'square.and.arrow.down', android: 'download', web: 'download' }}
                   onPress={onImportAgent}
                 />
@@ -573,29 +573,29 @@ function ChatRosterImpl({
           {emptyView.kind === 'waiting' ? (
             <EmptyState
               icon={{ ios: 'clock', android: 'schedule', web: 'schedule' }}
-              title="Waiting for connection"
-              description="The roster is read as soon as the gateway connects."
+              title="Connecting…"
+              description="Your Bots will appear when the gateway is online."
             />
           ) : null}
           {emptyView.kind === 'zero-bots' ? (
             <EmptyState
               icon={{ ios: 'person.crop.circle', android: 'person', web: 'person' }}
-              title="No bots on this gateway"
-              description="Named Hermes profiles appear here once the Gate can inventory them."
+              title="No Bots yet"
+              description="Bots on this gateway appear here."
             />
           ) : null}
           {emptyView.kind === 'uninventoried' ? (
             <EmptyState
               icon={{ ios: 'questionmark.circle', android: 'help', web: 'help' }}
-              title="Can't inventory agents"
-              description="This connection has no Bot roster, so the list was never read."
+              title="Bots aren't available here"
+              description="This gateway doesn't provide a Bot list."
             />
           ) : null}
           {emptyView.kind === 'no-match' ? (
             <EmptyState
               icon={{ ios: 'magnifyingglass', android: 'search', web: 'search' }}
-              title={`No agents match "${emptyView.query}"`}
-              description="Names, ids, and descriptions are searched."
+              title={`No Bots match "${emptyView.query}"`}
+              description="Try another name."
               actionLabel="Clear search"
               onAction={() => setQuery('')}
             />

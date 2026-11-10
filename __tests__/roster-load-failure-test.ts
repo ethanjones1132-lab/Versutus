@@ -24,7 +24,7 @@ describe('roster load failure', () => {
     const src = readChatRosterSource();
     const failed = src.match(/emptyView\.kind === 'load-failed'[\s\S]*?\) : null/)?.[0];
     expect(failed).toBeDefined();
-    expect(failed).toMatch(/title="Couldn't load agents"/);
+    expect(failed).toMatch(/title="Couldn't load your Bots"/);
     expect(failed).toMatch(/actionLabel="Retry"/);
     expect(failed).toMatch(/onAction=\{handleRefresh\}/);
   });
@@ -59,16 +59,16 @@ describe('roster load failure', () => {
 
   test('the load-failed empty state leads the footer above the creation rows', () => {
     // With a failed read the list body is empty, so the footer is the whole
-    // surface below the header reason. Leading with "Couldn't load agents"
+    // surface below the header reason. Leading with "Couldn't load your Bots"
     // makes the failure the first thing read — New Agent / Import / New Group
     // and the capability notes come after it, not before.
     const src = readChatRosterSource();
     const footer = src.match(/ListFooterComponent=\{[\s\S]*?\n {6}\}/)?.[0];
     expect(footer).toBeDefined();
     const failedIdx = footer!.indexOf("emptyView.kind === 'load-failed'");
-    const newAgentIdx = footer!.indexOf('title="New Agent"');
-    const importIdx = footer!.indexOf('title="Import handoff"');
-    const newGroupIdx = footer!.indexOf('title="New Group Room"');
+    const newAgentIdx = footer!.indexOf('title="New Bot"');
+    const importIdx = footer!.indexOf('title="Import a Bot"');
+    const newGroupIdx = footer!.indexOf('title="New group"');
     expect(failedIdx).toBeGreaterThan(-1);
     expect(newAgentIdx).toBeGreaterThan(-1);
     expect(importIdx).toBeGreaterThan(-1);

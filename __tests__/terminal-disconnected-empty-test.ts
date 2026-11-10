@@ -46,14 +46,16 @@ describe('terminal disconnected empty state', () => {
     expect(src).toContain('Connect to the gateway to run commands.');
   });
 
-  test('the connected empty copy stays byte-identical with no action of its own', () => {
+  test('the connected empty state gives one instruction, and no action of its own', () => {
     const src = readScreen();
-    expect(src).toContain('Run a command to inspect or control the live gateway.');
+    // Spec §2: the panel used to repeat this sentence as helper text above the
+    // empty state, so the screen carried two instructions for one state.
+    expect(src).toContain('title="Choose a command above"');
     // The Reconnect action lives only in the disconnected branch — exactly
     // one Reconnect in the whole screen, so the connected branch renders
-    // none. ('Use Gateway RPC' is the shell-unavailable empty's own action.)
+    // none. ('Use Commands' is the shell-unavailable empty's own action.)
     expect(src.match(/actionLabel="Reconnect"/g)?.length).toBe(1);
-    expect(src).toContain('actionLabel="Use Gateway RPC"');
+    expect(src).toContain('actionLabel="Use Commands"');
   });
 
   // The connected-idle branch was a bare tertiary Text — less structure than
@@ -68,7 +70,7 @@ describe('terminal disconnected empty state', () => {
     expect(reconnectIdx).toBeGreaterThan(connectedIdx);
     const connectedBranch = src.slice(connectedIdx, reconnectIdx);
     expect(connectedBranch).toContain('<EmptyState');
-    expect(connectedBranch).toContain('description="Run a command to inspect or control the live gateway."');
+    expect(connectedBranch).toContain('title="Choose a command above"');
     expect(connectedBranch).not.toContain('color="tertiary"');
     expect(connectedBranch).not.toContain('actionLabel=');
   });

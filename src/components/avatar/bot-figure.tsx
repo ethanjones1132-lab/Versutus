@@ -1,5 +1,5 @@
 import { useEffect, useId } from 'react';
-import { StyleSheet, Text as RNText, View, type ViewStyle } from 'react-native';
+import { StyleSheet, Text as RNText, View, type TextStyle, type ViewStyle } from 'react-native';
 import Animated, {
   Easing,
   cancelAnimation,
@@ -614,8 +614,6 @@ const styles = StyleSheet.create({
   },
   letterpress: {
     // Letterpress: the initial sits pressed into the stone, not floating on it.
-    textShadowColor: 'rgba(0, 0, 0, 0.32)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 1.5,
-  },
+    textShadow: '0 1px 1.5px rgba(0, 0, 0, 0.32)',
+  } as TextStyle,
 });

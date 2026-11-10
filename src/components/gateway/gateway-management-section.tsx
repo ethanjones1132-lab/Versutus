@@ -66,7 +66,7 @@ export function GatewayManagementSection() {
           <Switch
             value={settings.autoConnect}
             onValueChange={(value) => void setAutoConnect(value)}
-            trackColor={{ true: tokens.accent, false: tokens.border }}
+            trackColor={{ true: tokens.accent, false: tokens.controlTrackOff }}
             thumbColor={tokens.textPrimary}
             accessibilityLabel="Connect automatically on launch"
             accessibilityState={{ checked: settings.autoConnect }}

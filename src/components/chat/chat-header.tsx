@@ -46,6 +46,12 @@ export type ChatHeaderProps = {
    * beneath it.
    */
   spendNote?: string;
+  /**
+   * True once the transcript has scrolled under the bar. Flat at its rest edge,
+   * a quiet glass surface while content passes beneath it — the bar tells you
+   * it is covering something instead of letting text collide with the title.
+   */
+  scrolled?: boolean;
 };
 
 /**
@@ -75,6 +81,7 @@ function ChatHeaderImpl({
   titleHidden = false,
   spendNote,
   botThinking = false,
+  scrolled = false,
 }: ChatHeaderProps) {
   const tokens = useTokens();
   const title = chatHeaderTitle({ gatewayName, backendLabel, groupName });
@@ -202,7 +209,12 @@ function ChatHeaderImpl({
   ) : null;
 
   return (
-    <View style={styles.bar}>
+    <View
+      testID="chat-header"
+      style={[
+        styles.bar,
+        scrolled && { backgroundColor: tokens.stageGlass, borderBottomColor: tokens.border },
+      ]}>
       {leading}
       {titles}
       {overflow}
@@ -215,7 +227,9 @@ ChatHeader.displayName = 'ChatHeader';
 
 const styles = StyleSheet.create({
   // Flat on the stage: no card, no ring. The bar is told from the transcript
-  // by the space above the first message, not by a surface of its own.
+  // by the space above the first message, not by a surface of its own. The
+  // hairline is always there (transparent at rest) so gaining the scroll
+  // surface never nudges the row by half a pixel.
   bar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -224,6 +238,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.two,
     paddingTop: Spacing.one,
     paddingBottom: Spacing.one,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'transparent',
   },
   control: {
     width: 40,

@@ -204,10 +204,10 @@ describe('ONB-1: the failed auto-connect Retry is honest about its own run', () 
   test('the button says it is working through the whole searching phase, and is disabled', async () => {
     const openCycle = pendingCycle('failed');
     await mount();
-    expect(button('Retry')).toBeTruthy();
+    expect(button('Try again')).toBeTruthy();
 
     await act(async () => {
-      button('Retry')?.onPress?.();
+      button('Try again')?.onPress?.();
     });
     await settle();
     await commitPhase('searching');
@@ -215,18 +215,18 @@ describe('ONB-1: the failed auto-connect Retry is honest about its own run', () 
     // The ladder is parked in 'searching', so `busy` is true for its whole
     // run: the tap has to stay visible, or an unchanged screen over a 30s
     // probe ladder is indistinguishable from a dead button.
-    expect(button('Retry')).toBeUndefined();
-    expect(button('Retrying…')).toMatchObject({ disabled: true });
+    expect(button('Try again')).toBeUndefined();
+    expect(button('Trying again…')).toMatchObject({ disabled: true });
     expect(mockGateway.retryAutoConnect).toHaveBeenCalledTimes(1);
 
     // A second tap inside the run must not start a second ladder. `disabled`
     // is only a hint the real Button honours; the ref is the guard.
     await act(async () => {
-      button('Retrying…')?.onPress?.();
+      button('Trying again…')?.onPress?.();
     });
     await settle();
     expect(mockGateway.retryAutoConnect).toHaveBeenCalledTimes(1);
-    expect(button('Retrying…')).toMatchObject({ disabled: true });
+    expect(button('Trying again…')).toMatchObject({ disabled: true });
 
     // The ladder ends in `failed` again: an enabled Retry is back.
     await act(async () => {
@@ -235,8 +235,8 @@ describe('ONB-1: the failed auto-connect Retry is honest about its own run', () 
     await settle();
     await commitPhase('failed');
 
-    expect(button('Retrying…')).toBeUndefined();
-    expect(button('Retry')?.disabled).toBeFalsy();
+    expect(button('Trying again…')).toBeUndefined();
+    expect(button('Try again')?.disabled).toBeFalsy();
   });
 
   test('a second tap inside one frame runs one cycle, not two', async () => {
@@ -245,8 +245,8 @@ describe('ONB-1: the failed auto-connect Retry is honest about its own run', () 
     // Both taps come off the SAME rendered closure, which is exactly the frame
     // a nervous second tap lands in: `setRetrying` cannot gate it.
     await act(async () => {
-      button('Retry')?.onPress?.();
-      button('Retry')?.onPress?.();
+      button('Try again')?.onPress?.();
+      button('Try again')?.onPress?.();
     });
     await settle();
 
@@ -261,7 +261,7 @@ describe('ONB-1: the failed auto-connect Retry is honest about its own run', () 
     expect(texts()).toContain('no gateway found');
 
     await act(async () => {
-      button('Retry')?.onPress?.();
+      button('Try again')?.onPress?.();
     });
     await settle();
     await commitPhase('searching');
@@ -279,18 +279,18 @@ describe('ONB-1: the failed auto-connect Retry is honest about its own run', () 
     const cards = renderer.root.findAllByType(ERROR_CARD);
     expect(cards).toHaveLength(1);
     expect(cards[0].props.cause).toBe('Saved your address, but could not reach the gateway.');
-    expect(cards[0].props.affected).toBe('gateway connection');
+    expect(cards[0].props.affected).toBe('Connection');
   });
 
   test('a cycle that succeeds leaves no failure card and no Retry behind', async () => {
     const openCycle = pendingCycle('connected');
     await mount();
     await act(async () => {
-      button('Retry')?.onPress?.();
+      button('Try again')?.onPress?.();
     });
     await settle();
     await commitPhase('searching');
-    expect(button('Retrying…')).toMatchObject({ disabled: true });
+    expect(button('Trying again…')).toMatchObject({ disabled: true });
 
     await act(async () => {
       openCycle();
@@ -299,8 +299,8 @@ describe('ONB-1: the failed auto-connect Retry is honest about its own run', () 
     await commitPhase('connected');
 
     expect(renderer.root.findAllByType(ERROR_CARD)).toHaveLength(0);
-    expect(button('Retry')).toBeUndefined();
-    expect(button('Retrying…')).toBeUndefined();
+    expect(button('Try again')).toBeUndefined();
+    expect(button('Trying again…')).toBeUndefined();
   });
 
   test('a rejected cycle is handled and named, and stops claiming to be retrying', async () => {
@@ -312,20 +312,20 @@ describe('ONB-1: the failed auto-connect Retry is honest about its own run', () 
     });
     await mount();
     await act(async () => {
-      button('Retry')?.onPress?.();
+      button('Try again')?.onPress?.();
     });
     await settle();
 
     // The handler owns the rejection, so the cycle's own failure never becomes
     // an unhandled one and it is named instead of dropped.
     expect(renderer.root.findAllByType(ERROR_CARD)[0]?.props.cause).toBe('the cycle exploded');
-    expect(button('Retrying…')).toBeUndefined();
+    expect(button('Trying again…')).toBeUndefined();
     expect(mockGateway.retryAutoConnect).toHaveBeenCalledTimes(1);
 
     // Whenever the phase is back in the failed phase, the button is there and
     // enabled again — the throw cannot leave it wedged.
     await commitPhase('failed');
-    expect(button('Retry')?.disabled).toBeFalsy();
+    expect(button('Try again')?.disabled).toBeFalsy();
   });
 });
 

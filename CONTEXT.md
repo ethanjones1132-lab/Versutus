@@ -141,6 +141,13 @@ _Avoid_: push (which implies server delivery)
 - An **approval** is resolved per run via the gateway's approval endpoint; only runs the app initiated can be approved
 - A **local notification** can announce an approval request or run completion while the app's connection is alive
 
+## Voice
+
+How the app talks on screen — the seven rules, the term map and the copy
+patterns — lives in [`docs/voice.md`](docs/voice.md). It is binding for every
+user-facing string, and `__tests__/copy-guard-test.ts` enforces it on the
+priority screens.
+
 ## Example dialogue
 
 > **Dev:** "When the phone reconnects after a wifi blip, do we re-probe the network?"

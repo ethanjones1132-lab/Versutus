@@ -42,14 +42,14 @@ describe('roster New Group Room under the two-bot floor', () => {
     const src = readChatRosterSource();
     const rowBlock = src.match(/\{onNewGroup \? \([\s\S]*?\) : null\}/)?.[0];
     expect(rowBlock).toBeDefined();
-    expect(rowBlock).toMatch(/title="New Group Room"/);
+    expect(rowBlock).toMatch(/title="New group"/);
   });
 
   test('the row copy is byte-identical', () => {
     const src = readChatRosterSource();
     const rowBlock = src.match(/\{onNewGroup \? \([\s\S]*?\) : null\}/)?.[0];
     expect(rowBlock).toBeDefined();
-    expect(rowBlock).toMatch(/subtitle="2–6 bots reply in rounds to one message"/);
+    expect(rowBlock).toMatch(/subtitle="2–6 Bots take turns replying."/);
     expect(rowBlock).toMatch(/icon=\{\{ ios: 'person\.3', android: 'groups', web: 'groups' \}\}/);
     expect(rowBlock).toMatch(/onPress=\{onNewGroup\}/);
   });

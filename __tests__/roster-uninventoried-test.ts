@@ -207,15 +207,15 @@ describe('the roster surface shows the distinct line when the read never ran', (
   test('a connected client with no roster call says it cannot inventory', async () => {
     publishBotInventoryAvailable(false);
     renderer = await mount({ connected: true, loading: false });
-    expect(emptyStateTitles(renderer)).toEqual(["Can't inventory agents"]);
-    expect(emptyStateTitles(renderer)).not.toContain('No bots on this gateway');
+    expect(emptyStateTitles(renderer)).toEqual(["Bots aren't available here"]);
+    expect(emptyStateTitles(renderer)).not.toContain('No Bots yet');
   });
 
   test('a real empty roster keeps the exact "No bots" copy', async () => {
     publishBotInventoryAvailable(true);
     renderer = await mount({ connected: true, loading: false });
-    expect(emptyStateTitles(renderer)).toEqual(['No bots on this gateway']);
-    expect(emptyStateTitles(renderer)).not.toContain("Can't inventory agents");
+    expect(emptyStateTitles(renderer)).toEqual(['No Bots yet']);
+    expect(emptyStateTitles(renderer)).not.toContain("Bots aren't available here");
   });
 
   test('the verdict reaches a roster that is already on screen', async () => {
@@ -223,18 +223,18 @@ describe('the roster surface shows the distinct line when the read never ran', (
     // without a remount: the store is subscribed, not read once.
     publishBotInventoryAvailable(true);
     renderer = await mount({ connected: true, loading: false });
-    expect(emptyStateTitles(renderer)).toEqual(['No bots on this gateway']);
+    expect(emptyStateTitles(renderer)).toEqual(['No Bots yet']);
     await act(async () => {
       publishBotInventoryAvailable(false);
     });
-    expect(emptyStateTitles(renderer)).toEqual(["Can't inventory agents"]);
+    expect(emptyStateTitles(renderer)).toEqual(["Bots aren't available here"]);
   });
 
   test('the non-answer offers no Retry it could never honour', async () => {
     publishBotInventoryAvailable(false);
     renderer = await mount({ connected: true, loading: false, onRefresh: jest.fn() });
     const state = emptyStates(renderer)[0];
-    expect(state.props.title).toBe("Can't inventory agents");
+    expect(state.props.title).toBe("Bots aren't available here");
     expect(state.props.actionLabel).toBeUndefined();
     expect(state.props.onAction).toBeUndefined();
   });

@@ -182,7 +182,7 @@ export function ChatOverflowSheet({
               <Switch
                 value={speakerOn === true}
                 onValueChange={() => onSpeakerPress()}
-                trackColor={{ true: tokens.accentDeep, false: tokens.backgroundRaised }}
+                trackColor={{ true: tokens.accentDeep, false: tokens.controlTrackOff }}
                 thumbColor={tokens.textPrimary}
                 accessibilityLabel="Read replies aloud"
                 accessibilityState={{ checked: speakerOn === true }}

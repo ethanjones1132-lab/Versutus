@@ -85,7 +85,7 @@ export function BotApprovalPolicyRow({ botId }: { botId: string }) {
         value={enabled}
         onValueChange={(next) => void toggle(next)}
         disabled={!loaded || saving}
-        trackColor={{ true: tokens.accent, false: tokens.border }}
+        trackColor={{ true: tokens.accent, false: tokens.controlTrackOff }}
         thumbColor={tokens.textPrimary}
         accessibilityLabel="Auto-approve read-only commands for this Bot"
         accessibilityState={{ checked: enabled }}
