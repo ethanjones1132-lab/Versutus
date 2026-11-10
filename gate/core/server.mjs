@@ -63,6 +63,7 @@ import {
 } from './backend-model-route.mjs';
 import { createModelHealth, healthScopeId, modelHealthKey } from './model-health.mjs';
 import { isModelFault } from './model-fault.mjs';
+import { collectActivity, parseActivitySince, withActivityTimeout } from './activity.mjs';
 import { curateModels } from './model-curation.mjs';
 import { backendUpstreamRefusal } from './upstream-refusal.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
@@ -2508,6 +2509,7 @@ export async function createGate(config = {}) {
       // This allows us to return 404 for unknown routes
       const isKnownAuthenticatedRoute =
         (pathname === '/v1/models' && method === 'GET') ||
+        (pathname === '/v1/activity' && method === 'GET') ||
         (pathname === '/v1/providers' && method === 'GET') ||
         /^\/v1\/providers\/[^/]+$/.test(pathname) ||
         /^\/p\/[^/]+\/v1\/models$/.test(pathname) ||
@@ -2603,6 +2605,55 @@ export async function createGate(config = {}) {
       }
 
       // Authenticated endpoints
+
+      if (pathname === '/v1/activity' && method === 'GET') {
+        const parsedSince = parseActivitySince(url.searchParams.get('since'));
+        if (parsedSince.error) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: parsedSince.error, code: 'invalid_since' } }));
+          return;
+        }
+        const requestedBackendId = url.searchParams.get('backendId') || undefined;
+        let entries;
+        try {
+          entries = (await backendManager.list())
+            .filter((entry) => !requestedBackendId || entry.id === requestedBackendId);
+        } catch (error) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error?.message ?? 'Could not list backends', code: 'activity_read_failed' } }));
+          return;
+        }
+        const backends = await Promise.all(entries.map(async (entry) => {
+          const canListSessions = await backendCanServe(entry, 'listSessions');
+          return {
+            id: entry.id,
+            label: entry.label,
+            listRuns: () => environmentService.listRuns(entry.id, 100),
+            ...(canListSessions ? {
+              listSessions: async () => {
+                return withActivityTimeout(Promise.resolve().then(async () => {
+                  const backend = await backendManager.get(entry.id);
+                  if (typeof backend.listSessions !== 'function') throw new Error('Sessions are unavailable');
+                  return backend.listSessions(500);
+                }));
+              },
+            } : {}),
+          };
+        }));
+        try {
+          const result = await collectActivity({
+            since: parsedSince.since,
+            backendId: requestedBackendId,
+            backends,
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error?.message ?? 'Could not read activity', code: 'activity_read_failed' } }));
+        }
+        return;
+      }
 
       // A device grant acts only where its recorded scopes say it may. The
       // acting routes are listed above; the check is central so a new route
