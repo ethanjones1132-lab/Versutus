@@ -324,12 +324,70 @@ try:
         result["whisperCuda"] = {"ok": True}
 except Exception as error:
     result["whisperCuda"] = {"ok": False, "error": str(error)[:300]}
+
+models_dir = os.environ.get("VERSUTUS_VOICE_MODELS", "")
+# Each model is probed through the worker's own loader, in its own guard: one
+# broken model must name itself without hiding the state of the other two.
+try:
+    from versutus_voice.audio import VAD_WINDOW_SAMPLES
+    from versutus_voice.server import SileroScorer
+
+    # One 32 ms window of silence: a missing or incompatible graph fails here,
+    # which is exactly the failure that would make every window read as silence.
+    SileroScorer()(b"\x00\x00" * VAD_WINDOW_SAMPLES)
+    result["silero"] = {"ok": True, "error": None}
+except Exception as error:
+    result["silero"] = {"ok": False, "error": str(error)[:300]}
+
+try:
+    from versutus_voice.server import load_smart_turn
+
+    # The loader returns None when the model is absent or cannot run its first
+    # inference; that is the degraded "pause is a turn" judge the doctor exists
+    # to catch, so it is a failure rather than an unknown.
+    if load_smart_turn(models_dir) is None:
+        installed = []
+        if os.path.isdir(models_dir):
+            installed = sorted(name for name in os.listdir(models_dir) if name.startswith("smart-turn"))
+        reason = "no smart-turn model under " + models_dir if not installed else "the smart-turn model did not run"
+        result["smartTurn"] = {"ok": False, "error": reason}
+    else:
+        result["smartTurn"] = {"ok": True, "error": None}
+except Exception as error:
+    result["smartTurn"] = {"ok": False, "error": str(error)[:300]}
+
+try:
+    from versutus_voice.server import KokoroSynthesizer, load_kokoro
+
+    # Speak one short sentence to a buffer. Nothing goes to an audio device:
+    # the check is that Kokoro synthesises, not that the host is audible.
+    speaker = KokoroSynthesizer(load_kokoro(models_dir))
+    pcm = b"".join(speaker("Voice check."))
+    result["kokoro"] = {"ok": bool(pcm), "error": None if pcm else "synthesised no audio"}
+except Exception as error:
+    result["kokoro"] = {"ok": False, "error": str(error)[:300]}
 print(json.dumps(result))
 `;
 
 /**
- * Check the venv, the GPU and the models. Returns a list of named checks; a
- * failing check names itself instead of throwing.
+ * One named check for a model the worker loads. A probe that did not report the
+ * model is a failure, not a pass: the doctor's whole job is to prove the model
+ * loads, so "not measured" must never read as "ready".
+ */
+function modelLoadCheck(name, label, okDetail, probe) {
+  if (probe == null) {
+    return { name, ok: false, detail: `the ${label} load probe did not run` };
+  }
+  if (probe.ok) return { name, ok: true, detail: okDetail };
+  // A Python exception can wrap; the CLI prints one line per check.
+  const reason = String(probe.error ?? 'unknown error').replace(/\s+/g, ' ').trim();
+  return { name, ok: false, detail: `${label} failed to load: ${reason}; run voice install` };
+}
+
+/**
+ * Check the venv, the GPU, Whisper and the three models every call loads
+ * (Silero VAD, Smart Turn, Kokoro). Returns a list of named checks; a failing
+ * check names itself instead of throwing.
  */
 export function voiceDoctor({ paths, spawnSync = nodeSpawnSync, env = process.env, log = console.log } = {}) {
   const checks = [];
@@ -388,6 +446,14 @@ export function voiceDoctor({ paths, spawnSync = nodeSpawnSync, env = process.en
   } else {
     checks.push({ name: 'whisper', ok: false, detail: `CUDA load failed: ${info.whisperCuda.error ?? 'unknown error'}; run voice install` });
   }
+  // The three models a call cannot do without are probed by name: a call with
+  // no Silero, no Smart Turn (the degraded "pause is a turn" judge) or no
+  // Kokoro must fail the doctor instead of passing it.
+  checks.push(
+    modelLoadCheck('silero', 'Silero VAD', 'silero VAD scores a 32 ms window', info.silero),
+    modelLoadCheck('smartTurn', 'Smart Turn', 'smart turn loads (not the pause-is-a-turn fallback)', info.smartTurn),
+    modelLoadCheck('kokoro', 'Kokoro TTS', 'Kokoro speaks a test sentence to a buffer', info.kokoro),
+  );
   log(JSON.stringify(checks));
 
   const status = voiceStatus({ paths });

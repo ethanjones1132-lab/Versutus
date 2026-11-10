@@ -230,6 +230,11 @@ function doctorSpawn({ whisperCuda = { ok: true }, vram = { usedMb: 100, totalMb
       versions: { faster_whisper: '1.2.1', kokoro_onnx: '0.6.1', onnxruntime: '1.30.0' },
       vram,
       whisperCuda,
+      // The probe also loads the three call models; this fixture stands for a
+      // healthy host. voice-doctor-models.test.mjs covers each one failing.
+      silero: { ok: true, error: null },
+      smartTurn: { ok: true, error: null },
+      kokoro: { ok: true, error: null },
       error: null,
     }),
   });
