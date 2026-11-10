@@ -191,6 +191,10 @@ export function handsfreeStartResultCopy(
         'The PC voice engine is not ready. Check Voice in Settings, or run voice install on the PC.',
         detail,
       );
+    case 'insecure-media-url':
+      // The call's audio would cross the network unencrypted. There is no
+      // override (D2), so the one useful thing to say is how to make it secure.
+      return 'Calls need a secure connection to your gateway. Use HTTPS or Tailscale. Then start again.';
     case 'session-start-failed':
       return withDetail(
         'The call request to the PC failed. Check the connection to the PC, then try again.',

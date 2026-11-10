@@ -260,7 +260,7 @@ describe('reconnectGateMedia counts only a proven re-attach', () => {
     const gate = gateSays([]);
     const ok = await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: () => Promise.resolve(true),
       proveLink: gate.proveLink,
@@ -281,7 +281,7 @@ describe('reconnectGateMedia counts only a proven re-attach', () => {
     const gate = gateSays([false, false, true]);
     const ok = await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: () => Promise.resolve(true),
       proveLink: gate.proveLink,
@@ -301,7 +301,7 @@ describe('reconnectGateMedia counts only a proven re-attach', () => {
     const gate = gateSays([]);
     const ok = await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: () => Promise.resolve(true),
       proveLink: gate.proveLink,
@@ -322,7 +322,7 @@ describe('reconnectGateMedia counts only a proven re-attach', () => {
     const gate = gateSays([]);
     const ok = await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: () => Promise.resolve(true),
       proveLink: gate.proveLink,
@@ -347,7 +347,7 @@ describe('reconnectGateMedia counts only a proven re-attach', () => {
     let calls = 0;
     const ok = await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: () => {
         calls += 1;
@@ -372,7 +372,7 @@ describe('reconnectGateMedia counts only a proven re-attach', () => {
     let calls = 0;
     const ok = await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: () => {
         calls += 1;

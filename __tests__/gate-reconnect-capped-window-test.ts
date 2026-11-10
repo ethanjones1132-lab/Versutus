@@ -70,7 +70,7 @@ describe('reconnectGateMedia across a 90 s window', () => {
     const attemptsAt: number[] = [];
     const ok = await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: () => {
         attemptsAt.push(time.now());
@@ -99,7 +99,7 @@ describe('reconnectGateMedia across a 90 s window', () => {
     let aborted = false;
     const ok = await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: () => {
         attemptsAt.push(time.now());
@@ -123,7 +123,7 @@ describe('reconnectGateMedia across a 90 s window', () => {
     const attemptsAt: number[] = [];
     const ok = await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: () => {
         attemptsAt.push(time.now());

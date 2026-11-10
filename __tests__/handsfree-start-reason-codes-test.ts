@@ -129,6 +129,9 @@ const DRIVERS: Record<ChainCode, () => Promise<HandsfreeStartFailure>> = {
   'not-paired': async () => chainResult({ gatewayRequest: gateRefusal('pairing_required') }),
   'call-in-progress': async () => chainResult({ gatewayRequest: gateRefusal('call_in_progress') }),
   'no-engine': async () => chainResult({ gatewayRequest: gateRefusal('no_engine') }),
+  // A plaintext socket to a host off this machine: refused before the Gate is
+  // asked for a session at all (S1, D2).
+  'insecure-media-url': async () => chainResult({ gatewayUrl: 'http://192.168.1.20:8760' }),
   'session-start-failed': async () => chainResult({
     gatewayRequest: async () => {
       throw new Error('Network request failed');

@@ -51,6 +51,7 @@ export type HandsfreeStartResult =
   | 'not-paired'
   | 'call-in-progress'
   | 'no-engine'
+  | 'insecure-media-url'
   | 'session-start-failed'
   | 'session-grant-incomplete'
   | 'media-start-failed'
@@ -94,6 +95,7 @@ export const HANDSFREE_START_FAILURES: readonly HandsfreeStartFailure[] = [
   'not-paired',
   'call-in-progress',
   'no-engine',
+  'insecure-media-url',
   'session-start-failed',
   'session-grant-incomplete',
   'media-start-failed',

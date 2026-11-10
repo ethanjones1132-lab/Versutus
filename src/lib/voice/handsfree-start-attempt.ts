@@ -13,7 +13,7 @@
 // never the thing that keeps the call from coming home to `idle`.
 
 import { GATE_LINK_READY_MS, type GateLinkProof } from '@/lib/voice/gate-link';
-import { mediaSocketUrl } from '@/lib/voice/gate-media-url';
+import { mediaSocketTransport, mediaSocketUrl } from '@/lib/voice/gate-media-url';
 import { HANDSFREE_START_TIMEOUT_MS, isStartTimeout, startDeadline } from '@/lib/voice/start-deadline';
 import {
   logHandsfreeStart,
@@ -193,6 +193,16 @@ export async function openGateVoiceSession(
 ): Promise<HandsfreeStartAttempt & { grant?: GateVoiceGrant }> {
   const log = input.log ?? logHandsfreeStart;
   const toMediaUrl = input.mediaUrl ?? mediaSocketUrl;
+  // The media socket carries raw call audio. `mediaSocketUrl` folds http: to
+  // ws: with no host check, so a LAN or internet gateway would stream a call in
+  // the clear. Refuse before the Gate is asked for a session: nothing has been
+  // granted, no microphone is open and no socket exists, so there is nothing to
+  // clean up and no way for a retry to trip over this start. The reason reaches
+  // the sheet as `insecure-media-url`; the detail is only for the phone log.
+  const transport = mediaSocketTransport(toMediaUrl(input.gatewayUrl, '/'));
+  if (!transport.allowed) {
+    return finish({ result: 'insecure-media-url', detail: transport.reason }, log);
+  }
   // A budget the caller already started spends with the call, not with this
   // function: only one minted here is this function's to dispose.
   const ownDeadline = input.deadline

@@ -12,7 +12,7 @@ const grant: GateVoiceGrant = {
   engine: 'local',
 };
 
-const options = { url: 'ws://gate.local:8760/v1/voice/stream', token: 'tok', voiceSessionId: 'vs-1' };
+const options = { url: 'wss://gate.local:8760/v1/voice/stream', token: 'tok', voiceSessionId: 'vs-1' };
 
 function sleeper() {
   const sleeps: number[] = [];
@@ -76,7 +76,7 @@ describe('reconnectGateMedia', () => {
     const attempts: unknown[] = [];
     const ok = await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: (opts) => {
         attempts.push(opts);
@@ -102,7 +102,7 @@ describe('reconnectGateMedia', () => {
     const attemptsAt: number[] = [];
     const ok = await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: () => {
         attemptsAt.push(time.now());
@@ -126,7 +126,7 @@ describe('reconnectGateMedia', () => {
     const total = gateReconnectDelays().length;
     const ok = await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: () => {
         calls += 1;
@@ -152,7 +152,7 @@ describe('reconnectGateMedia', () => {
     const attemptsAt: number[] = [];
     await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: () => {
         attemptsAt.push(time.now());
@@ -174,7 +174,7 @@ describe('reconnectGateMedia', () => {
     let aborted = false;
     const ok = await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: () => {
         calls += 1;
@@ -194,7 +194,7 @@ describe('reconnectGateMedia', () => {
     let calls = 0;
     const ok = await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: () => {
         calls += 1;
@@ -215,7 +215,7 @@ describe('reconnectGateMedia', () => {
     let aborted = false;
     const ok = await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: () => {
         calls += 1;
@@ -238,7 +238,7 @@ describe('reconnectGateMedia', () => {
     let calls = 0;
     const ok = await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: () => {
         calls += 1;
@@ -261,7 +261,7 @@ describe('reconnectGateMedia', () => {
     let calls = 0;
     const ok = await reconnectGateMedia({
       grant,
-      gatewayUrl: 'http://gate.local:8760',
+      gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
       startGateMedia: () => {
         calls += 1;

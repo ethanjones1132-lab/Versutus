@@ -12,7 +12,7 @@
 // and a call that accepted that ran the whole window on a link nobody was on.
 
 import { GATE_LINK_READY_MS, type GateLinkProof } from '@/lib/voice/gate-link';
-import { mediaSocketUrl } from '@/lib/voice/gate-media-url';
+import { mediaSocketUrl, mediaSocketTransport } from '@/lib/voice/gate-media-url';
 import type { GateVoiceGrant } from '@/lib/voice/handsfree-start-reason';
 
 /**
@@ -137,9 +137,16 @@ export async function reconnectGateMedia(input: ReconnectGateMediaInput): Promis
     const room = deadline - now() - ATTEMPT_ROUND_TRIP_MS;
     if (input.isAborted() || room <= 0) return false;
     const proofBudget = input.proveLink ? Math.min(linkReadyMs, room) : 0;
+    const url = toMediaUrl(input.gatewayUrl, input.grant.streamPath);
+    // The start check (S1) holds for every re-open too: a profile URL edited
+    // mid-call must not move the call's audio onto plaintext.
+    if (!mediaSocketTransport(url).allowed) {
+      log(`gate media reconnect refused session=${input.grant.voiceSessionId} reason=insecure-transport`);
+      return false;
+    }
     try {
       const started = await input.startGateMedia({
-        url: toMediaUrl(input.gatewayUrl, input.grant.streamPath),
+        url,
         token: input.gatewayToken,
         voiceSessionId: input.grant.voiceSessionId,
       });
