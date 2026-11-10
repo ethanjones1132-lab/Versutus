@@ -9,7 +9,7 @@ export const claudeCodeAdapter = {
   adapterRevision: '1',
   supportedCliVersions: '2.1.x',
   protocolVersions: { jsonl: '1' },
-  capabilities: ['chat', 'stream-json', 'mcp', 'sessions', 'tools', 'models'],
+  capabilities: ['chat', 'stream-json', 'mcp', 'sessions', 'tools', 'models', 'bots'],
 
   /**
    * Claude Code has no long-lived server: `--print` runs one process per turn

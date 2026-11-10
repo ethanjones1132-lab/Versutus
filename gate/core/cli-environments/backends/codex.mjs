@@ -151,6 +151,32 @@ export function isApprovalRequest(method) {
 const TURN_TIMEOUT_MS = 180_000;
 
 /**
+ * The one Bot this environment serves: the agent itself (ADR 0016).
+ *
+ * A Bot is routable when the backend that lists it can answer, and only a
+ * healthy backend ever reaches `listBots`, so this row is always routable.
+ * `runtime` is what lets the roster tell two agents apart, exactly as the
+ * OpenCode rows do.
+ */
+const CODEX_BOT = {
+  id: 'codex',
+  displayName: 'Codex',
+  routable: true,
+  routingIssue: null,
+  description: "OpenAI's coding agent on this computer",
+  model: null,
+  runtime: 'codex',
+};
+
+/** The refusal every Bot lookup shares: this environment has never heard of that id. */
+function unknownBot(id) {
+  const error = new Error(`unknown bot "${id}"`);
+  error.code = 'unknown_bot';
+  error.status = 404;
+  return error;
+}
+
+/**
  * Build a backend over a connected app-server.
  *
  * `cwd` is the environment's workspace root: Codex scopes a thread to a
@@ -225,7 +251,7 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeou
     };
   }
 
-  return {
+  const backend = {
     kind: 'codex',
 
     async listSessions(limit = 50) {
@@ -354,7 +380,36 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeou
     subscribe(sessionId, onEvent) {
       return scopedHandler(sessionId, onEvent);
     },
+
+    // ---- Bots: the agent itself (ADR 0016) ------------------------------
+    // Codex profiles are a later slice, so this environment serves exactly one
+    // Bot — the agent — and every thread it opens belongs to it. createBot and
+    // updateBot stay absent so the Gate refuses them by name instead of
+    // pretending there is a roster to edit.
+
+    async listBots() {
+      return { object: 'list', data: [{ ...CODEX_BOT }] };
+    },
+
+    /**
+     * One Bot: the agent, plus the `soul` field every Gate Bot read carries.
+     * There is no soul the Gate can read or edit — the CLI's own configuration
+     * and profiles are its instructions — so it is explicitly null ("genuinely
+     * none") rather than absent, which the app would report as a failed read.
+     */
+    async getBot({ id } = {}) {
+      if (id !== CODEX_BOT.id) throw unknownBot(id);
+      return { ...CODEX_BOT, soul: null };
+    },
+
+    /** The same backend, labelled with its one Bot; all threads are already its. */
+    async forBot(botId) {
+      if (botId !== CODEX_BOT.id) throw unknownBot(botId);
+      return { ...backend, bot: botId };
+    },
   };
+
+  return backend;
 }
 
 /**

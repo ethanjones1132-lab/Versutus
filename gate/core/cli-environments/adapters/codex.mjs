@@ -8,7 +8,7 @@ export const codexAdapter = {
   // backend uses is present in both, so the range widens rather than forking.
   supportedCliVersions: '0.142.x-0.147.x',
   protocolVersions: { jsonl: '1', app_server: 'experimental' },
-  capabilities: ['exec', 'jsonl', 'mcp', 'sessions', 'tools', 'models'],
+  capabilities: ['exec', 'jsonl', 'mcp', 'sessions', 'tools', 'models', 'bots'],
 
   /**
    * Codex's app-server is newline-delimited JSON-RPC on stdio, not HTTP, so it

@@ -125,6 +125,32 @@ export function normalizeClaudeEvent(event) {
   return { type: 'diagnostic', payload: { source: `${event.type}${event.subtype ? `/${event.subtype}` : ''}` } };
 }
 
+/**
+ * The one Bot this environment serves: the agent itself (ADR 0016).
+ *
+ * A Bot is routable when the backend that lists it can answer, and only a
+ * healthy backend ever reaches `listBots`, so this row is always routable.
+ * `runtime` is what lets the roster tell two agents apart, exactly as the
+ * OpenCode rows do.
+ */
+const CLAUDE_CODE_BOT = {
+  id: 'claude-code',
+  displayName: 'Claude Code',
+  routable: true,
+  routingIssue: null,
+  description: "Anthropic's coding agent on this computer",
+  model: null,
+  runtime: 'claude-code',
+};
+
+/** The refusal every Bot lookup shares: this environment has never heard of that id. */
+function unknownBot(id) {
+  const error = new Error(`unknown bot "${id}"`);
+  error.code = 'unknown_bot';
+  error.status = 404;
+  return error;
+}
+
 export function createClaudeCodeBackend({
   executablePath,
   cwd,
@@ -209,7 +235,7 @@ export function createClaudeCodeBackend({
       .filter(Boolean);
   }
 
-  return {
+  const backend = {
     kind: 'claude-code',
 
     async listSessions(limit = 50) {
@@ -542,7 +568,36 @@ export function createClaudeCodeBackend({
         available: true,
       }));
     },
+
+    // ---- Bots: the agent itself (ADR 0016) ------------------------------
+    // Claude Code has no named agents of its own, so this environment serves
+    // exactly one Bot — the agent — and every session it opens belongs to it.
+    // Custom agent files are a later slice; createBot/updateBot stay absent so
+    // the Gate refuses them by name rather than inventing an editable roster.
+
+    async listBots() {
+      return { object: 'list', data: [{ ...CLAUDE_CODE_BOT }] };
+    },
+
+    /**
+     * One Bot: the agent, plus the `soul` field every Gate Bot read carries.
+     * There is no soul the Gate can read or edit — the CLI's own configuration
+     * is its instructions — so it is explicitly null ("genuinely none") rather
+     * than absent, which the app would report as a failed read.
+     */
+    async getBot({ id } = {}) {
+      if (id !== CLAUDE_CODE_BOT.id) throw unknownBot(id);
+      return { ...CLAUDE_CODE_BOT, soul: null };
+    },
+
+    /** The same backend, labelled with its one Bot; all sessions are already its. */
+    async forBot(botId) {
+      if (botId !== CLAUDE_CODE_BOT.id) throw unknownBot(botId);
+      return { ...backend, bot: botId };
+    },
   };
+
+  return backend;
 }
 
 /** `Promise.all` over a long list, with at most `limit` in flight. */
