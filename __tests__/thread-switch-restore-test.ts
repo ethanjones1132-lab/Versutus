@@ -143,7 +143,11 @@ describe('provider selectSession keeps the slash discipline', () => {
   function selectSessionBody(src: string): string {
     const start = src.indexOf('const selectSession = useCallback(');
     expect(start).toBeGreaterThanOrEqual(0);
-    return src.slice(start, start + 4000);
+    // The whole callback, not a fixed 4000 characters: the explicit-scope path
+    // (an Activity row's own backend and Bot) pushed the history reload past it.
+    const end = src.indexOf('selectSessionRef.current = selectSession', start);
+    expect(end).toBeGreaterThan(start);
+    return src.slice(start, end);
   }
 
   test('the tap reads session.restore through the shared validator', () => {

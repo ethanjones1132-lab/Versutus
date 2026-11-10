@@ -6838,13 +6838,28 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // answer can put the identity back with the transcript already on screen.
     const previousSessionId = sessionIdRef.current;
     const previousGateway = activeGateway;
+    // A row from another environment moves the stored scope with it, the way
+    // selectBackend does: pinning B's session under a profile still naming
+    // backend A would reconnect into A asking for a thread A does not hold.
+    // The model goes with it too, restored the same way, so a send after the
+    // tap does not carry the previous backend's model id.
+    const scopedModel = scope && activeGateway && activeGateway.backendId !== scope.backendId
+      ? effectiveModel(activeGateway, scope.backendId)
+      : undefined;
+    const scopedGateway = scope && activeGateway && activeGateway.backendId !== scope.backendId
+      ? {
+          ...activeGateway,
+          backendId: scope.backendId,
+          ...(scopedModel && scopedModel !== activeGateway.model ? { model: scopedModel } : {}),
+        }
+      : activeGateway;
     // Pinning the client is not enough: connect copies stored onto live
     // before disconnect can rewrite it. Same persist as createNewSession.
     const pinned = client
       ? pinLiveSession({
           client,
           sessionId,
-          profile: activeGateway ?? undefined,
+          profile: scopedGateway ?? undefined,
         })
       : undefined;
     sessionIdRef.current = sessionId;
@@ -6854,7 +6869,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setActiveGateway(pinned);
       persistGateway(pinned);
     }
-    const gateway = pinned ?? activeGateway;
+    const gateway = pinned ?? scopedGateway;
     if (gateway) {
       const read = await reloadHistoryFor(gateway);
       if (!read) {

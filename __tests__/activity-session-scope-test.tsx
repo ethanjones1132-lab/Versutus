@@ -127,6 +127,19 @@ describe('selectSession adopts an explicit row scope', () => {
     expect(body).toContain('if (previousScope) adoptThreadScope(previousScope);');
   });
 
+  test('a row from another backend moves the stored profile to that backend before the pin', () => {
+    const body = selectSessionBody(provider());
+    expect(body).toContain('activeGateway.backendId !== scope.backendId');
+    expect(body).toContain('backendId: scope.backendId,');
+    // The backend's remembered model moves with it, as selectBackend restores it.
+    expect(body).toContain('effectiveModel(activeGateway, scope.backendId)');
+    expect(body).toContain('...(scopedModel && scopedModel !== activeGateway.model ? { model: scopedModel } : {}),');
+    expect(body).toContain('profile: scopedGateway ?? undefined,');
+    expect(body).toContain('const gateway = pinned ?? scopedGateway;');
+    // The rollback still restores the profile as it was before the tap.
+    expect(body).toContain('profile: previousGateway ?? undefined,');
+  });
+
   test('Activity passes the row object through to selectSession', () => {
     const activity = readSource('src', 'app', '(tabs)', 'activity.tsx');
     expect(activity).toContain('onOpenSession={({ sessionId, backendId, botId }) => {');
