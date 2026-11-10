@@ -69,6 +69,7 @@ def test_push_audio_ends_a_turn_and_speak_streams_in_order():
     )
     assert events[0][0] == "voice.final"
     assert events[0][1]["text"] == "hello there"
+    assert "eosMs" not in events[0][1]
 
     server.handle_message(
         json.dumps(
@@ -295,5 +296,4 @@ def test_a_failing_request_still_answers_with_a_json_rpc_error():
     assert frame["id"] == 11
     assert frame["error"] == {"code": -32000, "message": "the decoder died"}
     assert "method" not in frame
-
 

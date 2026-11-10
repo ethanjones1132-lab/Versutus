@@ -15,7 +15,7 @@ const wait = async (predicate) => {
   }
 };
 
-async function callHarness(t, control) {
+async function callHarness(t) {
   const registry = new VoiceSessionRegistry();
   registry.create({ voiceSessionId: 'vs-stream', deviceId: 'device', engine: 'local' });
   const listeners = new Map();
@@ -57,27 +57,53 @@ async function callHarness(t, control) {
   const pcm = Buffer.alloc(24_000 * 2 * 35 / 100, 7);
   engine.emit('speechAudio', { gen: engine.gen, pcm });
   await wait(() => received.some(Buffer.isBuffer));
-  ws.send(JSON.stringify(control === 'mute' ? { t: control, on: true } : { t: control }));
+  return { engine, received, ws };
+}
+
+test('speech is chunked and barge-in cancels without sending stale audio', async (t) => {
+  const { engine, received, ws } = await callHarness(t);
+  const firstAudioIndex = received.findIndex(Buffer.isBuffer);
+  const startIndex = received.findIndex((frame) => frame?.t === 'speech' && frame.state === 'start');
+  assert.ok(startIndex >= 0 && startIndex < firstAudioIndex, 'start precedes first PCM chunk');
+
+  const pcmChunks = received.filter(Buffer.isBuffer);
+  const maxBytes = OUTPUT_SAMPLE_RATE * 2 * MAX_SPEECH_CHUNK_MS / 1000;
+  assert.ok(pcmChunks.length > 1);
+  assert.ok(pcmChunks.every((chunk) => chunk.length <= maxBytes));
+  ws.send(JSON.stringify({ t: 'bargein' }));
   await wait(() => received.some((frame) => frame?.t === 'speech' && frame.state === 'cancelled'));
-  return { engine, received };
-}
+  const cancelIndex = received.findIndex((frame) => frame?.t === 'speech' && frame.state === 'cancelled');
+  const chunksBefore = received.filter(Buffer.isBuffer).length;
+  engine.emit('speechAudio', { gen: engine.gen, pcm: Buffer.alloc(48, 1) });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(received.filter(Buffer.isBuffer).length, chunksBefore, 'no chunk from the cancelled generation follows cancellation');
+  assert.ok(cancelIndex > firstAudioIndex);
+});
 
-for (const control of ['bargein', 'skip', 'mute']) {
-  test(`speech is chunked and ${control} cancels without sending stale audio`, async (t) => {
-    const { engine, received } = await callHarness(t, control);
-    const firstAudioIndex = received.findIndex(Buffer.isBuffer);
-    const startIndex = received.findIndex((frame) => frame?.t === 'speech' && frame.state === 'start');
-    const cancelIndex = received.findIndex((frame) => frame?.t === 'speech' && frame.state === 'cancelled');
-    assert.ok(startIndex >= 0 && startIndex < firstAudioIndex, 'start precedes first PCM chunk');
+test('skip cancels the reply and suppresses its later audio', async (t) => {
+  const { engine, received, ws } = await callHarness(t);
+  ws.send(JSON.stringify({ t: 'skip' }));
+  await wait(() => received.some((frame) => frame?.t === 'speech' && frame.state === 'cancelled'));
+  const chunksBefore = received.filter(Buffer.isBuffer).length;
+  engine.emit('speechAudio', { gen: engine.gen, pcm: Buffer.alloc(48, 1) });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(received.filter(Buffer.isBuffer).length, chunksBefore, 'skip drops later audio from the cancelled generation');
+});
 
-    const pcmChunks = received.filter(Buffer.isBuffer);
-    const maxBytes = OUTPUT_SAMPLE_RATE * 2 * MAX_SPEECH_CHUNK_MS / 1000;
-    assert.ok(pcmChunks.length > 1);
-    assert.ok(pcmChunks.every((chunk) => chunk.length <= maxBytes));
-    const chunksBefore = pcmChunks.length;
-    engine.emit('speechAudio', { gen: engine.gen, pcm: Buffer.alloc(48, 1) });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(received.filter(Buffer.isBuffer).length, chunksBefore, 'no chunk from the cancelled generation follows cancellation');
-    assert.ok(cancelIndex > firstAudioIndex);
-  });
-}
+test('mute leaves the reply playing and sends its remaining chunks', async (t) => {
+  const { engine, received, ws } = await callHarness(t);
+  const chunksBeforeMute = received.filter(Buffer.isBuffer).length;
+  ws.send(JSON.stringify({ t: 'mute', on: true }));
+  await wait(() => received.some((frame) => frame?.t === 'phase' && frame.phase === 'muted'));
+  assert.equal(received.some((frame) => frame?.t === 'speech' && frame.state === 'cancelled'), false);
+
+  const remaining = Buffer.alloc(24_000 * 2 * 35 / 100, 1);
+  engine.emit('speechAudio', { gen: engine.gen, pcm: remaining });
+  const maxBytes = OUTPUT_SAMPLE_RATE * 2 * MAX_SPEECH_CHUNK_MS / 1000;
+  const expectedChunks = Math.ceil(remaining.length / maxBytes);
+  await wait(() => received.filter(Buffer.isBuffer).length >= chunksBeforeMute + expectedChunks);
+  const remainingChunks = received.filter(Buffer.isBuffer).slice(chunksBeforeMute);
+  assert.equal(remainingChunks.length, expectedChunks);
+  assert.ok(remainingChunks.every((chunk) => chunk.length <= maxBytes));
+  assert.equal(received.some((frame) => frame?.t === 'speech' && frame.state === 'cancelled'), false);
+});

@@ -29,7 +29,11 @@ class PlaybackLoop(
         // A write can block while AudioTrack consumes it. Bound each call to
         // 100 ms of 24 kHz mono PCM so pause/flush can cut it short.
         var offset = 0
-        while (offset < pcm.size && isRunning()) {
+        // Once drain() hands us a buffer, write at least its first chunk. The
+        // call can stop while drain() runs; dropping that buffer loses audio
+        // that was already removed from the queue. Later chunks remain
+        // interruptible between bounded writes.
+        while (offset < pcm.size && (offset == 0 || isRunning())) {
           val end = minOf(offset + maxWriteBytes, pcm.size) and -2
           if (end <= offset) break
           write(if (offset == 0 && end == pcm.size) pcm else pcm.copyOfRange(offset, end))

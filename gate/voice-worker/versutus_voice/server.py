@@ -127,6 +127,9 @@ class VoicePipeline:
         # What voice.ready names: the device Whisper really ran on, so a silent
         # CUDA→CPU fallback is visible to the Gate and not only on stderr.
         self.whisper_device = "cpu"
+        # Set again by open(); a pipeline driven without open() (tests, a warm
+        # restart) still has a clock to stamp eosMs against.
+        self._call_started_ms = time.time() * 1000.0
 
     def open(self, params):
         self._reset()
@@ -196,7 +199,9 @@ class VoicePipeline:
             if event.kind == "speech_start":
                 self._start_speech(pcm, before)
             elif event.kind == "speech_end":
-                self._end_speech(self._call_started_ms + event.at_ms)
+                at_ms = getattr(event, "at_ms", None)
+                eos_ms = self._call_started_ms + at_ms if at_ms is not None else None
+                self._end_speech(eos_ms)
 
         # An utterance the VAD never closes would grow for the whole call and
         # be re-decoded from the start on every partial. Past the cap it ends
@@ -538,7 +543,10 @@ class VoicePipeline:
             decode_ms = (time.perf_counter() - decode_started) * 1000.0
             if early_end:
                 self._emit("voice.earlyEnd", {"text": text})
-            self._emit("voice.final", {"text": text, "eosMs": eos_ms, "decodeMs": decode_ms})
+            payload = {"text": text, "decodeMs": decode_ms}
+            if eos_ms is not None:
+                payload["eosMs"] = eos_ms
+            self._emit("voice.final", payload)
 
 
 class RpcServer:

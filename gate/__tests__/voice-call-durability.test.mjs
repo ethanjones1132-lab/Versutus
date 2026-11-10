@@ -245,6 +245,8 @@ test('a reply streams into a call with no phone for 40 s, replays on re-attach, 
     'frame:ready',
     'frame:phase',
     'frame:phase',
+    // The generation's start precedes its first reply text and audio.
+    'frame:speech',
     'frame:reply',
     'audio:1',
     'audio:2',
@@ -261,7 +263,7 @@ test('a reply streams into a call with no phone for 40 s, replays on re-attach, 
     ['Here is the answer. ', 'And the rest of it.'],
   );
   assert.equal(second.frames().find((frame) => frame.t === 'turn').state, 'done');
-  assert.equal(second.frames().find((frame) => frame.t === 'speech').state, 'end');
+  assert.equal(second.frames().find((frame) => frame.t === 'speech' && frame.state === 'end').gen, gen);
 
   // A phone that never comes back still ends the call, at the whole window.
   await second.drop();
@@ -307,7 +309,9 @@ test('a replay log past its bound drops the oldest audio, keeps every control fr
     'frame:ready',
     'frame:phase',
     'frame:phase',
+    'frame:speech',
     'frame:reply',
+    // The gap sits directly in front of the audio it explains.
     'frame:speech',
     'audio:4',
     'audio:5',
@@ -318,7 +322,9 @@ test('a replay log past its bound drops the oldest audio, keeps every control fr
   ];
   await waitFor(() => shape(second).length === expectedReplay.length);
   assert.deepEqual(shape(second), expectedReplay);
-  const gaps = second.frames().filter((frame) => frame.t === 'speech' && frame.state === 'gap');
+  const speechFrames = second.frames().filter((frame) => frame.t === 'speech');
+  assert.deepEqual(speechFrames.map((frame) => frame.state), ['start', 'gap', 'end']);
+  const gaps = speechFrames.filter((frame) => frame.state === 'gap');
   assert.equal(gaps.length, 1, 'the gap is named once');
   const gapAt = second.entries.findIndex((entry) => entry.frame?.state === 'gap');
   const firstAudioAt = second.entries.findIndex((entry) => entry.binary);

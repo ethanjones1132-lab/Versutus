@@ -207,7 +207,7 @@ describe('the Bot Chat re-arms from the routine read only it can make', () => {
   test("the pane's fresh routine read re-arms that Bot's notices", () => {
     const src = screen();
     const effect = src.match(
-      /useEffect\(\(\) => \{\n    if \(!botSurfaceId \|\| !activeGateway\?\.id \|\| status !== 'connected'\) return;[\s\S]*?\n  \}, \[activeGateway\?\.id, botSurfaceId, status, botJobs, foldRoutineRead\]\);/,
+      /useEffect\(\(\) => \{\n(?:    \/\/[^\n]*\n)*    if \(!botSurfaceId \|\| !activeBotFeatures\.routines \|\| !activeGateway\?\.id \|\| status !== 'connected'\) return;[\s\S]*?\n  \}, \[activeGateway\?\.id, botSurfaceId, status, botJobs, foldRoutineRead, activeBotFeatures\.routines\]\);/,
     )?.[0];
     expect(effect).toBeDefined();
     // One read, not two: the same parsed list feeds the pane and the re-arm.

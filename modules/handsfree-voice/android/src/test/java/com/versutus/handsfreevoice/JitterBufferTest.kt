@@ -61,12 +61,12 @@ class JitterBufferTest {
     buffer.push(gen = 1, pcm = frame(20)) // newest chunk is refused at 100 ms
     assertEquals(100, buffer.pendingMs())
     assertEquals(1, warnings)
-    assertEquals(1.toByte(), buffer.drain()!!.first(), "oldest current-gen audio is preserved")
+    assertEquals("oldest current-gen audio is preserved", 1.toByte(), buffer.drain()!!.first())
     assertEquals(2.toByte(), buffer.drain()!!.first())
     assertEquals(3.toByte(), buffer.drain()!!.first())
     assertEquals(4.toByte(), buffer.drain()!!.first())
     assertEquals(5.toByte(), buffer.drain()!!.first())
-    assertEquals(1, warnings, "the capacity warning is emitted only once")
+    assertEquals("the capacity warning is emitted only once", 1, warnings)
   }
 
   @Test fun flushClearsEveryGeneration() {

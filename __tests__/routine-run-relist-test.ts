@@ -132,7 +132,7 @@ describe('routine sheet actions re-list the roster', () => {
       '[botSurfaceId, botJobs, foldRoutineRead, routineJobsFromList]',
     );
     const retry = routineCallback(src, 'handleRoutinesRetry');
-    expect(retry).toContain('[botSurfaceId, status, botJobs]');
+    expect(retry).toContain('[botSurfaceId, status, botJobs, activeBotFeatures.routines]');
     // The create callback guards the non-bot surface, so the pane's
     // React.memo wrapper holds across chat-screen ticks.
     expect(create).toContain('if (!botSurfaceId) return;');

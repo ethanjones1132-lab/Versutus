@@ -306,23 +306,12 @@ export function reduceVoiceSession(state, event) {
     case 'mute': {
       if (state.phase === 'muted') return stay(state);
       if (state.phase !== 'listening' && state.phase !== 'speaking') return stay(state);
-      const wasSpeaking = state.phase === 'speaking';
-      const effects = [
-        ...(wasSpeaking ? [
-          frameSend({ t: 'speech', gen: state.gen, state: 'cancelled' }),
-          { kind: 'turn.cancel' },
-          { kind: 'engine.cancelSpeech', gen: state.gen },
-        ] : []),
+      // Mute turns the microphone off; it never cuts the Bot off. A reply that is
+      // playing keeps playing (VS-023), so no speech cancel is sent here.
+      return stay({ ...state, phase: 'muted', resumePhase: state.phase, muted: true }, [
         { kind: 'engine.setMuted', muted: true },
         phaseEffect('muted'),
-      ];
-      return stay({
-        ...state,
-        phase: 'muted',
-        resumePhase: wasSpeaking ? 'listening' : state.phase,
-        muted: true,
-        ...(wasSpeaking ? { gen: state.gen + 1 } : {}),
-      }, effects);
+      ]);
     }
 
     case 'unmute': {
