@@ -88,19 +88,19 @@ describe('streamingFetch', () => {
     const calls: string[] = [];
     installStreamingFetch((async (url: string) => {
       calls.push(String(url));
-      if (String(url).includes('ethanspc.example.ts.net')) {
+      if (String(url).includes('my-pc.example.ts.net')) {
         throw new Error(
-          'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.example.ts.net"',
+          'fetch failed: java.net.UnknownHostException: Unable to resolve host "my-pc.example.ts.net"',
         );
       }
       return new Response('ok', { status: 200 });
     }) as unknown as typeof globalThis.fetch);
-    installStreamingFetchHostFallback('ethanspc.example.ts.net', ['100.101.102.103']);
+    installStreamingFetchHostFallback('my-pc.example.ts.net', ['100.101.102.103']);
 
-    const res = await streamingFetch('http://ethanspc.example.ts.net:8760/v1/runs/r1/events');
+    const res = await streamingFetch('http://my-pc.example.ts.net:8760/v1/runs/r1/events');
     expect(await res.text()).toBe('ok');
     expect(calls).toEqual([
-      'http://ethanspc.example.ts.net:8760/v1/runs/r1/events',
+      'http://my-pc.example.ts.net:8760/v1/runs/r1/events',
       'http://100.101.102.103:8760/v1/runs/r1/events',
     ]);
   });
@@ -114,7 +114,7 @@ describe('streamingFetch', () => {
       calls.push(String(url));
       throw new Error('fetch failed: java.net.UnknownHostException: Unable to resolve host "otherpc.example.ts.net"');
     }) as unknown as typeof globalThis.fetch);
-    installStreamingFetchHostFallback('ethanspc.example.ts.net', ['100.101.102.103']);
+    installStreamingFetchHostFallback('my-pc.example.ts.net', ['100.101.102.103']);
 
     await expect(streamingFetch('http://otherpc.example.ts.net:8760/v1/runs/r1/events')).rejects.toThrow();
     expect(calls).toEqual(['http://otherpc.example.ts.net:8760/v1/runs/r1/events']);
@@ -125,28 +125,28 @@ describe('streamingFetch', () => {
     installStreamingFetch((async (url: string) => {
       calls.push(String(url));
       throw new Error(
-        'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.example.ts.net"',
+        'fetch failed: java.net.UnknownHostException: Unable to resolve host "my-pc.example.ts.net"',
       );
     }) as unknown as typeof globalThis.fetch);
-    installStreamingFetchHostFallback('ethanspc.example.ts.net', ['100.101.102.103']);
+    installStreamingFetchHostFallback('my-pc.example.ts.net', ['100.101.102.103']);
 
     await expect(
-      streamingFetch('https://ethanspc.example.ts.net:8760/v1/runs/r1/events'),
+      streamingFetch('https://my-pc.example.ts.net:8760/v1/runs/r1/events'),
     ).rejects.toMatchObject({
       name: 'HostLookupError',
     });
-    expect(calls).toEqual(['https://ethanspc.example.ts.net:8760/v1/runs/r1/events']);
+    expect(calls).toEqual(['https://my-pc.example.ts.net:8760/v1/runs/r1/events']);
   });
 
   test('a lookup failure without an IPv4 fallback is a HostLookupError, not the Java exception', async () => {
     installStreamingFetch((async () => {
       throw new Error(
-        'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.example.ts.net"',
+        'fetch failed: java.net.UnknownHostException: Unable to resolve host "my-pc.example.ts.net"',
       );
     }) as unknown as typeof globalThis.fetch);
 
     await expect(
-      streamingFetch('http://ethanspc.example.ts.net:8760/v1/runs/r1/events'),
+      streamingFetch('http://my-pc.example.ts.net:8760/v1/runs/r1/events'),
     ).rejects.toMatchObject({
       name: 'HostLookupError',
       message: expect.stringMatching(/could not look up your PC's address/i),
@@ -156,9 +156,9 @@ describe('streamingFetch', () => {
   test('a refused token is not retried as a DNS miss', async () => {
     const fetchMock = jest.fn(async () => new Response('{"error":{"message":"Invalid API key"}}', { status: 401 }));
     installStreamingFetch(fetchMock as unknown as typeof globalThis.fetch);
-    installStreamingFetchHostFallback('ethanspc.example.ts.net', ['100.101.102.103']);
+    installStreamingFetchHostFallback('my-pc.example.ts.net', ['100.101.102.103']);
 
-    const res = await streamingFetch('http://ethanspc.example.ts.net:8760/v1/runs/r1/events');
+    const res = await streamingFetch('http://my-pc.example.ts.net:8760/v1/runs/r1/events');
     expect(res.status).toBe(401);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -225,9 +225,9 @@ describe('streaming call sites', () => {
     const calls: string[] = [];
     installStreamingFetch((async (url: string) => {
       calls.push(String(url));
-      if (String(url).includes('ethanspc.example.ts.net')) {
+      if (String(url).includes('my-pc.example.ts.net')) {
         throw new Error(
-          'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.example.ts.net"',
+          'fetch failed: java.net.UnknownHostException: Unable to resolve host "my-pc.example.ts.net"',
         );
       }
       return sseResponse([
@@ -246,7 +246,7 @@ describe('streaming call sites', () => {
       },
     };
     const client = new ManifestClient(
-      { ...PROFILE, url: 'http://ethanspc.example.ts.net:8760' },
+      { ...PROFILE, url: 'http://my-pc.example.ts.net:8760' },
       identity,
       {},
     );
@@ -258,7 +258,7 @@ describe('streaming call sites', () => {
     await environments.streamRun('env-1', 'r-1', (event) => types.push(event.type));
 
     expect(types).toEqual(['run.started', 'run.completed']);
-    expect(calls.some((url) => url.includes('ethanspc.example.ts.net'))).toBe(true);
+    expect(calls.some((url) => url.includes('my-pc.example.ts.net'))).toBe(true);
     expect(calls.some((url) => url.includes('100.101.102.103'))).toBe(true);
   });
 });

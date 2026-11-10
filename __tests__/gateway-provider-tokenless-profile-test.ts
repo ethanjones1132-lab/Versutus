@@ -29,9 +29,9 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 );
 jest.mock('expo-constants', () => ({ __esModule: true, default: { expoConfig: { extra: {} } } }));
 
-const GATE_URL = 'http://ethanspc.tail1234.ts.net:8760';
+const GATE_URL = 'http://my-pc.tail1234.ts.net:8760';
 /** The same address the way the operator types it: no scheme. */
-const GATE_HOST = 'ethanspc.tail1234.ts.net:8760';
+const GATE_HOST = 'my-pc.tail1234.ts.net:8760';
 const OTHER_TOKEN = 'old';
 const TYPED_TOKEN = 'typed';
 
@@ -42,7 +42,7 @@ const mockState = {
     autoConnect: false,
     onboardingComplete: true,
     voiceEngine: 'auto',
-    tailscaleHost: 'ethanspc.tail1234.ts.net',
+    tailscaleHost: 'my-pc.tail1234.ts.net',
   } as Record<string, unknown>,
   /** The URL the candidate wave answers for. */
   waveWinner: GATE_URL as string | null,
@@ -291,7 +291,7 @@ beforeEach(async () => {
     autoConnect: false,
     onboardingComplete: true,
     voiceEngine: 'auto',
-    tailscaleHost: 'ethanspc.tail1234.ts.net',
+    tailscaleHost: 'my-pc.tail1234.ts.net',
   };
   mockState.waveWinner = GATE_URL;
   observed.gateway = null;

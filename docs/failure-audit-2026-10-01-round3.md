@@ -26,7 +26,7 @@ Round 3 came from the operator's own report (phone screenshots, 2026-10-01), not
 | `GET /v1/sessions?backendId=hermes-local&limit=50` | 3.0 s warm; 30 s timeout (502) cold; Hermes alone 38.5 s cold | The Gate's 30 s bound meant a cold list could never load (SPD-1/2) |
 | Bot session lists / any session's messages | 0.4-3.3 s / ~0.1 s | Session lists, not message reads, are the slow screens |
 | Gate log `auth refused ... no authorization header` | 88 lines since 2026-09-27, from the phone's tailnet IP, in connect-shaped bursts | A token-less duplicate gateway profile was being created and connected (AUTH-1) |
-| `tailscale ping ethans-a54` (phone on home Wi-Fi) | Direct path (`192.168.1.235`), 3 ms to 1.2 s; plain LAN ping 3-118 ms | The tunnel is direct at home; the swings come from the phone's power saving, which is the operator's Samsung settings step |
+| `tailscale ping my-phone` (phone on home Wi-Fi) | Direct path (`192.168.1.235`), 3 ms to 1.2 s; plain LAN ping 3-118 ms | The tunnel is direct at home; the swings come from the phone's power saving, which is the operator's Samsung settings step |
 | `tailscale netcheck` | UDP yes, no UPnP/PCP/NAT-PMP, `MappingVariesByDestIP: false` | Away from home a direct path is likely but not guaranteed; the router port-forward (operator step) makes it reliable |
 
 ## How the round was run
@@ -401,7 +401,7 @@ Totals: **17 fixed**, **1 fixed in part**, **0 not fixed**.
 
 ### What still needs you
 
-- **Router:** DHCP reservation for the PC (`192.168.1.107`) and a UDP 41641 port-forward to it, so the phone gets a direct Tailscale path away from home; then `tailscale ping ethans-a54` from the PC should say `via <public ip>` rather than `via DERP`.
+- **Router:** DHCP reservation for the PC (`192.168.1.107`) and a UDP 41641 port-forward to it, so the phone gets a direct Tailscale path away from home; then `tailscale ping my-phone` from the PC should say `via <public ip>` rather than `via DERP`.
 - **Samsung settings for Tailscale and Versutus:** battery Unrestricted, never sleeping, and Tailscale as Always-on VPN. At home the path is already direct but swings 3 ms-1.2 s, which points at the phone's power saving.
 - **Delete the old Hermes backups (~18 GB):** `Get-ChildItem "$env:LOCALAPPDATA\hermes" -Filter "state.db.pre-update-emergency-*" | Remove-Item` (they are not used by anything; Hermes keeps its live `state.db`).
 

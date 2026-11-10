@@ -53,10 +53,10 @@ Do them in this order: **A (Gate) → B (voice GPU) → C (push)**. Voice and pu
 | Master checkout `C:\Projects\Versutus` | Fast-forwarded `a155d25 → c2d9015`: voice sprint + widget sprint + shortcut-label fix, 673 files. 432 commits ahead of `origin/master`, not pushed. A stale 0-byte `.git\index.lock` from 2026-09-10 was removed first. |
 | Gate | **Interim, NOT durable**, and gone at the next reboot. Details below the table. |
 | Why the Gate was down | Ethan restarted the PC at 2026-09-12 23:51:59 (System event 1074), and nothing starts or supervises the Gate. `gate service install` is a stub: `handleService` in `gate/cli.mjs` only prints "Would install…". `gate/core/service/windows-task.mjs` builds XML that is never registered. |
-| Phone | APK `versutus-everything-c2d9015` Taildropped to `ethans-a54` (same code as master; whether it's installed is unknown). |
+| Phone | APK `versutus-everything-c2d9015` Taildropped to `my-phone` (same code as master; whether it's installed is unknown). |
 | Voice models | `node gate\cli.mjs voice install` finished with exit 0 in 373 s. It created the venv `%LOCALAPPDATA%\Versutus\Gate\voice\venv` (Python 3.12.13, 38 packages) and installed 8 SHA-256-verified models into `…\voice\models`: the Kokoro onnx model and voices, Smart Turn v3.2, and faster-whisper large-v3-turbo (`whisper\*`, including the 1.6 GB `model.bin`). **The GPU path is broken** — see Task B. |
 | Push | No remote push exists anywhere. See Task C. |
-| OpenClaw | The `OpenClaw Gateway` and `OpenClaw Gateway (versutus)` tasks last exited with 0xC000013A (console closed). Nothing listens on 18789, yet `tailscale serve` maps `https://ethanspc.tail3a1a8a.ts.net/` → `http://127.0.0.1:18789`. Not part of this job: tell Ethan, don't change it. |
+| OpenClaw | The `OpenClaw Gateway` and `OpenClaw Gateway (versutus)` tasks last exited with 0xC000013A (console closed). Nothing listens on 18789, yet `tailscale serve` maps `https://my-pc.tailnet.ts.net/` → `http://127.0.0.1:18789`. Not part of this job: tell Ethan, don't change it. |
 
 Interim Gate details:
 - pid **40452**, running `node gate/cli.mjs start` from `C:\Projects\Versutus`, started detached and
@@ -74,13 +74,13 @@ Host facts:
 
 | Item | Value |
 |---|---|
-| User | `ETHANSPC\ethan` |
+| User | `MY-PC\ethan` |
 | node | `C:\Program Files\nodejs\node.exe` v24.14.0 |
 | uv | `C:\Users\ethan\AppData\Local\hermes\bin\uv.exe` 0.12.13 |
 | GPU | RTX 4060 8 GB, driver 610.47 |
 | Disk | C: has 43 GB free |
 | Firewall | inbound rule "Versutus Gate 8760" exists (any profile) |
-| Network | Tailscale interface is Private; PC tailnet IP 100.95.137.83; phone is `ethans-a54` |
+| Network | Tailscale interface is Private; PC tailnet IP 100.64.0.10; phone is `my-phone` |
 
 ---
 
@@ -95,7 +95,7 @@ Host facts:
     phone has to re-pair.
   - Gate home (`%LOCALAPPDATA%\Versutus\Gate`) holds config, DPAPI credentials, voice,
     `push-tokens.json` and `gate.lock`.
-- **The credential vault is per-user DPAPI.** The task must run as `ETHANSPC\ethan` with
+- **The credential vault is per-user DPAPI.** The task must run as `MY-PC\ethan` with
   `InteractiveToken`. S4U can't decrypt DPAPI, and a test already refuses SYSTEM.
 - **A visible console window gets closed by hand.** That's how the Hermes and OpenClaw tasks died
   (0xC000013A). Launch the Gate without a window.
@@ -151,7 +151,7 @@ Work test-first in bee6. Use `npm run test:gate` while iterating and `npm run ve
    - Emit valid Task Scheduler XML: `<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">`,
      with every value XML-escaped.
    - Write it as UTF-16LE with a BOM: `Buffer.from('\ufeff' + xml, 'utf16le')`.
-   - **Principal:** `UserId ETHANSPC\ethan`, `LogonType InteractiveToken`, `RunLevel LeastPrivilege`.
+   - **Principal:** `UserId MY-PC\ethan`, `LogonType InteractiveToken`, `RunLevel LeastPrivilege`.
    - **Triggers:**
      - `LogonTrigger` for that user;
      - `TimeTrigger` with `Repetition Interval PT5M` and no duration. It revives a dead supervisor
@@ -429,7 +429,7 @@ The spec is "Solution A — True push notifications" in `FUTURE-ITEMS.md`:
 $env:CI = '1'; npx expo prebuild --platform android --clean
 Set-Content android\local.properties 'sdk.dir=C\:\\Users\\ethan\\AppData\\Local\\Android\\Sdk' -Encoding ascii
 cd android; .\gradlew.bat assembleRelease     # ~8 min; APK at android\app\build\outputs\apk\release\app-release.apk
-tailscale file cp <renamed.apk> ethans-a54:    # ~10 min over the DERP relay
+tailscale file cp <renamed.apk> my-phone:    # ~10 min over the DERP relay
 ```
 Two gotchas:
 - A shortcut label, or any other resource a config plugin writes, must be an `@string/` reference, or

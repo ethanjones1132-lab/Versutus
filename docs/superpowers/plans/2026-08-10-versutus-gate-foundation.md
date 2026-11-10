@@ -105,8 +105,8 @@ describe('HttpTransport', () => {
   });
 
   test('reports the host for operator-facing messages', () => {
-    const transport = new HttpTransport({ baseUrl: 'https://ethanspc.tail3a1a8a.ts.net' });
-    expect(transport.displayHost).toBe('ethanspc.tail3a1a8a.ts.net');
+    const transport = new HttpTransport({ baseUrl: 'https://my-pc.tailnet.ts.net' });
+    expect(transport.displayHost).toBe('my-pc.tailnet.ts.net');
   });
 });
 ```

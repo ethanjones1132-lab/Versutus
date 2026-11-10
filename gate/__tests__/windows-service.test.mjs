@@ -33,14 +33,14 @@ async function runCli(args, env = {}) {
 }
 
 test('task XML carries the plaintext acknowledgement only when given, and reads it back', () => {
-  const plain = buildTaskDefinition({ user: 'ETHANSPC\\ethan', host: '0.0.0.0', port: 9500 });
-  const acked = buildTaskDefinition({ user: 'ETHANSPC\\ethan', host: '0.0.0.0', port: 9500, allowPlaintext: true });
+  const plain = buildTaskDefinition({ user: 'MY-PC\\ethan', host: '0.0.0.0', port: 9500 });
+  const acked = buildTaskDefinition({ user: 'MY-PC\\ethan', host: '0.0.0.0', port: 9500, allowPlaintext: true });
   assert.match(acked.xml, /service run --host 0\.0\.0\.0 --port 9500 --allow-plaintext/);
   assert.deepEqual(taskRunArgs(acked.xml), { host: '0.0.0.0', port: 9500, allowPlaintext: true });
   assert.doesNotMatch(plain.xml, /allow-plaintext/);
   assert.deepEqual(taskRunArgs(plain.xml), { host: '0.0.0.0', port: 9500 });
-  const absent = buildTaskDefinition({ user: 'ETHANSPC\\ethan', host: '127.0.0.1', port: 9500 });
-  const explicitFalse = buildTaskDefinition({ user: 'ETHANSPC\\ethan', host: '127.0.0.1', port: 9500, allowPlaintext: false });
+  const absent = buildTaskDefinition({ user: 'MY-PC\\ethan', host: '127.0.0.1', port: 9500 });
+  const explicitFalse = buildTaskDefinition({ user: 'MY-PC\\ethan', host: '127.0.0.1', port: 9500, allowPlaintext: false });
   assert.equal(explicitFalse.xml, absent.xml);
 });
 
@@ -68,11 +68,11 @@ test('task definition binds logon of the current user', () => {
 
 test('task XML runs the supervisor headless from the code root', () => {
   const task = buildTaskDefinition({
-    user: 'ETHANSPC\\ethan',
+    user: 'MY-PC\\ethan',
     codeRoot: 'C:\\Projects\\Versutus',
   });
   assert.match(task.xml, /http:\/\/schemas\.microsoft\.com\/windows\/2004\/02\/mit\/task/);
-  assert.match(task.xml, /<UserId>ETHANSPC\\ethan<\/UserId>/);
+  assert.match(task.xml, /<UserId>MY-PC\\ethan<\/UserId>/);
   assert.match(task.xml, /<LogonType>InteractiveToken<\/LogonType>/);
   assert.match(task.xml, /<Command>C:\\Windows\\System32\\conhost\.exe<\/Command>/);
   assert.match(task.xml, /service run/);
@@ -92,23 +92,23 @@ test('task XML escapes user-controlled values', () => {
 
 test('a task definition names the host and port its installer resolved', () => {
   const task = buildTaskDefinition({
-    user: 'ETHANSPC\\ethan',
+    user: 'MY-PC\\ethan',
     codeRoot: 'C:\\Projects\\Versutus',
     host: '0.0.0.0',
     port: 9500,
   });
   assert.match(task.xml, /service run --host 0\.0\.0\.0 --port 9500/);
   // An install with no flags is unchanged: the Gate's own defaults still apply.
-  const plain = buildTaskDefinition({ user: 'ETHANSPC\\ethan' });
+  const plain = buildTaskDefinition({ user: 'MY-PC\\ethan' });
   assert.doesNotMatch(plain.xml, /--host|--port/);
 });
 
 test('an installed task reads its supervisor host and port back', () => {
-  const task = buildTaskDefinition({ user: 'ETHANSPC\\ethan', host: '127.0.0.1', port: 9500 });
+  const task = buildTaskDefinition({ user: 'MY-PC\\ethan', host: '127.0.0.1', port: 9500 });
   assert.deepEqual(taskRunArgs(task.xml), { host: '127.0.0.1', port: 9500 });
   // The flags are independent, and anything absent means the Gate's default.
-  assert.deepEqual(taskRunArgs(buildTaskDefinition({ user: 'ETHANSPC\\ethan', port: 9000 }).xml), { port: 9000 });
-  assert.deepEqual(taskRunArgs(buildTaskDefinition({ user: 'ETHANSPC\\ethan' }).xml), {});
+  assert.deepEqual(taskRunArgs(buildTaskDefinition({ user: 'MY-PC\\ethan', port: 9000 }).xml), { port: 9000 });
+  assert.deepEqual(taskRunArgs(buildTaskDefinition({ user: 'MY-PC\\ethan' }).xml), {});
   assert.deepEqual(taskRunArgs(''), {});
 });
 
@@ -321,7 +321,7 @@ test('service status probes the port the installed task names', { skip: process.
     const serviceDir = join(dir, 'service');
     await mkdir(serviceDir, { recursive: true });
     writeTaskFile(
-      buildTaskDefinition({ user: 'ETHANSPC\\ethan', codeRoot: 'C:\\Projects\\Versutus', host: '127.0.0.1', port }).xml,
+      buildTaskDefinition({ user: 'MY-PC\\ethan', codeRoot: 'C:\\Projects\\Versutus', host: '127.0.0.1', port }).xml,
       join(serviceDir, 'VersutusGate.xml'),
     );
     await writeFile(join(serviceDir, 'supervisor.json'), JSON.stringify({ status: 'running' }));
@@ -338,7 +338,7 @@ test('service status probes the port the installed task names', { skip: process.
 test('task file is written UTF-16LE with a BOM', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'gate-task-'));
   try {
-    const task = buildTaskDefinition({ user: 'ETHANSPC\\ethan' });
+    const task = buildTaskDefinition({ user: 'MY-PC\\ethan' });
     const dest = join(dir, 'VersutusGate.xml');
     writeTaskFile(task.xml, dest);
     const bytes = readFileSync(dest);

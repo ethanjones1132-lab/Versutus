@@ -8,7 +8,7 @@ Branch: `master` (clean tree, **58 commits unpushed** — `origin/master` is sti
 ## 1. Where things stand right now
 
 **Working, verified end to end:** the Android app on the phone sends a message through
-`https://ethanspc.tail3a1a8a.ts.net` using the `API_SERVER_KEY` from
+`https://my-pc.tailnet.ts.net` using the `API_SERVER_KEY` from
 `%LOCALAPPDATA%\hermes\.env`, and Hermes answers. This was confirmed live, not inferred.
 
 **Verification state on `master` (all re-run after the dependency upgrade):**
@@ -95,7 +95,7 @@ from three commands on the PC:
 
 ```bash
 netstat -ano | grep ":8642"                                   # nothing listening
-curl -s -o /dev/null -w "%{http_code}" https://ethanspc.tail3a1a8a.ts.net/health   # 502
+curl -s -o /dev/null -w "%{http_code}" https://my-pc.tailnet.ts.net/health   # 502
 tail -40 "$LOCALAPPDATA/hermes/logs/gateway.log"              # the real story
 ```
 
@@ -225,8 +225,8 @@ See §3.1. Needs an upstream fix or a watchdog; currently requires a manual
 
 **Gateway URLs (all verified 200 as of this writing):**
 - `http://127.0.0.1:8642` — local
-- `http://100.95.137.83:8642` — tailnet IP (Hermes binds `0.0.0.0`, so this works)
-- `https://ethanspc.tail3a1a8a.ts.net` — Tailscale Serve → `127.0.0.1:8642` ✅ *this is the one in use*
+- `http://100.64.0.10:8642` — tailnet IP (Hermes binds `0.0.0.0`, so this works)
+- `https://my-pc.tailnet.ts.net` — Tailscale Serve → `127.0.0.1:8642` ✅ *this is the one in use*
 
 **API key:** `API_SERVER_KEY` in `C:\Users\ethan\AppData\Local\hermes\.env`
 (64 chars, no quotes, single entry). A wrong/truncated paste here produces
@@ -236,10 +236,10 @@ See §3.1. Needs an upstream fix or a watchdog; currently requires a manual
 ```bash
 netstat -ano | grep ":8642"                                    # is anything listening?
 curl -s http://127.0.0.1:8642/health                           # is Hermes answering?
-curl -s -o /dev/null -w "%{http_code}" https://ethanspc.tail3a1a8a.ts.net/health   # is Serve proxying?
+curl -s -o /dev/null -w "%{http_code}" https://my-pc.tailnet.ts.net/health   # is Serve proxying?
 tail -40 "$LOCALAPPDATA/hermes/logs/gateway.log"               # what is it actually saying?
 "$LOCALAPPDATA/hermes/hermes-agent/venv/Scripts/hermes.exe" gateway restart        # the usual fix
 ```
 
 **Tailscale:** `tailscale status` / `tailscale serve status`
-(PC `ethanspc` 100.95.137.83, phone `ethans-a54` 100.81.238.109).
+(PC `my-pc` 100.64.0.10, phone `my-phone` 100.64.0.20).

@@ -21,7 +21,7 @@ stays in the tree as a dormant fallback, switched per device.
 ## Architecture
 
 ```
-Gate (:8760, 127.0.0.1 + tailnet IP)          Phone (ethans-a54)
+Gate (:8760, 127.0.0.1 + tailnet IP)          Phone (my-phone)
 ─────────────────────────────────            ──────────────────
 onRunEvent ──► push fan-out ──┬──► expo sink (existing, dormant)
                               └──► socket sink (NEW) ──► WS /v1/push-stream

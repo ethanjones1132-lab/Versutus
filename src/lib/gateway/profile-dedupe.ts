@@ -2,7 +2,7 @@
 // Every add path — onboarding auto-connect, a discovery beacon, a manual or
 // deep-link add — made a brand-new profile with a fresh id, and the store only
 // ever matched on id. So the same Gate saved twice became two profiles. On
-// 2026-09-16 "Gateway" and "Ethanspc" both pointed at the same URL, one with
+// 2026-09-16 "Gateway" and "My-pc" both pointed at the same URL, one with
 // the token and one without, and which one the app connected to decided
 // whether requests authenticated at all.
 //

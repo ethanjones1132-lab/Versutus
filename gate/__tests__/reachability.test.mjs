@@ -10,7 +10,7 @@ test('Tailscale CGNAT addresses are recognized and loopback is not', () => {
   assert.equal(isTailnetIpv4('100.63.255.255'), false);
   assert.equal(isTailnetIpv4('127.0.0.1'), false);
   assert.equal(isTailnetIpv4('192.168.1.30'), false);
-  assert.equal(isTailnetIpv4('ethanspc.example.ts.net'), false);
+  assert.equal(isTailnetIpv4('my-pc.example.ts.net'), false);
 });
 
 test('tailnetIpv4FromInterfaces only returns CGNAT IPv4s', () => {

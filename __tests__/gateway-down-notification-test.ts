@@ -69,12 +69,12 @@ describe('gateway-down notification lifecycle', () => {
   });
 
   test('notifyGatewayDown schedules the notice under its stable title and payload', async () => {
-    await notifyGatewayDown('gw-a', 'ethanspc');
+    await notifyGatewayDown('gw-a', 'my-pc');
 
     expect(mockSchedule).toHaveBeenCalledTimes(1);
     const request = mockSchedule.mock.calls[0][0];
     expect(request.content.title).toBe('Gateway unreachable');
-    expect(request.content.body).toContain('ethanspc');
+    expect(request.content.body).toContain('my-pc');
     // The gateway key rides in the payload so a restarted process can still
     // attribute the notice to exactly the gateway that posted it.
     expect(request.content.data).toEqual({ kind: 'gateway-down', gatewayKey: 'gw-a' });
@@ -83,7 +83,7 @@ describe('gateway-down notification lifecycle', () => {
 
   test('dismissGatewayDown retires the notice this process posted', async () => {
     mockSchedule.mockResolvedValue('notif-7');
-    await notifyGatewayDown('gw-a', 'ethanspc');
+    await notifyGatewayDown('gw-a', 'my-pc');
 
     await dismissGatewayDown('gw-a');
 
@@ -142,7 +142,7 @@ describe('gateway-down notification lifecycle', () => {
   });
 
   test('recovery dismisses the posted notice even when the tray sweep finds nothing', async () => {
-    await notifyGatewayDown('gw-a', 'ethanspc');
+    await notifyGatewayDown('gw-a', 'my-pc');
     mockPresented.mockResolvedValue([]);
 
     await dismissGatewayDown('gw-a');
@@ -155,7 +155,7 @@ describe('gateway-down notification lifecycle', () => {
     // Foregrounded posts are suppressed by design — nothing lands in the tray
     // and no identifier is recorded behind a phantom id.
     setAppState('active');
-    await notifyGatewayDown('gw-a', 'ethanspc');
+    await notifyGatewayDown('gw-a', 'my-pc');
     expect(mockSchedule).not.toHaveBeenCalled();
 
     mockPresented.mockResolvedValue([presentedNotification('old', 'Gateway unreachable')]);
@@ -165,7 +165,7 @@ describe('gateway-down notification lifecycle', () => {
   });
 
   test('dismissal failures never propagate — recovery cleanup is best-effort', async () => {
-    await notifyGatewayDown('gw-a', 'ethanspc');
+    await notifyGatewayDown('gw-a', 'my-pc');
     mockDismiss.mockRejectedValue(new Error('tray unavailable'));
 
     await expect(dismissGatewayDown('gw-a')).resolves.toBeUndefined();

@@ -2,18 +2,18 @@ import { onboardingCompletionForAddedGateway } from '@/lib/onboarding/completion
 
 describe('onboarding completion from an added gateway', () => {
   test('a tailnet URL derives the host for future auto-connect probing', () => {
-    expect(onboardingCompletionForAddedGateway('https://ethanspc.example.ts.net', {})).toEqual({
+    expect(onboardingCompletionForAddedGateway('https://my-pc.example.ts.net', {})).toEqual({
       onboardingComplete: true,
-      tailscaleHost: 'ethanspc.example.ts.net',
-      pcName: 'Ethanspc',
+      tailscaleHost: 'my-pc.example.ts.net',
+      pcName: 'My-pc',
     });
   });
 
   test('scheme, port, and path never leak into the saved host', () => {
-    expect(onboardingCompletionForAddedGateway('http://EthanPC.example.ts.net:8760/gate', {})).toEqual({
+    expect(onboardingCompletionForAddedGateway('http://MyPC.example.ts.net:8760/gate', {})).toEqual({
       onboardingComplete: true,
-      tailscaleHost: 'ethanpc.example.ts.net',
-      pcName: 'Ethanpc',
+      tailscaleHost: 'mypc.example.ts.net',
+      pcName: 'Mypc',
     });
   });
 
@@ -27,7 +27,7 @@ describe('onboarding completion from an added gateway', () => {
   test('the first deliberately added machine wins; later adds never churn it', () => {
     expect(
       onboardingCompletionForAddedGateway('https://other.tailnet.ts.net', {
-        tailscaleHost: 'ethanspc.example.ts.net',
+        tailscaleHost: 'my-pc.example.ts.net',
       }),
     ).toEqual({ onboardingComplete: true });
   });

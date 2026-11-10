@@ -624,7 +624,7 @@ test('Windows keeps the Scheduled Task backend; macOS gets launchd; others are t
   assert.equal(serviceBackendFor('linux'), 'unsupported');
   assert.match(unsupportedServiceMessage('linux'), /not supported on linux yet/);
   // The Windows task still runs the hidden `service run` supervisor.
-  const task = buildTaskDefinition({ user: 'ETHANSPC\\ethan' });
+  const task = buildTaskDefinition({ user: 'MY-PC\\ethan' });
   assert.match(task.xml, /--headless .*service run/);
 });
 

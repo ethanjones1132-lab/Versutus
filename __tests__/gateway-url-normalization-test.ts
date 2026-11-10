@@ -11,8 +11,8 @@ import {
 // artifact can never identify fine and then save wrong.
 describe('normalizeGatewayUrl', () => {
   it('trims paste artifacts around an otherwise correct URL', () => {
-    expect(normalizeGatewayUrl('  http://ethanspc.example.ts.net:8760 \n')).toBe(
-      'http://ethanspc.example.ts.net:8760',
+    expect(normalizeGatewayUrl('  http://my-pc.example.ts.net:8760 \n')).toBe(
+      'http://my-pc.example.ts.net:8760',
     );
   });
 
@@ -38,8 +38,8 @@ describe('normalizeGatewayUrl', () => {
   });
 
   it('defaults a bare host to the Hermes API port', () => {
-    expect(normalizeGatewayUrl('ethanspc.example.ts.net')).toBe(
-      'http://ethanspc.example.ts.net:8642',
+    expect(normalizeGatewayUrl('my-pc.example.ts.net')).toBe(
+      'http://my-pc.example.ts.net:8642',
     );
   });
 
@@ -62,7 +62,7 @@ describe('normalizeGatewayUrl', () => {
 
   it('is idempotent for every accepted shape', () => {
     const inputs = [
-      'http://ethanspc.example.ts.net:8760',
+      'http://my-pc.example.ts.net:8760',
       'https://gate.test',
       'ws://192.168.1.30:7400/openclaw',
       'mybox.example.ts.net:8760',
@@ -143,7 +143,7 @@ describe('numeric-host validation shared with onboarding', () => {
   });
 
   it('never applies the octet check to real hostnames', () => {
-    expect(hasImpossibleNumericOctets('ethanspc.example.ts.net')).toBe(false);
+    expect(hasImpossibleNumericOctets('my-pc.example.ts.net')).toBe(false);
     expect(hasImpossibleNumericOctets('gate.test')).toBe(false);
     expect(hasImpossibleNumericOctets('mybox')).toBe(false);
   });

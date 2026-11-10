@@ -835,7 +835,7 @@ UI, the Gate (node:test, no coverage) and the Kotlin/Swift modules are unmeasure
 
 > **Fix status:** Not fixed (low value, your call) - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#cfg-1)
 
-`app.json` → `extra.gatewayHosts` hard-codes `ethanspc.tail3a1a8a.ts.net`, `100.95.137.83`, `192.168.4.30`, `192.168.4.28`. The saved
+`app.json` → `extra.gatewayHosts` hard-codes `my-pc.tailnet.ts.net`, `100.64.0.10`, `192.168.1.30`, `192.168.1.28`. The saved
 profile and `lastSuccessfulUrl` mask this normally; a changed PC address or a second user needs a rebuild for the fallback list.
 
 ### DEAD-1 · S3 · Discovery is off but still in the connect path `[read]`

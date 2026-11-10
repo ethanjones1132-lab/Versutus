@@ -31,7 +31,7 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 );
 jest.mock('expo-constants', () => ({ __esModule: true, default: { expoConfig: { extra: {} } } }));
 
-const GATE_DNS_URL = 'http://ethanspc.tail1234.ts.net:8760';
+const GATE_DNS_URL = 'http://my-pc.tail1234.ts.net:8760';
 const GATE_TAILNET_IP = '100.101.102.103';
 const GATE_TAILNET_URL = `http://${GATE_TAILNET_IP}:8760`;
 
@@ -44,7 +44,7 @@ const mockState = {
     autoConnect: true,
     onboardingComplete: true,
     voiceEngine: 'auto',
-    tailscaleHost: 'ethanspc.tail1234.ts.net',
+    tailscaleHost: 'my-pc.tail1234.ts.net',
   } as Record<string, unknown>,
   /** URLs the single-URL probe answers 404/unreachable for — a DNS blip. */
   unreachableUrls: new Set<string>(),
@@ -192,7 +192,7 @@ const GATE_MANIFEST = {
 } as unknown as GatewayManifest;
 
 const WELL_KNOWN_PATH = '/.well-known/gateway.json';
-const GATE_DNS_HOST = 'ethanspc.tail1234.ts.net';
+const GATE_DNS_HOST = 'my-pc.tail1234.ts.net';
 
 type RecordedRequest = { method: string; url: string; authorization?: string };
 
@@ -326,7 +326,7 @@ beforeEach(async () => {
     autoConnect: true,
     onboardingComplete: true,
     voiceEngine: 'auto',
-    tailscaleHost: 'ethanspc.tail1234.ts.net',
+    tailscaleHost: 'my-pc.tail1234.ts.net',
   };
   mockState.unreachableUrls = new Set();
   mockState.waveWinner = null;
@@ -401,7 +401,7 @@ describe('a saved Gate the wave reaches under another host form', () => {
     // no startup merge is safe. It is the ACTIVE gateway, which is how the
     // connect picked it in the first place.
     const alpha = profile({ id: 'alpha', url: GATE_DNS_URL, token: 't' });
-    const twin = profile({ id: 'twin', url: GATE_TAILNET_URL, token: undefined, name: 'Ethanspc' });
+    const twin = profile({ id: 'twin', url: GATE_TAILNET_URL, token: undefined, name: 'My-pc' });
     const office = profile({ id: 'office', url: 'http://office.tail1234.ts.net:8760', token: 't2', alternateIpv4: [GATE_TAILNET_IP] });
     mockState.gateways = [alpha, office, twin];
     mockState.activeId = twin.id;
@@ -440,7 +440,7 @@ describe('a saved Gate the wave reaches under another host form', () => {
 describe('the roster a poisoned device is holding at startup', () => {
   test('is healed to one profile, active, with the key — before anything connects', async () => {
     const paired = profile({ id: 'alpha', url: GATE_DNS_URL, token: 't' });
-    const twin = profile({ id: 'twin', name: 'Ethanspc', url: GATE_TAILNET_URL, token: undefined });
+    const twin = profile({ id: 'twin', name: 'My-pc', url: GATE_TAILNET_URL, token: undefined });
     mockState.gateways = [paired, twin];
     // The copy that cannot authenticate is the ACTIVE gateway, which is how the
     // operator's phone got here: the connect picked it, so the next wave does too.
@@ -560,7 +560,7 @@ describe('a Gate profile with no token at all', () => {
 
   test("a twin of a Gate this device is paired with connects the paired profile", async () => {
     const alpha = profile({ id: 'alpha', url: GATE_DNS_URL, token: 't' });
-    const twin = profile({ id: 'twin', url: GATE_TAILNET_URL, token: undefined, name: 'Ethanspc' });
+    const twin = profile({ id: 'twin', url: GATE_TAILNET_URL, token: undefined, name: 'My-pc' });
     mockState.gateways = [alpha, twin];
     // The poisoned copy is the active gateway, which is how the startup repair
     // found it on the operator's phone — and this attach must not be a dead end.

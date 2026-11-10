@@ -6,7 +6,7 @@ import type { GatewayProfile } from '@/lib/gateway/types';
 // tailnet IP answers — became a brand-new profile with no token. Its connect
 // fan-out then went out with no Authorization, and the Gate answered 401.
 
-const GATE_URL = 'http://ethanspc.tail1234.ts.net:8760';
+const GATE_URL = 'http://my-pc.tail1234.ts.net:8760';
 const TAILNET_IP = '100.101.102.103';
 
 function profile(overrides: Partial<GatewayProfile> & { id: string; url: string }): GatewayProfile {

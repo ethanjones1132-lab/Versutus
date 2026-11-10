@@ -14,25 +14,25 @@ describe('gateway candidate URLs', () => {
 
   test('a tailnet hostname keeps the Serve HTTPS endpoint first', () => {
     const urls = buildGatewayCandidates({
-      configuredHosts: ['ethanspc.example.ts.net'],
+      configuredHosts: ['my-pc.example.ts.net'],
       includeLocalFallbacks: false,
     });
-    expect(urls[0]).toBe('https://ethanspc.example.ts.net:443');
-    expect(urls).toContain('http://ethanspc.example.ts.net:8760');
-    expect(urls).toContain('http://ethanspc.example.ts.net:8642');
+    expect(urls[0]).toBe('https://my-pc.example.ts.net:443');
+    expect(urls).toContain('http://my-pc.example.ts.net:8760');
+    expect(urls).toContain('http://my-pc.example.ts.net:8642');
   });
 
   test('routes are ordered widest-reach first, LAN last', () => {
     // Hostname works anywhere DNS resolves; the tailnet IP works anywhere on
     // the tailnet without DNS; the LAN IP works only at home but needs neither.
     const urls = buildGatewayCandidates({
-      configuredHosts: ['ethanspc.example.ts.net', '100.101.102.103', '192.168.1.30'],
+      configuredHosts: ['my-pc.example.ts.net', '100.101.102.103', '192.168.1.30'],
       includeLocalFallbacks: false,
     });
     expect(urls).toEqual([
-      'https://ethanspc.example.ts.net:443',
-      'http://ethanspc.example.ts.net:8760',
-      'http://ethanspc.example.ts.net:8642',
+      'https://my-pc.example.ts.net:443',
+      'http://my-pc.example.ts.net:8760',
+      'http://my-pc.example.ts.net:8642',
       'http://100.101.102.103:8760',
       'http://100.101.102.103:8642',
       'http://192.168.1.30:8760',
@@ -42,7 +42,7 @@ describe('gateway candidate URLs', () => {
 
   test('hostname and IP together give a fallback when DNS is unavailable', () => {
     const urls = buildGatewayCandidates({
-      configuredHosts: ['ethanspc.example.ts.net', '100.101.102.103'],
+      configuredHosts: ['my-pc.example.ts.net', '100.101.102.103'],
       includeLocalFallbacks: false,
     });
     // Every hostname candidate needs DNS; the IP is the one that does not.

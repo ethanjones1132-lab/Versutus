@@ -153,22 +153,22 @@ async function main() {
 
   console.log('\n[gateway URL candidates]');
   const tailnetCandidates = buildGatewayCandidates({
-    tailscaleHost: 'ethanspc.example.ts.net',
+    tailscaleHost: 'my-pc.example.ts.net',
     platform: 'android',
   });
   check(
     'Tailscale Serve candidate uses HTTPS :443',
-    tailnetCandidates[0] === 'https://ethanspc.example.ts.net:443',
+    tailnetCandidates[0] === 'https://my-pc.example.ts.net:443',
     tailnetCandidates,
   );
   check(
     'Gate candidate uses HTTP :8760, ahead of the Hermes fallback',
-    tailnetCandidates[1] === 'http://ethanspc.example.ts.net:8760',
+    tailnetCandidates[1] === 'http://my-pc.example.ts.net:8760',
     tailnetCandidates,
   );
   check(
     'direct Hermes fallback uses HTTP :8642',
-    tailnetCandidates[2] === 'http://ethanspc.example.ts.net:8642',
+    tailnetCandidates[2] === 'http://my-pc.example.ts.net:8642',
     tailnetCandidates,
   );
   check(

@@ -8,7 +8,7 @@ import { validatePcAddress } from '@/lib/onboarding/validate-pc-address';
 describe('validatePcAddress', () => {
   test.each([
     ['studio.tailnet.ts.net', 'a tailnet hostname — what onboarding asks for'],
-    ['ethans-pc.tail1234.ts.net', 'a hostname with digits and a hyphen'],
+    ['my-pc.tail1234.ts.net', 'a hostname with digits and a hyphen'],
     ['studio.tailnet.ts.net:8760', 'a hostname with the Gate port'],
     ['host-1.local', 'a mDNS name with a digit in its first label'],
   ])('accepts %s (%s)', (value) => {
@@ -16,9 +16,9 @@ describe('validatePcAddress', () => {
   });
 
   test.each([
-    ['100.81.238.109', 'a tailnet IP'],
+    ['100.64.0.20', 'a tailnet IP'],
     ['192.168.1.5', 'a LAN IP'],
-    ['100.81.238.109:8760', 'a tailnet IP with a port'],
+    ['100.64.0.20:8760', 'a tailnet IP with a port'],
     ['192.168.1.10:8760', 'a LAN IP with the Gate port'],
   ])('accepts %s (%s)', (value) => {
     expect(validatePcAddress(value).valid).toBe(true);
@@ -55,7 +55,7 @@ describe('validatePcAddress', () => {
 
   test('rejects a bare single-label name', () => {
     // No dot: not a hostname by this pattern, not an IP either.
-    expect(validatePcAddress('ethanspc').valid).toBe(false);
+    expect(validatePcAddress('my-pc').valid).toBe(false);
   });
 
   // ONB-2: the old check stripped up to five port digits and validated only

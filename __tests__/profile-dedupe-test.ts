@@ -7,20 +7,20 @@ const profile = (overrides: Partial<GatewayProfile> & { id: string; url: string 
   ...overrides,
 });
 
-// 2026-09-16: "Gateway" and "Ethanspc" were two saved profiles for the same
+// 2026-09-16: "Gateway" and "My-pc" were two saved profiles for the same
 // Gate URL, created by two different add paths that never looked for an
 // existing profile. One carried the token and one did not, so which one the
 // app connected to decided whether requests authenticated.
 
 describe('collapsing saved profiles that point at the same gateway', () => {
   test('two profiles for one URL become one, keeping the one that has the token', () => {
-    const tokenless = profile({ id: 'gw-ethanspc', name: 'Ethanspc', url: 'http://ethanspc.example.ts.net:8760', kind: 'custom' });
-    const tokened = profile({ id: 'gw-gateway', name: 'Gateway', url: 'http://ethanspc.example.ts.net:8760/', token: 'secret', kind: 'custom' });
-    const result = collapseDuplicateGateways([tokenless, tokened], 'gw-ethanspc');
+    const tokenless = profile({ id: 'gw-my-pc', name: 'My PC', url: 'http://my-pc.example.ts.net:8760', kind: 'custom' });
+    const tokened = profile({ id: 'gw-gateway', name: 'Gateway', url: 'http://my-pc.example.ts.net:8760/', token: 'secret', kind: 'custom' });
+    const result = collapseDuplicateGateways([tokenless, tokened], 'gw-my-pc');
     expect(result.gateways).toHaveLength(1);
     expect(result.gateways[0].id).toBe('gw-gateway');
     expect(result.gateways[0].token).toBe('secret');
-    expect(result.idMap).toEqual({ 'gw-ethanspc': 'gw-gateway' });
+    expect(result.idMap).toEqual({ 'gw-my-pc': 'gw-gateway' });
     expect(result.activeId).toBe('gw-gateway');
     expect(result.changed).toBe(true);
   });
@@ -74,7 +74,7 @@ describe('collapsing saved profiles that point at the same gateway', () => {
 describe('adding a profile for a gateway that is already saved', () => {
   test('updates the saved profile instead of creating a second one, keeping a fresh token', () => {
     const saved = profile({ id: 'gw-gateway', name: 'Gateway', url: 'http://h:8760', token: 'old', botModels: { anvil: 'kilo/glm-5.3' } });
-    const incoming = profile({ id: 'gw-new', name: 'Ethanspc', url: 'http://h:8760/', token: 'fresh', kind: 'custom' });
+    const incoming = profile({ id: 'gw-new', name: 'My-pc', url: 'http://h:8760/', token: 'fresh', kind: 'custom' });
     const result = mergeIntoExistingGateway([saved], incoming);
     expect(result.gateways).toHaveLength(1);
     expect(result.profile.id).toBe('gw-gateway');

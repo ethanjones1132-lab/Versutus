@@ -10,7 +10,7 @@ import type { GatewayProfile } from '@/lib/gateway/types';
 // the real provider lives in gateway-provider-token-fanout-test.tsx; these are
 // its two rules, on their own.
 
-const GATE_URL = 'http://ethanspc.tail1234.ts.net:8760';
+const GATE_URL = 'http://my-pc.tail1234.ts.net:8760';
 const TAILNET_IP = '100.101.102.103';
 const TAILNET_URL = `http://${TAILNET_IP}:8760`;
 
@@ -25,7 +25,7 @@ const profile = (overrides: Partial<GatewayProfile> & { id: string; url: string 
 function poisonedRoster(): GatewayProfile[] {
   return [
     profile({ id: 'paired', url: GATE_URL, token: 't', model: 'kilo/glm-5.3' }),
-    profile({ id: 'twin', name: 'Ethanspc', url: TAILNET_URL, sessionKey: 'sk' }),
+    profile({ id: 'twin', name: 'My-pc', url: TAILNET_URL, sessionKey: 'sk' }),
   ];
 }
 

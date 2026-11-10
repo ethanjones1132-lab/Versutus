@@ -6,7 +6,7 @@ You do the heavy lifting. This brief has only the facts that were verified befor
 
 ## The bug, as Ethan saw it (Android phone, 2026-09-18 19:52 local / 23:52Z)
 
-Chat with the **Hermes** Bot via **Ethanspc**, thread "Untitled". Tap the call button → sheet
+Chat with the **Hermes** Bot via **My-pc**, thread "Untitled". Tap the call button → sheet
 "Start a hands-free call with Untitled?" → **Using: This PC — local voice** → Start call →
 red error:
 

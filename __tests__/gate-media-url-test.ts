@@ -2,16 +2,16 @@ import { mediaSocketUrl } from '@/lib/voice/gate-media-url';
 
 describe('the Gate media socket URL', () => {
   test('rewrites http to ws on the same host and port', () => {
-    expect(mediaSocketUrl('http://ethanspc.example.ts.net:8760', '/v1/voice/stream')).toBe(
-      'ws://ethanspc.example.ts.net:8760/v1/voice/stream',
+    expect(mediaSocketUrl('http://my-pc.example.ts.net:8760', '/v1/voice/stream')).toBe(
+      'ws://my-pc.example.ts.net:8760/v1/voice/stream',
     );
   });
 
   test('rewrites https to wss and never to ws', () => {
-    expect(mediaSocketUrl('https://ethanspc.example.ts.net:8760', '/v1/voice/stream')).toBe(
-      'wss://ethanspc.example.ts.net:8760/v1/voice/stream',
+    expect(mediaSocketUrl('https://my-pc.example.ts.net:8760', '/v1/voice/stream')).toBe(
+      'wss://my-pc.example.ts.net:8760/v1/voice/stream',
     );
-    expect(mediaSocketUrl('https://ethanspc.example.ts.net:8760', '/v1/voice/stream')).not.toMatch(
+    expect(mediaSocketUrl('https://my-pc.example.ts.net:8760', '/v1/voice/stream')).not.toMatch(
       /^ws:/,
     );
   });

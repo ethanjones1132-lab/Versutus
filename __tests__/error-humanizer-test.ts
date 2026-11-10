@@ -69,7 +69,7 @@ describe('humanizeGatewayError', () => {
   it('maps a MagicDNS miss to a lookup verdict, not a raw Java exception', () => {
     const result = humanizeGatewayError(
       new Error(
-        'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.example.ts.net"',
+        'fetch failed: java.net.UnknownHostException: Unable to resolve host "my-pc.example.ts.net"',
       ),
     );
     expect(result.title).toMatch(/look up your PC/i);

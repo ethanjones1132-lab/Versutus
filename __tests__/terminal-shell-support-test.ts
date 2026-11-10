@@ -212,25 +212,25 @@ describe('resolveShellSupport', () => {
 
 describe('describeShellUnavailable', () => {
   test('unsupported states the fact and names the gateway', () => {
-    const copy = describeShellUnavailable('unsupported', 'ethanspc');
+    const copy = describeShellUnavailable('unsupported', 'my-pc');
     expect(copy.title).toBe('No shell on this gateway');
-    expect(copy.description).toContain('ethanspc');
+    expect(copy.description).toContain('my-pc');
     expect(copy.description).toContain('does not offer');
   });
 
   test('unknown defers judgement instead of claiming absence', () => {
-    const copy = describeShellUnavailable('unknown', 'ethanspc');
+    const copy = describeShellUnavailable('unknown', 'my-pc');
     expect(copy.title).not.toBe('No shell on this gateway');
     expect(copy.description).toContain('Still confirming');
-    expect(copy.description).toContain('ethanspc');
+    expect(copy.description).toContain('my-pc');
   });
 
   test('a scope-limited gateway gets the "not confirmed" copy, not the no-shell copy', () => {
     const support = resolveShellSupport(snapshotWith('fresh', [group('missing-scope')]));
     if (support === 'ready') throw new Error('a scope-limited group must not read as ready');
-    const copy = describeShellUnavailable(support, 'ethanspc');
+    const copy = describeShellUnavailable(support, 'my-pc');
     expect(copy.title).toBe('Shell not confirmed yet');
     expect(copy.description).not.toContain('does not offer');
-    expect(copy.description).toContain('ethanspc');
+    expect(copy.description).toContain('my-pc');
   });
 });
