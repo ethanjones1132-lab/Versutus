@@ -1716,10 +1716,11 @@ test('abort cancels the active turn', async () => {
 test('an approval reply reaches the session permission route', async () => {
   const { calls, fetchImpl } = stubFetch({ 'POST /session/ses_abc/permission/perm_1/reply': { ok: true } });
   const backend = createOpenCodeBackend({ baseUrl: 'http://127.0.0.1:4096', fetchImpl });
-  await backend.replyApproval('ses_abc', 'perm_1', 'approve');
+  // K1: the Gate answers OpenCode only with once or reject, never always.
+  await backend.replyApproval('ses_abc', 'perm_1', 'once');
   const reply = calls.find((call) => call.method === 'POST');
   assert.equal(reply?.path, '/session/ses_abc/permission/perm_1/reply');
-  assert.equal(reply?.body.reply, 'approve');
+  assert.equal(reply?.body.reply, 'once');
 });
 
 // ─── guarded-server credentials ──────────────────────────────────────
