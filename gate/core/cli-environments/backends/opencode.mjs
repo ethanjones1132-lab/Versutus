@@ -10,6 +10,7 @@ import {
   toPublicAgentBot,
   validateBotId,
 } from '../opencode-agents.mjs';
+import { assertOpenCodeReply } from '../opencode-permissions.mjs';
 
 /**
  * OpenCode as a chat backend.
@@ -551,7 +552,7 @@ export function createOpenCodePartTracker() {
  * `field:'text'` delta is routed by the type of the part it names — reasoning
  * to `message.reasoning.delta`, answer text to `message.delta`.
  */
-export function normalizeOpenCodeEvent(event, tracker) {
+export function normalizeOpenCodeEvent(event, tracker, owner = {}) {
   if (!event?.type) return null;
   const props = event.properties ?? {};
   const sessionId = props.sessionID;
@@ -623,12 +624,31 @@ export function normalizeOpenCodeEvent(event, tracker) {
       return frame('run.failed', { sessionId, error: props.error });
     case 'permission.asked':
     case 'permission.v2.asked':
+      {
+      const permission = props.action ?? props.permission;
+      const resources = props.resources ?? props.patterns;
+      const metadata = {
+        ...(typeof props.metadata?.command === 'string' ? { command: props.metadata.command } : {}),
+        ...(typeof props.metadata?.tool === 'string' ? { tool: props.metadata.tool } : {}),
+        ...(typeof props.metadata?.description === 'string' ? { description: props.metadata.description } : {}),
+      };
       return frame('approval.required', {
         sessionId,
         approvalId: props.id,
-        action: props.action ?? props.permission,
-        resources: props.resources ?? props.patterns,
+        action: permission,
+        permission,
+        tool: metadata.tool ?? props.source ?? props.tool ?? null,
+        command: metadata.command ?? null,
+        resources,
+        patterns: props.patterns ?? [],
+        save: props.save ?? props.always ?? [],
+        metadata,
+        source: props.source ?? props.tool ?? null,
+        session: sessionId,
+        backendId: owner.backendId ?? null,
+        botId: owner.botId ?? null,
       });
+      }
     default:
       break;
   }
@@ -746,6 +766,7 @@ export function createOpenCodeBackend({
   // The workspace directory every v2 session-scoped call is location-scoped
   // to (`?location[directory]=…`); v1 ignores it.
   directory = null,
+  record,
   // The silence bounds are injectable so a test proves the failure without
   // waiting one out; production takes the exported defaults.
   firstOutputIdleMs = OPENCODE_FIRST_OUTPUT_IDLE_MS,
@@ -756,6 +777,7 @@ export function createOpenCodeBackend({
   agentsDir,
   // The Gate only ever serves free models here (ADR 0016).
   freeOnly = true,
+  permissionBridge,
   writeFile = writeFileAtomic,
   readText = (path) => readFile(path, 'utf8'),
   removeFile = unlink,
@@ -763,6 +785,7 @@ export function createOpenCodeBackend({
 } = {}) {
   const root = String(baseUrl).replace(/\/+$/, '');
   const workspace = typeof directory === 'string' && directory ? directory : null;
+  const backendId = record?.id ?? null;
 
   /**
    * The detected server major, cached for the backend's lifetime. A server
@@ -1033,7 +1056,7 @@ export function createOpenCodeBackend({
    * to emit no success-terminal bus frame, so the wait route's 204 is the
    * authoritative "session went idle" signal there.
    */
-  function openTurnBus(sessionId, model, signal, major = 1) {
+  function openTurnBus(sessionId, model, signal, major = 1, botId = null) {
     const controller = new AbortController();
     const runningTools = new Set();
     let startedOutput = false;
@@ -1172,7 +1195,7 @@ export function createOpenCodeBackend({
     let subscription = null;
     if (!settled) {
       arm();
-      subscription = backend.streamEvents(sessionId, onEvent, controller.signal);
+      subscription = backend.streamEvents(sessionId, onEvent, controller.signal, botId);
       // A feed that fails is silence from then on: the bound still ends the
       // turn, and the wait re-reads the session before it calls it dead.
       Promise.resolve(subscription).catch(() => {
@@ -1281,9 +1304,9 @@ export function createOpenCodeBackend({
    * "fallback" would only double-submit a turn the server may already be
    * running.
    */
-  async function sendMessageV2(sessionId, { text, model, signal } = {}) {
+  async function sendMessageV2(sessionId, { text, model, signal, agent } = {}) {
     const session = encodeURIComponent(sessionId);
-    const turn = openTurnBus(sessionId, model, signal, 2);
+    const turn = openTurnBus(sessionId, model, signal, 2, agent);
     // The ready wait answers to the caller's signal as well as its own ceiling:
     // a Stop pressed while the subscription is opening is released at once.
     await turn.ready;
@@ -1408,7 +1431,7 @@ export function createOpenCodeBackend({
      */
     async sendMessage(sessionId, { text, model, signal, agent } = {}) {
       const { major } = await serverProfile();
-      if (major >= 2) return sendMessageV2(sessionId, { text, model, signal });
+      if (major >= 2) return sendMessageV2(sessionId, { text, model, signal, agent });
       const body = { parts: [{ type: 'text', text }] };
       if (agent) body.agent = agent;
       if (model?.providerId) {
@@ -1420,7 +1443,7 @@ export function createOpenCodeBackend({
       // Subscribe first, post second, and record when the send went out: the
       // session's messages are read back against this mark, so the previous
       // turn's answer can never be passed off as this one's.
-      const turn = openTurnBus(sessionId, model, signal, 1);
+      const turn = openTurnBus(sessionId, model, signal, 1, agent);
       // The ready wait answers to the caller's signal as well as its own
       // ceiling: a Stop pressed while the subscription is opening is released
       // here at once instead of after the ready window.
@@ -1476,6 +1499,7 @@ export function createOpenCodeBackend({
     },
 
     async replyApproval(sessionId, requestId, reply) {
+      assertOpenCodeReply(reply);
       const { major } = await serverProfile();
       if (major >= 2) {
         await call(
@@ -1626,11 +1650,14 @@ export function createOpenCodeBackend({
         sendMessage(sessionId, options = {}) {
           return backend.sendMessage(sessionId, { ...options, agent: id });
         },
+        streamEvents(sessionId, onEvent, signal) {
+          return backend.streamEvents(sessionId, onEvent, signal, id);
+        },
       };
     },
 
     /** Read the shared bus, exposing its ready point before a turn is sent. */
-    streamEvents(sessionId, onEvent, signal) {
+    streamEvents(sessionId, onEvent, signal, botId = null) {
       let resolveReady;
       let rejectReady;
       const ready = new Promise((resolve, reject) => {
@@ -1670,6 +1697,21 @@ export function createOpenCodeBackend({
           reader = response.body?.getReader();
           if (!reader) throw new Error('OpenCode event stream has no body');
           resolveReady();
+          if (permissionBridge) {
+            // Taken before the read: a request that shows up on the stream
+            // while the snapshot is in flight is newer than it, not missing.
+            const asOf = permissionBridge.mark?.();
+            try {
+              const path = major >= 2
+                ? `/api/session/${encodeURIComponent(sessionId)}/permission${locationQuery()}`
+                : `/session/${encodeURIComponent(sessionId)}/permission`;
+              const pending = await call(path, {}, readTimeoutMs, major >= 2 ? 2 : 1);
+              permissionBridge.reconcile(sessionId, pending, asOf);
+            } catch {
+              // An unavailable snapshot cannot prove a permission is expired;
+              // later asked/replied events and reply-side 404s still reconcile.
+            }
+          }
           const decoder = new TextDecoder();
           let buffer = '';
           const toolCalls = new Map();
@@ -2047,6 +2089,11 @@ export function createOpenCodeBackend({
               const scoped = scopeToSession(parsed, sessionId);
               if (!scoped) continue;
               parsed = scoped;
+              if (permissionBridge && (parsed.type === 'permission.asked' || parsed.type === 'permission.v2.asked')) {
+                Promise.resolve(permissionBridge.asked(parsed, botId)).catch(() => undefined);
+              } else if (permissionBridge && (parsed.type === 'permission.replied' || parsed.type === 'permission.v2.replied')) {
+                permissionBridge.replied(parsed);
+              }
               // The role of a message lives only on `message.updated`, and the
               // bus does not promise it lands before the parts of that message.
               if (parsed.type === 'message.updated') {
@@ -2077,7 +2124,7 @@ export function createOpenCodeBackend({
               if (parsed.type === 'message.part.updated') {
                 flushPartDeltas(parsed.properties?.part?.id);
               }
-              let normalized = normalizeOpenCodeEvent(parsed, parts);
+              let normalized = normalizeOpenCodeEvent(parsed, parts, { backendId, botId });
               const callId = normalized?.payload?.callId;
               if (normalized?.type === 'tool.started' && callId) {
                 let state = toolCalls.get(callId);
@@ -2229,5 +2276,7 @@ export function createOpenCodeBackend({
     },
   };
 
+  permissionBridge?.setReplyApproval?.((sessionId, requestId, reply) =>
+    backend.replyApproval(sessionId, requestId, reply));
   return backend;
 }

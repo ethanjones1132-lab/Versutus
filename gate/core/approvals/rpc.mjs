@@ -26,14 +26,37 @@ function rpcError(message, status, code) {
   return error;
 }
 
-async function decide(store, approvalId, decision) {
+async function decide(store, approvalId, decision, params = {}) {
   const id = typeof approvalId === 'string' ? approvalId.trim() : '';
   if (!id) throw rpcError('approvalId is required', 400, 'invalid_request');
   if (!store || typeof store.decide !== 'function') {
     throw rpcError('This Gate cannot decide approvals.', 501, 'approvals_unavailable');
   }
-  if (!store.get(id)) throw rpcError(`Unknown approval "${id}"`, 404, 'unknown_approval');
+  const pending = store.get(id);
+  if (!pending) throw rpcError(`Unknown approval "${id}"`, 404, 'unknown_approval');
+  if (pending.request?.adapterId === 'opencode') {
+    const namedDecisions = [params.decision, params.reply].filter((value) => value !== undefined);
+    const expected = decision === 'approve' ? new Set(['approve', 'once']) : new Set(['deny', 'reject']);
+    if (namedDecisions.some((value) => !expected.has(value))) {
+      throw rpcError('OpenCode approvals support only once (approve) or reject (deny)', 400, 'invalid_approval_decision');
+    }
+    const owner = pending.request;
+    const claims = [
+      ['backendId', owner.backendId ?? owner.environmentId],
+      ['environmentId', owner.environmentId],
+      ['botId', owner.botId],
+      ['sessionId', owner.sessionId ?? owner.runId],
+    ];
+    for (const [field, expected] of claims) {
+      if (params[field] !== undefined && params[field] !== expected) {
+        throw rpcError(`Approval ${field} does not match its owner`, 403, 'approval_owner_mismatch');
+      }
+    }
+  }
   const entry = await store.decide(id, decision);
+  if (pending.request?.adapterId === 'opencode' && (!entry?.approvalId || entry.reason === 'unknown approval')) {
+    throw rpcError(`Unknown approval "${id}"`, 404, 'unknown_approval');
+  }
   return { approvalId: entry.approvalId, decision: entry.decision };
 }
 
@@ -46,12 +69,12 @@ export function createApprovalRpc({ approvals = null } = {}) {
 
     'approval.approve': async (params = {}, ctx) => {
       requireDevice(ctx);
-      return decide(approvals, params.approvalId, 'approve');
+      return decide(approvals, params.approvalId, 'approve', params);
     },
 
     'approval.deny': async (params = {}, ctx) => {
       requireDevice(ctx);
-      return decide(approvals, params.approvalId, 'deny');
+      return decide(approvals, params.approvalId, 'deny', params);
     },
   };
 

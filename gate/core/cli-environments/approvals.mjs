@@ -51,8 +51,31 @@ export class ApprovalService {
       environmentId: entry.request?.environmentId ?? null,
       operation: entry.request?.operation ?? null,
       summary: entry.request?.summary ?? null,
+      ...(entry.request?.adapterId === 'opencode' ? {
+        backendId: entry.request?.backendId ?? entry.request?.environmentId ?? null,
+        adapterId: 'opencode',
+        botId: entry.request?.botId ?? null,
+        sessionId: entry.request?.sessionId ?? entry.request?.runId ?? null,
+        context: entry.request?.context ?? null,
+      } : {}),
       createdAt: entry.createdAt,
     }));
+  }
+
+  /** Remove a native request which OpenCode resolved outside this inbox. */
+  withdraw(approvalId, reason = 'approval is no longer pending') {
+    const entry = this.pending.get(approvalId);
+    if (!entry) return null;
+    this.pending.delete(approvalId);
+    entry.decision = 'deny';
+    entry.withdrawn = true;
+    entry.withdrawReason = reason;
+    const waiters = this.waiters.get(approvalId);
+    if (waiters) {
+      this.waiters.delete(approvalId);
+      for (const resolve of waiters) resolve(entry);
+    }
+    return entry;
   }
 
   /**
@@ -75,6 +98,34 @@ export class ApprovalService {
     const entry = this.pending.get(approvalId);
     if (!entry) {
       return { decision: 'deny', reason: 'unknown approval' };
+    }
+    if (entry.request?.adapterId === 'opencode' && decision !== 'approve' && decision !== 'deny') {
+      const error = new Error('OpenCode approvals support only once (approve) or reject (deny)');
+      error.status = 400;
+      error.code = 'invalid_approval_decision';
+      throw error;
+    }
+    if (entry.request?.adapterId === 'opencode' && typeof entry.request.onDecision === 'function') {
+      if (entry.deciding) {
+        const error = new Error('OpenCode permission decision is already being forwarded');
+        error.status = 409;
+        error.code = 'approval_decision_in_progress';
+        throw error;
+      }
+      entry.deciding = true;
+      try {
+        await entry.request.onDecision(decision === 'approve' ? 'once' : 'reject');
+      } finally {
+        entry.deciding = false;
+      }
+      // OpenCode may have resolved the request on another client while this
+      // reply was in flight. Its lifecycle event remains authoritative.
+      if (this.pending.get(approvalId) !== entry) {
+        const error = new Error('OpenCode permission request is no longer pending');
+        error.status = 404;
+        error.code = 'unknown_approval';
+        throw error;
+      }
     }
     entry.decision = decision === 'approve' ? 'approve' : 'deny';
     this.pending.delete(approvalId);

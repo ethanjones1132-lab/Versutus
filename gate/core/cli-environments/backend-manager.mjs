@@ -2,6 +2,7 @@ import { createNativeServer } from './native-server.mjs';
 import { createStdioServer } from './stdio-server.mjs';
 import { isApprovalRequest } from './backends/codex.mjs';
 import { createPermissionBridge } from './claude-permissions.mjs';
+import { createOpenCodePermissionBridge } from './opencode-permissions.mjs';
 
 // How long a backend whose server will not start stays unretried. The first
 // cold read after a Gate restart otherwise pays the supervisor's whole start
@@ -329,6 +330,14 @@ export function createBackendManager({
     const cached = backends.get(environmentId);
     if (cached?.key === key) return cached.backend;
 
+    const opencodePermissionBridge = record.adapterId === 'opencode' && approvals
+      ? createOpenCodePermissionBridge({
+          approvals,
+          backendId: record.id,
+          environmentId: record.id,
+          timeoutMs: approvalTimeoutMs,
+        })
+      : undefined;
     const backend = isStdio
       ? adapter.createBackend({
           rpc: handle.rpc,
@@ -348,7 +357,12 @@ export function createBackendManager({
             if (result?.reason === 'unknown approval') throw noPendingApproval();
           },
         })
-      : adapter.createBackend({ baseUrl: handle.baseUrl, credentials, record });
+      : adapter.createBackend({
+          baseUrl: handle.baseUrl,
+          credentials,
+          record,
+          ...(opencodePermissionBridge ? { permissionBridge: opencodePermissionBridge } : {}),
+        });
     backends.set(environmentId, { key, backend });
     return backend;
   }
