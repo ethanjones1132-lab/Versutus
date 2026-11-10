@@ -17,7 +17,7 @@ export type WizardCtaState = {
   locked: boolean;
   /** Scan strip / timeline / probe-message theater should animate. */
   theaterBusy: boolean;
-  label: 'Connecting…' | 'Connect gateway';
+  label: 'Connecting…' | 'Connect your PC';
 };
 
 export function deriveWizardCta(working: boolean, connectionPhase: ConnectionPhase): WizardCtaState {
@@ -26,6 +26,6 @@ export function deriveWizardCta(working: boolean, connectionPhase: ConnectionPha
   return {
     locked: working,
     theaterBusy: working || connecting || searching,
-    label: working ? 'Connecting…' : 'Connect gateway',
+    label: working ? 'Connecting…' : 'Connect your PC',
   };
 }

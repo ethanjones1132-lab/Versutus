@@ -418,7 +418,7 @@ describe('terminal RPC pane host', () => {
     expect(source).toMatch(/keyExtractor=\{\(\) => 'result'\}/);
     expect(source).toMatch(/ListHeaderComponent=\{/);
     expect(source).toMatch(/ListHeaderComponent=\{[\s\S]*?<GatewayCommandPanel/);
-    expect(source).toMatch(/ListEmptyComponent=\{[\s\S]*?Run a command to inspect/);
+    expect(source).toMatch(/ListEmptyComponent=\{[\s\S]*?Choose a command above/);
     expect(source).toMatch(/onOpenOutput=\{\(\) => setLogSheetVisible\(true\)\}/);
     expect(source).toMatch(/import \{ FlatList,/);
   });

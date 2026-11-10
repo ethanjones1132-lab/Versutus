@@ -301,7 +301,7 @@ describe("Onboarding's Connect cannot be stopped by a haptic (ONB-3)", () => {
     await mount(createElement(OnboardingScreen));
 
     await act(async () => {
-      press('Connect gateway');
+      press('Connect your PC');
     });
     await settle();
 
@@ -316,7 +316,7 @@ describe("Onboarding's Connect cannot be stopped by a haptic (ONB-3)", () => {
     await mount(createElement(OnboardingScreen));
 
     await act(async () => {
-      press('Connect gateway');
+      press('Connect your PC');
     });
     await settle();
 
@@ -325,7 +325,7 @@ describe("Onboarding's Connect cannot be stopped by a haptic (ONB-3)", () => {
     expect(card).toBeTruthy();
     expect((card.props as { cause?: string }).cause).toContain('keychain');
     // `working` cleared through the `finally`, so the form is not locked.
-    expect(buttonWithLabel('Connect gateway').disabled).toBe(false);
+    expect(buttonWithLabel('Connect your PC').disabled).toBe(false);
   });
 
   test('a successful connect navigates even when the native call throws synchronously', async () => {
@@ -334,7 +334,7 @@ describe("Onboarding's Connect cannot be stopped by a haptic (ONB-3)", () => {
     await mount(createElement(OnboardingScreen));
 
     await act(async () => {
-      press('Connect gateway');
+      press('Connect your PC');
     });
     await settle();
 
@@ -345,10 +345,10 @@ describe("Onboarding's Connect cannot be stopped by a haptic (ONB-3)", () => {
 describe('the onboarding Retry button still fires its handler (ONB-1)', () => {
   test('Retry calls retryAutoConnect while haptics reject', async () => {
     await mount(createElement(OnboardingScreen));
-    expect(buttonWithLabel('Retry')).toBeTruthy();
+    expect(buttonWithLabel('Try again')).toBeTruthy();
 
     await act(async () => {
-      press('Retry');
+      press('Try again');
     });
     await settle();
 
@@ -360,7 +360,7 @@ describe('the onboarding Retry button still fires its handler (ONB-1)', () => {
     await mount(createElement(OnboardingScreen));
 
     await act(async () => {
-      press('Retry');
+      press('Try again');
     });
     await settle();
 
@@ -371,7 +371,7 @@ describe('the onboarding Retry button still fires its handler (ONB-1)', () => {
     connectFails = true;
     await mount(createElement(OnboardingScreen));
     await act(async () => {
-      press('Connect gateway');
+      press('Connect your PC');
     });
     await settle();
     mockGateway.setupFromPcAddress.mockClear();

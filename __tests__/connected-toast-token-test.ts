@@ -15,13 +15,14 @@ function readToastSource(): string {
   return readSource(['src', 'components', 'connected-toast.tsx']);
 }
 
-test('the toast shadow is sourced from the Palette overlay token', () => {
+test('the toast floats on a boxShadow, not the deprecated shadow props', () => {
   const src = readToastSource();
-  // The shadow sits beside the other token colors in the same inline block.
-  expect(src).toContain('shadowColor: tokens.overlay');
+  expect(src).toContain("boxShadow: '0 4px 12px rgba(0, 0, 0, 0.25)'");
   expect(src).toContain('backgroundColor: tokens.backgroundRaised');
   expect(src).toContain('borderColor: tokens.statusConnectedMuted');
-  // The hardcoded literal is gone from the whole file.
+  // The deprecated family is gone from the whole file.
+  expect(src).not.toMatch(/\bshadow(Color|Opacity|Radius|Offset)\s*:/);
+  expect(src).not.toMatch(/\belevation\s*:/);
   expect(src).not.toContain("'#000'");
   expect(src).not.toContain('"#000"');
 });

@@ -39,7 +39,7 @@ describe('Gateway auto-connect Switch screen-reader state', () => {
     // screen, and the new accessibilityState must not regress any of them.
     expect(src).toContain('value={settings.autoConnect}');
     expect(src).toContain('onValueChange={(value) => void setAutoConnect(value)}');
-    expect(src).toContain('trackColor={{ true: tokens.accent, false: tokens.border }}');
+    expect(src).toContain('trackColor={{ true: tokens.accent, false: tokens.controlTrackOff }}');
     expect(src).toContain('thumbColor={tokens.textPrimary}');
   });
 

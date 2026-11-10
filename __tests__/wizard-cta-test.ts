@@ -7,7 +7,7 @@ describe('deriveWizardCta', () => {
     // unreachable for minutes on a machine where discovery only gets 403s.
     const state = deriveWizardCta(false, 'searching');
     expect(state.locked).toBe(false);
-    expect(state.label).toBe('Connect gateway');
+    expect(state.label).toBe('Connect your PC');
     // The theater should still animate so discovery looks alive.
     expect(state.theaterBusy).toBe(true);
   });
@@ -24,7 +24,7 @@ describe('deriveWizardCta', () => {
     // this form's submit — the typed form must stay actionable.
     const state = deriveWizardCta(false, 'connecting');
     expect(state.locked).toBe(false);
-    expect(state.label).toBe('Connect gateway');
+    expect(state.label).toBe('Connect your PC');
     expect(state.theaterBusy).toBe(true);
   });
 
@@ -32,12 +32,12 @@ describe('deriveWizardCta', () => {
     expect(deriveWizardCta(false, 'idle')).toEqual({
       locked: false,
       theaterBusy: false,
-      label: 'Connect gateway',
+      label: 'Connect your PC',
     });
     expect(deriveWizardCta(false, 'failed')).toEqual({
       locked: false,
       theaterBusy: false,
-      label: 'Connect gateway',
+      label: 'Connect your PC',
     });
   });
 

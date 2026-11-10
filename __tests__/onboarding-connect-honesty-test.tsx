@@ -339,7 +339,7 @@ describe('ONB-2: a port no socket can be asked for never reads "ready"', () => {
     await typeAddress(address);
 
     expect(texts()).toContain('Ports go from 1 to 65535.');
-    expect(button('Connect gateway')?.disabled).toBe(true);
+    expect(button('Connect your PC')?.disabled).toBe(true);
     expect(mockGateway.setupFromPcAddress).not.toHaveBeenCalled();
   });
 
@@ -350,7 +350,7 @@ describe('ONB-2: a port no socket can be asked for never reads "ready"', () => {
       await typeAddress(address);
 
       expect(texts()).toContain('Looks good');
-      expect(button('Connect gateway')?.disabled).toBeFalsy();
+      expect(button('Connect your PC')?.disabled).toBeFalsy();
     },
   );
 });

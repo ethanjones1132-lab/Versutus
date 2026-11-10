@@ -95,7 +95,7 @@ describe('every gateway and settings flow the tone pass left alone', () => {
     const source = management();
     for (const needle of [
       'onValueChange={(value) => void setAutoConnect(value)}',
-      'trackColor={{ true: tokens.accent, false: tokens.border }}',
+      'trackColor={{ true: tokens.accent, false: tokens.controlTrackOff }}',
       'onPress={discovery.rescan}',
       'discovery.status === \'scanning\'',
       '<CompactGatewayList',
