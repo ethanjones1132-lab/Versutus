@@ -31,15 +31,33 @@ const V2_AGENTS = [
   { id: 'scout', name: 'Scout', mode: 'subagent', hidden: false, request: {}, permissions: [] },
 ];
 
+const V2_MODELS = [
+  { id: 'big-pickle', modelID: 'big-pickle', providerID: 'opencode', status: 'active', cost: [{ input: 0, output: 0, cache: { read: 0, write: 0 } }] },
+  { id: 'paid-one', modelID: 'paid-one', providerID: 'opencode', status: 'active', cost: [{ input: 3, output: 15, cache: { read: 0, write: 0 } }] },
+  { id: 'old-free', modelID: 'old-free', providerID: 'opencode', status: 'deprecated', cost: [{ input: 0, output: 0, cache: { read: 0, write: 0 } }] },
+  { id: 'unpriced', modelID: 'unpriced', providerID: 'opencode', status: 'active', cost: [] },
+];
+
+const V2_SESSIONS = [
+  { id: 'ses_r', title: 'review', agent: 'reviewer', time: { created: 1, updated: 2 } },
+  { id: 'ses_b', title: 'plain', agent: 'build', time: { created: 1, updated: 2 } },
+];
+
 function v2Server() {
   const requests = [];
   const fetchImpl = async (url, init = {}) => {
     const path = String(url).replace(/^https?:\/\/[^/]+/, '');
-    requests.push({ method: init.method ?? 'GET', path, auth: init.headers?.Authorization });
+    const method = init.method ?? 'GET';
+    requests.push({ method, path, auth: init.headers?.Authorization, body: init.body ? JSON.parse(init.body) : undefined });
     if (path === '/session') return html; // the v2 probe: the SPA catch-all
     if (path === '/api/info') return json({ version: '2.2.6' });
-    if (path.startsWith('/agent')) return html; // the real 2.x answer to the v1 route
+    if (path.startsWith('/agent') || path.startsWith('/config/')) return html; // the real 2.x answer to v1 routes
     if (path.startsWith('/api/agent')) return json({ data: V2_AGENTS });
+    if (path.startsWith('/api/model')) return json({ data: V2_MODELS });
+    if (path.startsWith('/api/session') && method === 'GET') return json({ data: V2_SESSIONS });
+    if (path.startsWith('/api/session') && method === 'POST') {
+      return json({ data: { id: 'ses_new', title: 'x', agent: JSON.parse(init.body ?? '{}').agent, time: { created: 3 } } });
+    }
     return json({ name: 'NotFound' }, 404);
   };
   return { requests, fetchImpl };
@@ -80,4 +98,40 @@ test('fromV2Agent marks built-in and hidden agents native and maps the model ref
   assert.deepEqual(mine.model, { modelID: 'm1', providerID: 'p1' });
   assert.equal(fromV2Agent({ name: 'no-id', mode: 'primary' }), null);
   assert.equal(fromV2Agent(null), null);
+});
+
+test('a 2.x Bot sees only its own sessions, read from Session.Info.agent', async () => {
+  const { fetchImpl } = v2Server();
+  const backend = createOpenCodeBackend({ baseUrl: 'http://127.0.0.1:4096', fetchImpl });
+  const bot = await backend.forBot('reviewer');
+  assert.deepEqual((await bot.listSessions()).map((session) => session.id), ['ses_r']);
+});
+
+test('a 2.x Bot opens a new session as its agent', async () => {
+  const { requests, fetchImpl } = v2Server();
+  const backend = createOpenCodeBackend({ baseUrl: 'http://127.0.0.1:4096', fetchImpl });
+  const bot = await backend.forBot('reviewer');
+  const created = await bot.createSession({ title: 'x' });
+  const post = requests.find((request) => request.method === 'POST' && request.path.startsWith('/api/session'));
+  assert.equal(post.body.agent, 'reviewer');
+  assert.equal(created.bot, 'reviewer');
+});
+
+test('the free-only rule holds on 2.x: a Bot may name a free model, never a paid, retired or unpriced one', async () => {
+  const { fetchImpl } = v2Server();
+  const backend = createOpenCodeBackend({ baseUrl: 'http://127.0.0.1:4096', fetchImpl });
+  const bot = await backend.forBot('reviewer');
+  // createSession is where the check runs before any session exists.
+  await bot.createSession({ model: { providerId: 'opencode', modelId: 'big-pickle' } });
+  for (const modelId of ['paid-one', 'old-free', 'unpriced', 'not-listed']) {
+    await assert.rejects(
+      bot.createSession({ model: { providerId: 'opencode', modelId } }),
+      (error) => error.code === 'model_not_free',
+      `${modelId} must be refused`,
+    );
+  }
+  await assert.rejects(
+    backend.sendMessage('ses_r', { text: 'hi', agent: 'reviewer', model: { providerId: 'opencode', modelId: 'paid-one' } }),
+    (error) => error.code === 'model_not_free',
+  );
 });

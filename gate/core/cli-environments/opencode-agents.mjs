@@ -75,6 +75,36 @@ export function flattenModels(config) {
 }
 
 /**
+ * The same free test for a 2.x catalog row (GET /api/model, Model.Info): cost
+ * is a list of price tiers, so a model is free only when it has at least one
+ * tier and every tier prices input and output at zero, and it is not retired.
+ * An empty or missing cost list proves nothing, so it is not free.
+ */
+export function isFreeModelV2(model) {
+  if (!model || model.status === 'deprecated') return false;
+  const tiers = model.cost;
+  if (!Array.isArray(tiers) || tiers.length === 0) return false;
+  return tiers.every((tier) => tier?.input === 0 && tier?.output === 0);
+}
+
+/**
+ * 2.x catalog rows in flattenModels' shape. A model is matched by its modelID
+ * and, when it differs, by its ref id too, since the Gate sends `id` in a
+ * Model.Ref and lists `modelID`.
+ */
+export function flattenModelsV2(models) {
+  const rows = [];
+  for (const model of Array.isArray(models) ? models : []) {
+    const providerId = model?.providerID;
+    if (typeof providerId !== 'string' || !providerId) continue;
+    const free = isFreeModelV2(model);
+    const ids = new Set([model.modelID, model.id].filter((value) => typeof value === 'string' && value));
+    for (const modelId of ids) rows.push({ providerId, modelId, free });
+  }
+  return rows;
+}
+
+/**
  * Pick the pin for a Bot. An explicit choice must exist and, when the Gate is
  * free-only, be free; no choice falls back to the server's default if that is
  * free, else the first free model, so an unpinned Bot can never drift onto a

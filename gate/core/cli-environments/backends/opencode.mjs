@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { writeFileAtomic } from '../../atomic-file.mjs';
 import {
   flattenModels,
+  flattenModelsV2,
   fromV2Agent,
   isBotAgent,
   renderAgentFile,
@@ -102,6 +103,9 @@ export function toGatewaySessionV2(session) {
     preview: session.title ?? null,
     has_system_prompt: false,
     has_model_config: Boolean(session.model),
+    // The agent the session runs as (Session.Info.agent): forBot's roster
+    // keeps only its own Bot's sessions by this field, as with v1.
+    bot: typeof session.agent === 'string' && session.agent ? session.agent : null,
   };
 }
 
@@ -1248,6 +1252,14 @@ export function createOpenCodeBackend({
   };
 
   async function readModels() {
+    const { major } = await serverProfile();
+    if (major >= 2) {
+      // 2.x answers /config/providers with its web app; the catalog with
+      // prices is /api/model. Its default model is not part of that list, so
+      // none is claimed here.
+      const models = await call(`/api/model${locationQuery()}`, {}, readTimeoutMs, 2);
+      return { rows: flattenModelsV2(models), defaults: {} };
+    }
     const config = await call('/config/providers');
     return { rows: flattenModels(config), defaults: config?.default ?? {} };
   }
@@ -1402,6 +1414,8 @@ export function createOpenCodeBackend({
       if (major >= 2) {
         const body = {};
         if (title) body.title = title;
+        // session.create takes the agent, so a Bot's new session starts as it.
+        if (agent) body.agent = agent;
         if (model?.providerId) body.model = { providerID: model.providerId, id: model.modelId };
         const payload = await call(`/api/session${locationQuery()}`, { method: 'POST', body: JSON.stringify(body) }, readTimeoutMs, 2);
         return toGatewaySessionV2(payload);
@@ -1452,7 +1466,11 @@ export function createOpenCodeBackend({
      */
     async sendMessage(sessionId, { text, model, signal, agent } = {}) {
       const { major } = await serverProfile();
-      if (major >= 2) return sendMessageV2(sessionId, { text, model, signal, agent });
+      if (major >= 2) {
+        // The same free-only rule as v1: a Bot's turn may name only a free model.
+        if (freeOnly && agent && model?.providerId) await assertFreeModel(model);
+        return sendMessageV2(sessionId, { text, model, signal, agent });
+      }
       const body = { parts: [{ type: 'text', text }] };
       if (agent) body.agent = agent;
       if (model?.providerId) {

@@ -241,6 +241,10 @@ function startServer({
 
     if (path === `/api/session/${SESSION_ID}/model` && method === 'POST') return emptyReply(204);
     if (path === `/api/session/${SESSION_ID}/agent` && method === 'POST') return emptyReply(204);
+    // A Bot's v2 turn checks its model against the priced catalog first.
+    if (path.startsWith('/api/model') && method === 'GET') {
+      return reply({ data: [{ id: MODEL.modelId, modelID: MODEL.modelId, providerID: MODEL.providerId, status: 'active', cost: [{ input: 0, output: 0 }] }] });
+    }
     if (path === `/api/session/${SESSION_ID}/prompt` && method === 'POST') {
       state.promptSignal = init.signal ?? null;
       state.posted.resolve();
