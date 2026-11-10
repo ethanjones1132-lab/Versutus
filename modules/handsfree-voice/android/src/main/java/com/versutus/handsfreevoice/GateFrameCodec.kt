@@ -72,6 +72,10 @@ sealed class GateFrame {
     object End : Phone() {
       override val t get() = "end"
     }
+
+    data class Played(val gen: Long, val atMs: Long) : Phone() {
+      override val t get() = "played"
+    }
   }
 }
 
@@ -87,7 +91,7 @@ object GateFrameCodec {
   private val GATE_TYPES = setOf(
     "ready", "phase", "partial", "final", "turn", "reply", "speech", "level", "approval", "error", "ended",
   )
-  private val PHONE_TYPES = setOf("mute", "skip", "bargein", "end")
+  private val PHONE_TYPES = setOf("mute", "skip", "bargein", "end", "played")
   private val PHASES = setOf("opening", "listening", "thinking", "speaking", "muted")
   private val TURN_STATES = setOf("sent", "replying", "done", "failed")
   private val SPEECH_STATES = setOf("start", "end", "cancelled", "gap")
@@ -104,12 +108,17 @@ object GateFrameCodec {
       }
       "skip" -> GateFrame.Phone.Skip
       "bargein" -> GateFrame.Phone.BargeIn
+      "played" -> GateFrame.Phone.Played(
+        requireNumber(frame, "gen").toLong(),
+        requireNumber(frame, "atMs").toLong(),
+      )
       else -> GateFrame.Phone.End
     }
   }
 
   fun encodePhone(frame: GateFrame.Phone): String = when (frame) {
     is GateFrame.Phone.Mute -> JSONObject().put("t", frame.t).put("on", frame.on).toString()
+    is GateFrame.Phone.Played -> JSONObject().put("t", frame.t).put("gen", frame.gen).put("atMs", frame.atMs).toString()
     else -> JSONObject().put("t", frame.t).toString()
   }
 

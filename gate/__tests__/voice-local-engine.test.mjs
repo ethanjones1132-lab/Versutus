@@ -159,14 +159,14 @@ test('worker notifications become engine events', async () => {
 
   const finals = [];
   const speech = [];
-  engine.on('final', (event) => finals.push(event.text));
+  engine.on('final', (event) => finals.push(event));
   engine.on('speechAudio', (event) => speech.push(event));
 
-  notify(children[0], 'voice.final', { text: 'hello' });
+  notify(children[0], 'voice.final', { text: 'hello', eosMs: 1234, decodeMs: 56 });
   const pcm = Buffer.from([1, 2, 3, 4]);
   notify(children[0], 'voice.speechAudio', { gen: 2, chunk: { data: pcm.toString('base64'), sampleRate: 24000, numChannels: 1 } });
 
-  assert.deepEqual(finals, ['hello']);
+  assert.deepEqual(finals, [{ text: 'hello', eosMs: 1234, decodeMs: 56 }]);
   assert.equal(speech.length, 1);
   assert.equal(speech[0].gen, 2);
   assert.deepEqual(speech[0].pcm, pcm);

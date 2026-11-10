@@ -864,7 +864,13 @@ def test_a_failed_decode_is_reported_and_the_call_keeps_hearing():
     events.clear()
     pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
     pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
-    assert events == [("voice.final", {"text": "hello there"})]
+    final = events[0][1]
+    assert events[0][0] == "voice.final"
+    assert final["text"] == "hello there"
+    assert isinstance(final["eosMs"], float)
+    assert final["eosMs"] > 0
+    assert isinstance(final["decodeMs"], float)
+    assert final["decodeMs"] >= 0
 
 
 # ─── Round 4: one warm process, many calls ──────────────────────────────────

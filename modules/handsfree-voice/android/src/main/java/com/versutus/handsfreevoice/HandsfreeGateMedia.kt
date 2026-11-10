@@ -80,6 +80,7 @@ class HandsfreeGateMedia(
   )
   private val playbackLock = Any()
   @Volatile private var currentGen = 0L
+  private val playedGens = mutableSetOf<Long>()
 
   fun start(context: Context, url: String, token: String, voiceSessionId: String) {
     stop()
@@ -88,6 +89,7 @@ class HandsfreeGateMedia(
     captureState.setRunning(true)
     sawEnded = false
     currentGen = 0L
+    playedGens.clear()
     buffer.flush()
 
     val streamUrl = buildStreamUrl(url, voiceSessionId)
@@ -356,7 +358,17 @@ class HandsfreeGateMedia(
       PlaybackLoop(
         isRunning = { running },
         drain = { buffer.drain() },
-        write = { pcm -> synchronized(playbackLock) { track.write(pcm, 0, pcm.size) } },
+        write = { pcm ->
+          // W5 serialises writes with cancel; W3 reports the first audible sample of each generation.
+          val written = synchronized(playbackLock) { track.write(pcm, 0, pcm.size) }
+          val gen = currentGen
+          if (written > 0) {
+            val firstForGen = synchronized(playedGens) { playedGens.add(gen) }
+            if (firstForGen) {
+              socket?.send(GateFrameCodec.encodePhone(GateFrame.Phone.Played(gen, System.currentTimeMillis())))
+            }
+          }
+        },
       ).run()
     }.also { it.name = "gate-playback"; it.start() }
     return true

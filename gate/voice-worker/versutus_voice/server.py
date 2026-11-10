@@ -131,6 +131,7 @@ class VoicePipeline:
     def open(self, params):
         self._reset()
         self._session = (params or {}).get("voiceSessionId")
+        self._call_started_ms = time.time() * 1000.0
         return {"ok": True}
 
     def close(self, params):
@@ -195,14 +196,14 @@ class VoicePipeline:
             if event.kind == "speech_start":
                 self._start_speech(pcm, before)
             elif event.kind == "speech_end":
-                self._end_speech()
+                self._end_speech(self._call_started_ms + event.at_ms)
 
         # An utterance the VAD never closes would grow for the whole call and
         # be re-decoded from the start on every partial. Past the cap it ends
         # exactly as a speech-end would, and the audio that keeps arriving opens
         # the next one.
         if self._speaking and len(self._buffer) > self._max_utterance_bytes:
-            self._end_speech(force=True)
+            self._end_speech(time.time() * 1000.0, force=True)
             self._utterance += 1
             self._speaking = True
             self._last_partial = 0
@@ -213,7 +214,7 @@ class VoicePipeline:
                 if self._turn.decide(pending["pcm"], pending["silence_ms"]) == "complete":
                     held = pending["pcm"]
                     self._pending = None
-                    self._finalize(held)
+                    self._finalize(held, pending["eos_ms"])
                 else:
                     # Re-judge a window later, but never past the force point —
                     # decide() forces completion once silence passes it.
@@ -226,7 +227,7 @@ class VoicePipeline:
             window_bytes = int(INPUT_SAMPLE_RATE * _PARTIAL_WINDOW_MS / 1000) * 2
             if len(self._buffer) - self._last_partial >= window_bytes:
                 self._last_partial = len(self._buffer)
-                self._queue_recognition(("partial", self._utterance, self._partial_pcm(), False))
+                self._queue_recognition(("partial", self._utterance, self._partial_pcm(), False, None))
         return {"ok": True}
 
     def _report_bad_chunk(self, message):
@@ -264,7 +265,7 @@ class VoicePipeline:
         self._buffer = bytearray(held) + (b"" if held else before) + pcm
         self._preroll = bytearray()
 
-    def _end_speech(self, force=False):
+    def _end_speech(self, eos_ms, force=False):
         """Close the open utterance: the VAD's speech_end, or the length cap.
 
         Both go through the same finalisation. A capped one is *forced*: a cut
@@ -276,7 +277,7 @@ class VoicePipeline:
             # Never overwrite a held segment with a newer one: it is earlier
             # audio, so it is sent first.
             held, self._pending = self._pending, None
-            self._finalize(held["pcm"])
+            self._finalize(held["pcm"], held["eos_ms"])
         self._speaking = False
         if not self._buffer:
             return
@@ -284,22 +285,23 @@ class VoicePipeline:
         self._buffer.clear()
         self._last_partial = 0
         if force:
-            self._finalize(utterance)
+            self._finalize(utterance, eos_ms)
         elif self._turn is None:
             # No Smart Turn installed: a pause ends the turn.
-            self._finalize(utterance)
+            self._finalize(utterance, eos_ms)
         elif len(utterance) < self._min_utterance_bytes:
             # A blip is not a turn, however confident the judge.
             return
         elif self._turn.confident(utterance, silence_ms=self._vad.silence_ms):
             # A confident verdict at the first pause is an early end: the Gate
             # may start the Bot turn before the final.
-            self._finalize(utterance, early_end=True)
+            self._finalize(utterance, eos_ms, early_end=True)
         else:
             # An unsure verdict is a thinking pause. Hold it and
             # re-judge at 600 ms of silence, forcing at 1.6 s.
             self._pending = {
                 "pcm": utterance,
+                "eos_ms": eos_ms,
                 "silence_ms": self._vad.silence_ms,
                 "next_judge_ms": self._turn.rejudge_ms,
             }
@@ -313,12 +315,12 @@ class VoicePipeline:
         window = getattr(self._transcriber, "window", None)
         return bytes(window(self._buffer)) if callable(window) else bytes(self._buffer)
 
-    def _finalize(self, pcm, early_end=False):
+    def _finalize(self, pcm, eos_ms=None, early_end=False):
         # Too short to be a sentence: a cough or a door is not a turn, and
         # sending it is what made calls "send prematurely".
         if len(pcm) < self._min_utterance_bytes:
             return
-        self._queue_recognition(("final", self._utterance, pcm, early_end))
+        self._queue_recognition(("final", self._utterance, pcm, early_end, eos_ms))
 
     def speak(self, params):
         params = params or {}
@@ -508,8 +510,9 @@ class VoicePipeline:
                     self._stt_worker = None
 
     def _recognise(self, job):
-        kind, _utterance, pcm, early_end = job
+        kind, _utterance, pcm, early_end, eos_ms = job
         epoch = self._epoch
+        decode_started = time.perf_counter()
         try:
             text = self._transcriber.partial(pcm) if kind == "partial" else self._transcriber.final(pcm)
         except Exception as error:  # noqa: BLE001 - one bad decode is not the end of the call
@@ -531,11 +534,11 @@ class VoicePipeline:
             return
         if kind == "partial":
             self._emit("voice.partial", {"text": text})
-        elif early_end:
-            self._emit("voice.earlyEnd", {"text": text})
-            self._emit("voice.final", {"text": text})
         else:
-            self._emit("voice.final", {"text": text})
+            decode_ms = (time.perf_counter() - decode_started) * 1000.0
+            if early_end:
+                self._emit("voice.earlyEnd", {"text": text})
+            self._emit("voice.final", {"text": text, "eosMs": eos_ms, "decodeMs": decode_ms})
 
 
 class RpcServer:

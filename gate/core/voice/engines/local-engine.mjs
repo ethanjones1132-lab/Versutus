@@ -256,7 +256,11 @@ export class LocalEngine extends EventEmitter {
     if (method === 'voice.ready') {
       void this._reopen();
     } else if (method === 'voice.partial') this.emit('partial', { text: params.text });
-    else if (method === 'voice.final') this.emit('final', { text: params.text });
+    else if (method === 'voice.final') this.emit('final', {
+      text: params.text,
+      eosMs: params.eosMs,
+      decodeMs: params.decodeMs,
+    });
     else if (method === 'voice.earlyEnd') this.emit('earlyEnd', { text: params.text });
     else if (method === 'voice.speechAudio') {
       const chunk = params.chunk ?? {};

@@ -81,4 +81,12 @@ class GateFrameCodecTest {
     val skip = JSONObject(GateFrameCodec.encodePhone(GateFrame.Phone.Skip))
     assertEquals("skip", skip.getString("t"))
   }
+
+  @Test fun playedFrameCarriesGenerationAndPhoneTimestamp() {
+    val encoded = JSONObject(GateFrameCodec.encodePhone(GateFrame.Phone.Played(7, 1234)))
+    assertEquals("played", encoded.getString("t"))
+    assertEquals(7L, encoded.getLong("gen"))
+    assertEquals(1234L, encoded.getLong("atMs"))
+    assertEquals(GateFrame.Phone.Played(7, 1234), GateFrameCodec.parsePhone(encoded.toString()))
+  }
 }

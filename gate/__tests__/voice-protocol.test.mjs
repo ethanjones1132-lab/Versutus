@@ -33,6 +33,12 @@ test('every phone frame in the shared fixture parses', () => {
   }
 });
 
+test('played frames require and preserve generation and phone timestamp', () => {
+  const frame = { t: 'played', gen: 4, atMs: 1234 };
+  assert.deepEqual(parsePhoneFrame(JSON.stringify(frame)), frame);
+  assert.throws(() => parsePhoneFrame('{"t":"played","gen":4}'), VoiceProtocolError);
+});
+
 test('every Gate frame in the shared fixture parses', () => {
   for (const frame of fixture.gateToPhone) {
     assert.deepEqual(parseGateFrame(JSON.stringify(frame)), frame);

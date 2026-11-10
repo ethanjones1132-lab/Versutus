@@ -25,7 +25,17 @@ const DOCUMENTED_FIELDS = [
   'secondsListening',
   'secondsSpeaking',
   'p50FirstAudioMs',
+  'p90FirstAudioMs',
   'p50FirstReplyMs',
+  'p90FirstReplyMs',
+  'p50EosToCommitMs',
+  'p90EosToCommitMs',
+  'p50DecodeMs',
+  'p90DecodeMs',
+  'p50SentenceToPcmMs',
+  'p90SentenceToPcmMs',
+  'p50PlayedMs',
+  'p90PlayedMs',
   'error',
 ];
 

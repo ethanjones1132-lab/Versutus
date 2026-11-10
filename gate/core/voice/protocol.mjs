@@ -6,7 +6,7 @@
 
 export const MAX_FRAME_BYTES = 4096;
 
-export const PHONE_FRAME_TYPES = Object.freeze(['mute', 'skip', 'bargein', 'end']);
+export const PHONE_FRAME_TYPES = Object.freeze(['mute', 'skip', 'bargein', 'end', 'played']);
 export const GATE_FRAME_TYPES = Object.freeze([
   'ready',
   'phase',
@@ -93,6 +93,8 @@ export function parsePhoneFrame(value) {
         return { t: 'skip' };
       case 'bargein':
         return { t: 'bargein' };
+      case 'played':
+        return { t: 'played', gen: requireNumber(frame, 'gen'), atMs: requireNumber(frame, 'atMs') };
       default:
         return { t: 'end' };
     }
