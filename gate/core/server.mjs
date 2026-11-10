@@ -64,6 +64,7 @@ import {
 import { createModelHealth, healthScopeId, modelHealthKey } from './model-health.mjs';
 import { isModelFault } from './model-fault.mjs';
 import { collectActivity, parseActivitySince, withActivityTimeout } from './activity.mjs';
+import { collectRoutines, withRoutineTimeout } from './routines.mjs';
 import { curateModels } from './model-curation.mjs';
 import { backendUpstreamRefusal } from './upstream-refusal.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
@@ -2510,6 +2511,7 @@ export async function createGate(config = {}) {
       const isKnownAuthenticatedRoute =
         (pathname === '/v1/models' && method === 'GET') ||
         (pathname === '/v1/activity' && method === 'GET') ||
+        (pathname === '/v1/routines' && method === 'GET') ||
         (pathname === '/v1/providers' && method === 'GET') ||
         /^\/v1\/providers\/[^/]+$/.test(pathname) ||
         /^\/p\/[^/]+\/v1\/models$/.test(pathname) ||
@@ -2651,6 +2653,49 @@ export async function createGate(config = {}) {
         } catch (error) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: error?.message ?? 'Could not read activity', code: 'activity_read_failed' } }));
+        }
+        return;
+      }
+
+      // Every backend's routines in one read, mirroring /v1/activity's coverage
+      // contract. It is a read, so it needs no device scope, and the per-host
+      // timeout keeps one unresponsive environment from holding the list.
+      if (pathname === '/v1/routines' && method === 'GET') {
+        const requestedBackendId = url.searchParams.get('backendId') || undefined;
+        let entries;
+        try {
+          entries = (await backendManager.list())
+            .filter((entry) => !requestedBackendId || entry.id === requestedBackendId);
+        } catch (error) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error?.message ?? 'Could not list backends', code: 'routines_read_failed' } }));
+          return;
+        }
+        const backends = await Promise.all(entries.map(async (entry) => {
+          const canListJobs = await backendCanServe(entry, 'listJobs');
+          return {
+            id: entry.id,
+            label: entry.label,
+            // Omitted, not faked: collectRoutines reads the absence as
+            // unavailable and the app explains why instead of showing zero.
+            ...(canListJobs ? {
+              listJobs: async () => {
+                return withRoutineTimeout(Promise.resolve().then(async () => {
+                  const backend = await backendManager.get(entry.id);
+                  if (typeof backend.listJobs !== 'function') throw new Error('Routines are unavailable');
+                  return backend.listJobs();
+                }));
+              },
+            } : {}),
+          };
+        }));
+        try {
+          const result = await collectRoutines({ backendId: requestedBackendId, backends });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error?.message ?? 'Could not read routines', code: 'routines_read_failed' } }));
         }
         return;
       }
