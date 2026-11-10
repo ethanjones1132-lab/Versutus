@@ -5,6 +5,7 @@ and a cancelled generation stops mid-sentence rather than finishing (§4.5).
 """
 
 from .audio import OUTPUT_SAMPLE_RATE
+from .speakable import speakable
 
 _TERMINATORS = ".!?"
 
@@ -47,7 +48,9 @@ class SpeechSynthesizer:
 
     def speak(self, text, gen):
         """Yield ``(gen, pcm)`` per sentence chunk, stopping on cancel."""
-        for sentence in split_sentences(text):
+        # Clean before splitting so fences and URLs never reach Kokoro as
+        # words, while sentence pauses still match what is spoken (U6).
+        for sentence in split_sentences(speakable(text)):
             for pcm in self.synthesize(sentence):
                 if self.is_cancelled(gen):
                     return
