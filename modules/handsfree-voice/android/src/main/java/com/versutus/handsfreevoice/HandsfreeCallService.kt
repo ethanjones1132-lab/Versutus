@@ -184,6 +184,7 @@ class HandsfreeCallService : Service() {
       deliverStart(if (state.isActive) "started" else "unavailable")
       return false
     }
+    HandsfreeGateMediaOwner.beginCall()
     notificationTitle = title
     try {
       startForegroundWithNotification(title)
@@ -929,6 +930,7 @@ class HandsfreeCallService : Service() {
   fun setMuted(muted: Boolean) {
     mainHandler.post {
       if (!state.setMuted(muted)) return@post
+      HandsfreeGateMediaOwner.setMuted(muted)
       if (muted) {
         listening = false
         cancelTick()
@@ -1002,6 +1004,7 @@ class HandsfreeCallService : Service() {
     // second pass has nothing left to do.
     if (destroyed) return
     destroyed = true
+    HandsfreeGateMediaOwner.stop()
     listening = false
     readyForSpeech = false
     stopRequested = false

@@ -318,7 +318,9 @@ export function attachVoiceMediaSocket({
       // resume window exists for — would then leak a 1 Hz timer per re-attach.
       clearAudioTimer();
       audioTimer = setInterval(() => {
-        if (ws && now() - lastAudioAt > noAudioTimeoutMs) ws.close(1001, 'idle');
+        // A muted phone intentionally sends no PCM. Its mute control proves
+        // liveness; only an unmuted silent call is idle.
+        if (ws && call.phase !== 'muted' && now() - lastAudioAt > noAudioTimeoutMs) ws.close(1001, 'idle');
       }, Math.min(noAudioTimeoutMs, 1000));
       audioTimer.unref?.();
     };
@@ -713,7 +715,10 @@ export function attachVoiceMediaSocket({
         // on: the lease tracks liveness, not protocol correctness.
         registry.markActivity(session.voiceSessionId);
         const control = parsePhoneFrame(data.toString());
-        if (control.t === 'mute') dispatch({ type: control.on ? 'mute' : 'unmute' });
+        if (control.t === 'mute') {
+          lastAudioAt = now();
+          dispatch({ type: control.on ? 'mute' : 'unmute' });
+        }
         else if (control.t === 'skip' || control.t === 'bargein') {
           dispatch({ type: control.t });
         } else {

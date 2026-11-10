@@ -26,7 +26,10 @@ import java.util.concurrent.TimeUnit
  * stale audio, then forwarded to JS unchanged. Incoming binary frames are PCM
  * for the current generation and go through [JitterBuffer].
  */
-class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
+class HandsfreeGateMedia(
+  private val onFrame: (String) -> Unit,
+  initiallyMuted: Boolean = false,
+) {
   companion object {
     const val CAPTURE_SAMPLE_RATE = 16000
     const val PLAYBACK_SAMPLE_RATE = 24000
@@ -53,11 +56,18 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
     .build()
 
   @Volatile private var running = false
+  @Volatile private var stopped = false
+  private val captureState = GateCaptureState()
+  private val captureLock = Any()
+  @Volatile private var socketOpen = false
+  private var lastMuteFrameSent: Boolean? = null
+
+  init { captureState.setMuted(initiallyMuted) }
   @Volatile private var sawEnded = false
   private var socket: WebSocket? = null
   private var captureThread: Thread? = null
   private var playbackThread: Thread? = null
-  private var audioRecord: AudioRecord? = null
+  private var micSource: MicSource? = null
   private var audioTrack: AudioTrack? = null
   private var echoCanceler: AcousticEchoCanceler? = null
   private var noiseSuppressor: NoiseSuppressor? = null
@@ -70,7 +80,9 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
 
   fun start(context: Context, url: String, token: String, voiceSessionId: String) {
     stop()
+    stopped = false
     running = true
+    captureState.setRunning(true)
     sawEnded = false
     currentGen = 0L
     buffer.flush()
@@ -91,10 +103,40 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
     }
   }
 
-  fun sendControl(json: String): Boolean = socket?.send(json) ?: false
+  fun sendControl(json: String): Boolean {
+    val control = try {
+      GateFrameCodec.parsePhone(json)
+    } catch (_: Exception) {
+      null
+    }
+    if (control is GateFrame.Phone.Mute) return setMuted(control.on)
+    return socket?.send(json) ?: false
+  }
+
+  fun setMuted(muted: Boolean): Boolean {
+    synchronized(captureLock) {
+      captureState.setMuted(muted)
+    }
+    return sendMuteIfOpen(muted)
+  }
+
+  internal fun isMuted(): Boolean = captureState.isMuted()
+  internal fun isRunning(): Boolean = running
+  internal fun isStopped(): Boolean = stopped
+
+  private fun sendMuteIfOpen(muted: Boolean): Boolean = synchronized(captureLock) {
+    if (!socketOpen) return@synchronized false
+    if (lastMuteFrameSent == muted) return@synchronized true
+    val sent = socket?.send(GateFrameCodec.encodePhone(GateFrame.Phone.Mute(muted))) ?: false
+    if (sent) lastMuteFrameSent = muted
+    sent
+  }
 
   fun stop() {
+    stopped = true
     running = false
+    synchronized(captureLock) { captureState.setRunning(false) }
+    HandsfreeGateMediaOwner.detach(this)
     socket?.close(1000, "call ended")
     socket = null
     // Both loops end on `running`, so the interrupt is only a wake-up: they
@@ -107,11 +149,10 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
     echoCanceler = null
     noiseSuppressor?.release()
     noiseSuppressor = null
-    audioRecord?.runCatching {
-      if (recordingState == AudioRecord.RECORDSTATE_RECORDING) stop()
-      release()
-    }
-    audioRecord = null
+    micSource?.runCatching { stop(); release() }
+    micSource = null
+    socketOpen = false
+    lastMuteFrameSent = null
     audioTrack?.runCatching {
       if (playState == AudioTrack.PLAYSTATE_PLAYING) stop()
       release()
@@ -121,6 +162,12 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
   }
 
   private val listener = object : WebSocketListener() {
+    override fun onOpen(webSocket: WebSocket, response: Response) {
+      if (webSocket !== socket) return
+      socketOpen = true
+      sendMuteIfOpen(captureState.isMuted())
+    }
+
     // Every callback is identity-guarded: a replaced or stopped socket's
     // late frames must not reach the call a new socket now serves.
     override fun onMessage(webSocket: WebSocket, text: String) {
@@ -205,20 +252,33 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
       record.release()
       return false
     }
-    audioRecord = record
+    val source = AudioRecordMicSource(record)
+    micSource = source
     if (AcousticEchoCanceler.isAvailable()) {
       echoCanceler = AcousticEchoCanceler.create(record.audioSessionId)?.also { it.enabled = true }
     }
     if (NoiseSuppressor.isAvailable()) {
       noiseSuppressor = NoiseSuppressor.create(record.audioSessionId)?.also { it.enabled = true }
     }
-    record.startRecording()
+    captureState.attachSource(source)
     captureThread = Thread {
       val frame = ByteArray(CAPTURE_FRAME_BYTES)
       var failedReads = 0
       try {
         while (running) {
-          val read = record.read(frame, 0, frame.size)
+          if (!captureState.shouldRead()) {
+            Thread.sleep(READ_FAILURE_BACKOFF_MS)
+            continue
+          }
+          val read = synchronized(captureLock) {
+            captureState.readAndSend(source, frame) { bytes ->
+              socket?.send(ByteString.of(*bytes))
+            }
+          }
+          if (!captureState.shouldRead()) {
+            failedReads = 0
+            continue
+          }
           if (read <= 0) {
             // A record whose mic was taken by another app, or that lost audio
             // focus, fails every read at once: spinning on it burns the CPU for
@@ -232,7 +292,6 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
             continue
           }
           failedReads = 0
-          socket?.send(ByteString.of(*frame.copyOf(read)))
         }
       } catch (_: InterruptedException) {
         Thread.currentThread().interrupt()
@@ -293,4 +352,90 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
     val separator = if (normalized.contains('?')) '&' else '?'
     return "$normalized${separator}voiceSessionId=$voiceSessionId"
   }
+}
+
+/** Pure gate around AudioRecord reads, so mute behavior is JVM-testable. */
+internal class GateCaptureState {
+  @Volatile private var muted = false
+  @Volatile private var running = false
+  private var source: MicSource? = null
+
+  @Synchronized fun setMuted(value: Boolean): Boolean {
+    if (muted == value) return false
+    muted = value
+    updateSource()
+    return true
+  }
+  fun isMuted(): Boolean = muted
+  @Synchronized fun attachSource(value: MicSource) { source = value; updateSource() }
+  @Synchronized fun setRunning(value: Boolean) { running = value; updateSource() }
+  @Synchronized fun readAndSend(mic: MicSource, buffer: ByteArray, send: (ByteArray) -> Unit): Int {
+    if (!shouldRead()) return 0
+    val count = mic.read(buffer, 0, buffer.size)
+    if (count > 0 && shouldSend()) send(buffer.copyOf(count))
+    return count
+  }
+  // Stopping a recorder is not proof its buffer is empty, and restarting it is
+  // not proof the buffer was flushed: drain after both, so no sample captured
+  // while muted can ever be read (a restart gives up a few ms of fresh audio).
+  private fun updateSource() {
+    val current = source ?: return
+    runCatching {
+      if (running && !muted) {
+        current.start()
+        current.drain()
+      } else {
+        current.stop()
+        current.drain()
+      }
+    }
+  }
+  fun shouldRead(): Boolean = running && !muted
+  fun shouldSend(): Boolean = running && !muted
+}
+
+/** The service and module have separate lifetimes; this bridges their media instance. */
+internal object HandsfreeGateMediaOwner {
+  private var media: HandsfreeGateMedia? = null
+  private var closed = false
+  private var muted = false
+
+  @Synchronized fun beginCall() { closed = false; muted = false }
+  @Synchronized fun attach(value: HandsfreeGateMedia) {
+    if (closed) { value.stop(); return }
+    media = value
+    value.setMuted(muted)
+  }
+  @Synchronized fun detach(value: HandsfreeGateMedia) { if (media === value) media = null }
+  @Synchronized fun setMuted(value: Boolean) { muted = value; media?.setMuted(value) }
+  @Synchronized fun isMuted(): Boolean = muted
+  @Synchronized fun stop() {
+    closed = true
+    val current = media
+    media = null
+    current?.stop()
+  }
+}
+
+internal interface MicSource {
+  fun start()
+  fun stop()
+  fun read(buffer: ByteArray, offset: Int, length: Int): Int
+  /** Discards whatever the source has buffered, without blocking. */
+  fun drain()
+  fun release()
+}
+
+private class AudioRecordMicSource(private val record: AudioRecord) : MicSource {
+  override fun start() { if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) record.startRecording() }
+  override fun stop() { if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) record.stop() }
+  override fun read(buffer: ByteArray, offset: Int, length: Int): Int = record.read(buffer, offset, length)
+  override fun drain() {
+    val scratch = ByteArray(4096)
+    // Bounded: a live recorder refills while we read, and this must not spin.
+    repeat(64) {
+      if (record.read(scratch, 0, scratch.size, AudioRecord.READ_NON_BLOCKING) <= 0) return
+    }
+  }
+  override fun release() { record.release() }
 }

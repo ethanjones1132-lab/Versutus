@@ -683,6 +683,21 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         module.addListener('level', (event) => {
           level.value = clampLevel(event.level);
         }),
+        // Gate mode has no phone recognizer, but the call service still owns the
+        // call's lifetime: an audio-focus loss (a phone call), the notification's
+        // End and a native fatal error must end the call here too (bar R1, R2).
+        module.addListener('interruption', () => {
+          dispatch({ type: 'interruption' });
+        }),
+        module.addListener('endRequested', (event) => {
+          dispatch({
+            type: 'endRequested',
+            reason: event.reason === 'app-killed' ? 'app-killed' : undefined,
+          });
+        }),
+        module.addListener('fatalError', (event) => {
+          dispatch({ type: 'fatalError', reason: event.reason });
+        }),
       ];
     },
     [clearGateMute, dispatch, level, runGateEffect, unsubscribe],

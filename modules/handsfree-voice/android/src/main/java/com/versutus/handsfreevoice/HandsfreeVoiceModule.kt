@@ -197,11 +197,13 @@ class HandsfreeVoiceModule : Module() {
         return@AsyncFunction
       }
       gateMedia?.stop()
-      val media = HandsfreeGateMedia { frame ->
+      val media = HandsfreeGateMedia({ frame ->
         sendEvent("gate", mapOf("frame" to frame))
-      }
+      }, initiallyMuted = HandsfreeGateMediaOwner.isMuted())
       gateMedia = media
       media.start(context, url, token, voiceSessionId)
+      // After start: start() begins with stop(), which detaches whatever the owner held.
+      HandsfreeGateMediaOwner.attach(media)
       promise.resolve(true)
     }.runOnQueue(Queues.MAIN)
 
