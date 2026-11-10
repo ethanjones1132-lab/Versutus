@@ -240,6 +240,7 @@ function startServer({
     if (path === `/session/${SESSION_ID}/abort` && method === 'POST') return reply({ ok: true });
 
     if (path === `/api/session/${SESSION_ID}/model` && method === 'POST') return emptyReply(204);
+    if (path === `/api/session/${SESSION_ID}/agent` && method === 'POST') return emptyReply(204);
     if (path === `/api/session/${SESSION_ID}/prompt` && method === 'POST') {
       state.promptSignal = init.signal ?? null;
       state.posted.resolve();
@@ -577,4 +578,23 @@ test('a successful v2 send still posts once and completes from the wait route', 
   );
   assert.equal(waits.length, 1, 'the v2 completion witness must still be used');
   assertRetired(tracked, 'a healthy v2 turn must retire its abort listener');
+});
+
+test('a v2 Bot send switches the session to its agent before the model and the prompt', async () => {
+  const { backend, state } = startServer({ major: 2 });
+
+  const result = await backend.sendMessage(SESSION_ID, { text: 'say hi', model: MODEL, agent: 'reviewer' });
+
+  assert.equal(result.text, 'the answer');
+  // v2's prompt has no agent field (session.prompt), so without the switch a
+  // Bot's turn answered as the server's default agent.
+  assert.deepEqual(sessionPosts(state, V2), [`${V2}/agent`, `${V2}/model`, `${V2}/prompt`]);
+  const switched = state.requests.find((request) => request.path === `${V2}/agent`);
+  assert.deepEqual(switched.body, { agent: 'reviewer' });
+});
+
+test('a v2 send without a Bot leaves the session agent alone', async () => {
+  const { backend, state } = startServer({ major: 2 });
+  await backend.sendMessage(SESSION_ID, { text: 'say hi', model: MODEL });
+  assert.equal(sessionPosts(state, V2).includes(`${V2}/agent`), false);
 });

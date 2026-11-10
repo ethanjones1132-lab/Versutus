@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { writeFileAtomic } from '../../atomic-file.mjs';
 import {
   flattenModels,
+  fromV2Agent,
   isBotAgent,
   renderAgentFile,
   resolveModelPin,
@@ -1260,6 +1261,13 @@ export function createOpenCodeBackend({
   }
 
   async function readAgents() {
+    const { major } = await serverProfile();
+    if (major >= 2) {
+      // 2.x moved the list to /api/agent; its bare /agent is the web app's
+      // HTML, which is why a 2.x Gate showed no OpenCode Bots at all.
+      const agents = await call(`/api/agent${locationQuery()}`, {}, readTimeoutMs, 2);
+      return (Array.isArray(agents) ? agents : []).map(fromV2Agent).filter(Boolean);
+    }
     const agents = await call('/agent');
     return Array.isArray(agents) ? agents : [];
   }
@@ -1319,6 +1327,19 @@ export function createOpenCodeBackend({
     const sentAt = Date.now();
     let submitted = false;
     try {
+      // v2's prompt carries no agent; the session's agent is switched first
+      // (session.switchAgent), so a Bot answers as itself, not as `build`.
+      // Before the model switch, so an explicit model still wins over the
+      // agent's own pin.
+      if (agent) {
+        await call(
+          `/api/session/${session}/agent${locationQuery()}`,
+          { method: 'POST', body: JSON.stringify({ agent }) },
+          readTimeoutMs,
+          2,
+        );
+        if (signal?.aborted) throw turnAbortedError();
+      }
       if (model?.providerId && model?.modelId) {
         await call(
           `/api/session/${session}/model${locationQuery()}`,

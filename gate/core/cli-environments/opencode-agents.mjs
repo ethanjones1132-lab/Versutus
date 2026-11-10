@@ -20,6 +20,38 @@ export function isBotAgent(agent) {
 }
 
 /**
+ * The agents OpenCode 2.x registers itself (packages/core/src/plugin/agent.ts:
+ * build, general, explore, and the hidden compaction/title/summary), plus plan.
+ * v2's Agent.Info has no `native` flag, so these ids are how a built-in is told
+ * apart from an agent file the operator (or this Gate) wrote.
+ */
+export const V2_BUILTIN_AGENT_IDS = new Set(['build', 'plan', 'general', 'explore', 'compaction', 'title', 'summary']);
+
+/**
+ * One element of v2's `GET /api/agent` (Agent.Info: id, name, model {id,
+ * providerID}, system, description, mode, hidden) in the v1 shape the rest of
+ * this module reads (name is the id, model {providerID, modelID}, prompt,
+ * native). Without it a 2.x server's agents never become Bots: the v1 route
+ * answers 2.x with its web app, not the list.
+ */
+export function fromV2Agent(agent) {
+  if (!agent || typeof agent !== 'object') return null;
+  const id = typeof agent.id === 'string' && agent.id ? agent.id : null;
+  if (!id) return null;
+  const modelId = agent.model?.id;
+  return {
+    name: id,
+    ...(typeof agent.description === 'string' ? { description: agent.description } : {}),
+    mode: agent.mode,
+    native: V2_BUILTIN_AGENT_IDS.has(id) || agent.hidden === true,
+    ...(typeof agent.system === 'string' ? { prompt: agent.system } : {}),
+    ...(typeof modelId === 'string' && modelId
+      ? { model: { modelID: modelId, providerID: agent.model.providerID ?? null } }
+      : {}),
+  };
+}
+
+/**
  * A model is free when the server prices both directions at zero and the
  * catalog has not retired it. Cost is the server's own statement, so a paid key
  * added later never makes a paid model look free.
