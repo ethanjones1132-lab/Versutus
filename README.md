@@ -58,7 +58,7 @@ Deferred on purpose, and tracked: New Agent creation, routines, `@mention` hando
 - **Chat** — streaming markdown, executable-first slash command palette, sessions, model picker and `/model set` override, durable offline outbox, tool-call cards when the stream or history exposes them, inline run approvals.
 - **Activity** — start an agentic run, watch live events, approve or deny, stop, persisted history, profile-scoped gateway targets.
 - **Tools** — Shell when the gateway advertises a terminal; otherwise RPC / Agent.
-- **Discovery** — LAN beacons, Tailscale candidates, saved profiles, manual add, `versutus://add` deep links.
+- **Connecting** — saved gateways, configured host candidates (Tailscale names or LAN IPs) probed on launch, manual add, `versutus://add` deep links. Automatic LAN discovery (mDNS) is not in this build: its native module crashed under the New Architecture.
 - **Identity** — SecureStore-backed profiles, tokens, device identity; Gate pairing for custom and OpenClaw access grants.
 - **Voice** — hold-to-talk dictation into the composer (never auto-sends), optional per-Bot spoken replies, and a separate opt-in hands-free call. See [Voice](#voice).
 
@@ -117,7 +117,7 @@ npm install
 npm start          # then: npm run android | npm run ios | npm run web
 ```
 
-Point the app at a gateway by saved profile, LAN discovery, or deep link:
+Point the app at a gateway by saved profile, a configured host, or deep link:
 
 ```text
 versutus://add?url=https%3A%2F%2Fpc.example.ts.net&token=API_KEY&name=Home%20PC&agentId=main

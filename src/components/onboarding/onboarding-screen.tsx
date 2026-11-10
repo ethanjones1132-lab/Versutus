@@ -224,7 +224,7 @@ export function OnboardingScreen() {
               <TextField
                 value={pcAddress}
                 onChangeText={setPcAddress}
-                placeholder="ethanspc.example.ts.net"
+                placeholder="my-pc.tailnet.ts.net"
                 autoCapitalize="none"
                 autoCorrect={false}
                 validationState={fieldState}
