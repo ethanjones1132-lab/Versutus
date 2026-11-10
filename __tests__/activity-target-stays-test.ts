@@ -43,7 +43,6 @@ describe('activity gateway target stays on Activity', () => {
     const select = readSelect();
     expect(select).toContain('void connectGateway(gateway)');
     expect(select).not.toContain("router.push('/chat')");
-    expect(readActivity()).not.toContain("router.push('/chat')");
   });
 
   test('the tap still calls connectGateway with the tapped gateway profile', () => {
@@ -68,10 +67,11 @@ describe('activity gateway target stays on Activity', () => {
     expect(src).toContain('onPress={() => void startRun()}');
   });
 
-  test('the Home dashboard Chat hops stay on that tab, not this one', () => {
+  test('the Home dashboard Chat hops stay on that tab, not on a gateway tap', () => {
     const dashboard = readDashboard();
     expect(dashboard).toContain("onOpenChat={() => router.push('/chat')}");
     expect(dashboard).toContain("router.push('/chat')");
-    expect(readActivity()).not.toContain("router.push('/chat')");
+    // Only Today's session rows open Chat; selecting a gateway still stays put.
+    expect(readSelect()).not.toContain("router.push('/chat')");
   });
 });

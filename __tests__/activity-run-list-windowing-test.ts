@@ -49,10 +49,10 @@ describe('runs list windowing', () => {
     expect(src).toContain('ListHeaderComponent=');
     expect(src).toContain('ListFooterComponent=');
     expect(src).toContain('startCard');
-    // The cron section and the approval card stay on the Activity tab, which
-    // no longer carries the run list this destination extracted.
+    // Activity delegates its live feed and approval surface to TodaySection;
+    // scheduled work remains behind Routines.
     const tab = readCronTabSource();
+    expect(tab).toContain('<TodaySection');
     expect(tab).toContain('<CronSection cronReloadSignal={cronReloadSignal} />');
-    expect(tab).toContain('ApprovalDecisionCard');
   });
 });

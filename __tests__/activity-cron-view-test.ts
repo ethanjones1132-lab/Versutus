@@ -17,21 +17,18 @@ const layout = () => readSource('src', 'app', '_layout.tsx');
 const jobSheet = () => readSource('src', 'components', 'activity', 'cron-job-sheet.tsx');
 const cronModel = () => readSource('src', 'lib', 'gateway', 'cron.ts');
 
-// Workflows slice 3b: the Activity tab is the scheduled-work view only. The
-// individual run surface was extracted to its own /runs destination, reached
-// from an explicit control on the tab. Nothing is deleted — the run history,
-// its attribution and every run-history test moved with the surface (their
-// assertions now read src/app/runs.tsx).
-describe('Activity is the cron view, and runs live on their own destination', () => {
-  test('the run surface is gone from the Activity tab', () => {
+describe('Activity defaults to Today and preserves Routines', () => {
+  test('the Today feed replaces the old standalone Runs section', () => {
     const src = activity();
-    expect(src).not.toContain('showRuns');
+    expect(src).toContain('<TodaySection');
+    expect(src).not.toContain('<RecentRuns');
     expect(src).not.toContain('<ScorecardsSection');
     expect(src).not.toContain('activityRuns.length === 0');
     expect(src).not.toContain("label={starting ? 'Starting…' : 'Run task'}");
   });
 
-  test('scheduled work is always on the tab', () => {
+  test('scheduled work remains on Routines', () => {
+    expect(activity()).toContain("activityView === 'routines'");
     expect(activity()).toContain('<CronSection cronReloadSignal={cronReloadSignal} />');
   });
 
@@ -41,7 +38,7 @@ describe('Activity is the cron view, and runs live on their own destination', ()
 
   test('the must-still-work surface is untouched: approvals, targets and spend', () => {
     const src = activity();
-    expect(src).toContain('ApprovalDecisionCard');
+    expect(src).toContain('<TodaySection');
     expect(src).toContain('<AgentTargets');
     expect(src).toContain('<SpendEntryRow />');
   });

@@ -29,6 +29,7 @@ jest.mock('@/components/ui', () => ({
   PageTitle: 'PageTitle',
   Screen: 'Screen',
   SectionHeader: 'SectionHeader',
+  SegmentedControl: 'SegmentedControl',
   Skeleton: 'Skeleton',
   Text: 'Text',
   TextField: 'TextField',
@@ -40,6 +41,7 @@ jest.mock('@/components/activity/cron-run-sheet', () => ({ CronRunSheet: 'CronRu
 jest.mock('@/components/nav/drawer-menu-button', () => ({ DrawerMenuButton: 'DrawerMenuButton' }));
 jest.mock('@/components/connection-badge', () => ({ PulsingDot: 'PulsingDot' }));
 jest.mock('@/components/activity/activity-glance', () => ({ ActivityGlance: 'ActivityGlance' }));
+jest.mock('@/components/activity/today-section', () => ({ TodaySection: 'TodaySection' }));
 jest.mock('@/components/activity/agent-targets', () => ({ AgentTargets: 'AgentTargets' }));
 jest.mock('@/components/activity/approval-decision-card', () => ({ ApprovalDecisionCard: 'ApprovalDecisionCard' }));
 jest.mock('@/components/activity/approval-inbox', () => ({ ApprovalInbox: 'ApprovalInbox' }));
@@ -171,19 +173,18 @@ test('a pull reads the approvals, then the capabilities, then the roster — one
   ]);
 });
 
-test('a pull reads the cron roster once and the pending approvals once', async () => {
+test('a pull does not read the routine roster while Today is shown', async () => {
   await mount();
-  // The focus read the section already issued on arrival.
-  expect(mockCronReads).toBe(1);
+  // Cron lives behind the Routines view; Today never mounts it, so the tab
+  // opening must not spend a Gate request on a list nobody is looking at.
+  expect(mockCronReads).toBe(0);
 
   await pull();
   await act(async () => {
     await jest.advanceTimersByTimeAsync(1);
   });
 
-  // The reload signal reaches the section's own coalesced loader, so the pull
-  // adds exactly one cron.list() — not a second one beside the focus read.
-  expect(mockCronReads).toBe(2);
+  expect(mockCronReads).toBe(0);
   expect(mockTrace.filter((entry) => entry === 'approvals:start')).toHaveLength(1);
 });
 

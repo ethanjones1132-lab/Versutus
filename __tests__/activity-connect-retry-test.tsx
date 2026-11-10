@@ -31,6 +31,7 @@ jest.mock('@/components/ui', () => ({
   PageTitle: 'PageTitle',
   Screen: 'Screen',
   SectionHeader: 'SectionHeader',
+  SegmentedControl: 'SegmentedControl',
   Skeleton: 'Skeleton',
   Text: 'Text',
   TextField: 'TextField',
@@ -43,6 +44,7 @@ jest.mock('@/components/activity/cron-run-sheet', () => ({ CronRunSheet: 'CronRu
 jest.mock('@/components/nav/drawer-menu-button', () => ({ DrawerMenuButton: 'DrawerMenuButton' }));
 jest.mock('@/components/connection-badge', () => ({ PulsingDot: 'PulsingDot' }));
 jest.mock('@/components/activity/activity-glance', () => ({ ActivityGlance: 'ActivityGlance' }));
+jest.mock('@/components/activity/today-section', () => ({ TodaySection: 'TodaySection' }));
 // The switcher's own row contract is pinned elsewhere; here the leaf is a
 // string so the test can hand the screen the tap AgentTargets would make.
 jest.mock('@/components/activity/agent-targets', () => ({ AgentTargets: 'AgentTargets' }));

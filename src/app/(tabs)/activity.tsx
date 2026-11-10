@@ -6,13 +6,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ActivityGlance } from '@/components/activity/activity-glance';
 import { AgentTargets } from '@/components/activity/agent-targets';
-import { ApprovalDecisionCard } from '@/components/activity/approval-decision-card';
-import { ApprovalInbox } from '@/components/activity/approval-inbox';
 import { CronSection } from '@/components/activity/cron-section';
+import { TodaySection } from '@/components/activity/today-section';
 import { SpendEntryRow } from '@/components/gateway/spend-entry-row';
-import { RecentRuns } from '@/components/activity/recent-runs';
 import { PulsingDot } from '@/components/connection-badge';
-import { Card, ErrorCard, Icon, PageTitle, Screen, SectionHeader, Skeleton, Text } from '@/components/ui';
+import { Card, ErrorCard, Icon, PageTitle, Screen, SectionHeader, SegmentedControl, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useNow } from '@/hooks/use-now';
@@ -31,26 +29,19 @@ import {
 } from '@/lib/gateway/approval-audit-view';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
-/**
- * The scheduled-work view. Workflows slice 3b extracted the individual run
- * surface (the start card, the windowed run list and the post-run scorecards)
- * to its own `/runs` destination; this tab keeps the gateway's cron jobs, the
- * pending approval and the gateway-wide reads, with one control into Runs.
- */
+/** Activity's Today feed and the retained scheduled-work, approval and gateway sections. */
 export default function ActivityScreen() {
   const router = useRouter();
   const tokens = useTokens();
   const {
     activeGateway,
     activityRunsForActiveGateway,
-    capabilitySnapshot,
     gateways,
     settings,
     status,
-    pendingRunApproval,
     pendingApprovals,
     requestRunFocus,
-    resolveRunApproval,
+    selectSession,
     refreshPendingApprovals,
     connectGateway,
     refreshCapabilities,
@@ -82,6 +73,8 @@ export default function ActivityScreen() {
   // without remounting the tab, and the section coalesces it with a read
   // already in flight.
   const [cronReloadSignal, setCronReloadSignal] = useState(0);
+  const [todayReloadSignal, setTodayReloadSignal] = useState(0);
+  const [activityView, setActivityView] = useState<'today' | 'routines'>('today');
   // Decision history is this device's key-value audit, not a Gateway read:
   // loaded once, and re-read alongside the pulls so a fresh decision shows.
   // Three phases, because the lenient loader folds a storage refusal into []
@@ -103,16 +96,6 @@ export default function ActivityScreen() {
     },
     [requestRunFocus, router],
   );
-
-  // The same reading of the run capability the Runs screen makes
-  // (runs.tsx:181-186): only a connected gateway whose `agent` group is
-  // explicitly `unsupported` is known to have no run API. A `ready` group and
-  // one the gateway has not reported yet both keep today's "No runs yet" line,
-  // because neither lets this screen claim runs are unavailable.
-  const runsUnsupported =
-    status === 'connected' &&
-    activeGateway != null &&
-    capabilitySnapshot?.groups.find((group) => group.id === 'agent')?.status === 'unsupported';
 
   // One reader for mount, retry, and pull-to-refresh: the strict loader
   // rejects on a storage refusal so `failed` is reachable, and `isLive`
@@ -167,6 +150,7 @@ export default function ActivityScreen() {
     // The section's own `load` coalesces with a read already in flight, so
     // this bump costs at most the one read that is still running.
     setCronReloadSignal((n) => n + 1);
+    setTodayReloadSignal((n) => n + 1);
     // Hold the spinner briefly so recovery isn't a disorienting flash.
     const elapsed = Date.now() - started;
     if (elapsed < 400) await new Promise((resolve) => setTimeout(resolve, 400 - elapsed));
@@ -237,6 +221,7 @@ export default function ActivityScreen() {
             colors={[tokens.accent]}
             progressBackgroundColor={tokens.backgroundElevated}
           />
+
         }>
         <View style={styles.header}>
           <PageTitle
@@ -255,6 +240,12 @@ export default function ActivityScreen() {
                 </Text>
               </>
             }
+          />
+
+          <SegmentedControl
+            options={[{ key: 'today', label: 'Today' }, { key: 'routines', label: 'Routines' }]}
+            selectedKey={activityView}
+            onSelect={setActivityView}
           />
 
           {/* The day at a glance: three figures, and the last day's runs as a
@@ -289,33 +280,26 @@ export default function ActivityScreen() {
             />
           ) : null}
 
-          {/* D1: the Gate's pending approvals, triaged without the run open. */}
-          <View style={styles.section}>
-            <SectionHeader title="Needs you" />
-            <ApprovalInbox />
-          </View>
-
-          {pendingRunApproval ? (
-            <ApprovalDecisionCard
-              runId={pendingRunApproval.runId}
-              prompt={pendingRunApproval.prompt}
-              onResolve={(approved, feedback) => resolveRunApproval(approved, feedback)}
+          {activityView === 'today' ? (
+            <TodaySection
+              reloadSignal={todayReloadSignal}
+              onOpenRun={openRun}
+              onOpenSession={(sessionId) => {
+                // The same door the session sheet uses: validate, switch the
+                // thread, then show it. A tap that only opened Chat would land
+                // the operator on whatever conversation was already selected.
+                selectSession(sessionId);
+                router.push('/chat');
+              }}
             />
           ) : null}
-
-          {/* Workflows slice 3b: runs have their own destination; this is the
-              glance — what is waiting, what is working, what just finished. */}
-          <View style={styles.section}>
-            <SectionHeader title="Runs" actionLabel="See all" onAction={() => router.push('/runs')} />
-            <RecentRuns runs={activityRunsForActiveGateway}
-              onOpenRun={openRun}
-              runsUnsupported={runsUnsupported && activeGateway ? { gatewayName: activeGateway.name } : undefined}
-            />
-          </View>
         </View>
 
       <View style={styles.footer}>
-      <CronSection cronReloadSignal={cronReloadSignal} />
+      {activityView === 'routines' ? <>
+        {/* The Routine view follows; CronSection remains unchanged in this interim view. */}
+        <CronSection cronReloadSignal={cronReloadSignal} />
+      </> : null}
 
       {/* D1: what this device has already decided — the tally plus the
           newest lines. Settings keeps the full history. Loading shows

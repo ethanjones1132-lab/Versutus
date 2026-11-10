@@ -101,7 +101,10 @@ describe('section headers sit at headline, never competing with the screen title
 describe('Activity section headers converge on one level', () => {
   test('every Activity section is named by one section header at the same level', () => {
     const src = activityScreen();
-    for (const title of ['Needs you', 'Runs', 'Your decisions', 'Gateways']) {
+    const today = readSource('src', 'components', 'activity', 'today-section.tsx');
+    // Approvals moved into Today's feed; the tab keeps the remaining sections.
+    expect(today).toMatch(/<SectionHeader title="Needs you"/);
+    for (const title of ['Your decisions', 'Gateways']) {
       expect(src).toMatch(new RegExp(`<SectionHeader title="${title}"`));
     }
     // The groups under those headers carry no heading of their own.
@@ -172,7 +175,8 @@ describe('keep-working: copy, badges, and mounts under the demoted headings', ()
 
   test('the screens still mount every section that lost its title rank', () => {
     const activity = activityScreen();
-    expect(activity).toContain('<ApprovalInbox />');
+    const today = readSource('src', 'components', 'activity', 'today-section.tsx');
+    expect(today).toContain('<ApprovalInbox />');
     expect(activity).toContain('<CronSection');
     expect(activity).toContain('<AgentTargets');
     const runs = runsScreen();

@@ -17,7 +17,7 @@ function readCardSource(): string {
 
 function readActivitySource(): string {
   return nodeFs
-    .readFileSync([__dirname, '..', 'src', 'app', '(tabs)', 'activity.tsx'].join(SEP), 'utf8')
+    .readFileSync([__dirname, '..', 'src', 'components', 'activity', 'today-section.tsx'].join(SEP), 'utf8')
     .replace(/\r\n/g, '\n');
 }
 

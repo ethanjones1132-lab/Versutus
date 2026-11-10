@@ -102,8 +102,9 @@ describe('copy', () => {
 describe('Activity mounts the inbox', () => {
   it('renders ApprovalInbox and refreshes it on pull', () => {
     const activity = readSource(['src', 'app', '(tabs)', 'activity.tsx']);
-    expect(activity).toContain("import { ApprovalInbox } from '@/components/activity/approval-inbox'");
-    expect(activity).toContain('<ApprovalInbox');
+    const today = readSource(['src', 'components', 'activity', 'today-section.tsx']);
+    expect(today).toContain("import { ApprovalInbox } from '@/components/activity/approval-inbox'");
+    expect(today).toContain('<ApprovalInbox');
     expect(activity).toContain('refreshPendingApprovals');
   });
 

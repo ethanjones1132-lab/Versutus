@@ -71,7 +71,7 @@ describe('tab pull-to-refresh failure is surfaced', () => {
     const src = readActivity();
     const titleAt = src.indexOf('title="Activity"');
     const errorAt = src.indexOf('refreshError ? (');
-    const entryAt = src.indexOf('<SectionHeader title="Needs you" />');
+    const entryAt = src.indexOf('<TodaySection');
     expect(titleAt).toBeGreaterThanOrEqual(0);
     expect(errorAt).toBeGreaterThan(titleAt);
     expect(entryAt).toBeGreaterThan(errorAt);

@@ -66,7 +66,7 @@ describe('Every high-value action is ≤3 taps from the Chat root', () => {
   });
 
   test('pending approvals are one Activity drawer hop away, listed at its top', () => {
-    const src = readActivity();
+    const src = readSource(['src', 'components', 'activity', 'today-section.tsx']);
     expect(src).toContain('<ApprovalInbox />');
   });
 

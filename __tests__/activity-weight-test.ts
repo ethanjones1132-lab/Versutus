@@ -51,9 +51,9 @@ describe('Activity carries quieter violet weight than Chat', () => {
 
   test('secondary Activity cards sit on inset panels while their surfaces stay flat', () => {
     const screen = activity();
-    // Nocturne: runs are a grouped glance with their own section, and the
-    // decisions card sits on the elevated step like every other group.
-    expect(screen).toContain('<RecentRuns runs={activityRunsForActiveGateway}');
+    // Activity's universal feed owns Today rows and live runs now.
+    expect(screen).toContain('<TodaySection');
+    expect(readSource('src', 'components', 'activity', 'today-section.tsx')).toContain('<RecentRuns runs={liveRuns}');
     expect(screen).toContain('<Card variant="stage" padding={Spacing.three} style={styles.card}>');
     expect(screen).not.toMatch(/tokens\.glass|tokens\.glassBorder|Palette\.gold/);
   });
@@ -61,7 +61,7 @@ describe('Activity carries quieter violet weight than Chat', () => {
   test("Activity's supporting entry points keep their existing routes and callbacks", () => {
     const screen = activity();
     expect(screen).toContain("router.push('/runs')");
-    expect(screen).toContain('<ApprovalInbox />');
+    expect(readSource('src', 'components', 'activity', 'today-section.tsx')).toContain('<ApprovalInbox />');
     expect(screen).toContain('<CronSection cronReloadSignal={cronReloadSignal} />');
     expect(screen).toContain('<SpendEntryRow />');
     expect(screen).toContain('<AgentTargets');
