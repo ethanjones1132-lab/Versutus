@@ -166,6 +166,7 @@ import {
   type RunTranscriptPage,
 } from '@/lib/gateway/runs';
 import { routineJobsFromList } from '@/lib/gateway/routines';
+import type { ActivityFeed, RoutineFeed } from '@/lib/gateway/activity-feed';
 import { beginFleetRoutineRead, fleetRoutineRead, type FleetRoutineRead } from '@/lib/fleet/routine-read';
 import {
   durableQueueRows,
@@ -521,6 +522,14 @@ type GatewayContextValue = {
     list: () => Promise<import('@/lib/gateway/cron').CronJob[]>;
     runs: (jobId: string) => Promise<import('@/lib/gateway/cron').CronRun[]>;
     transcript: (runId: string, limit?: number) => Promise<import('@/lib/gateway/cron').CronTurn[]>;
+  };
+  /**
+   * Activity's universal read, per gateway. Separate from `cron` because it spans
+   * every backend and carries per-backend coverage instead of one job list.
+   */
+  activityFeed: {
+    readActivity: (options: { since: string; backendId?: string }) => Promise<ActivityFeed>;
+    readRoutines: (options?: { backendId?: string }) => Promise<RoutineFeed>;
   };
   botGroups: {
     list: () => Promise<BotGroupRoom[]>;
@@ -7009,6 +7018,23 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     },
   }), []);
 
+  const activityFeed = useMemo(() => ({
+    readActivity: (options: { since: string; backendId?: string }) => {
+      const client = clientRef.current as (PortalClient & {
+        getActivityFeed?: (since: string, backendId?: string) => Promise<ActivityFeed>;
+      }) | null;
+      if (!client?.getActivityFeed) throw new Error('This gateway cannot report activity.');
+      return client.getActivityFeed(options.since, options.backendId);
+    },
+    readRoutines: (options?: { backendId?: string }) => {
+      const client = clientRef.current as (PortalClient & {
+        getRoutineFeed?: (backendId?: string) => Promise<RoutineFeed>;
+      }) | null;
+      if (!client?.getRoutineFeed) throw new Error('This gateway cannot report activity.');
+      return client.getRoutineFeed(options?.backendId);
+    },
+  }), []);
+
   /**
    * The widget's routine half. A snapshot is folded from facts this client
    * already holds, and the write below is no place to make a gateway call, so
@@ -8005,6 +8031,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       routineRead,
       botGroups,
       cron,
+      activityFeed,
       relatedWorkflows,
       runAgentCommand,
       dynamicCommands,
@@ -8079,7 +8106,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, canReadBotSessions, readBotSessions, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, requestedComposerFocus, requestComposerFocus, clearRequestedComposerFocus, requestedComposeRequest, requestComposeRequest, clearRequestedComposeRequest, requestedRunFocus, requestRunFocus, clearRequestedRunFocus, botJobs, routineJobs, routineRead, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
+      cron, activityFeed, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, canReadBotSessions, readBotSessions, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, requestedComposerFocus, requestComposerFocus, clearRequestedComposerFocus, requestedComposeRequest, requestComposeRequest, clearRequestedComposeRequest, requestedRunFocus, requestRunFocus, clearRequestedRunFocus, botJobs, routineJobs, routineRead, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
       setAutoConnect, recentCommands, commandTranscripts, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,

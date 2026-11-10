@@ -256,6 +256,33 @@ export function DemoGatewayProvider({ children }: { children: React.ReactNode })
         runs: async () => [],
         transcript: async () => [],
       },
+      // The showcase folds the demo runs Activity's glance already holds into
+      // the shape a Gate answers with, so Today renders for real on the web
+      // demo instead of claiming a Gateway reported nothing. Routines stay
+      // unavailable because the demo has no job store behind them.
+      activityFeed: {
+        readActivity: async ({ since: requestedSince }) => ({
+          since: requestedSince,
+          generatedAt: new Date().toISOString(),
+          backends: [{ id: SHOWCASE_GATEWAY.id, label: SHOWCASE_GATEWAY.name, status: 'complete' }],
+          items: SHOWCASE_RUNS.map((run) => ({
+            id: run.id,
+            backendId: SHOWCASE_GATEWAY.id,
+            ...(run.botId ? { botId: run.botId } : {}),
+            kind: 'run' as const,
+            startedAt: new Date(run.startedAt).toISOString(),
+            ...(run.finishedAt ? { finishedAt: new Date(run.finishedAt).toISOString() } : {}),
+            status: run.status,
+            title: run.prompt,
+            metrics: {},
+          })),
+        }),
+        readRoutines: async () => ({
+          generatedAt: new Date().toISOString(),
+          backends: [{ id: SHOWCASE_GATEWAY.id, label: SHOWCASE_GATEWAY.name, status: 'unavailable' }],
+          routines: [],
+        }),
+      },
       botGroups: {
         list: async () => SHOWCASE_GROUPS,
         create: async (input) => ({ id: input.name.toLowerCase(), name: input.name, memberIds: input.memberIds }),

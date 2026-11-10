@@ -11,6 +11,7 @@ import { flattenHermesModelOptions, type HermesModelOptions } from '@/lib/gatewa
 import { createMessageId } from '@/lib/gateway/messages';
 import { METHOD_GUIDANCE, METHOD_TO_ROUTE, resolveRoute } from '@/lib/gateway/rpc-routes';
 import { isRunEventFrame } from '@/lib/gateway/runs';
+import { parseActivityFeed, parseRoutineFeed, type ActivityFeed, type RoutineFeed } from './activity-feed';
 
 import { streamingFetch } from '@/lib/net/streaming-fetch';
 import type {
@@ -374,6 +375,22 @@ export class HermesGatewayClient {
 
   async getCapabilities(): Promise<GatewayCapabilities> {
     return this.transport.request<GatewayCapabilities>('GET', '/v1/capabilities');
+  }
+
+  // Today's activity across every backend. Parsing at this boundary turns a
+  // malformed answer into one named failure instead of a screen full of holes.
+  async getActivityFeed(since: string, backendId?: string): Promise<ActivityFeed> {
+    const query = `since=${encodeURIComponent(since)}${backendId?.trim() ? `&backendId=${encodeURIComponent(backendId)}` : ''}`;
+    const raw = await this.transport.request<unknown>('GET', `/v1/activity?${query}`);
+    return parseActivityFeed(raw);
+  }
+
+  // The same coverage contract, for routines: a backend that cannot list them
+  // must stay distinguishable from one that listed none.
+  async getRoutineFeed(backendId?: string): Promise<RoutineFeed> {
+    const query = backendId?.trim() ? `?backendId=${encodeURIComponent(backendId)}` : '';
+    const raw = await this.transport.request<unknown>('GET', `/v1/routines${query}`);
+    return parseRoutineFeed(raw);
   }
 
   async getModels(): Promise<ModelInfo[]> {
