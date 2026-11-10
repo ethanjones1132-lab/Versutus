@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { spawnCommand } from '../adapters/shared.mjs';
+import { scanAgentDirs } from '../claude-agents.mjs';
 import { createWindowsJob } from '../windows-job.mjs';
 
 /**
@@ -15,6 +16,9 @@ import { createWindowsJob } from '../windows-job.mjs';
  * emits newline-delimited events and exits. Continuity comes from `--session-id`,
  * and history lives in on-disk transcripts rather than behind an API — so
  * listing sessions means reading the project's transcript directory.
+ *
+ * Its agent files become Bots: each one is listed from disk and a turn taken
+ * as that Bot passes `--agent <name>`, which is how the CLI selects it.
  */
 
 /** Claude Code names a project directory after its cwd, with separators flattened. */
@@ -126,7 +130,8 @@ export function normalizeClaudeEvent(event) {
 }
 
 /**
- * The one Bot this environment serves: the agent itself (ADR 0016).
+ * The built-in Bot every Claude Code environment serves: the agent itself
+ * (ADR 0016). Agent files add rows after it; it never goes away.
  *
  * A Bot is routable when the backend that lists it can answer, and only a
  * healthy backend ever reaches `listBots`, so this row is always routable.
@@ -142,6 +147,14 @@ const CLAUDE_CODE_BOT = {
   model: null,
   runtime: 'claude-code',
 };
+
+/**
+ * A Bot id for one of the CLI's agent files.
+ *
+ * The runtime is part of the id because a bare name also addresses a Hermes
+ * profile or an OpenCode agent, and the roster must keep the three apart.
+ */
+const AGENT_BOT_PREFIX = 'claude-code:';
 
 /** The refusal every Bot lookup shares: this environment has never heard of that id. */
 function unknownBot(id) {
@@ -233,6 +246,235 @@ export function createClaudeCodeBackend({
       .filter(Boolean)
       .map((line) => { try { return JSON.parse(line); } catch { return null; } })
       .filter(Boolean);
+  }
+
+  /**
+   * One turn: a single `claude --print` process, assembled from its stream.
+   *
+   * `agent` is passed in rather than held on the backend. The backend serves
+   * every Bot on this environment, so the choice belongs to the turn — a scoped
+   * view that mutated shared state would silently change the next turn taken
+   * by anyone else.
+   */
+  async function sendTurn(sessionId, { text, model, signal, agent } = {}, onEvent) {
+    const args = [
+      '--print',
+      '--output-format', 'stream-json',
+      '--include-partial-messages',
+      '--verbose',
+      '--permission-mode', permissionMode,
+      '--session-id', sessionId,
+    ];
+    // `--agent` selects the Claude Code agent for this turn; without it the
+    // CLI runs as its default one, which is the built-in Bot.
+    if (agent) args.push('--agent', agent);
+    const chosen = model?.modelId ?? defaultModel;
+    if (chosen) args.push('--model', chosen);
+    args.push(text ?? '');
+
+    const { command, prefix } = spawnCommand(executablePath);
+    const child = spawnImpl(command, [...prefix, ...args], { cwd, windowsHide: true });
+    // A job per turn, not per backend: a stop must take the tools this turn
+    // spawned with it, and must never reach a pid an earlier turn registered.
+    const job = jobFactory();
+    job.add(child);
+    const turn = { cancelled: false, stopped: null };
+    inflight = turn;
+    /**
+     * Kill the tree, then reject — in that order. Stop is a promise to the
+     * operator that the agent stops working in the workspace, so a rejection
+     * that outran the kill would be a lie.
+     *
+     * The chain is returned so `abort()` can wait for the kill too: it awaits
+     * this, and `await undefined` would have resolved on the next microtask
+     * while the Job Object terminate was still in flight.
+     */
+    const cancel = (reject) => {
+      if (turn.cancelled) return turn.stopped;
+      turn.cancelled = true;
+      turn.stopped = Promise.resolve()
+        .then(() => job.terminate())
+        .catch(() => undefined)
+        .then(() => reject(stoppedError()));
+      return turn.stopped;
+    };
+
+    let buffer = '';
+    let assembled = '';
+    let failure = null;
+    let sawPartialText = false;
+    let sawPartialThinking = false;
+    const partialToolIds = new Set();
+    const partialToolBlocks = new Map();
+    const handle = (line) => {
+      let parsed;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        return;
+      }
+      // Claude repeats every partial block in its complete `assistant`
+      // message. Emit the complete message only for blocks whose partials
+      // never arrived, so neither the transcript nor a tool card doubles.
+      if (parsed.type === 'assistant' && Array.isArray(parsed.message?.content)) {
+        for (const part of parsed.message.content) {
+          let event = null;
+          if (part.type === 'text' && part.text && !sawPartialText) {
+            event = { type: 'message.delta', payload: { text: part.text, sessionId: parsed.session_id } };
+          } else if (part.type === 'thinking' && part.thinking && !sawPartialThinking) {
+            event = { type: 'message.reasoning.delta', payload: { text: part.thinking, sessionId: parsed.session_id } };
+          } else if (part.type === 'tool_use' && part.name && !partialToolIds.has(part.id)) {
+            event = { type: 'tool.started', payload: { name: part.name, callId: part.id, input: part.input } };
+          }
+          if (event?.type === 'message.delta') assembled += event.payload.text;
+          if (event) onEvent?.(event);
+        }
+        sawPartialText = false;
+        sawPartialThinking = false;
+        partialToolIds.clear();
+        return;
+      }
+      if (parsed.type === 'stream_event') {
+        const streamEvent = parsed.event ?? {};
+        const index = streamEvent.index;
+        if (streamEvent.type === 'content_block_delta'
+          && streamEvent.delta?.type === 'input_json_delta'
+          && Number.isInteger(index)) {
+          const block = partialToolBlocks.get(index);
+          if (block && typeof streamEvent.delta.partial_json === 'string') {
+            block.partialJson = `${block.partialJson}${streamEvent.delta.partial_json}`.slice(0, 2048);
+          }
+          return;
+        }
+        if (streamEvent.type === 'content_block_stop' && Number.isInteger(index)) {
+          const block = partialToolBlocks.get(index);
+          if (block?.partialJson) {
+            onEvent?.({ type: 'tool.progress', payload: {
+              name: block.name,
+              callId: block.callId,
+              detail: block.partialJson,
+              snapshot: true,
+            } });
+          }
+          partialToolBlocks.delete(index);
+          return;
+        }
+      }
+      const normalized = normalizeClaudeEvent(parsed);
+      if (!normalized) return;
+      if (parsed.type === 'stream_event') {
+        if (normalized.type === 'message.delta') sawPartialText = true;
+        else if (normalized.type === 'message.reasoning.delta') sawPartialThinking = true;
+        else if (normalized.type === 'tool.started' && normalized.payload.callId) {
+          partialToolIds.add(normalized.payload.callId);
+          const index = parsed.event?.index;
+          if (Number.isInteger(index)) {
+            partialToolBlocks.set(index, {
+              callId: normalized.payload.callId,
+              name: normalized.payload.name,
+              partialJson: '',
+            });
+          }
+        }
+      }
+      if (normalized.type === 'message.delta') assembled += normalized.payload.text;
+      if (normalized.type === 'run.failed') failure = normalized.payload.text ?? 'run failed';
+      if (normalized.type === 'run.completed' && !assembled) assembled = normalized.payload.text ?? '';
+      onEvent?.(normalized);
+    };
+
+    // stdout arrives as raw Buffers whose UTF-8 sequences stop at chunk
+    // boundaries: a multi-byte code point split between two reads decoded
+    // through String(chunk) as U+FFFD on both sides, corrupting the JSON
+    // line before it was parsed. The decoder holds the incomplete tail back
+    // until the bytes that finish it arrive; a string chunk passes through
+    // unchanged.
+    const decoder = new StringDecoder('utf8');
+    child.stdout?.on('data', (chunk) => {
+      buffer += decoder.write(chunk);
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) if (line.trim()) handle(line.trim());
+    });
+
+    let onAbort = null;
+    let exitCode;
+    try {
+      exitCode = await new Promise((resolve, reject) => {
+        // A cancelled turn settles as a cancellation however its child dies:
+        // the exit code of a process that was killed is not the turn's
+        // outcome, and neither is a stdin error on the way down.
+        child.on('error', (error) => { if (!turn.cancelled) reject(error); });
+        child.on('close', (code) => { if (!turn.cancelled) resolve(code); });
+        // `signal` is how the runner hands the turn's cancellation down: the
+        // runner's own race settles the HTTP turn, but only this kills the
+        // agent still reading the workspace and calling the vendor.
+        if (signal) {
+          onAbort = () => cancel(reject);
+          if (signal.aborted) onAbort();
+          else signal.addEventListener('abort', onAbort, { once: true });
+        }
+        turn.cancel = () => cancel(reject);
+      });
+    } finally {
+      // A turn that ended on its own leaves nothing on the caller's signal:
+      // hundreds of turns would otherwise stack listeners on it, and a late
+      // abort would try to kill a process that already exited.
+      if (onAbort) signal.removeEventListener('abort', onAbort);
+      if (inflight === turn) inflight = null;
+    }
+    // The last line's end was never announced, and any multi-byte sequence
+    // the child left incomplete on death must still be flushed before the
+    // final line is decoded and handled.
+    buffer += decoder.end();
+    if (buffer.trim()) handle(buffer.trim());
+
+    if (failure) throw new Error(`claude-code: ${failure}`);
+    if (exitCode !== 0 && !assembled) throw new Error(`claude-code exited with code ${exitCode}`);
+    return {
+      message: assembled ? { id: sessionId, role: 'assistant', content: [{ type: 'text', text: assembled }] } : null,
+      text: assembled,
+    };
+  }
+
+  /** The agent files this environment can serve; a failed scan is simply none. */
+  async function agentFiles() {
+    try {
+      return await scanAgentDirs({ claudeHome, cwd });
+    } catch {
+      // A scan that throws (a refused read, say) must not cost the roster its
+      // built-in Bot: it is the same roster, with no agent files on it.
+      return [];
+    }
+  }
+
+  /** The roster row for one agent file, shaped exactly like the built-in Bot. */
+  function toAgentBot(agent) {
+    return {
+      id: `${AGENT_BOT_PREFIX}${agent.name}`,
+      displayName: agent.name,
+      routable: true,
+      routingIssue: null,
+      description: agent.description,
+      // The app's `PublicBot.model` is a pin (`{ default, provider }`), not a
+      // bare alias, so an agent's `model:` is reported in that shape. Claude
+      // Code resolves the alias itself, so the provider is genuinely unknown.
+      model: agent.model ? { default: agent.model, provider: null } : null,
+      runtime: 'claude-code',
+    };
+  }
+
+  /**
+   * The agent file a Bot id names, or null when there is none.
+   *
+   * Resolved by scanning rather than trusting the id: the file may have been
+   * deleted or renamed since the roster was read, and a turn must never run as
+   * a name the CLI would reject.
+   */
+  async function namedAgent(botId) {
+    if (typeof botId !== 'string' || !botId.startsWith(AGENT_BOT_PREFIX)) return null;
+    const name = botId.slice(AGENT_BOT_PREFIX.length);
+    return (await agentFiles()).find((agent) => agent.name === name) ?? null;
   }
 
   const backend = {
@@ -360,183 +602,13 @@ export function createClaudeCodeBackend({
       return typeof limit === 'number' ? mapped.slice(-limit) : mapped;
     },
 
-    /** One process per turn; `--session-id` is what makes it a conversation. */
-    async sendMessage(sessionId, { text, model, signal } = {}, onEvent) {
-      const args = [
-        '--print',
-        '--output-format', 'stream-json',
-        '--include-partial-messages',
-        '--verbose',
-        '--permission-mode', permissionMode,
-        '--session-id', sessionId,
-      ];
-      const chosen = model?.modelId ?? defaultModel;
-      if (chosen) args.push('--model', chosen);
-      args.push(text ?? '');
-
-      const { command, prefix } = spawnCommand(executablePath);
-      const child = spawnImpl(command, [...prefix, ...args], { cwd, windowsHide: true });
-      // A job per turn, not per backend: a stop must take the tools this turn
-      // spawned with it, and must never reach a pid an earlier turn registered.
-      const job = jobFactory();
-      job.add(child);
-      const turn = { cancelled: false, stopped: null };
-      inflight = turn;
-      /**
-       * Kill the tree, then reject — in that order. Stop is a promise to the
-       * operator that the agent stops working in the workspace, so a rejection
-       * that outran the kill would be a lie.
-       *
-       * The chain is returned so `abort()` can wait for the kill too: it awaits
-       * this, and `await undefined` would have resolved on the next microtask
-       * while the Job Object terminate was still in flight.
-       */
-      const cancel = (reject) => {
-        if (turn.cancelled) return turn.stopped;
-        turn.cancelled = true;
-        turn.stopped = Promise.resolve()
-          .then(() => job.terminate())
-          .catch(() => undefined)
-          .then(() => reject(stoppedError()));
-        return turn.stopped;
-      };
-
-      let buffer = '';
-      let assembled = '';
-      let failure = null;
-      let sawPartialText = false;
-      let sawPartialThinking = false;
-      const partialToolIds = new Set();
-      const partialToolBlocks = new Map();
-      const handle = (line) => {
-        let parsed;
-        try {
-          parsed = JSON.parse(line);
-        } catch {
-          return;
-        }
-        // Claude repeats every partial block in its complete `assistant`
-        // message. Emit the complete message only for blocks whose partials
-        // never arrived, so neither the transcript nor a tool card doubles.
-        if (parsed.type === 'assistant' && Array.isArray(parsed.message?.content)) {
-          for (const part of parsed.message.content) {
-            let event = null;
-            if (part.type === 'text' && part.text && !sawPartialText) {
-              event = { type: 'message.delta', payload: { text: part.text, sessionId: parsed.session_id } };
-            } else if (part.type === 'thinking' && part.thinking && !sawPartialThinking) {
-              event = { type: 'message.reasoning.delta', payload: { text: part.thinking, sessionId: parsed.session_id } };
-            } else if (part.type === 'tool_use' && part.name && !partialToolIds.has(part.id)) {
-              event = { type: 'tool.started', payload: { name: part.name, callId: part.id, input: part.input } };
-            }
-            if (event?.type === 'message.delta') assembled += event.payload.text;
-            if (event) onEvent?.(event);
-          }
-          sawPartialText = false;
-          sawPartialThinking = false;
-          partialToolIds.clear();
-          return;
-        }
-        if (parsed.type === 'stream_event') {
-          const streamEvent = parsed.event ?? {};
-          const index = streamEvent.index;
-          if (streamEvent.type === 'content_block_delta'
-            && streamEvent.delta?.type === 'input_json_delta'
-            && Number.isInteger(index)) {
-            const block = partialToolBlocks.get(index);
-            if (block && typeof streamEvent.delta.partial_json === 'string') {
-              block.partialJson = `${block.partialJson}${streamEvent.delta.partial_json}`.slice(0, 2048);
-            }
-            return;
-          }
-          if (streamEvent.type === 'content_block_stop' && Number.isInteger(index)) {
-            const block = partialToolBlocks.get(index);
-            if (block?.partialJson) {
-              onEvent?.({ type: 'tool.progress', payload: {
-                name: block.name,
-                callId: block.callId,
-                detail: block.partialJson,
-                snapshot: true,
-              } });
-            }
-            partialToolBlocks.delete(index);
-            return;
-          }
-        }
-        const normalized = normalizeClaudeEvent(parsed);
-        if (!normalized) return;
-        if (parsed.type === 'stream_event') {
-          if (normalized.type === 'message.delta') sawPartialText = true;
-          else if (normalized.type === 'message.reasoning.delta') sawPartialThinking = true;
-          else if (normalized.type === 'tool.started' && normalized.payload.callId) {
-            partialToolIds.add(normalized.payload.callId);
-            const index = parsed.event?.index;
-            if (Number.isInteger(index)) {
-              partialToolBlocks.set(index, {
-                callId: normalized.payload.callId,
-                name: normalized.payload.name,
-                partialJson: '',
-              });
-            }
-          }
-        }
-        if (normalized.type === 'message.delta') assembled += normalized.payload.text;
-        if (normalized.type === 'run.failed') failure = normalized.payload.text ?? 'run failed';
-        if (normalized.type === 'run.completed' && !assembled) assembled = normalized.payload.text ?? '';
-        onEvent?.(normalized);
-      };
-
-      // stdout arrives as raw Buffers whose UTF-8 sequences stop at chunk
-      // boundaries: a multi-byte code point split between two reads decoded
-      // through String(chunk) as U+FFFD on both sides, corrupting the JSON
-      // line before it was parsed. The decoder holds the incomplete tail back
-      // until the bytes that finish it arrive; a string chunk passes through
-      // unchanged.
-      const decoder = new StringDecoder('utf8');
-      child.stdout?.on('data', (chunk) => {
-        buffer += decoder.write(chunk);
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-        for (const line of lines) if (line.trim()) handle(line.trim());
-      });
-
-      let onAbort = null;
-      let exitCode;
-      try {
-        exitCode = await new Promise((resolve, reject) => {
-          // A cancelled turn settles as a cancellation however its child dies:
-          // the exit code of a process that was killed is not the turn's
-          // outcome, and neither is a stdin error on the way down.
-          child.on('error', (error) => { if (!turn.cancelled) reject(error); });
-          child.on('close', (code) => { if (!turn.cancelled) resolve(code); });
-          // `signal` is how the runner hands the turn's cancellation down: the
-          // runner's own race settles the HTTP turn, but only this kills the
-          // agent still reading the workspace and calling the vendor.
-          if (signal) {
-            onAbort = () => cancel(reject);
-            if (signal.aborted) onAbort();
-            else signal.addEventListener('abort', onAbort, { once: true });
-          }
-          turn.cancel = () => cancel(reject);
-        });
-      } finally {
-        // A turn that ended on its own leaves nothing on the caller's signal:
-        // hundreds of turns would otherwise stack listeners on it, and a late
-        // abort would try to kill a process that already exited.
-        if (onAbort) signal.removeEventListener('abort', onAbort);
-        if (inflight === turn) inflight = null;
-      }
-      // The last line's end was never announced, and any multi-byte sequence
-      // the child left incomplete on death must still be flushed before the
-      // final line is decoded and handled.
-      buffer += decoder.end();
-      if (buffer.trim()) handle(buffer.trim());
-
-      if (failure) throw new Error(`claude-code: ${failure}`);
-      if (exitCode !== 0 && !assembled) throw new Error(`claude-code exited with code ${exitCode}`);
-      return {
-        message: assembled ? { id: sessionId, role: 'assistant', content: [{ type: 'text', text: assembled }] } : null,
-        text: assembled,
-      };
+    /**
+     * One process per turn; `--session-id` is what makes it a conversation.
+     * The built-in Bot runs as the CLI's default agent, so no `--agent` is
+     * passed here — a named agent is the scoped view's turn.
+     */
+    async sendMessage(sessionId, opts = {}, onEvent) {
+      return sendTurn(sessionId, opts, onEvent);
     },
 
     /**
@@ -569,31 +641,50 @@ export function createClaudeCodeBackend({
       }));
     },
 
-    // ---- Bots: the agent itself (ADR 0016) ------------------------------
-    // Claude Code has no named agents of its own, so this environment serves
-    // exactly one Bot — the agent — and every session it opens belongs to it.
-    // Custom agent files are a later slice; createBot/updateBot stay absent so
-    // the Gate refuses them by name rather than inventing an editable roster.
+    // ---- Bots: the agent itself, plus the CLI's agent files (ADR 0016) ---
+    // Every session on this environment belongs to the agent, so the built-in
+    // Bot stays first and keeps its fixed identity. Agent files are the CLI's
+    // own: they are listed, never written, so createBot/updateBot stay absent
+    // and the Gate refuses them by name rather than inventing an editable
+    // roster. A chat with one runs `claude --agent <name>`.
 
     async listBots() {
-      return { object: 'list', data: [{ ...CLAUDE_CODE_BOT }] };
+      return {
+        object: 'list',
+        data: [{ ...CLAUDE_CODE_BOT }, ...(await agentFiles()).map(toAgentBot)],
+      };
     },
 
     /**
-     * One Bot: the agent, plus the `soul` field every Gate Bot read carries.
-     * There is no soul the Gate can read or edit — the CLI's own configuration
-     * is its instructions — so it is explicitly null ("genuinely none") rather
-     * than absent, which the app would report as a failed read.
+     * One Bot, plus the `soul` field every Gate Bot read carries.
+     *
+     * The built-in agent has no soul the Gate can read or edit — the CLI's own
+     * configuration is its instructions — so it is explicitly null ("genuinely
+     * none") rather than absent, which the app would report as a failed read.
+     * An agent file's instructions are its body, which only Claude Code reads,
+     * so its soul is null for the same reason.
      */
     async getBot({ id } = {}) {
-      if (id !== CLAUDE_CODE_BOT.id) throw unknownBot(id);
-      return { ...CLAUDE_CODE_BOT, soul: null };
+      if (id === CLAUDE_CODE_BOT.id) return { ...CLAUDE_CODE_BOT, soul: null };
+      const agent = await namedAgent(id);
+      if (!agent) throw unknownBot(id);
+      return { ...toAgentBot(agent), soul: null };
     },
 
-    /** The same backend, labelled with its one Bot; all sessions are already its. */
+    /**
+     * The same backend, scoped to one Bot. Sessions stay the environment's own —
+     * a Claude Code transcript records no agent, so there is nothing to filter
+     * them by — but every turn taken through the view names the agent.
+     */
     async forBot(botId) {
-      if (botId !== CLAUDE_CODE_BOT.id) throw unknownBot(botId);
-      return { ...backend, bot: botId };
+      if (botId === CLAUDE_CODE_BOT.id) return { ...backend, bot: botId };
+      const agent = await namedAgent(botId);
+      if (!agent) throw unknownBot(botId);
+      return {
+        ...backend,
+        bot: botId,
+        sendMessage: (sessionId, opts = {}, onEvent) => sendTurn(sessionId, { ...opts, agent: agent.name }, onEvent),
+      };
     },
   };
 

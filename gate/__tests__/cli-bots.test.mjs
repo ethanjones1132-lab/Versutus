@@ -11,11 +11,11 @@ import { createCodexBackend } from '../core/cli-environments/backends/codex.mjs'
 import { claudeCodeAdapter } from '../core/cli-environments/adapters/claude-code.mjs';
 import { codexAdapter } from '../core/cli-environments/adapters/codex.mjs';
 
-// ADR 0016 made a Bot an OpenCode agent as well as a Hermes profile. Claude Code
-// and Codex have neither agents nor profiles the Gate can write, so each serves
-// exactly one fixed Bot — the agent itself — and the roster says where it lives.
-// Custom agent files / Codex profiles are a later slice, so create and edit stay
-// unimplemented and are refused by name rather than inventing an editable roster.
+// ADR 0016 made a Bot an OpenCode agent as well as a Hermes profile. Claude
+// Code lists its own agent files as Bots too, but the Gate only reads them —
+// it never writes an agent, so create and edit stay unimplemented for Claude
+// Code and Codex alike and are refused by name rather than inventing an
+// editable roster. Codex profiles are still a later slice.
 
 const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
 const roots = [];
@@ -67,8 +67,10 @@ function fakeCodexRpc(threads = []) {
   };
 }
 
-test('Claude Code lists exactly one Bot: the agent itself', async () => {
+test('Claude Code lists its built-in Bot alone when no agent files exist', async () => {
   const backend = await claudeBackend();
+  // The temp home and `C:\ws` hold no `agents` directory, so the roster is the
+  // agent itself — the same fixed row, ahead of any agent file that appears.
   assert.deepEqual(await backend.listBots(), { object: 'list', data: [CLAUDE_ROW] });
 });
 
@@ -130,7 +132,8 @@ test('both adapters advertise bots and expose the methods backendCanServe probes
     for (const method of ['listBots', 'getBot', 'forBot']) {
       assert.equal(typeof probed[method], 'function', `${id} must expose ${method}`);
     }
-    // Fixed Bots: nothing to create or edit until the later agent-file slice.
+    // Read-only Bots: Claude Code owns its agent files, and Codex has no
+    // profiles here, so nothing is created or edited through the Gate.
     assert.equal(probed.createBot, undefined, `${id} must not offer createBot`);
     assert.equal(probed.updateBot, undefined, `${id} must not offer updateBot`);
   }
