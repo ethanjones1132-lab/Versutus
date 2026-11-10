@@ -41,9 +41,11 @@ for (const eventType of ['permission.asked', 'permission.v2.asked']) {
     const [row] = approvals.list();
     assert.deepEqual(
       { backendId: row.backendId, botId: row.botId, sessionId: row.sessionId, permission: row.context.permission,
-        command: row.context.command, resources: row.context.resources, source: row.context.source },
+        command: row.context.command, resources: row.context.resources, save: row.context.save,
+        patterns: row.context.patterns, source: row.context.source },
       { backendId: 'oc-local', botId: 'writer', sessionId: 'ses_1', permission: 'bash',
-        command: 'git status', resources: ['git status', 'src/**'],
+        command: 'git status', resources: ['git status', 'src/**'], save: ['src/**'],
+        patterns: eventType === 'permission.asked' ? ['git status', 'src/**'] : [],
         source: eventType === 'permission.asked'
           ? { messageID: 'msg_1', callID: 'call_1' }
           : { type: 'tool', messageID: 'msg_1', id: 'call_1' } },
@@ -115,6 +117,7 @@ test('a reply answered with OpenCode 404 makes the inbox decision fail and remov
   await assert.rejects(rpc.methods['approval.approve']({ approvalId: row.approvalId }, DEVICE),
     (error) => error.status === 404);
   await work;
+  assert.equal(approvals.get(row.approvalId), null);
   await assert.rejects(rpc.methods['approval.approve']({ approvalId: row.approvalId }, DEVICE),
     (error) => error.status === 404);
 });
@@ -203,4 +206,92 @@ test('approval.required frames retain permission, scope, session, backend, and B
     source: { type: 'tool', messageID: 'msg_1', id: 'call_1' },
     session: 'ses_1', backendId: 'oc-local', botId: 'writer',
   });
+});
+
+// ─── review fixes (Grok round, 2026-11-10) ───────────────────────────
+
+test('a request answered elsewhere while our reply is in flight is withdrawn when that reply fails', async () => {
+  const approvals = new ApprovalService();
+  let bridge;
+  bridge = createOpenCodePermissionBridge({
+    approvals,
+    ...owner,
+    replyApproval: async () => {
+      // Another client answers while this POST is outstanding, then the POST fails (not a 404).
+      bridge.replied({ type: 'permission.v2.replied', data: { sessionID: 'ses_1', requestID: 'per_1', reply: 'reject' } });
+      throw Object.assign(new Error('upstream reset'), { status: 502 });
+    },
+  });
+  const work = bridge.asked(asked('permission.v2.asked'), 'writer');
+  await nextTurn();
+  const [row] = approvals.list();
+  const rpc = createApprovalRpc({ approvals });
+  await assert.rejects(rpc.methods['approval.approve']({ approvalId: row.approvalId }, DEVICE), (error) => error.status === 404);
+  await work;
+  assert.equal(approvals.get(row.approvalId), null);
+});
+
+test('a failure that is not an OpenCode 404 leaves the request pending and retryable', async () => {
+  const approvals = new ApprovalService();
+  let attempts = 0;
+  const posted = [];
+  const bridge = createOpenCodePermissionBridge({
+    approvals,
+    ...owner,
+    replyApproval: async (...args) => {
+      attempts += 1;
+      if (attempts === 1) throw Object.assign(new Error('proxy: host not found'), { status: 502 });
+      posted.push(args);
+    },
+  });
+  const work = bridge.asked(asked('permission.v2.asked'), 'writer');
+  await nextTurn();
+  const [row] = approvals.list();
+  const rpc = createApprovalRpc({ approvals });
+  await assert.rejects(rpc.methods['approval.approve']({ approvalId: row.approvalId }, DEVICE), (error) => error.status === 502);
+  assert.ok(approvals.get(row.approvalId), 'still pending after a non-404 failure');
+  await rpc.methods['approval.approve']({ approvalId: row.approvalId }, DEVICE);
+  await work;
+  assert.deepEqual(posted, [['ses_1', 'per_1', 'once']]);
+});
+
+test('a pending snapshot that is not an array withdraws nothing', async () => {
+  const approvals = new ApprovalService();
+  const bridge = createOpenCodePermissionBridge({ approvals, ...owner, replyApproval: async () => undefined });
+  const work = bridge.asked(asked('permission.v2.asked'), 'writer');
+  await nextTurn();
+  const [row] = approvals.list();
+  for (const body of [null, undefined, {}, { data: [] }, 'oops']) bridge.reconcile('ses_1', body);
+  assert.ok(approvals.get(row.approvalId), 'a non-array snapshot is not evidence');
+  await approvals.decide(row.approvalId, 'deny');
+  await work;
+});
+
+test('a request newer than the snapshot is not judged missing by it', async () => {
+  const approvals = new ApprovalService();
+  const bridge = createOpenCodePermissionBridge({ approvals, ...owner, replyApproval: async () => undefined });
+  const asOf = bridge.mark();
+  const work = bridge.asked(asked('permission.v2.asked'), 'writer');
+  await nextTurn();
+  const [row] = approvals.list();
+  // The snapshot was requested before this request existed, so it cannot list it.
+  bridge.reconcile('ses_1', [], asOf);
+  assert.ok(approvals.get(row.approvalId), 'still pending');
+  await approvals.decide(row.approvalId, 'deny');
+  await work;
+});
+
+test('a request still opening when the snapshot omits it is withdrawn as it lands', async () => {
+  const approvals = new ApprovalService();
+  const realNormalize = approvals.normalize.bind(approvals);
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  approvals.normalize = async (request) => { await gate; return realNormalize(request); };
+  const bridge = createOpenCodePermissionBridge({ approvals, ...owner, replyApproval: async () => assert.fail('must not reply') });
+  const work = bridge.asked(asked('permission.v2.asked'), 'writer');
+  await nextTurn();
+  bridge.reconcile('ses_1', [], bridge.mark());
+  release();
+  await work;
+  assert.deepEqual(approvals.list(), []);
 });

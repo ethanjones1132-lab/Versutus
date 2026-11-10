@@ -21,7 +21,15 @@ export function createOpenCodePermissionBridge({
 } = {}) {
   const byNativeId = new Map();
   const sending = new Set();
+  // A request OpenCode reported resolved while this Gate's own reply was in
+  // flight: if that reply then fails, the request was answered elsewhere.
+  const supersededWhileSending = new Set();
   const openingIds = new Map();
+  // Every request is stamped with the order it was first seen in, so a pending
+  // snapshot only judges requests that existed before it was asked for: one
+  // that arrives on the stream while the snapshot is in flight is not missing.
+  let sequence = 0;
+  const seenAt = new Map();
   const resolvedDuringOpen = new Set();
   let sendReply = replyApproval;
 
@@ -32,6 +40,7 @@ export function createOpenCodePermissionBridge({
     if (typeof sessionId !== 'string' || typeof requestId !== 'string'
       || byNativeId.has(requestId) || openingIds.has(requestId)) return;
     openingIds.set(requestId, sessionId);
+    seenAt.set(requestId, ++sequence);
 
     const permission = request.action ?? request.permission ?? 'unknown';
     const resources = request.resources ?? request.patterns ?? [];
@@ -67,13 +76,19 @@ export function createOpenCodePermissionBridge({
           if (reply !== 'once' && reply !== 'reject') assertOpenCodeReply(reply);
           if (typeof sendReply !== 'function') throw new Error('OpenCode approval reply handler is unavailable');
           sending.add(requestId);
+          supersededWhileSending.delete(requestId);
           let terminal = false;
           try {
             await sendReply(sessionId, requestId, reply);
             terminal = true;
           } catch (error) {
-            if (error?.status === 404 || /not found/i.test(String(error?.message ?? ''))) {
-              approvals.withdraw(normalized.approvalId, 'OpenCode permission request expired');
+            // Only OpenCode's own 404 proves the request is gone. Any other
+            // failure (a proxy, DNS, a timeout) leaves it pending and retryable,
+            // unless OpenCode already said it was answered elsewhere meanwhile.
+            if (error?.status === 404 || supersededWhileSending.has(requestId)) {
+              approvals.withdraw(normalized.approvalId, error?.status === 404
+                ? 'OpenCode permission request expired'
+                : 'OpenCode permission was resolved elsewhere');
               terminal = true;
               if (error?.status !== 404) {
                 error.status = 404;
@@ -83,7 +98,11 @@ export function createOpenCodePermissionBridge({
             throw error;
           } finally {
             sending.delete(requestId);
-            if (terminal) byNativeId.delete(requestId);
+            supersededWhileSending.delete(requestId);
+            if (terminal) {
+              byNativeId.delete(requestId);
+              seenAt.delete(requestId);
+            }
           }
         },
       });
@@ -123,6 +142,7 @@ export function createOpenCodePermissionBridge({
     if (!ruling || ruling.withdrawn) return;
     if (byNativeId.get(requestId)?.approvalId === normalized.approvalId) {
       byNativeId.delete(requestId);
+      seenAt.delete(requestId);
     }
   }
 
@@ -136,17 +156,42 @@ export function createOpenCodePermissionBridge({
     }
     const pending = byNativeId.get(requestId);
     if (!pending || (properties.sessionID && properties.sessionID !== pending.sessionId)) return;
-    if (sending.has(requestId)) return;
+    // Our own reply's echo looks the same as another client's answer, so while
+    // it is in flight only remember the event; the reply's outcome decides.
+    if (sending.has(requestId)) {
+      supersededWhileSending.add(requestId);
+      return;
+    }
     byNativeId.delete(requestId);
+    seenAt.delete(requestId);
     approvals.withdraw(pending.approvalId, 'OpenCode permission was resolved elsewhere');
   }
 
-  function reconcile(sessionId, requests) {
-    const pending = new Set((Array.isArray(requests) ? requests : []).map((request) => request?.id));
+  /** The point a pending snapshot is requested at; pass it back to reconcile. */
+  function mark() {
+    return sequence;
+  }
+
+  /**
+   * Withdraw this session's requests that a pending snapshot no longer lists.
+   * Only an array is evidence: any other body proves nothing and withdraws
+   * nothing. Only requests seen at or before `asOf` are judged, including one
+   * still being opened into the inbox, which is tombstoned so it is withdrawn
+   * the moment it lands.
+   */
+  function reconcile(sessionId, requests, asOf = sequence) {
+    if (!Array.isArray(requests)) return;
+    const pending = new Set(requests.map((request) => request?.id));
+    const judged = (requestId) => (seenAt.get(requestId) ?? Infinity) <= asOf;
     for (const [requestId, owner] of byNativeId) {
-      if (owner.sessionId !== sessionId || pending.has(requestId)) continue;
+      if (owner.sessionId !== sessionId || pending.has(requestId) || !judged(requestId)) continue;
       byNativeId.delete(requestId);
+      seenAt.delete(requestId);
       approvals.withdraw(owner.approvalId, 'OpenCode permission request is no longer pending');
+    }
+    for (const [requestId, owningSession] of openingIds) {
+      if (owningSession !== sessionId || pending.has(requestId) || !judged(requestId)) continue;
+      resolvedDuringOpen.add(requestId);
     }
   }
 
@@ -154,6 +199,7 @@ export function createOpenCodePermissionBridge({
     asked,
     replied,
     reconcile,
+    mark,
     setReplyApproval(handler) { sendReply = handler; },
   };
 }

@@ -1698,12 +1698,15 @@ export function createOpenCodeBackend({
           if (!reader) throw new Error('OpenCode event stream has no body');
           resolveReady();
           if (permissionBridge) {
+            // Taken before the read: a request that shows up on the stream
+            // while the snapshot is in flight is newer than it, not missing.
+            const asOf = permissionBridge.mark?.();
             try {
               const path = major >= 2
                 ? `/api/session/${encodeURIComponent(sessionId)}/permission${locationQuery()}`
                 : `/session/${encodeURIComponent(sessionId)}/permission`;
               const pending = await call(path, {}, readTimeoutMs, major >= 2 ? 2 : 1);
-              permissionBridge.reconcile(sessionId, pending);
+              permissionBridge.reconcile(sessionId, pending, asOf);
             } catch {
               // An unavailable snapshot cannot prove a permission is expired;
               // later asked/replied events and reply-side 404s still reconcile.
