@@ -44,10 +44,29 @@ class JitterBufferTest {
     assertNull(buffer.drain())
   }
 
-  @Test fun aLatencyCapDropsTheOldestAudioRatherThanGrowingForever() {
-    val buffer = JitterBuffer(sampleRateHz = 24000, targetMs = 60, maxPendingMs = 100)
-    repeat(8) { buffer.push(gen = 1, pcm = frame(20)) } // 160 ms offered
+  @Test fun audioArrivingLateForACancelledGenerationIsRejected() {
+    val buffer = JitterBuffer(sampleRateHz = 24000, targetMs = 20)
+    buffer.push(gen = 1, pcm = frame(20))
+    buffer.cancel(gen = 1)
+    buffer.push(gen = 1, pcm = frame(20))
+    assertEquals(0, buffer.pendingMs())
+    assertNull(buffer.drain())
+  }
+
+  @Test fun f8KeepsCurrentGenerationAudioAndRefusesNewestAtSafetyCap() {
+    var warnings = 0
+    val buffer = JitterBuffer(sampleRateHz = 24000, targetMs = 60, maxPendingMs = 100) { warnings += 1 }
+    val chunks = (1..5).map { marker -> ByteArray(20 * 48) { marker.toByte() } }
+    chunks.forEach { buffer.push(gen = 1, pcm = it) }
+    buffer.push(gen = 1, pcm = frame(20)) // newest chunk is refused at 100 ms
     assertEquals(100, buffer.pendingMs())
+    assertEquals(1, warnings)
+    assertEquals(1.toByte(), buffer.drain()!!.first(), "oldest current-gen audio is preserved")
+    assertEquals(2.toByte(), buffer.drain()!!.first())
+    assertEquals(3.toByte(), buffer.drain()!!.first())
+    assertEquals(4.toByte(), buffer.drain()!!.first())
+    assertEquals(5.toByte(), buffer.drain()!!.first())
+    assertEquals(1, warnings, "the capacity warning is emitted only once")
   }
 
   @Test fun flushClearsEveryGeneration() {

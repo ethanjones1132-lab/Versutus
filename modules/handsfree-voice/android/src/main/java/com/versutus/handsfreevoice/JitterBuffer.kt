@@ -21,12 +21,15 @@ class JitterBuffer(
   channels: Int = 1,
   bytesPerSample: Int = 2,
   private val targetMs: Int = 60,
-  private val maxPendingMs: Int = 300,
+  private val maxPendingMs: Int = 60_000,
+  private val onCapacityReached: () -> Unit = {},
 ) {
   private val queued = ArrayDeque<ByteArray>()
   private var totalBytes = 0
   private var activeGen = 0L
   private var primed = false
+  private var cancelledGen: Long? = null
+  private var capacityLogged = false
 
   private val bytesPerMs = (sampleRateHz * channels * bytesPerSample / 1000).coerceAtLeast(1)
 
@@ -38,16 +41,36 @@ class JitterBuffer(
     if (gen > activeGen) {
       activeGen = gen
       clear()
+      cancelledGen = null
+    }
+    if (cancelledGen == gen) return
+    if (totalBytes + pcm.size > maxPendingMs * bytesPerMs) {
+      if (!capacityLogged) {
+        capacityLogged = true
+        onCapacityReached()
+      }
+      return
     }
     queued.addLast(pcm)
     totalBytes += pcm.size
-    trimToCap()
+  }
+
+  /** A start explicitly advances generation and discards only older audio. */
+  @Synchronized
+  fun start(gen: Long) {
+    if (gen <= activeGen) return
+    activeGen = gen
+    cancelledGen = null
+    clear()
   }
 
   /** The Gate cancelled [gen]; anything still queued for it is stale. */
   @Synchronized
   fun cancel(gen: Long) {
-    if (gen == activeGen) clear()
+    if (gen == activeGen) {
+      cancelledGen = gen
+      clear()
+    }
   }
 
   /**
@@ -77,19 +100,17 @@ class JitterBuffer(
   fun pendingMs(): Int = totalBytes / bytesPerMs
 
   @Synchronized
-  fun flush() = clear()
+  fun flush() {
+    clear()
+    activeGen = 0L
+    cancelledGen = null
+    capacityLogged = false
+  }
 
   @Synchronized
   private fun clear() {
     queued.clear()
     totalBytes = 0
     primed = false
-  }
-
-  @Synchronized
-  private fun trimToCap() {
-    while (queued.size > 1 && pendingMs() > maxPendingMs) {
-      totalBytes -= queued.removeFirst().size
-    }
   }
 }

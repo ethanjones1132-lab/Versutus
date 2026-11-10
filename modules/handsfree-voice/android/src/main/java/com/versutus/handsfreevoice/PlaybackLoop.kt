@@ -16,6 +16,7 @@ class PlaybackLoop(
   private val drain: () -> ByteArray?,
   private val write: (ByteArray) -> Unit,
   private val sleepMs: (Long) -> Unit = { Thread.sleep(it) },
+  private val maxWriteBytes: Int = 4_800,
 ) {
   fun run() {
     try {
@@ -25,7 +26,15 @@ class PlaybackLoop(
           sleepMs(IDLE_SLEEP_MS)
           continue
         }
-        write(pcm)
+        // A write can block while AudioTrack consumes it. Bound each call to
+        // 100 ms of 24 kHz mono PCM so pause/flush can cut it short.
+        var offset = 0
+        while (offset < pcm.size && isRunning()) {
+          val end = minOf(offset + maxWriteBytes, pcm.size) and -2
+          if (end <= offset) break
+          write(if (offset == 0 && end == pcm.size) pcm else pcm.copyOfRange(offset, end))
+          offset = end
+        }
       }
     } catch (_: InterruptedException) {
       Thread.currentThread().interrupt()

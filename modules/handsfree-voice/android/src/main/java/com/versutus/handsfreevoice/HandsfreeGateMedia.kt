@@ -6,6 +6,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.util.Log
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
 import okhttp3.OkHttpClient
@@ -75,7 +76,9 @@ class HandsfreeGateMedia(
   private val buffer = JitterBuffer(
     sampleRateHz = PLAYBACK_SAMPLE_RATE,
     targetMs = JITTER_TARGET_MS,
+    onCapacityReached = { Log.w("HandsfreeGateMedia", "Refusing speech audio after 60 s queue limit") },
   )
+  private val playbackLock = Any()
   @Volatile private var currentGen = 0L
 
   fun start(context: Context, url: String, token: String, voiceSessionId: String) {
@@ -220,7 +223,21 @@ class HandsfreeGateMedia(
     when (frame) {
       is GateFrame.Speech -> {
         currentGen = frame.gen
-        if (frame.state == "cancelled") buffer.cancel(frame.gen)
+        when (frame.state) {
+          "start" -> buffer.start(frame.gen)
+          "cancelled" -> {
+            buffer.cancel(frame.gen)
+            // AudioTrack may already contain samples beyond the queue. Pause
+            // before flushing so no written tail remains audible after cancel.
+            synchronized(playbackLock) {
+              audioTrack?.runCatching {
+                pause()
+                flush()
+                if (running) play()
+              }
+            }
+          }
+        }
       }
       is GateFrame.Ended -> {
         sawEnded = true
@@ -339,7 +356,7 @@ class HandsfreeGateMedia(
       PlaybackLoop(
         isRunning = { running },
         drain = { buffer.drain() },
-        write = { pcm -> track.write(pcm, 0, pcm.size) },
+        write = { pcm -> synchronized(playbackLock) { track.write(pcm, 0, pcm.size) } },
       ).run()
     }.also { it.name = "gate-playback"; it.start() }
     return true

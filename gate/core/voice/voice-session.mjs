@@ -202,6 +202,7 @@ function isContinuation(state, event) {
 function bargeIn(state) {
   const cancelled = state.gen;
   return stay({ ...state, phase: 'listening', gen: state.gen + 1 }, [
+    frameSend({ t: 'speech', gen: cancelled, state: 'cancelled' }),
     { kind: 'turn.cancel' },
     { kind: 'engine.cancelSpeech', gen: cancelled },
     phaseEffect('listening'),
@@ -305,10 +306,23 @@ export function reduceVoiceSession(state, event) {
     case 'mute': {
       if (state.phase === 'muted') return stay(state);
       if (state.phase !== 'listening' && state.phase !== 'speaking') return stay(state);
-      return stay({ ...state, phase: 'muted', resumePhase: state.phase, muted: true }, [
+      const wasSpeaking = state.phase === 'speaking';
+      const effects = [
+        ...(wasSpeaking ? [
+          frameSend({ t: 'speech', gen: state.gen, state: 'cancelled' }),
+          { kind: 'turn.cancel' },
+          { kind: 'engine.cancelSpeech', gen: state.gen },
+        ] : []),
         { kind: 'engine.setMuted', muted: true },
         phaseEffect('muted'),
-      ]);
+      ];
+      return stay({
+        ...state,
+        phase: 'muted',
+        resumePhase: wasSpeaking ? 'listening' : state.phase,
+        muted: true,
+        ...(wasSpeaking ? { gen: state.gen + 1 } : {}),
+      }, effects);
     }
 
     case 'unmute': {
@@ -333,6 +347,7 @@ export function reduceVoiceSession(state, event) {
       if (state.phase !== 'speaking' && state.phase !== 'thinking') return stay(state);
       const cancelled = state.gen;
       return stay({ ...state, phase: 'listening', gen: state.gen + 1 }, [
+        frameSend({ t: 'speech', gen: cancelled, state: 'cancelled' }),
         { kind: 'turn.cancel' },
         { kind: 'engine.cancelSpeech', gen: cancelled },
         phaseEffect('listening'),
@@ -345,7 +360,7 @@ export function reduceVoiceSession(state, event) {
       let next = state;
       if (state.phase === 'thinking') {
         next = { ...state, phase: 'speaking', gen: state.gen + 1, reply: state.reply + event.text };
-        effects.push(phaseEffect('speaking'));
+        effects.push(phaseEffect('speaking'), frameSend({ t: 'speech', gen: next.gen, state: 'start' }));
       } else {
         next = { ...state, reply: state.reply + event.text };
       }
@@ -372,6 +387,7 @@ export function reduceVoiceSession(state, event) {
         const gen = state.gen + 1;
         return stay({ ...state, phase: 'speaking', gen, reply: FAILED_TURN_LINE, spoken: FAILED_TURN_LINE }, [
           phaseEffect('speaking'),
+          frameSend({ t: 'speech', gen, state: 'start' }),
           frameSend({ t: 'turn', turnId: state.turnId, state: 'failed', error: 'empty turn' }),
           { kind: 'engine.speak', text: FAILED_TURN_LINE, gen, final: true },
         ]);
@@ -397,6 +413,7 @@ export function reduceVoiceSession(state, event) {
       const gen = state.gen + 1;
       return stay({ ...state, phase: 'speaking', gen, reply: FAILED_TURN_LINE, spoken: FAILED_TURN_LINE }, [
         phaseEffect('speaking'),
+        frameSend({ t: 'speech', gen, state: 'start' }),
         frameSend({ t: 'turn', turnId: state.turnId, state: 'failed', error: event.message }),
         { kind: 'engine.speak', text: FAILED_TURN_LINE, gen, final: true },
       ]);

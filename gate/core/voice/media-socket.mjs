@@ -54,6 +54,8 @@ export const MAX_BUFFERED_FRAMES = 1_000;
 export const PARKED_TURN_MAX_MS = 30 * 60_000;
 export const OUTPUT_SAMPLE_RATE = 24_000;
 export const OUTPUT_CHANNELS = 1;
+// Keep a blocking AudioTrack write bounded so a cancel can take effect promptly.
+export const MAX_SPEECH_CHUNK_MS = 100;
 // How long a turn started on an early end survives before it is committed.
 export const SPECULATION_WINDOW_MS = 600;
 // How long consecutive transcript segments are gathered into one utterance
@@ -366,6 +368,17 @@ export function attachVoiceMediaSocket({
 
     const sendFrame = (frame) => {
       if (ended) return;
+      if (frame.t === 'speech' && frame.state === 'cancelled') {
+        // A detached phone must not replay audio that was cancelled while it
+        // was away; keep the cancellation control frame in the replay stream.
+        for (let index = replay.length - 1; index >= 0; index -= 1) {
+          const entry = replay[index];
+          if (entry.pcm && entry.gen === frame.gen) {
+            bufferedAudioBytes -= entry.pcm.length;
+            replay.splice(index, 1);
+          }
+        }
+      }
       const data = serializeFrame(frame);
       if (ws) {
         ws.send(data);
@@ -380,12 +393,16 @@ export function attachVoiceMediaSocket({
       // to. A barge-in or a skip has already moved it on, so a chunk left over
       // from the cancelled reply would play straight over the operator who
       // interrupted it.
-      if (typeof gen === 'number' && gen < call.gen) return;
-      if (ws) {
-        ws.send(pcm, { binary: true });
-        return;
+      if (typeof gen === 'number' && gen !== call.gen) return;
+      const maxBytes = OUTPUT_SAMPLE_RATE * OUTPUT_CHANNELS * 2 * MAX_SPEECH_CHUNK_MS / 1000;
+      for (let offset = 0; offset < pcm.length; offset += maxBytes) {
+        // PCM16 samples must not be split between messages.
+        const end = Math.min(offset + maxBytes, pcm.length) & ~1;
+        if (end <= offset) continue;
+        const chunk = pcm.subarray(offset, end);
+        if (ws) ws.send(chunk, { binary: true });
+        else append({ pcm: chunk, gen });
       }
-      append({ pcm, gen });
     };
 
     const runEffect = (effect) => {
