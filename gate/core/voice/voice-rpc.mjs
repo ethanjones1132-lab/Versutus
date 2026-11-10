@@ -8,7 +8,8 @@
 // used instead (§4.2), so a fallback is never silent.
 
 import { requireDevice } from '../push-rpc.mjs';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
+import { deviceTag } from './audit.mjs';
 import { codexRealtimeStatus } from './codex-status.mjs';
 
 /**
@@ -280,15 +281,6 @@ function rpcError(message, status, code) {
   return error;
 }
 
-/**
- * A stable, non-reversible handle for a log line. A raw device id is an
- * identifier the operator does not need in gate.log, and the same phone must
- * still be greppable across attempts, so the tag is a fixed hash prefix.
- */
-function deviceTag(deviceId) {
-  return createHash('sha256').update(String(deviceId)).digest('hex').slice(0, 12);
-}
-
 /** `auto` prefers `local`, then `codex`; `phone` never runs on the Gate. */
 function readyEngines(engines) {
   return ['local', 'codex'].filter((id) => engines[id]?.state === 'ready');
@@ -353,7 +345,7 @@ export function createVoiceRpc({
     'voice.capabilities': async (params = {}, ctx) => {
       const deviceId = requireDevice(ctx, params);
       const state = decorate(capabilities());
-      log(`voice.capabilities device=${deviceId} enabled=${state.enabled} local=${state.engines?.local?.state} codex=${state.engines?.codex?.state}`);
+      log(`voice.capabilities device=${deviceTag(deviceId)} enabled=${state.enabled} local=${state.engines?.local?.state} codex=${state.engines?.codex?.state}`);
       return state;
     },
 
@@ -475,7 +467,7 @@ export function createVoiceRpc({
         throw rpcError('That voice session belongs to another device', 403, 'not_your_session');
       }
       registry.end(params.voiceSessionId);
-      log(`voice.session.stop ok device=${deviceId} session=${params.voiceSessionId} reason=${params.reason ?? 'unspecified'}`);
+      log(`voice.session.stop ok device=${deviceTag(deviceId)} session=${params.voiceSessionId} reason=${params.reason ?? 'unspecified'}`);
       return { stopped: true };
     },
   };

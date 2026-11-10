@@ -11,7 +11,7 @@ import { AUDIT_FIELDS, buildAuditLine, createVoiceAudit } from '../core/voice/au
 // field from the module fails here.
 const DOCUMENTED_FIELDS = [
   'ts',
-  'deviceId',
+  'deviceTag',
   'botId',
   'engine',
   'fellBackFrom',
