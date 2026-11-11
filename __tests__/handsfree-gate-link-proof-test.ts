@@ -75,7 +75,7 @@ describe('the probe', () => {
     const proving = probe.prove(GATE_LINK_READY_MS);
     expect(budgets).toEqual([]);
     // Nothing has been said on the wire yet: the link is still `connecting`.
-    probe.observe('{"t":"level","v":0.4}');
+    probe.observe('{"t":"partial","text":"hi"}');
     await expect(proving).resolves.toBe('frame');
     jest.useRealTimers();
   });

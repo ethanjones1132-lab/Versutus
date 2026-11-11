@@ -138,35 +138,6 @@ test('a final runs the Bot turn and speaks its sentences', async () => {
   await media.close();
 });
 
-test('a phone barge-in cancels only the generation being spoken', async () => {
-  let release;
-  const runTurn = (_session, _text, { onDelta }) => {
-    onDelta('A spoken sentence.');
-    return new Promise((resolve) => {
-      release = () => resolve({ hasContent: true });
-    });
-  };
-  const engine = new FakeEngine({ autoDone: false });
-  const media = await startMedia({ runTurn, engine });
-  const { ws, frames } = connect(media.port);
-  await once(ws, 'open');
-  await waitUntil(() => frames.some((frame) => frame.t === 'ready'));
-
-  ws.send(Buffer.from([0, 0]));
-  await waitUntil(() => frames.some((frame) => frame.t === 'reply'));
-  const gen = engine.spoken[0]?.gen;
-
-  ws.send(JSON.stringify({ t: 'bargein' }));
-  await waitUntil(() => engine.cancelled.length === 1);
-  assert.equal(engine.cancelled[0], gen);
-  assert.ok(frames.some((frame) => frame.t === 'phase' && frame.phase === 'listening'));
-
-  release?.();
-  ws.close();
-  await once(ws, 'close');
-  await media.close();
-});
-
 test('the engine hearing speech cancels the live generation', async () => {
   let release;
   const runTurn = (_session, _text, { onDelta }) => {

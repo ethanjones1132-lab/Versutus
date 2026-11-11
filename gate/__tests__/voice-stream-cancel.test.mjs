@@ -60,7 +60,7 @@ async function callHarness(t) {
   return { engine, received, ws };
 }
 
-test('speech is chunked and barge-in cancels without sending stale audio', async (t) => {
+test('speech is chunked and a speech onset cancels without sending stale audio', async (t) => {
   const { engine, received, ws } = await callHarness(t);
   const firstAudioIndex = received.findIndex(Buffer.isBuffer);
   const startIndex = received.findIndex((frame) => frame?.t === 'speech' && frame.state === 'start');
@@ -70,7 +70,9 @@ test('speech is chunked and barge-in cancels without sending stale audio', async
   const maxBytes = OUTPUT_SAMPLE_RATE * 2 * MAX_SPEECH_CHUNK_MS / 1000;
   assert.ok(pcmChunks.length > 1);
   assert.ok(pcmChunks.every((chunk) => chunk.length <= maxBytes));
-  ws.send(JSON.stringify({ t: 'bargein' }));
+  // The Gate hears the onset in the PCM it already receives; the phone has no
+  // separate barge-in control.
+  engine.emit('userSpeechStart', {});
   await wait(() => received.some((frame) => frame?.t === 'speech' && frame.state === 'cancelled'));
   const cancelIndex = received.findIndex((frame) => frame?.t === 'speech' && frame.state === 'cancelled');
   const chunksBefore = received.filter(Buffer.isBuffer).length;

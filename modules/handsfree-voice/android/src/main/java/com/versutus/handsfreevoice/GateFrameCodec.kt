@@ -39,11 +39,22 @@ sealed class GateFrame {
     override val t get() = "speech"
   }
 
-  data class Level(val v: Double) : GateFrame() {
-    override val t get() = "level"
+  data class Tool(
+    val turnId: String,
+    val toolId: String,
+    val name: String,
+    val status: String,
+    val summary: String,
+  ) : GateFrame() {
+    override val t get() = "tool"
   }
 
-  data class Approval(val turnId: String, val summary: String) : GateFrame() {
+  data class Approval(
+    val turnId: String,
+    val summary: String,
+    val approvalId: String?,
+    val state: String?,
+  ) : GateFrame() {
     override val t get() = "approval"
   }
 
@@ -71,10 +82,6 @@ sealed class GateFrame {
       override val t get() = "skip"
     }
 
-    object BargeIn : Phone() {
-      override val t get() = "bargein"
-    }
-
     object End : Phone() {
       override val t get() = "end"
     }
@@ -98,13 +105,17 @@ class GateProtocolError(message: String) : Exception(message)
  * than guessed at.
  */
 object GateFrameCodec {
-  private val GATE_TYPES = setOf(
-    "call", "ready", "phase", "partial", "final", "turn", "reply", "speech", "level", "approval", "error", "ended",
+  // Barge-in is heard by the Gate from PCM and `level` is measured natively by
+  // the phone, so neither is a wire frame. Every type left has a real producer.
+  internal val GATE_TYPES = setOf(
+    "call", "ready", "phase", "partial", "final", "turn", "reply", "speech", "tool", "approval", "error", "ended",
   )
-  private val PHONE_TYPES = setOf("mute", "skip", "bargein", "end", "played", "resume")
+  internal val PHONE_TYPES = setOf("mute", "skip", "end", "played", "resume")
   private val PHASES = setOf("opening", "listening", "thinking", "speaking", "muted")
   private val TURN_STATES = setOf("sent", "replying", "done", "failed")
   private val SPEECH_STATES = setOf("start", "end", "cancelled", "gap")
+  private val TOOL_STATES = setOf("running", "complete", "error")
+  private val APPROVAL_STATES = setOf("pending", "approved", "denied", "expired")
 
   fun parse(json: String, expectedCallId: String? = null): GateFrame {
     val frame = record(json, GATE_TYPES)
@@ -131,7 +142,6 @@ object GateFrameCodec {
         GateFrame.Phone.Mute(on)
       }
       "skip" -> GateFrame.Phone.Skip
-      "bargein" -> GateFrame.Phone.BargeIn
       "played" -> GateFrame.Phone.Played(
         requireNumber(frame, "gen").toLong(),
         requireNumber(frame, "atMs").toLong(),
@@ -180,8 +190,19 @@ object GateFrameCodec {
       requireNumber(frame, "gen").toLong(),
       requireEnum(frame, "state", SPEECH_STATES),
     )
-    "level" -> GateFrame.Level(requireNumber(frame, "v"))
-    "approval" -> GateFrame.Approval(requireString(frame, "turnId"), requireString(frame, "summary"))
+    "tool" -> GateFrame.Tool(
+      requireString(frame, "turnId"),
+      requireString(frame, "toolId"),
+      requireString(frame, "name"),
+      requireEnum(frame, "status", TOOL_STATES),
+      requireString(frame, "summary"),
+    )
+    "approval" -> GateFrame.Approval(
+      requireString(frame, "turnId"),
+      requireString(frame, "summary"),
+      optionalString(frame, "approvalId"),
+      optionalEnum(frame, "state", APPROVAL_STATES),
+    )
     "error" -> {
       val fatal = frame.opt("fatal")
       if (fatal !is Boolean) throw GateProtocolError("fatal must be a boolean")
@@ -205,8 +226,8 @@ object GateFrameCodec {
   }
 
   private fun validateEnvelope(frame: JSONObject, expectedCallId: String?): Int {
-    // A v1 `level` frame uses `v` for its level (0..1), so only `v == 2` names
-    // the v2 envelope, the same rule the Gate and app parsers apply.
+    // Only `v == 2` names the v2 envelope, the same rule the Gate and app
+    // parsers apply; a v1 frame has no version field at all.
     val version = frame.opt("v")
     if (version !is Number || version.toDouble() != 2.0) return 1
     val callId = requireString(frame, "callId")
@@ -239,5 +260,17 @@ object GateFrameCodec {
       throw GateProtocolError("$field must be one of ${allowed.joinToString(", ")}")
     }
     return value
+  }
+
+  // Additive fields keep the old approval shape valid: absent means the older
+  // Gate that sent only a turn id and summary.
+  private fun optionalString(frame: JSONObject, field: String): String? {
+    if (!frame.has(field) || frame.get(field) == JSONObject.NULL) return null
+    return requireString(frame, field)
+  }
+
+  private fun optionalEnum(frame: JSONObject, field: String, allowed: Set<String>): String? {
+    if (!frame.has(field) || frame.get(field) == JSONObject.NULL) return null
+    return requireEnum(frame, field, allowed)
   }
 }

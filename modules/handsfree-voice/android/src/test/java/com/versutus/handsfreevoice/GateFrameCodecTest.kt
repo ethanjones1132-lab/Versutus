@@ -59,6 +59,52 @@ class GateFrameCodecTest {
     }
   }
 
+  @Test fun everyDeclaredFrameTypeAppearsInTheSharedFixture() {
+    val source = fixture()
+    val gateSeen = mutableSetOf<String>()
+    for (key in listOf("gateToPhone", "v2GateToPhone")) {
+      val frames = source.getJSONArray(key)
+      for (i in 0 until frames.length()) gateSeen.add(frames.getJSONObject(i).getString("t"))
+    }
+    assertEquals(GateFrameCodec.GATE_TYPES, gateSeen)
+
+    val phoneSeen = mutableSetOf<String>()
+    for (key in listOf("phoneToGate", "v2PhoneToGate")) {
+      val frames = source.getJSONArray(key)
+      for (i in 0 until frames.length()) phoneSeen.add(frames.getJSONObject(i).getString("t"))
+    }
+    assertEquals(GateFrameCodec.PHONE_TYPES, phoneSeen)
+  }
+
+  @Test fun aToolFrameCarriesOnlyItsBoundedLifecycleSummary() {
+    val tool = GateFrameCodec.parse(
+      """{"v":2,"callId":"vs-1","seq":12,"ts":11,"t":"tool","turnId":"t1","toolId":"call-1","name":"read","status":"running","summary":"read running"}""",
+      "vs-1",
+    )
+    assertEquals(GateFrame.Tool("t1", "call-1", "read", "running", "read running"), tool)
+    assertThrows(GateProtocolError::class.java) {
+      GateFrameCodec.parse(
+        """{"t":"tool","turnId":"t1","toolId":"call-1","name":"read","status":"done","summary":"read done"}""",
+      )
+    }
+  }
+
+  @Test fun approvalKeepsItsAdditiveIdentityAndState() {
+    assertEquals(
+      GateFrame.Approval("t1", "Run it?", "a1", "pending"),
+      GateFrameCodec.parse(
+        """{"t":"approval","turnId":"t1","summary":"Run it?","approvalId":"a1","state":"pending"}""",
+      ),
+    )
+    assertEquals(
+      GateFrame.Approval("t1", "Run it?", null, null),
+      GateFrameCodec.parse("""{"t":"approval","turnId":"t1","summary":"Run it?"}"""),
+    )
+    assertThrows(GateProtocolError::class.java) {
+      GateFrameCodec.parse("""{"t":"approval","turnId":"t1","summary":"Run it?","state":"maybe"}""")
+    }
+  }
+
   @Test fun everyMalformedFrameIsRejected() {
     val frames = fixture().getJSONArray("malformed")
     for (i in 0 until frames.length()) {

@@ -438,6 +438,10 @@ export function attachVoiceMediaSocket({
 
     const sendFrame = (frame) => {
       if (ended) return;
+      // Tool lifecycle is v2-only. A v1 phone never declared the type, so the
+      // Gate keeps its old byte stream rather than sending a frame that peer
+      // cannot read.
+      if (protocolVersion === 1 && frame.t === 'tool') return;
       // A detached link cannot deliver the intermediate live transcript. Keep
       // the latest adjacent partial at the same sequence slot rather than
       // growing the bounded replay log with superseded text.
@@ -445,14 +449,6 @@ export function attachVoiceMediaSocket({
       if (protocolVersion === 2 && !ws && frame.t === 'partial' && replay.length) {
         const tail = replay[replay.length - 1];
         if (tail.seq !== undefined && JSON.parse(tail.frame).t === 'partial') coalescedPartial = tail;
-      }
-      if (protocolVersion === 2 && frame.t === 'level') {
-        const overloaded = ws
-          ? ws.bufferedAmount > V2_MAX_REPLAY_BYTES / 4
-          : replayBytes > V2_MAX_REPLAY_BYTES * 0.75 || replay.length > maxBufferedFrames * 0.75;
-        // Levels are optional and lossy by design; discard before sequencing so
-        // the replay stream remains contiguous and lifecycle controls retain room.
-        if (overloaded) return;
       }
       // The reducer's turn ids are per-commit. Preserve the historical v1
       // payload exactly; only negotiated v2 peers observe the new identities.
@@ -738,11 +734,11 @@ export function attachVoiceMediaSocket({
           trace.sentencePcmLatencies.push(turnSentencePcmMs);
           turnSentenceAt = 0;
         }
-      } else if (['bargein', 'userSpeechStart', 'skip', 'end', 'error', 'mute', 'unmute'].includes(event.type)) {
-        // Both the phone's own frame and the worker's speech onset mean the
-        // operator talked over the reply. Skip is a control, not a barge-in,
-        // and a speech onset while nothing is being spoken is just listening.
-        if ((event.type === 'bargein' || event.type === 'userSpeechStart') && call.phase === 'speaking') {
+      } else if (['userSpeechStart', 'skip', 'end', 'error', 'mute', 'unmute'].includes(event.type)) {
+        // The worker's speech onset means the operator talked over the reply.
+        // Skip is a control, not a barge-in, and a speech onset while nothing is
+        // being spoken is just listening.
+        if (event.type === 'userSpeechStart' && call.phase === 'speaking') {
           trace.bargeIns += 1;
         }
         log(`voice.event session=${session.voiceSessionId} type=${event.type}${event.code ? ` code=${event.code}` : ''}${event.message ? ` message=${redactedLogText(event.message)}` : ''}`);
@@ -848,6 +844,23 @@ export function attachVoiceMediaSocket({
             summary: approval?.summary ?? 'Approval needed',
             state: 'pending',
           }),
+          // The phone gets the tool's lifecycle, not its content: the runner's
+          // detail holds arguments and output, so only a bounded name/status
+          // summary crosses the wire. A running event may arrive twice (start,
+          // then progress); the phone keys it by toolId.
+          onToolCall: (tool) => {
+            const name = String(tool?.name ?? 'tool').slice(0, 80);
+            const status = tool?.status === 'error'
+              ? 'error'
+              : tool?.status === 'complete' ? 'complete' : 'running';
+            deliver({
+              type: 'toolUpdate',
+              toolId: String(tool?.callId ?? `tool-${tool?.index ?? 0}`).slice(0, 80),
+              name,
+              status,
+              summary: `${name} ${status}`,
+            });
+          },
           // How far the runner got, so a silent turn is placed in the log: which
           // backend answered, was the turn sent, was it accepted, did any
           // activity arrive, and if it stalled, which step it was waiting on.
@@ -980,8 +993,8 @@ export function attachVoiceMediaSocket({
             );
           }
         }
-        else if (control.t === 'skip' || control.t === 'bargein') {
-          dispatch({ type: control.t });
+        else if (control.t === 'skip') {
+          dispatch({ type: 'skip' });
         } else {
           dispatch({ type: 'end' });
         }

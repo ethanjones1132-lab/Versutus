@@ -92,6 +92,26 @@ describe('reduceGateCall folds every Gate frame into the banner', () => {
     expect(state.speechState).toBe('start');
   });
 
+  test('a tool update is folded for the call and retired by the next turn', () => {
+    const { state } = reduceGateCall(INITIAL_GATE_CALL, {
+      t: 'tool',
+      turnId: 't1',
+      toolId: 'call-1',
+      name: 'read',
+      status: 'running',
+      summary: 'read running',
+    });
+    expect(state.tool).toEqual({
+      turnId: 't1',
+      toolId: 'call-1',
+      name: 'read',
+      status: 'running',
+      summary: 'read running',
+    });
+    const next = reduceGateCall(state, { t: 'final', turnId: 't2', text: 'next' });
+    expect(next.state.tool).toBeNull();
+  });
+
   test('an approval frame is surfaced for the approval flow', () => {
     const { state } = reduceGateCall(INITIAL_GATE_CALL, {
       t: 'approval',

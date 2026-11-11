@@ -336,11 +336,6 @@ export function reduceVoiceSession(state, event) {
       return stay({ ...state, phase: back, resumePhase: null, muted: false }, effects);
     }
 
-    case 'bargein': {
-      if (state.phase !== 'speaking') return stay(state);
-      return bargeIn(state);
-    }
-
     case 'skip': {
       if (state.phase !== 'speaking' && state.phase !== 'thinking') return stay(state);
       const cancelled = state.gen;
@@ -416,6 +411,23 @@ export function reduceVoiceSession(state, event) {
         { kind: 'engine.speak', text: FAILED_TURN_LINE, gen, final: true },
       ]);
     }
+
+    // The runner reports tool lifecycle while the turn runs. It is the turn's
+    // news even though it is not the call's: the phone shows the card, and a
+    // frame is safe to carry because the runner's summary is bounded and holds
+    // no arguments or output.
+    case 'toolUpdate':
+      if (!state.turnId) return stay(state);
+      return stay(state, [
+        frameSend({
+          t: 'tool',
+          turnId: state.turnId,
+          toolId: event.toolId,
+          name: event.name,
+          status: event.status,
+          summary: event.summary,
+        }),
+      ]);
 
     case 'approvalRequired':
       return stay(state, [

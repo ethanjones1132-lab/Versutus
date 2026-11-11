@@ -46,6 +46,14 @@ export type GateCallBanner = {
   speechGen: number;
   speechState: VoiceSpeechState | null;
   muted: boolean;
+  /** The latest tool lifecycle frame, keyed by `toolId` for the call's turn. */
+  tool: {
+    turnId: string;
+    toolId: string;
+    name: string;
+    status: 'running' | 'complete' | 'error';
+    summary: string;
+  } | null;
   approval: {
     turnId: string;
     summary: string;
@@ -77,6 +85,7 @@ export const INITIAL_GATE_CALL: GateCallBanner = {
   speechGen: 0,
   speechState: null,
   muted: false,
+  tool: null,
   approval: null,
   endedReason: null,
   recovery: '',
@@ -149,7 +158,16 @@ export function reduceGateCall(
       // send it. It is held so a dropped call can offer it back in the composer.
       // A new turn also clears the last one's failure: the Gate heard something
       // else, so that sentence is no longer this call's news.
-      return stay({ ...state, partial: '', recovery: frame.text, turnError: null, approval: null });
+      return stay({
+        ...state,
+        partial: '',
+        recovery: frame.text,
+        turnError: null,
+        // A new committed turn is a new card: the last turn's tool does not
+        // belong to it any more.
+        tool: null,
+        approval: null,
+      });
 
     case 'turn': {
       const next = { ...state, turnState: frame.state, turnError: frame.error ?? null };
@@ -174,10 +192,19 @@ export function reduceGateCall(
       return stay(next);
     }
 
-    case 'level':
-      // Amplitude is banner-only and handled by the provider; it does not change
-      // the folded state.
-      return stay(state);
+    case 'tool':
+      // The call owns one tool card at a time; a later status for the same id
+      // replaces it, and a different id is the next tool in the turn.
+      return stay({
+        ...state,
+        tool: {
+          turnId: frame.turnId,
+          toolId: frame.toolId,
+          name: frame.name,
+          status: frame.status,
+          summary: frame.summary,
+        },
+      });
 
     case 'approval':
       return stay({

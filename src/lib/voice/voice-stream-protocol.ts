@@ -5,7 +5,10 @@
 
 export const MAX_FRAME_BYTES = 4096;
 
-export const PHONE_FRAME_TYPES = ['mute', 'skip', 'bargein', 'end', 'played', 'resume'] as const;
+// Every type here has a producer on the other side. Barge-in is heard by the
+// Gate from the PCM it already receives, and the Gate has no amplitude source
+// for `level`, so neither is a frame.
+export const PHONE_FRAME_TYPES = ['mute', 'skip', 'end', 'played', 'resume'] as const;
 export const GATE_FRAME_TYPES = [
   'call',
   'ready',
@@ -15,7 +18,7 @@ export const GATE_FRAME_TYPES = [
   'turn',
   'reply',
   'speech',
-  'level',
+  'tool',
   'approval',
   'error',
   'ended',
@@ -23,17 +26,18 @@ export const GATE_FRAME_TYPES = [
 export const PHASES = ['opening', 'listening', 'thinking', 'speaking', 'muted'] as const;
 export const TURN_STATES = ['sent', 'replying', 'done', 'failed'] as const;
 export const SPEECH_STATES = ['start', 'end', 'cancelled', 'gap'] as const;
+export const TOOL_STATES = ['running', 'complete', 'error'] as const;
 
 export type VoicePhase = (typeof PHASES)[number];
 export type VoiceTurnState = (typeof TURN_STATES)[number];
 export type VoiceSpeechState = (typeof SPEECH_STATES)[number];
+export type VoiceToolState = (typeof TOOL_STATES)[number];
 export type VoiceEngineId = 'local' | 'codex' | 'phone';
 export type VoiceV2Envelope = { v: 2; callId: string; seq: number; ts: number };
 
 export type PhoneVoiceFrame = (
   | { t: 'mute'; on: boolean }
   | { t: 'skip' }
-  | { t: 'bargein' }
   | { t: 'end' }
   | { t: 'played'; gen: number; atMs: number }
   | { t: 'resume'; lastSeq: number }) & Partial<VoiceV2Envelope>;
@@ -48,6 +52,14 @@ export type GateVoiceFrame = (
   | { t: 'reply'; turnId: string; delta: string; offset?: number }
   | { t: 'speech'; gen: number; state: VoiceSpeechState }
   | {
+      t: 'tool';
+      turnId: string;
+      toolId: string;
+      name: string;
+      status: VoiceToolState;
+      summary: string;
+    }
+  | {
       t: 'approval';
       turnId: string;
       summary: string;
@@ -55,9 +67,7 @@ export type GateVoiceFrame = (
       state?: 'pending' | 'approved' | 'denied' | 'expired';
     }
   | { t: 'error'; code: string; message: string; fatal: boolean }
-  | { t: 'ended'; reason: string }) & Partial<VoiceV2Envelope>
-  | { t: 'level'; v: number }
-  | ({ t: 'level'; level: number } & VoiceV2Envelope);
+  | { t: 'ended'; reason: string }) & Partial<VoiceV2Envelope>;
 
 export class VoiceProtocolError extends Error {
   constructor(message: string) {
@@ -150,8 +160,6 @@ export function parsePhoneFrame(value: unknown, options: { callId?: string } = {
       return withEnvelope({ t: 'mute', on: frame.on });
     case 'skip':
       return withEnvelope({ t: 'skip' });
-    case 'bargein':
-      return withEnvelope({ t: 'bargein' });
     case 'played':
       return withEnvelope({ t: 'played', gen: requireNumber(frame, 'gen'), atMs: requireNumber(frame, 'atMs') });
     case 'resume': {
@@ -167,10 +175,7 @@ export function parsePhoneFrame(value: unknown, options: { callId?: string } = {
 export function parseGateFrame(value: unknown, options: { callId?: string } = {}): GateVoiceFrame {
   const frame = toRecord(value, GATE_FRAME_TYPES);
   if (frame.t === 'call' && frame.v !== 2) throw new VoiceProtocolError('call frames require protocol version 2');
-  // `v` is the existing v1 level payload. V2 levels use `level` for the
-  // payload so the envelope can keep `v: 2` without colliding with it.
-  const isLegacyLevel = frame.t === 'level' && frame.level === undefined && frame.callId === undefined && frame.seq === undefined && frame.ts === undefined;
-  const envelope = isLegacyLevel ? null : parseEnvelope(frame, options.callId);
+  const envelope = parseEnvelope(frame, options.callId);
   const withEnvelope = <T extends GateVoiceFrame>(parsed: T): T => ({ ...parsed, ...(envelope ?? {}) }) as T;
   switch (frame.t) {
     case 'call':
@@ -216,9 +221,15 @@ export function parseGateFrame(value: unknown, options: { callId?: string } = {}
     }
     case 'speech':
       return withEnvelope({ t: 'speech', gen: requireNumber(frame, 'gen'), state: requireEnum(frame, 'state', SPEECH_STATES) });
-    case 'level':
-      if (envelope) return { t: 'level', level: requireNumber(frame, 'level'), ...envelope };
-      return { t: 'level', v: requireNumber(frame, 'v') };
+    case 'tool':
+      return withEnvelope({
+        t: 'tool',
+        turnId: requireString(frame, 'turnId'),
+        toolId: requireString(frame, 'toolId'),
+        name: requireString(frame, 'name'),
+        status: requireEnum(frame, 'status', TOOL_STATES),
+        summary: requireString(frame, 'summary'),
+      });
     case 'approval': {
       const approval: Extract<GateVoiceFrame, { t: 'approval' }> = {
         t: 'approval',

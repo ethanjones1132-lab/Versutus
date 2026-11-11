@@ -6,7 +6,13 @@
 
 export const MAX_FRAME_BYTES = 4096;
 
-export const PHONE_FRAME_TYPES = Object.freeze(['mute', 'skip', 'bargein', 'end', 'played', 'resume']);
+// A phone frames only what it can actually do on a Gate call. Barge-in is not
+// one of them: the Gate hears the onset in the PCM it already receives and the
+// phone has no second detector, so a `bargein` frame would have no producer.
+export const PHONE_FRAME_TYPES = Object.freeze(['mute', 'skip', 'end', 'played', 'resume']);
+// `level` is absent for the same reason: the Gate has no amplitude source to
+// sample, while the phone measures its own capture natively and never over
+// this wire. Every type here has a producer in `media-socket`/`voice-session`.
 export const GATE_FRAME_TYPES = Object.freeze([
   'call',
   'ready',
@@ -16,7 +22,7 @@ export const GATE_FRAME_TYPES = Object.freeze([
   'turn',
   'reply',
   'speech',
-  'level',
+  'tool',
   'approval',
   'error',
   'ended',
@@ -25,6 +31,9 @@ export const GATE_FRAME_TYPES = Object.freeze([
 // once and `listening` only when the engine is open.
 export const PHASES = Object.freeze(['opening', 'listening', 'thinking', 'speaking', 'muted']);
 export const TURN_STATES = Object.freeze(['sent', 'replying', 'done', 'failed']);
+// The runner reports a tool's progress as it happens; the wire carries only that
+// lifecycle, never the arguments or output the runner keeps for the thread.
+export const TOOL_STATES = Object.freeze(['running', 'complete', 'error']);
 // `gap` says the audio that was in front of this is gone: the head of a reply
 // was dropped because the call's replay log overflowed while no phone was
 // attached, and the chunks that follow belong to what it did not drop.
@@ -81,8 +90,7 @@ function parseFrame(value, types, build) {
   }
   if (frame.t === 'call' && frame.v !== 2) throw new VoiceProtocolError('call frames require protocol version 2');
   if (frame.t === 'resume' && frame.v !== 2) throw new VoiceProtocolError('resume frames require protocol version 2');
-  const legacyLevel = frame.t === 'level' && frame.level === undefined && frame.callId === undefined && frame.seq === undefined && frame.ts === undefined;
-  const envelope = frame.v === undefined || legacyLevel ? null : parseEnvelope(frame);
+  const envelope = frame.v === undefined ? null : parseEnvelope(frame);
   return Object.freeze({ ...build(frame), ...(envelope ?? {}) });
 }
 
@@ -111,7 +119,7 @@ export function parsePhoneFrame(value, options = {}) {
     if (Buffer.byteLength(value, 'utf8') > MAX_FRAME_BYTES) throw new VoiceProtocolError('frame is too large');
     try { value = JSON.parse(value); } catch { throw new VoiceProtocolError('frame is not JSON'); }
   }
-  if (isRecord(value) && value.v !== undefined && !(value.t === 'level' && value.level === undefined && value.callId === undefined && value.seq === undefined && value.ts === undefined)) parseEnvelope(value, options.callId);
+  if (isRecord(value) && value.v !== undefined) parseEnvelope(value, options.callId);
   return parseFrame(value, PHONE_FRAME_TYPES, (frame) => {
     switch (frame.t) {
       case 'mute': {
@@ -120,8 +128,6 @@ export function parsePhoneFrame(value, options = {}) {
       }
       case 'skip':
         return { t: 'skip' };
-      case 'bargein':
-        return { t: 'bargein' };
       case 'played':
         return { t: 'played', gen: requireNumber(frame, 'gen'), atMs: requireNumber(frame, 'atMs') };
       case 'resume': {
@@ -141,7 +147,7 @@ export function parseGateFrame(value, options = {}) {
     if (Buffer.byteLength(value, 'utf8') > MAX_FRAME_BYTES) throw new VoiceProtocolError('frame is too large');
     try { value = JSON.parse(value); } catch { throw new VoiceProtocolError('frame is not JSON'); }
   }
-  if (isRecord(value) && value.v !== undefined && !(value.t === 'level' && value.level === undefined && value.callId === undefined && value.seq === undefined && value.ts === undefined)) parseEnvelope(value, options.callId);
+  if (isRecord(value) && value.v !== undefined) parseEnvelope(value, options.callId);
   return parseFrame(value, GATE_FRAME_TYPES, (frame) => {
     switch (frame.t) {
       case 'call':
@@ -182,10 +188,15 @@ export function parseGateFrame(value, options = {}) {
       }
       case 'speech':
         return { t: 'speech', gen: requireNumber(frame, 'gen'), state: requireEnum(frame, 'state', SPEECH_STATES) };
-      case 'level':
-        return frame.callId !== undefined || frame.seq !== undefined || frame.ts !== undefined
-          ? { t: 'level', level: requireNumber(frame, 'level'), v: 2, callId: frame.callId, seq: frame.seq, ts: frame.ts }
-          : { t: 'level', v: requireNumber(frame, 'v') };
+      case 'tool':
+        return {
+          t: 'tool',
+          turnId: requireString(frame, 'turnId'),
+          toolId: requireString(frame, 'toolId'),
+          name: requireString(frame, 'name'),
+          status: requireEnum(frame, 'status', TOOL_STATES),
+          summary: requireString(frame, 'summary'),
+        };
       case 'approval': {
         const approval = {
           t: 'approval',
