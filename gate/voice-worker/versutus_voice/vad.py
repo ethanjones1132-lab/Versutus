@@ -88,6 +88,12 @@ class VadSegmenter:
         # A warm worker is reused across calls, and the hardened echo gate is
         # state: left on, the next call would refuse the operator's speech.
         self._playback = False
+        # How many speech-like onsets the playback echo gate refused, and
+        # whether one is currently being refused. The count is an episode, not
+        # every 32 ms window: the Gate audits "how often echo tried to barge",
+        # which stays readable across a long loudspeaker passage.
+        self.echo_gated = 0
+        self._echo_gated_episode = False
         # The floor starts noise-suspicious, not quiet-trusting: with a low
         # seed, eight consecutive above-threshold noise windows (250 ms) open
         # an utterance before the floor can ever rise — the bootstrap problem.
@@ -123,6 +129,15 @@ class VadSegmenter:
                 return events
         gate = self._gate()
         if not self.in_speech:
+            # A window that clears the base threshold but not the raised
+            # playback gate is echo the gate refused. Count the onset once;
+            # the windows after it are the same echo still arriving.
+            if self._playback and self.threshold <= probability < gate:
+                if not self._echo_gated_episode:
+                    self._echo_gated_episode = True
+                    self.echo_gated += 1
+            else:
+                self._echo_gated_episode = False
             if probability >= gate:
                 self._speech_ms += self.window_ms
                 self._silence_ms = 0.0
@@ -140,12 +155,14 @@ class VadSegmenter:
                 self._floor += (min(probability, self.floor_cap) - self._floor) * alpha
                 self._floor = min(max(self._floor, 0.0), self.floor_cap)
         elif probability < gate:
+            self._echo_gated_episode = False
             self._silence_ms += self.window_ms
             if self._silence_ms >= self.silence_ms:
                 self.in_speech = False
                 self._speech_ms = 0.0
                 events.append(VadEvent("speech_end", round(self._now_ms - self._silence_ms)))
         else:
+            self._echo_gated_episode = False
             self._silence_ms = 0.0
         return events
 

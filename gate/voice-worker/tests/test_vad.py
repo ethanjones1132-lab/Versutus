@@ -178,6 +178,27 @@ def test_playback_raises_the_gate_against_leaked_echo():
     assert "speech_start" in [event.kind for event in events]
 
 
+def test_an_echo_onset_the_playback_gate_refuses_is_counted_once():
+    # O2 audits how often echo tried to barge. One sustained loudspeaker
+    # passage is one onset, not sixty 32 ms windows of the same echo.
+    seg = VadSegmenter(start_ms=250)
+    _prob_segmenter([0.7] * 300, seg)
+    seg.set_playback(True)
+    assert seg.echo_gated == 0
+    assert _prob_segmenter([0.87] * 60, seg) == []
+    assert seg.echo_gated == 1
+
+    # Real speech clears the raised gate and ends the episode; a later echo
+    # onset is a new thing to count.
+    _prob_segmenter([0.95] * 40, seg)
+    seg.set_playback(True)
+    _prob_segmenter([0.87] * 60, seg)
+    assert seg.echo_gated == 2
+
+    seg.reset()
+    assert seg.echo_gated == 0
+
+
 def test_reset_restores_the_quiet_room_gate():
     seg = VadSegmenter(start_ms=250)
     _prob_segmenter([0.55] * 200, seg)

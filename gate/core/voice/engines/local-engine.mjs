@@ -267,6 +267,8 @@ export class LocalEngine extends EventEmitter {
       this.emit('speechAudio', { gen: params.gen, pcm: Buffer.from(chunk.data ?? '', 'base64') });
     } else if (method === 'voice.speechDone') this.emit('speechDone', { gen: params.gen });
     else if (method === 'voice.userSpeechStart') this.emit('userSpeechStart', { gen: params.gen });
+    else if (method === 'voice.noSpeechDrop') this.emit('noSpeechDrop', {});
+    else if (method === 'voice.echoGated') this.emit('echoGated', { gen: params.gen, count: params.count });
     else if (method === 'voice.error') {
       this.emit('error', {
         code: params.code,

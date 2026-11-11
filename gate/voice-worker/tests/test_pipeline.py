@@ -164,6 +164,47 @@ def test_synthetic_speech_becomes_a_final_then_spoken_sentences():
     assert audio[0]["chunk"]["sampleRate"] == 24000
 
 
+class EchoCountingVad:
+    """A VAD whose playback gate reports one echo refusal, as the real one does."""
+
+    silence_ms = 200
+
+    def __init__(self):
+        self.echo_gated = 0
+        self._streams = 0
+
+    def reset(self):
+        self.echo_gated = 0
+        self._streams = 0
+
+    def stream(self, _pcm):
+        self._streams += 1
+        if self._streams == 1:
+            self.echo_gated += 1
+        return []
+
+
+def test_a_new_echo_gate_refusal_is_sent_to_the_gate_once():
+    events = []
+    pipeline = VoicePipeline(
+        vad=EchoCountingVad(),
+        transcriber=PartialTranscriber(lambda pcm, beam_size: "hello there"),
+        turn_judge=None,
+        synthesizer=SpeechSynthesizer(lambda text: [text.encode("ascii")]),
+        emit=lambda method, params: events.append((method, params)),
+        spawn=lambda fn: fn(),
+    )
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
+
+    # One new refusal that the Gate has not seen yet: one frame.
+    assert events == [("voice.echoGated", {"gen": None, "count": 1})]
+
+    # The same count is not reported again on every chunk.
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
+    assert [method for method, _params in events].count("voice.echoGated") == 1
+
+
 def test_a_cancelled_generation_speaks_nothing():
     events = []
     pipeline = _pipeline(events)

@@ -72,6 +72,27 @@ def test_an_utterance_at_the_minimum_is_a_turn():
     assert [params["text"] for method, params in events if method == "voice.final"] == ["Thank you."]
 
 
+def test_a_final_with_no_speech_in_it_is_reported_as_dropped():
+    # O2: a final Whisper refuses as no-speech is not a turn, but the call
+    # counts the drop instead of leaving a noisy line looking quiet.
+    events = []
+    pipeline = VoicePipeline(
+        vad=OneUtteranceVad(),
+        transcriber=PartialTranscriber(lambda pcm, beam_size: ""),
+        turn_judge=None,
+        synthesizer=SpeechSynthesizer(lambda text: [text.encode("ascii")]),
+        emit=lambda method, params: events.append((method, params)),
+        min_utterance_ms=0,
+        spawn=lambda fn: fn(),
+    )
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.pushAudio({"chunk": encode_chunk(_pcm(600), 16000)})
+
+    methods = [method for method, _params in events]
+    assert "voice.final" not in methods
+    assert methods.count("voice.noSpeechDrop") == 1
+
+
 def test_segments_whisper_thinks_are_silence_are_dropped():
     segments = [
         _Segment(" What time is it", no_speech_prob=0.05, avg_logprob=-0.3),

@@ -233,6 +233,12 @@ export function attachVoiceMediaSocket({
       utterances: 0,
       queued: 0,
       continued: 0,
+      // The endpoints the call refused or gave up: a final with no speech in
+      // it, an operator talking over the reply, and speech the worker's echo
+      // gate refused while the loudspeaker was live. Counts only.
+      spuriousDrops: 0,
+      bargeIns: 0,
+      echoGated: 0,
       speechChunks: 0,
       firstReplyAt: 0,
       // How many turns ran on after the phone went away, so a call that lost its
@@ -535,6 +541,9 @@ export function attachVoiceMediaSocket({
             partials: trace.partials,
             queued: trace.queued,
             continued: trace.continued,
+            spuriousDrops: trace.spuriousDrops,
+            bargeIns: trace.bargeIns,
+            echoGated: trace.echoGated,
             parkedTurns: trace.parkedTurns,
             secondsListening: Math.round(listeningMs / 1000),
             secondsSpeaking: Math.round(speakingMs / 1000),
@@ -578,6 +587,17 @@ export function attachVoiceMediaSocket({
       if (event.type === 'final') {
         trace.finals += 1;
         log(`voice.final session=${session.voiceSessionId} chars=${String(event.text ?? '').length} afterMs=${now() - trace.startedAt}`);
+      } else if (event.type === 'noSpeechDrop') {
+        // The worker decoded a final and found no speech in it. It is not a
+        // final the call can answer, but a call that kept dropping speech must
+        // not read like a quiet one.
+        trace.spuriousDrops += 1;
+        log(`voice.final dropped session=${session.voiceSessionId} reason=no-speech`);
+      } else if (event.type === 'echoGated') {
+        // The worker's playback gate refused speech-like audio while the PC
+        // was speaking, so leaked loudspeaker echo did not barge the reply.
+        trace.echoGated += Number.isFinite(event.count) ? event.count : 1;
+        log(`voice.echo gated session=${session.voiceSessionId}`);
       } else if (event.type === 'replyDelta') {
         if (turnCommittedAt && !turnFirstReplyAt) {
           turnFirstReplyAt = now();
@@ -598,6 +618,12 @@ export function attachVoiceMediaSocket({
           turnSentenceAt = 0;
         }
       } else if (['bargein', 'userSpeechStart', 'skip', 'end', 'error', 'mute', 'unmute'].includes(event.type)) {
+        // Both the phone's own frame and the worker's speech onset mean the
+        // operator talked over the reply. Skip is a control, not a barge-in,
+        // and a speech onset while nothing is being spoken is just listening.
+        if ((event.type === 'bargein' || event.type === 'userSpeechStart') && call.phase === 'speaking') {
+          trace.bargeIns += 1;
+        }
         log(`voice.event session=${session.voiceSessionId} type=${event.type}${event.code ? ` code=${event.code}` : ''}${event.message ? ` message=${redactedLogText(event.message)}` : ''}`);
       } else if (event.type === 'socketClosed') {
         log(
@@ -606,7 +632,8 @@ export function attachVoiceMediaSocket({
           + ` finals=${trace.finals} speechChunks=${trace.speechChunks} utterances=${trace.utterances}`
           + ` queued=${trace.queued} continued=${trace.continued} turns=${turns}`
           + ` parkedTurns=${trace.parkedTurns} phase=${call.phase}`
-          + ` audioFramesEarly=${trace.audioFramesEarly}`,
+          + ` audioFramesEarly=${trace.audioFramesEarly}`
+          + ` spuriousDrops=${trace.spuriousDrops} bargeIns=${trace.bargeIns} echoGated=${trace.echoGated}`,
         );
       }
       // The reducer keeps its own clocks out, so the socket stamps the time it
@@ -1012,6 +1039,11 @@ export function attachVoiceMediaSocket({
       }
       dispatch({ type: 'userSpeechStart' });
     });
+    // Endpointing outcomes the worker knows and the call must count: a final
+    // it dropped as no-speech, and speech its playback echo gate refused. Both
+    // stay out of the reducer, which has nothing to send for either.
+    engine.on?.('noSpeechDrop', () => dispatch({ type: 'noSpeechDrop' }));
+    engine.on?.('echoGated', (event) => dispatch({ type: 'echoGated', count: event?.count }));
     engine.on?.('error', (event) =>
       dispatch({
         type: 'error',

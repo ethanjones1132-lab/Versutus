@@ -117,6 +117,9 @@ class VoicePipeline:
         self._speaking = False
         self._last_partial = 0
         self._last_bad_chunk = float("-inf")
+        # The VAD's echo-gate count already reported to the Gate, so each new
+        # refusal is named once rather than every audio chunk.
+        self._echo_gated_reported = 0
         # The generation currently being synthesized, so VAD speech during it
         # is a barge-in rather than a new turn (§4.6 step 5).
         self._synth_speaking = False
@@ -160,6 +163,7 @@ class VoicePipeline:
         self._speaking = False
         self._last_partial = 0
         self._last_bad_chunk = float("-inf")
+        self._echo_gated_reported = 0
         self._utterance = 0
         self._synth_speaking = False
         self._speech_gen = None
@@ -187,6 +191,16 @@ class VoicePipeline:
             self._pending["silence_ms"] += chunk_ms
 
         events = self._vad.stream(pcm)
+        # Echo the playback gate refused is an endpointing outcome the Gate
+        # audits. The VAD counts episodes; send only the new ones, so one
+        # loudspeaker passage is one line on the call.
+        echo_gated = getattr(self._vad, "echo_gated", 0)
+        if echo_gated > self._echo_gated_reported:
+            self._emit(
+                "voice.echoGated",
+                {"gen": self._speech_gen, "count": echo_gated - self._echo_gated_reported},
+            )
+        self._echo_gated_reported = echo_gated
         before = bytes(self._preroll)
         if not self._speaking:
             self._preroll.extend(pcm)
@@ -536,6 +550,11 @@ class VoicePipeline:
             )
             return
         if not text:
+            if kind == "final":
+                # Whisper found no speech it trusts in a final utterance. The
+                # call did not hear a turn, but the drop is counted so a noisy
+                # line reads differently from a quiet one (O2).
+                self._emit("voice.noSpeechDrop", {"gen": None})
             return
         if kind == "partial":
             self._emit("voice.partial", {"text": text})

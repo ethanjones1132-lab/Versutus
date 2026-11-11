@@ -72,6 +72,12 @@ export const AUDIT_FIELDS = Object.freeze([
   'utterances',
   'queued',
   'continued',
+  // Speech the call heard but did not act on, and the interruptions it took:
+  // a final Whisper found no speech in, operator barge-ins, and speech the
+  // playback echo gate refused while the PC was speaking. Counts only.
+  'spuriousDrops',
+  'bargeIns',
+  'echoGated',
   // Turns that were still running when the phone went away and were parked to
   // finish on the PC (a count; what was said stays off disk).
   'parkedTurns',

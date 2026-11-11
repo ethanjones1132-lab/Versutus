@@ -21,6 +21,9 @@ const DOCUMENTED_FIELDS = [
   'utterances',
   'queued',
   'continued',
+  'spuriousDrops',
+  'bargeIns',
+  'echoGated',
   'parkedTurns',
   'secondsListening',
   'secondsSpeaking',
@@ -52,6 +55,9 @@ test('the audit line has exactly the documented fields', () => {
     utterances: 3,
     queued: 2,
     continued: 1,
+    spuriousDrops: 1,
+    bargeIns: 2,
+    echoGated: 3,
     secondsListening: 12.5,
     secondsSpeaking: 7,
     p50FirstAudioMs: 900,
@@ -68,6 +74,9 @@ test('the audit line has exactly the documented fields', () => {
   assert.equal(line.utterances, 3);
   assert.equal(line.queued, 2);
   assert.equal(line.continued, 1);
+  assert.equal(line.spuriousDrops, 1);
+  assert.equal(line.bargeIns, 2);
+  assert.equal(line.echoGated, 3);
   assert.equal(line.p50FirstReplyMs, 450);
 });
 
@@ -98,6 +107,9 @@ test('missing fields are null and a turn count defaults to zero', () => {
   assert.equal(line.turns, 0);
   assert.equal(line.botId, null);
   assert.equal(line.engine, null);
+  assert.equal(line.spuriousDrops, null);
+  assert.equal(line.bargeIns, null);
+  assert.equal(line.echoGated, null);
   assert.equal(line.error, null);
 });
 
