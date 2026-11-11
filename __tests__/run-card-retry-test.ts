@@ -99,7 +99,7 @@ describe('runs screen retry wiring', () => {
     // the second early return is the same guard as the button's.
     const screen = readSource('src', 'app', 'runs.tsx');
     expect(screen).toMatch(
-      /const retryRun = useCallback\(\s*\n\s*\(run: ActivityRun\) => \{\s*\n\s*const prompt = run\.prompt\.trim\(\);\s*\n\s*if \(!prompt\) return;\s*\n\s*if \(retryingRef\.current\) return;\s*\n\s*retryingRef\.current = run\.id;/,
+      /const retryRun = useCallback\(\s*\n\s*\(run: ActivityRun\) => \{\s*\n\s*if \(!runsSupported\) return;\s*\n\s*const prompt = run\.prompt\.trim\(\);\s*\n\s*if \(!prompt\) return;\s*\n\s*if \(retryingRef\.current\) return;\s*\n\s*retryingRef\.current = run\.id;/,
     );
     expect(screen.indexOf('if (!prompt) return;')).toBeLessThan(
       screen.indexOf('void sendChatInput(`/run ${prompt}`)'),

@@ -47,7 +47,8 @@ describe('cron section add busy state', () => {
   test('the creating state still wraps the create', () => {
     const src = readSection();
     expect(src).toContain('setCreating(true)');
-    expect(src).toContain('.finally(() => setCreating(false))');
+    // The same-frame guard releases its ref beside the state (VS-075).
+    expect(src).toMatch(/\.finally\(\(\) => \{\s*creatingRef\.current = false;\s*setCreating\(false\);/);
   });
 
   test('submitCreate keeps its re-entry guard', () => {
