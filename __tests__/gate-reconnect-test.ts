@@ -12,7 +12,7 @@ const grant: GateVoiceGrant = {
   engine: 'local',
 };
 
-const options = { url: 'wss://gate.local:8760/v1/voice/stream', token: 'tok', voiceSessionId: 'vs-1' };
+const options = { url: 'wss://gate.local:8760/v1/voice/stream?protocol=2', token: 'tok', voiceSessionId: 'vs-1' };
 
 function sleeper() {
   const sleeps: number[] = [];

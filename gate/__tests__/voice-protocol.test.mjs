@@ -61,3 +61,16 @@ test('serializeFrame round-trips through the Gate parser', () => {
     assert.deepEqual(parseGateFrame(serializeFrame(frame)), frame);
   }
 });
+
+test('v2 fixture frames preserve their envelope and reject invalid envelopes', () => {
+  for (const frame of fixture.v2PhoneToGate) {
+    assert.deepEqual(parsePhoneFrame(JSON.stringify(frame), { callId: 'vs-1' }), frame);
+  }
+  for (const frame of fixture.v2GateToPhone) {
+    assert.deepEqual(parseGateFrame(JSON.stringify(frame), { callId: 'vs-1' }), frame);
+  }
+  for (const frame of fixture.malformed.filter((candidate) => candidate.v !== undefined)) {
+    assert.throws(() => parsePhoneFrame(frame));
+  }
+  assert.throws(() => parseGateFrame(fixture.v2GateToPhone[0], { callId: 'another-call' }), /callId/);
+});

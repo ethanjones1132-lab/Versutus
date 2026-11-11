@@ -13,7 +13,7 @@
 // never the thing that keeps the call from coming home to `idle`.
 
 import { GATE_LINK_READY_MS, type GateLinkProof } from '@/lib/voice/gate-link';
-import { mediaSocketTransport, mediaSocketUrl } from '@/lib/voice/gate-media-url';
+import { mediaSocketTransport, mediaSocketUrl, withVoiceProtocol } from '@/lib/voice/gate-media-url';
 import { HANDSFREE_START_TIMEOUT_MS, isStartTimeout, startDeadline } from '@/lib/voice/start-deadline';
 import {
   logHandsfreeStart,
@@ -315,7 +315,7 @@ export async function openGateVoiceSession(
       started = await deadline.guard(
         'the audio link',
         input.startGateMedia({
-          url: toMediaUrl(input.gatewayUrl, parsed.streamPath),
+          url: withVoiceProtocol(toMediaUrl(input.gatewayUrl, parsed.streamPath), 2),
           token: input.gatewayToken,
           voiceSessionId: parsed.voiceSessionId,
           // The media link belongs to this attempt. The native side refuses a

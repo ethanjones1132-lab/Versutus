@@ -8,6 +8,7 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.SystemClock
 import android.util.Log
+import org.json.JSONObject
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
 import okhttp3.OkHttpClient
@@ -17,6 +18,8 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.sqrt
 
 /**
@@ -48,6 +51,7 @@ class HandsfreeGateMedia(
     /** A read that returns nothing is usually a dead device, not a quiet one. */
     private const val READ_FAILURE_BACKOFF_MS = 10L
     private const val MAX_CONSECUTIVE_READ_FAILURES = 100
+    private val phoneSequences = ConcurrentHashMap<String, AtomicLong>()
   }
 
   private val client = OkHttpClient.Builder()
@@ -70,6 +74,9 @@ class HandsfreeGateMedia(
   )
   private val captureLock = Any()
   @Volatile private var socketOpen = false
+  @Volatile private var negotiationConfirmed = false
+  @Volatile private var protocolV2 = false
+  private var activeCallId = ""
   private var lastMuteFrameSent: Boolean? = null
 
   init { captureState.setMuted(initiallyMuted) }
@@ -98,6 +105,10 @@ class HandsfreeGateMedia(
     stopped = false
     running = true
     captureState.setRunning(true)
+    negotiationConfirmed = false
+    protocolV2 = false
+    activeCallId = voiceSessionId
+    captureState.setNegotiated(false)
     captureLevel.reset()
     sawEnded = false
     currentGen = 0L
@@ -124,12 +135,13 @@ class HandsfreeGateMedia(
 
   fun sendControl(json: String): Boolean {
     val control = try {
-      GateFrameCodec.parsePhone(json)
+      GateFrameCodec.parsePhone(json, activeCallId)
     } catch (_: Exception) {
       null
     }
+    if (!negotiationConfirmed) return false
     if (control is GateFrame.Phone.Mute) return setMuted(control.on)
-    return socket?.send(json) ?: false
+    return socket?.send(encodeNegotiatedControl(json)) ?: false
   }
 
   fun setMuted(muted: Boolean): Boolean {
@@ -144,9 +156,9 @@ class HandsfreeGateMedia(
   internal fun isStopped(): Boolean = stopped
 
   private fun sendMuteIfOpen(muted: Boolean): Boolean = synchronized(captureLock) {
-    if (!socketOpen) return@synchronized false
+    if (!socketOpen || !negotiationConfirmed) return@synchronized false
     if (lastMuteFrameSent == muted) return@synchronized true
-    val sent = socket?.send(GateFrameCodec.encodePhone(GateFrame.Phone.Mute(muted))) ?: false
+    val sent = socket?.send(encodeNegotiatedControl(GateFrameCodec.encodePhone(GateFrame.Phone.Mute(muted)))) ?: false
     if (sent) lastMuteFrameSent = muted
     sent
   }
@@ -185,7 +197,6 @@ class HandsfreeGateMedia(
     override fun onOpen(webSocket: WebSocket, response: Response) {
       if (webSocket !== socket) return
       socketOpen = true
-      sendMuteIfOpen(captureState.isMuted())
     }
 
     // Every callback is identity-guarded: a replaced or stopped socket's
@@ -237,12 +248,18 @@ class HandsfreeGateMedia(
     """{"t":"error","code":"${escapeJsonString(code)}","message":"${escapeJsonString(message)}","fatal":true}"""
 
   private fun handleTextFrame(text: String) {
-    onFrame(text)
     val frame = try {
-      GateFrameCodec.parse(text)
+      GateFrameCodec.parse(text, activeCallId)
     } catch (_: GateProtocolError) {
       return
     }
+    if (frame.protocolVersion == 2) protocolV2 = true
+    if (!negotiationConfirmed && (frame.protocolVersion == 2 || frame.t == "ready" || frame.t == "phase")) {
+      negotiationConfirmed = true
+      captureState.setNegotiated(true)
+      sendMuteIfOpen(captureState.isMuted())
+    }
+    onFrame(text)
     when (frame) {
       is GateFrame.Speech -> {
         when (frame.state) {
@@ -268,6 +285,7 @@ class HandsfreeGateMedia(
       is GateFrame.Ended -> {
         sawEnded = true
         running = false
+        phoneSequences.remove(activeCallId)
       }
       else -> Unit
     }
@@ -403,7 +421,9 @@ class HandsfreeGateMedia(
               }
               if (receivedAtMs != null) {
                 val elapsedMs = elapsedSincePcmReceived(receivedAtMs, SystemClock.elapsedRealtime())
-                socket?.send(GateFrameCodec.encodePhone(GateFrame.Phone.Played(gen, elapsedMs)))
+                if (negotiationConfirmed) {
+                  socket?.send(encodeNegotiatedControl(GateFrameCodec.encodePhone(GateFrame.Phone.Played(gen, elapsedMs))))
+                }
               }
             }
           }
@@ -420,6 +440,16 @@ class HandsfreeGateMedia(
     val separator = if (normalized.contains('?')) '&' else '?'
     return "$normalized${separator}voiceSessionId=$voiceSessionId"
   }
+
+  private fun encodeNegotiatedControl(json: String): String {
+    if (!protocolV2) return json
+    val frame = JSONObject(json)
+      .put("v", 2)
+      .put("callId", activeCallId)
+      .put("seq", phoneSequences.computeIfAbsent(activeCallId) { AtomicLong() }.incrementAndGet())
+      .put("ts", SystemClock.elapsedRealtime())
+    return frame.toString()
+  }
 }
 
 /** A monotonic duration for `played.atMs`; wall-clock time is not comparable to Gate time. */
@@ -430,6 +460,7 @@ internal fun elapsedSincePcmReceived(receivedAtMs: Long, playedAtMs: Long): Long
 internal class GateCaptureState {
   @Volatile private var muted = false
   @Volatile private var running = false
+  @Volatile private var negotiated = true
   private var source: MicSource? = null
 
   @Synchronized fun setMuted(value: Boolean): Boolean {
@@ -441,6 +472,7 @@ internal class GateCaptureState {
   fun isMuted(): Boolean = muted
   @Synchronized fun attachSource(value: MicSource) { source = value; updateSource() }
   @Synchronized fun setRunning(value: Boolean) { running = value; updateSource() }
+  @Synchronized fun setNegotiated(value: Boolean) { negotiated = value; updateSource() }
   @Synchronized fun readAndSend(mic: MicSource, buffer: ByteArray, send: (ByteArray) -> Unit): Int {
     if (!shouldRead()) return 0
     val count = mic.read(buffer, 0, buffer.size)
@@ -453,7 +485,7 @@ internal class GateCaptureState {
   private fun updateSource() {
     val current = source ?: return
     runCatching {
-      if (running && !muted) {
+      if (running && negotiated && !muted) {
         current.start()
         current.drain()
       } else {
@@ -462,8 +494,8 @@ internal class GateCaptureState {
       }
     }
   }
-  fun shouldRead(): Boolean = running && !muted
-  fun shouldSend(): Boolean = running && !muted
+  fun shouldRead(): Boolean = running && negotiated && !muted
+  fun shouldSend(): Boolean = running && negotiated && !muted
 }
 
 /** The banner's dot is display-only, so ten samples a second is plenty. */

@@ -8,6 +8,7 @@ export const MAX_FRAME_BYTES = 4096;
 
 export const PHONE_FRAME_TYPES = Object.freeze(['mute', 'skip', 'bargein', 'end', 'played']);
 export const GATE_FRAME_TYPES = Object.freeze([
+  'call',
   'ready',
   'phase',
   'partial',
@@ -78,11 +79,38 @@ function parseFrame(value, types, build) {
   if (typeof frame.t !== 'string' || !types.includes(frame.t)) {
     throw new VoiceProtocolError(`unknown frame type: ${String(frame.t)}`);
   }
-  return Object.freeze(build(frame));
+  if (frame.t === 'call' && frame.v !== 2) throw new VoiceProtocolError('call frames require protocol version 2');
+  const legacyLevel = frame.t === 'level' && frame.level === undefined && frame.callId === undefined && frame.seq === undefined && frame.ts === undefined;
+  const envelope = frame.v === undefined || legacyLevel ? null : parseEnvelope(frame);
+  return Object.freeze({ ...build(frame), ...(envelope ?? {}) });
+}
+
+function parseEnvelope(frame, expectedCallId) {
+  if (frame.v !== 2) throw new VoiceProtocolError(`unsupported protocol version: ${String(frame.v)}`);
+  if (typeof frame.callId !== 'string' || !frame.callId) throw new VoiceProtocolError('callId must be a non-empty string');
+  if (expectedCallId !== undefined && frame.callId !== expectedCallId) throw new VoiceProtocolError('callId does not match this call');
+  if (!Number.isSafeInteger(frame.seq) || frame.seq <= 0) throw new VoiceProtocolError('seq must be a positive integer');
+  if (typeof frame.ts !== 'number' || !Number.isFinite(frame.ts) || frame.ts < 0) throw new VoiceProtocolError('ts must be a non-negative finite number');
+  return { v: 2, callId: frame.callId, seq: frame.seq, ts: frame.ts };
+}
+
+export function parseV2Envelope(value, expectedCallId) {
+  let frame = value;
+  if (typeof value === 'string') {
+    if (Buffer.byteLength(value, 'utf8') > MAX_FRAME_BYTES) throw new VoiceProtocolError('frame is too large');
+    try { frame = JSON.parse(value); } catch { throw new VoiceProtocolError('frame is not JSON'); }
+  }
+  if (!isRecord(frame)) throw new VoiceProtocolError('frame must be an object');
+  return Object.freeze(parseEnvelope(frame, expectedCallId));
 }
 
 /** Parse a phone → Gate control frame. */
-export function parsePhoneFrame(value) {
+export function parsePhoneFrame(value, options = {}) {
+  if (typeof value === 'string') {
+    if (Buffer.byteLength(value, 'utf8') > MAX_FRAME_BYTES) throw new VoiceProtocolError('frame is too large');
+    try { value = JSON.parse(value); } catch { throw new VoiceProtocolError('frame is not JSON'); }
+  }
+  if (isRecord(value) && value.v !== undefined && !(value.t === 'level' && value.level === undefined && value.callId === undefined && value.seq === undefined && value.ts === undefined)) parseEnvelope(value, options.callId);
   return parseFrame(value, PHONE_FRAME_TYPES, (frame) => {
     switch (frame.t) {
       case 'mute': {
@@ -102,9 +130,16 @@ export function parsePhoneFrame(value) {
 }
 
 /** Parse a Gate → phone frame. */
-export function parseGateFrame(value) {
+export function parseGateFrame(value, options = {}) {
+  if (typeof value === 'string') {
+    if (Buffer.byteLength(value, 'utf8') > MAX_FRAME_BYTES) throw new VoiceProtocolError('frame is too large');
+    try { value = JSON.parse(value); } catch { throw new VoiceProtocolError('frame is not JSON'); }
+  }
+  if (isRecord(value) && value.v !== undefined && !(value.t === 'level' && value.level === undefined && value.callId === undefined && value.seq === undefined && value.ts === undefined)) parseEnvelope(value, options.callId);
   return parseFrame(value, GATE_FRAME_TYPES, (frame) => {
     switch (frame.t) {
+      case 'call':
+        return { t: 'call', state: requireEnum(frame, 'state', ['opening', 'ready', 'ending', 'ended']) };
       case 'ready': {
         const ready = { t: 'ready', engine: requireString(frame, 'engine') };
         // How long the Gate will hold the call for without a phone, so the app
@@ -135,7 +170,9 @@ export function parseGateFrame(value) {
       case 'speech':
         return { t: 'speech', gen: requireNumber(frame, 'gen'), state: requireEnum(frame, 'state', SPEECH_STATES) };
       case 'level':
-        return { t: 'level', v: requireNumber(frame, 'v') };
+        return frame.callId !== undefined || frame.seq !== undefined || frame.ts !== undefined
+          ? { t: 'level', level: requireNumber(frame, 'level'), v: 2, callId: frame.callId, seq: frame.seq, ts: frame.ts }
+          : { t: 'level', v: requireNumber(frame, 'v') };
       case 'approval': {
         const approval = {
           t: 'approval',

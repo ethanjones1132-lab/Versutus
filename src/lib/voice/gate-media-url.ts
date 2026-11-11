@@ -10,7 +10,7 @@
 // the encrypted Tailscale link; every other host needs TLS.
 
 /** The websocket URL for the Gate's media socket, from the gateway's HTTP base. */
-export function mediaSocketUrl(baseUrl: string, streamPath: string): string {
+export function mediaSocketUrl(baseUrl: string, streamPath: string, protocolVersion?: 2): string {
   const trimmed = baseUrl.trim().replace(/\/+$/, '');
   const wsBase = trimmed.startsWith('https:')
     ? `wss:${trimmed.slice('https:'.length)}`
@@ -18,7 +18,22 @@ export function mediaSocketUrl(baseUrl: string, streamPath: string): string {
       ? `ws:${trimmed.slice('http:'.length)}`
       : trimmed;
   const path = streamPath.startsWith('/') ? streamPath : `/${streamPath}`;
-  return `${wsBase}${path}`;
+  const url = `${wsBase}${path}`;
+  return protocolVersion === 2 ? withVoiceProtocol(url, 2) : url;
+}
+
+/** Set the additive voice protocol query without leaving duplicate selectors. */
+export function withVoiceProtocol(url: string, version: 1 | 2): string {
+  const hashAt = url.indexOf('#');
+  const hash = hashAt >= 0 ? url.slice(hashAt) : '';
+  const withoutHash = hashAt >= 0 ? url.slice(0, hashAt) : url;
+  const queryAt = withoutHash.indexOf('?');
+  const path = queryAt >= 0 ? withoutHash.slice(0, queryAt) : withoutHash;
+  const params = queryAt >= 0
+    ? withoutHash.slice(queryAt + 1).split('&').filter((part) => part && !/^protocol=/.test(part))
+    : [];
+  params.push(`protocol=${version}`);
+  return `${path}?${params.join('&')}${hash}`;
 }
 
 export type MediaSocketTransportVerdict =

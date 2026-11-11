@@ -25,6 +25,7 @@
 // first transcript 17.9 s after the stream opened).
 
 import { WebSocketServer } from 'ws';
+import { performance } from 'node:perf_hooks';
 
 import { redactedLogText } from './audit.mjs';
 import { parsePhoneFrame, serializeFrame } from './protocol.mjs';
@@ -169,6 +170,12 @@ export function attachVoiceMediaSocket({
       rejectUpgrade(socket, 404, 'Not Found');
       return;
     }
+    const requestedProtocol = url.searchParams.get('protocol');
+    if (requestedProtocol !== null && requestedProtocol !== '1' && requestedProtocol !== '2') {
+      rejectUpgrade(socket, 400, 'Unsupported Voice Protocol');
+      return;
+    }
+    const protocolVersion = requestedProtocol === '2' ? 2 : 1;
 
     const grant = await deviceTokens.verify(req.headers.authorization).catch(() => null);
     // A phone holding the Gate's own token has no grant; voice-rpc files its
@@ -206,15 +213,15 @@ export function attachVoiceMediaSocket({
     wss.handleUpgrade(req, socket, head, (ws) => {
       const existing = calls.get(session.voiceSessionId);
       if (existing && !existing.ended) {
-        existing.attach(ws, { first: false });
+        existing.attach(ws, { first: false, protocolVersion });
         return;
       }
-      const call = createCall(session, ws);
+      const call = createCall(session, ws, protocolVersion);
       calls.set(session.voiceSessionId, call);
     });
   });
 
-  function createCall(session, firstWs) {
+  function createCall(session, firstWs, protocolVersion) {
     const engine = createEngine(session, firstWs);
     log(`voice.stream open session=${session.voiceSessionId} engine=${session.engine}`);
     const maxBufferedAudioBytes = (maxBufferedAudioMs / 1000) * OUTPUT_SAMPLE_RATE * 2 * OUTPUT_CHANNELS;
@@ -224,6 +231,9 @@ export function attachVoiceMediaSocket({
     const thread = session.thread;
     let ws = null;
     let ended = false;
+    let outboundSeq = 0;
+    let inboundSeq = 0;
+    const monotonicStartedAt = performance.now();
     let endingNow = false;
     let call = INITIAL_VOICE_SESSION;
     const trace = {
@@ -374,6 +384,19 @@ export function attachVoiceMediaSocket({
         bufferedAudioBytes -= dropped.pcm.length;
         audioDropped = true;
       }
+      if (audioDropped && protocolVersion === 2) {
+        audioDropped = false;
+        const gap = {
+          t: 'speech',
+          gen: call.gen,
+          state: 'gap',
+          v: 2,
+          callId: session.voiceSessionId,
+          seq: ++outboundSeq,
+          ts: Math.max(0, Math.floor(performance.now() - monotonicStartedAt)),
+        };
+        replay.push({ frame: serializeFrame(gap) });
+      }
     };
 
     const flush = () => {
@@ -387,7 +410,7 @@ export function attachVoiceMediaSocket({
         // so the phone never joins two halves of a reply it did not hear.
         if (audioDropped) {
           audioDropped = false;
-          ws.send(serializeFrame({ t: 'speech', gen: entry.gen ?? call.gen, state: 'gap' }));
+          sendFrame({ t: 'speech', gen: entry.gen ?? call.gen, state: 'gap' });
         }
         ws.send(entry.pcm, { binary: true });
       }
@@ -411,7 +434,16 @@ export function attachVoiceMediaSocket({
           }
         }
       }
-      const data = serializeFrame(frame);
+      const wireFrame = protocolVersion === 2
+        ? {
+            ...frame,
+            v: 2,
+            callId: session.voiceSessionId,
+            seq: ++outboundSeq,
+            ts: Math.max(0, Math.floor(performance.now() - monotonicStartedAt)),
+          }
+        : frame;
+      const data = serializeFrame(wireFrame);
       if (ws) {
         ws.send(data);
         return;
@@ -825,7 +857,16 @@ export function attachVoiceMediaSocket({
         // Any frame proves the phone is there, even one too malformed to act
         // on: the lease tracks liveness, not protocol correctness.
         registry.markActivity(session.voiceSessionId);
-        const control = parsePhoneFrame(data.toString());
+        const raw = data.toString();
+        const candidate = JSON.parse(raw);
+        if (protocolVersion === 2) {
+          const envelope = parsePhoneFrame(candidate, { callId: session.voiceSessionId });
+          if (envelope.v !== 2 || envelope.seq <= inboundSeq) throw new Error('invalid v2 sequence');
+          inboundSeq = envelope.seq;
+        } else if (candidate?.v !== undefined) {
+          throw new Error('unexpected protocol envelope');
+        }
+        const control = parsePhoneFrame(candidate, { callId: session.voiceSessionId });
         if (control.t === 'mute') {
           lastAudioAt = now();
           dispatch({ type: control.on ? 'mute' : 'unmute' });
@@ -892,7 +933,7 @@ export function attachVoiceMediaSocket({
       }
     };
 
-    function attach(newWs, { first = false } = {}) {
+    function attach(newWs, { first = false, protocolVersion: requestedVersion = protocolVersion } = {}) {
       // A call that has already ended has no loop left to serve a socket; close
       // the arrival rather than leaving it open with no listeners.
       if (ended) {
@@ -901,6 +942,10 @@ export function attachVoiceMediaSocket({
         } catch {
           // the peer is already gone
         }
+        return;
+      }
+      if (requestedVersion !== protocolVersion) {
+        newWs.close(1002, 'protocol mismatch');
         return;
       }
       // A re-attach supersedes the old socket. Take its listeners off first, so
@@ -942,7 +987,8 @@ export function attachVoiceMediaSocket({
       // once `engine.open` resolves. A re-attach is a phone rejoining a call
       // that is already running and keeps today's behaviour.
       if (first) {
-        sendFrame({ t: 'phase', phase: 'opening' });
+        if (protocolVersion === 2) sendFrame({ t: 'call', state: 'opening' });
+        else sendFrame({ t: 'phase', phase: 'opening' });
       } else {
         // A re-attach rejoins a call that may still be opening its engine. Send
         // the reducer's own phase verbatim — `opening` is a real phase both
@@ -1136,7 +1182,7 @@ export function attachVoiceMediaSocket({
         end('engine');
       });
 
-    api.attach(firstWs, { first: true });
+    api.attach(firstWs, { first: true, protocolVersion });
     return api;
   }
 

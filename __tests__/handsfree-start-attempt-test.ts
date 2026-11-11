@@ -49,7 +49,7 @@ describe('openGateVoiceSession against a fake Gate', () => {
     // socket to this start so a delayed old media call cannot replace a newer
     // retry's socket.
     expect(media[0]).toEqual({
-      url: mediaSocketUrl('http://127.0.0.1:8760', '/v1/voice/stream'),
+      url: `${mediaSocketUrl('http://127.0.0.1:8760', '/v1/voice/stream')}?protocol=2`,
       token: 'tok',
       voiceSessionId: 'vs-1',
       startId: 'hs-attempt-1',

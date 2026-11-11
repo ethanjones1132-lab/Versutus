@@ -4,7 +4,8 @@
     { "t": "mute", "on": true },
     { "t": "skip" },
     { "t": "bargein" },
-    { "t": "end" }
+    { "t": "end" },
+    { "t": "played", "gen": 7, "atMs": 42 }
   ],
   "gateToPhone": [
     { "t": "ready", "engine": "local", "resumeWindowMs": 90000 },
@@ -22,6 +23,30 @@
     { "t": "error", "code": "backend_error", "message": "boom", "fatal": false },
     { "t": "ended", "reason": "user" }
   ],
+  "v2PhoneToGate": [
+    { "v": 2, "callId": "vs-1", "seq": 1, "ts": 5, "t": "mute", "on": true },
+    { "v": 2, "callId": "vs-1", "seq": 2, "ts": 6, "t": "skip" },
+    { "v": 2, "callId": "vs-1", "seq": 3, "ts": 7, "t": "bargein" },
+    { "v": 2, "callId": "vs-1", "seq": 4, "ts": 8, "t": "end" },
+    { "v": 2, "callId": "vs-1", "seq": 5, "ts": 9, "t": "played", "gen": 7, "atMs": 42 }
+  ],
+  "v2GateToPhone": [
+    { "v": 2, "callId": "vs-1", "seq": 1, "ts": 0, "t": "call", "state": "opening" },
+    { "v": 2, "callId": "vs-1", "seq": 2, "ts": 1, "t": "ready", "engine": "local", "resumeWindowMs": 90000 },
+    { "v": 2, "callId": "vs-1", "seq": 3, "ts": 2, "t": "phase", "phase": "opening" },
+    { "v": 2, "callId": "vs-1", "seq": 4, "ts": 3, "t": "phase", "phase": "listening" },
+    { "v": 2, "callId": "vs-1", "seq": 5, "ts": 4, "t": "partial", "text": "hello" },
+    { "v": 2, "callId": "vs-1", "seq": 6, "ts": 5, "t": "final", "turnId": "t1", "text": "hello" },
+    { "v": 2, "callId": "vs-1", "seq": 7, "ts": 6, "t": "turn", "turnId": "t1", "state": "sent" },
+    { "v": 2, "callId": "vs-1", "seq": 8, "ts": 7, "t": "reply", "turnId": "t1", "delta": "Hi" },
+    { "v": 2, "callId": "vs-1", "seq": 9, "ts": 8, "t": "speech", "gen": 7, "state": "start" },
+    { "v": 2, "callId": "vs-1", "seq": 10, "ts": 9, "t": "speech", "gen": 7, "state": "cancelled" },
+    { "v": 2, "callId": "vs-1", "seq": 11, "ts": 10, "t": "speech", "gen": 7, "state": "gap" },
+    { "v": 2, "callId": "vs-1", "seq": 12, "ts": 11, "t": "level", "level": 0.42 },
+    { "v": 2, "callId": "vs-1", "seq": 13, "ts": 12, "t": "approval", "turnId": "t1", "summary": "Run ls?" },
+    { "v": 2, "callId": "vs-1", "seq": 14, "ts": 13, "t": "error", "code": "backend_error", "message": "boom", "fatal": false },
+    { "v": 2, "callId": "vs-1", "seq": 15, "ts": 14, "t": "ended", "reason": "user" }
+  ],
   "malformed": [
     { "t": "nope" },
     { "t": "phase", "phase": "dancing" },
@@ -31,6 +56,12 @@
     { "t": "ready", "engine": "local", "resumeWindowMs": "soon" },
     { "t": "level", "v": "loud" },
     { "t": "turn", "turnId": "t1" },
-    { "t": "ended" }
+    { "t": "ended" },
+    { "t": "call", "state": "opening" },
+    { "v": 2, "callId": "vs-1", "seq": 0, "ts": 1, "t": "mute", "on": true },
+    { "v": 2, "callId": "vs-1", "seq": 1.5, "ts": 1, "t": "mute", "on": true },
+    { "v": 2, "callId": "vs-1", "seq": 1, "ts": -1, "t": "mute", "on": true },
+    { "v": 3, "callId": "vs-1", "seq": 1, "ts": 1, "t": "mute", "on": true },
+    { "v": 2, "seq": 1, "ts": 1, "t": "mute", "on": true }
   ]
 }

@@ -8,6 +8,7 @@ const val MAX_FRAME_BYTES = 4096
 /** A parsed Gate → phone media frame, the Kotlin mirror of `parseGateFrame`. */
 sealed class GateFrame {
   abstract val t: String
+  var protocolVersion: Int = 1
 
   data class Ready(val engine: String, val resumeWindowMs: Long?) : GateFrame() {
     override val t get() = "ready"
@@ -53,6 +54,10 @@ sealed class GateFrame {
     override val t get() = "ended"
   }
 
+  data class Call(val state: String) : GateFrame() {
+    override val t get() = "call"
+  }
+
   /** A phone → Gate control frame. */
   sealed class Phone {
     abstract val t: String
@@ -89,17 +94,25 @@ class GateProtocolError(message: String) : Exception(message)
  */
 object GateFrameCodec {
   private val GATE_TYPES = setOf(
-    "ready", "phase", "partial", "final", "turn", "reply", "speech", "level", "approval", "error", "ended",
+    "call", "ready", "phase", "partial", "final", "turn", "reply", "speech", "level", "approval", "error", "ended",
   )
   private val PHONE_TYPES = setOf("mute", "skip", "bargein", "end", "played")
   private val PHASES = setOf("opening", "listening", "thinking", "speaking", "muted")
   private val TURN_STATES = setOf("sent", "replying", "done", "failed")
   private val SPEECH_STATES = setOf("start", "end", "cancelled", "gap")
 
-  fun parse(json: String): GateFrame = fromGateRecord(record(json, GATE_TYPES))
+  fun parse(json: String, expectedCallId: String? = null): GateFrame {
+    val frame = record(json, GATE_TYPES)
+    if (frame.getString("t") == "call" && frame.opt("v") != 2) {
+      throw GateProtocolError("call frames require protocol version 2")
+    }
+    val version = validateEnvelope(frame, expectedCallId)
+    return fromGateRecord(frame).also { it.protocolVersion = version }
+  }
 
-  fun parsePhone(json: String): GateFrame.Phone {
+  fun parsePhone(json: String, expectedCallId: String? = null): GateFrame.Phone {
     val frame = record(json, PHONE_TYPES)
+    validateEnvelope(frame, expectedCallId)
     return when (frame.getString("t")) {
       "mute" -> {
         val on = frame.opt("on")
@@ -123,6 +136,7 @@ object GateFrameCodec {
   }
 
   private fun fromGateRecord(frame: JSONObject): GateFrame = when (frame.getString("t")) {
+    "call" -> GateFrame.Call(requireEnum(frame, "state", setOf("opening", "ready", "ending", "ended")))
     "ready" -> GateFrame.Ready(
       requireString(frame, "engine"),
       if (frame.has("resumeWindowMs") && frame.get("resumeWindowMs") != JSONObject.NULL) {
@@ -169,6 +183,21 @@ object GateFrameCodec {
     val t = frame.opt("t")
     if (t !is String || t !in types) throw GateProtocolError("unknown frame type: ${t ?: "null"}")
     return frame
+  }
+
+  private fun validateEnvelope(frame: JSONObject, expectedCallId: String?): Int {
+    // A v1 `level` frame uses `v` for its level (0..1), so only `v == 2` names
+    // the v2 envelope, the same rule the Gate and app parsers apply.
+    val version = frame.opt("v")
+    if (version !is Number || version.toDouble() != 2.0) return 1
+    val callId = requireString(frame, "callId")
+    if (expectedCallId != null && callId != expectedCallId) throw GateProtocolError("callId does not match this call")
+    val seq = requireNumber(frame, "seq")
+    if (seq <= 0 || seq > 9_007_199_254_740_991.0 || seq % 1.0 != 0.0) {
+      throw GateProtocolError("seq must be a positive integer")
+    }
+    if (requireNumber(frame, "ts") < 0) throw GateProtocolError("ts must be a non-negative finite number")
+    return 2
   }
 
   private fun requireString(frame: JSONObject, field: String): String {

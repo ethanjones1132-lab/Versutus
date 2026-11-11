@@ -6,6 +6,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GateCaptureStateTest {
+  @Test fun captureWaitsForTheGateToConfirmTheProtocol() {
+    val state = GateCaptureState()
+    val mic = FakeMicSource()
+    state.setRunning(true)
+    state.setNegotiated(false)
+    state.attachSource(mic)
+
+    assertFalse(state.shouldRead())
+    assertFalse(mic.started)
+    assertEquals(0, state.readAndSend(mic, ByteArray(4)) {})
+
+    state.setNegotiated(true)
+    assertTrue(state.shouldRead())
+    assertTrue(mic.started)
+  }
+
   @Test fun muteStopsMicAndUnmuteRestartsItWithoutSendingMutedSamples() {
     val state = GateCaptureState()
     val mic = FakeMicSource()

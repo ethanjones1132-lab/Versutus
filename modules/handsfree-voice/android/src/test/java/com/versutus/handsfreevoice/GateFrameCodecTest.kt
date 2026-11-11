@@ -41,6 +41,24 @@ class GateFrameCodecTest {
     }
   }
 
+  @Test fun v2FixtureFramesValidateTheirCallEnvelope() {
+    val source = fixture()
+    val gateFrames = source.getJSONArray("v2GateToPhone")
+    for (i in 0 until gateFrames.length()) {
+      val frame = gateFrames.getJSONObject(i)
+      val parsed = GateFrameCodec.parse(frame.toString(), "vs-1")
+      assertEquals(2, parsed.protocolVersion)
+    }
+    val phoneFrames = source.getJSONArray("v2PhoneToGate")
+    for (i in 0 until phoneFrames.length()) {
+      val frame = phoneFrames.getJSONObject(i)
+      GateFrameCodec.parsePhone(frame.toString(), "vs-1")
+    }
+    assertThrows(GateProtocolError::class.java) {
+      GateFrameCodec.parse(gateFrames.getJSONObject(0).toString(), "another-call")
+    }
+  }
+
   @Test fun everyMalformedFrameIsRejected() {
     val frames = fixture().getJSONArray("malformed")
     for (i in 0 until frames.length()) {

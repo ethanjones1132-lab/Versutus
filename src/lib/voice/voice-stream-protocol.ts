@@ -5,8 +5,9 @@
 
 export const MAX_FRAME_BYTES = 4096;
 
-export const PHONE_FRAME_TYPES = ['mute', 'skip', 'bargein', 'end'] as const;
+export const PHONE_FRAME_TYPES = ['mute', 'skip', 'bargein', 'end', 'played'] as const;
 export const GATE_FRAME_TYPES = [
+  'call',
   'ready',
   'phase',
   'partial',
@@ -27,14 +28,17 @@ export type VoicePhase = (typeof PHASES)[number];
 export type VoiceTurnState = (typeof TURN_STATES)[number];
 export type VoiceSpeechState = (typeof SPEECH_STATES)[number];
 export type VoiceEngineId = 'local' | 'codex' | 'phone';
+export type VoiceV2Envelope = { v: 2; callId: string; seq: number; ts: number };
 
-export type PhoneVoiceFrame =
+export type PhoneVoiceFrame = (
   | { t: 'mute'; on: boolean }
   | { t: 'skip' }
   | { t: 'bargein' }
-  | { t: 'end' };
+  | { t: 'end' }
+  | { t: 'played'; gen: number; atMs: number }) & Partial<VoiceV2Envelope>;
 
-export type GateVoiceFrame =
+export type GateVoiceFrame = (
+  | { t: 'call'; state: 'opening' | 'ready' | 'ending' | 'ended' }
   | { t: 'ready'; engine: VoiceEngineId | string; resumeWindowMs?: number }
   | { t: 'phase'; phase: VoicePhase }
   | { t: 'partial'; text: string }
@@ -42,7 +46,6 @@ export type GateVoiceFrame =
   | { t: 'turn'; turnId: string; state: VoiceTurnState; error?: string }
   | { t: 'reply'; turnId: string; delta: string }
   | { t: 'speech'; gen: number; state: VoiceSpeechState }
-  | { t: 'level'; v: number }
   | {
       t: 'approval';
       turnId: string;
@@ -51,13 +54,27 @@ export type GateVoiceFrame =
       state?: 'pending' | 'approved' | 'denied' | 'expired';
     }
   | { t: 'error'; code: string; message: string; fatal: boolean }
-  | { t: 'ended'; reason: string };
+  | { t: 'ended'; reason: string }) & Partial<VoiceV2Envelope>
+  | { t: 'level'; v: number }
+  | ({ t: 'level'; level: number } & VoiceV2Envelope);
 
 export class VoiceProtocolError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'VoiceProtocolError';
   }
+}
+
+function parseEnvelope(frame: Record<string, unknown>, expectedCallId?: string): VoiceV2Envelope | null {
+  if (frame.v === undefined) return null;
+  if (frame.v !== 2) throw new VoiceProtocolError(`unsupported protocol version: ${String(frame.v)}`);
+  if (typeof frame.callId !== 'string' || !frame.callId) throw new VoiceProtocolError('callId must be a non-empty string');
+  if (expectedCallId !== undefined && frame.callId !== expectedCallId) throw new VoiceProtocolError('callId does not match this call');
+  if (!Number.isSafeInteger(frame.seq) || (frame.seq as number) <= 0) throw new VoiceProtocolError('seq must be a positive integer');
+  if (typeof frame.ts !== 'number' || !Number.isFinite(frame.ts) || frame.ts < 0) {
+    throw new VoiceProtocolError('ts must be a non-negative finite number');
+  }
+  return { v: 2, callId: frame.callId, seq: frame.seq as number, ts: frame.ts };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -121,24 +138,36 @@ function toRecord(value: unknown, types: readonly string[]): Record<string, unkn
   return frame;
 }
 
-export function parsePhoneFrame(value: unknown): PhoneVoiceFrame {
+export function parsePhoneFrame(value: unknown, options: { callId?: string } = {}): PhoneVoiceFrame {
   const frame = toRecord(value, PHONE_FRAME_TYPES);
+  const envelope = parseEnvelope(frame, options.callId);
+  const withEnvelope = <T extends PhoneVoiceFrame>(parsed: T): T => ({ ...parsed, ...(envelope ?? {}) }) as T;
   switch (frame.t) {
     case 'mute':
       if (typeof frame.on !== 'boolean') throw new VoiceProtocolError('on must be a boolean');
-      return { t: 'mute', on: frame.on };
+      return withEnvelope({ t: 'mute', on: frame.on });
     case 'skip':
-      return { t: 'skip' };
+      return withEnvelope({ t: 'skip' });
     case 'bargein':
-      return { t: 'bargein' };
+      return withEnvelope({ t: 'bargein' });
+    case 'played':
+      return withEnvelope({ t: 'played', gen: requireNumber(frame, 'gen'), atMs: requireNumber(frame, 'atMs') });
     default:
-      return { t: 'end' };
+      return withEnvelope({ t: 'end' });
   }
 }
 
-export function parseGateFrame(value: unknown): GateVoiceFrame {
+export function parseGateFrame(value: unknown, options: { callId?: string } = {}): GateVoiceFrame {
   const frame = toRecord(value, GATE_FRAME_TYPES);
+  if (frame.t === 'call' && frame.v !== 2) throw new VoiceProtocolError('call frames require protocol version 2');
+  // `v` is the existing v1 level payload. V2 levels use `level` for the
+  // payload so the envelope can keep `v: 2` without colliding with it.
+  const isLegacyLevel = frame.t === 'level' && frame.level === undefined && frame.callId === undefined && frame.seq === undefined && frame.ts === undefined;
+  const envelope = isLegacyLevel ? null : parseEnvelope(frame, options.callId);
+  const withEnvelope = <T extends GateVoiceFrame>(parsed: T): T => ({ ...parsed, ...(envelope ?? {}) }) as T;
   switch (frame.t) {
+    case 'call':
+      return withEnvelope({ t: 'call', state: requireEnum(frame, 'state', ['opening', 'ready', 'ending', 'ended']) });
     case 'ready': {
       const ready: Extract<GateVoiceFrame, { t: 'ready' }> = {
         t: 'ready',
@@ -150,14 +179,14 @@ export function parseGateFrame(value: unknown): GateVoiceFrame {
       if (frame.resumeWindowMs !== undefined) {
         ready.resumeWindowMs = requireNumber(frame, 'resumeWindowMs');
       }
-      return ready;
+      return withEnvelope(ready);
     }
     case 'phase':
-      return { t: 'phase', phase: requireEnum(frame, 'phase', PHASES) };
+      return withEnvelope({ t: 'phase', phase: requireEnum(frame, 'phase', PHASES) });
     case 'partial':
-      return { t: 'partial', text: requireString(frame, 'text') };
+      return withEnvelope({ t: 'partial', text: requireString(frame, 'text') });
     case 'final':
-      return { t: 'final', turnId: requireString(frame, 'turnId'), text: requireString(frame, 'text') };
+      return withEnvelope({ t: 'final', turnId: requireString(frame, 'turnId'), text: requireString(frame, 'text') });
     case 'turn': {
       const turn: Extract<GateVoiceFrame, { t: 'turn' }> = {
         t: 'turn',
@@ -165,13 +194,14 @@ export function parseGateFrame(value: unknown): GateVoiceFrame {
         state: requireEnum(frame, 'state', TURN_STATES),
       };
       if (frame.error !== undefined) turn.error = requireString(frame, 'error');
-      return turn;
+      return withEnvelope(turn);
     }
     case 'reply':
-      return { t: 'reply', turnId: requireString(frame, 'turnId'), delta: requireString(frame, 'delta') };
+      return withEnvelope({ t: 'reply', turnId: requireString(frame, 'turnId'), delta: requireString(frame, 'delta') });
     case 'speech':
-      return { t: 'speech', gen: requireNumber(frame, 'gen'), state: requireEnum(frame, 'state', SPEECH_STATES) };
+      return withEnvelope({ t: 'speech', gen: requireNumber(frame, 'gen'), state: requireEnum(frame, 'state', SPEECH_STATES) });
     case 'level':
+      if (envelope) return { t: 'level', level: requireNumber(frame, 'level'), ...envelope };
       return { t: 'level', v: requireNumber(frame, 'v') };
     case 'approval': {
       const approval: Extract<GateVoiceFrame, { t: 'approval' }> = {
@@ -184,21 +214,33 @@ export function parseGateFrame(value: unknown): GateVoiceFrame {
         approval.state = requireEnum(frame, 'state', ['pending', 'approved', 'denied', 'expired']) as
           'pending' | 'approved' | 'denied' | 'expired';
       }
-      return approval;
+      return withEnvelope(approval);
     }
     case 'error':
       if (typeof frame.fatal !== 'boolean') throw new VoiceProtocolError('fatal must be a boolean');
-      return {
+      return withEnvelope({
         t: 'error',
         code: requireString(frame, 'code'),
         message: requireString(frame, 'message'),
         fatal: frame.fatal,
-      };
+      });
     default:
-      return { t: 'ended', reason: requireString(frame, 'reason') };
+      return withEnvelope({ t: 'ended', reason: requireString(frame, 'reason') });
   }
 }
 
 export function serializeFrame(frame: PhoneVoiceFrame | GateVoiceFrame): string {
   return JSON.stringify(frame);
+}
+
+/** A requested v2 link is selected only by an envelope; legacy attach frames confirm fallback. */
+export function protocolForFirstGateFrame(value: unknown): 1 | 2 | null {
+  let frame: GateVoiceFrame;
+  try {
+    frame = parseGateFrame(value);
+  } catch {
+    return null;
+  }
+  if (frame.v === 2) return 2;
+  return frame.t === 'ready' || frame.t === 'phase' ? 1 : null;
 }

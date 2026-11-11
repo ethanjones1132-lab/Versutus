@@ -115,6 +115,17 @@ export function reduceGateCall(
   }
 
   switch (frame.t) {
+    case 'call':
+      if (frame.state === 'opening') return stay({ ...state, phase: 'opening' });
+      if (frame.state === 'ready') return stay({ ...state, phase: 'listening' });
+      if (frame.state === 'ending' || frame.state === 'ended') {
+        return {
+          state: { ...state, phase: 'ended', endedReason: 'ended' },
+          effects: [{ kind: 'ended', reason: 'ended' }],
+        };
+      }
+      return stay(state);
+
     case 'ready':
       return stay({
         ...state,
