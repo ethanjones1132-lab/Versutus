@@ -270,6 +270,10 @@ export function attachVoiceMediaSocket({
     let turnFirstAudioAt = 0;
     let turnSentencePcmMs = null;
     let latestFinalTiming = null;
+    // This turn's end-of-speech timings, captured at commit: the final's timing is
+    // cleared then, so the played line must not read it later.
+    let turnEosToCommitMs = null;
+    let turnDecodeMs = null;
     let turnSentenceAt = 0;
     let turnGen = null;
     let turnPlayed = false;
@@ -519,6 +523,8 @@ export function attachVoiceMediaSocket({
           turnSentencePcmMs = null;
           turnGen = null;
           turnPlayed = false;
+          turnEosToCommitMs = latestFinalTiming ? Math.max(0, turnCommittedAt - latestFinalTiming.eosMs) : null;
+          turnDecodeMs = latestFinalTiming?.decodeMs ?? null;
           if (latestFinalTiming) {
             trace.eosCommitLatencies.push(Math.max(0, turnCommittedAt - latestFinalTiming.eosMs));
             trace.decodeDurations.push(latestFinalTiming.decodeMs);
@@ -833,8 +839,8 @@ export function attachVoiceMediaSocket({
             ));
             log(
               `voice.turn latency session=${session.voiceSessionId}`
-              + ` eosToCommitMs=${latestFinalTiming ? Math.max(0, turnCommittedAt - latestFinalTiming.eosMs) : 'null'}`
-              + ` decodeMs=${latestFinalTiming?.decodeMs ?? 'null'}`
+              + ` eosToCommitMs=${turnEosToCommitMs ?? 'null'}`
+              + ` decodeMs=${turnDecodeMs ?? 'null'}`
               + ` commitToFirstReplyMs=${turnFirstReplyAt ? turnFirstReplyAt - turnCommittedAt : 'null'}`
               + ` commitToFirstPcmSentMs=${turnFirstAudioAt ? turnFirstAudioAt - turnCommittedAt : 'null'}`
               + ` sentenceToPcmMs=${turnSentencePcmMs ?? 'null'}`

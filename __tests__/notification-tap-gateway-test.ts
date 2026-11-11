@@ -127,14 +127,16 @@ describe('notification preference registration is scoped to its gateway profile'
   });
 
   test('enabling notifications registers the active profile key', async () => {
+    // setEnabled refuses until the first preferences read has landed (it owns
+    // no row before that), and under a loaded full run that read can still be
+    // in flight here. Wait for it rather than racing it.
+    for (let i = 0; i < 50 && preferences.loading; i += 1) {
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+    }
+    expect(preferences.loading).toBe(false);
     await act(async () => {
       await preferences.setEnabled(true);
     });
-    // The registration is fired from the enable's own follow-up; under a loaded
-    // full run it can land a few ticks later, so let it settle before asserting.
-    for (let i = 0; i < 10 && mockSyncPushRegistration.mock.calls.length === 0; i += 1) {
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
-    }
     expect(mockSyncPushRegistration).toHaveBeenCalledWith(
       expect.objectContaining({ rpcRequest: expect.any(Function) }),
       'gateway-b',
