@@ -13,16 +13,16 @@ package com.versutus.handsfreevoice
  */
 class PlaybackLoop(
   private val isRunning: () -> Boolean,
-  private val drain: () -> ByteArray?,
-  private val write: (ByteArray) -> Unit,
+  private val drain: () -> PlaybackChunk?,
+  private val write: (PlaybackChunk) -> Unit,
   private val sleepMs: (Long) -> Unit = { Thread.sleep(it) },
   private val maxWriteBytes: Int = 4_800,
 ) {
   fun run() {
     try {
       while (isRunning()) {
-        val pcm = drain()
-        if (pcm == null) {
+        val chunk = drain()
+        if (chunk == null) {
           sleepMs(IDLE_SLEEP_MS)
           continue
         }
@@ -33,10 +33,10 @@ class PlaybackLoop(
         // call can stop while drain() runs; dropping that buffer loses audio
         // that was already removed from the queue. Later chunks remain
         // interruptible between bounded writes.
-        while (offset < pcm.size && (offset == 0 || isRunning())) {
-          val end = minOf(offset + maxWriteBytes, pcm.size) and -2
+        while (offset < chunk.pcm.size && (offset == 0 || isRunning())) {
+          val end = minOf(offset + maxWriteBytes, chunk.pcm.size) and -2
           if (end <= offset) break
-          write(if (offset == 0 && end == pcm.size) pcm else pcm.copyOfRange(offset, end))
+          write(chunk.copy(pcm = if (offset == 0 && end == chunk.pcm.size) chunk.pcm else chunk.pcm.copyOfRange(offset, end)))
           offset = end
         }
       }

@@ -13,7 +13,7 @@ class JitterBufferTest {
     buffer.push(gen = 1, pcm = frame(20))
     assertNull(buffer.drain())
     buffer.push(gen = 1, pcm = frame(40))
-    assertEquals(20, buffer.drain()!!.size / 48)
+    assertEquals(20, buffer.drain()!!.pcm.size / 48)
   }
 
   @Test fun chunksDrainInTheOrderTheyArrived() {
@@ -21,9 +21,9 @@ class JitterBufferTest {
     buffer.push(1, ByteArray(20 * 48) { 1 })
     buffer.push(1, ByteArray(20 * 48) { 2 })
     buffer.push(1, ByteArray(20 * 48) { 3 })
-    assertEquals(1.toByte(), buffer.drain()!!.first())
-    assertEquals(2.toByte(), buffer.drain()!!.first())
-    assertEquals(3.toByte(), buffer.drain()!!.first())
+    assertEquals(1.toByte(), buffer.drain()!!.pcm.first())
+    assertEquals(2.toByte(), buffer.drain()!!.pcm.first())
+    assertEquals(3.toByte(), buffer.drain()!!.pcm.first())
   }
 
   @Test fun aNewerGenerationDropsTheOlderQueuedAudio() {
@@ -61,11 +61,11 @@ class JitterBufferTest {
     buffer.push(gen = 1, pcm = frame(20)) // newest chunk is refused at 100 ms
     assertEquals(100, buffer.pendingMs())
     assertEquals(1, warnings)
-    assertEquals("oldest current-gen audio is preserved", 1.toByte(), buffer.drain()!!.first())
-    assertEquals(2.toByte(), buffer.drain()!!.first())
-    assertEquals(3.toByte(), buffer.drain()!!.first())
-    assertEquals(4.toByte(), buffer.drain()!!.first())
-    assertEquals(5.toByte(), buffer.drain()!!.first())
+    assertEquals("oldest current-gen audio is preserved", 1.toByte(), buffer.drain()!!.pcm.first())
+    assertEquals(2.toByte(), buffer.drain()!!.pcm.first())
+    assertEquals(3.toByte(), buffer.drain()!!.pcm.first())
+    assertEquals(4.toByte(), buffer.drain()!!.pcm.first())
+    assertEquals(5.toByte(), buffer.drain()!!.pcm.first())
     assertEquals("the capacity warning is emitted only once", 1, warnings)
   }
 

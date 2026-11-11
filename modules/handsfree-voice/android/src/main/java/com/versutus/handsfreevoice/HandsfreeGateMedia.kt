@@ -225,14 +225,17 @@ class HandsfreeGateMedia(
     }
     when (frame) {
       is GateFrame.Speech -> {
-        currentGen = frame.gen
         when (frame.state) {
-          "start" -> buffer.start(frame.gen)
+          "start" -> synchronized(playbackLock) {
+            currentGen = frame.gen
+            buffer.start(frame.gen)
+          }
           "cancelled" -> {
-            buffer.cancel(frame.gen)
             // AudioTrack may already contain samples beyond the queue. Pause
             // before flushing so no written tail remains audible after cancel.
             synchronized(playbackLock) {
+              currentGen = frame.gen
+              buffer.cancel(frame.gen)
               audioTrack?.runCatching {
                 pause()
                 flush()
@@ -359,10 +362,13 @@ class HandsfreeGateMedia(
       PlaybackLoop(
         isRunning = { running },
         drain = { buffer.drain() },
-        write = { pcm ->
-          // W5 serialises writes with cancel; W3 reports the first audible sample of each generation.
-          val written = synchronized(playbackLock) { track.write(pcm, 0, pcm.size) }
-          val gen = currentGen
+        write = { chunk ->
+          // Revalidate after dequeue under the same lock as cancel's flush: a
+          // chunk removed just before cancel must not be written after it.
+          val written = synchronized(playbackLock) {
+            if (buffer.isCurrent(chunk.gen)) track.write(chunk.pcm, 0, chunk.pcm.size) else 0
+          }
+          val gen = chunk.gen
           if (written > 0) {
             val firstForGen = synchronized(playedGens) { playedGens.add(gen) }
             if (firstForGen) {

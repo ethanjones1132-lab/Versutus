@@ -5,6 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PlaybackLoopTest {
+  private fun chunk(size: Int = 48) = PlaybackChunk(1, ByteArray(size))
   /**
    * The hang-up path: `stop()` flips `running` and interrupts the thread while
    * it sleeps on an empty buffer. An uncaught `InterruptedException` here took
@@ -29,7 +30,7 @@ class PlaybackLoopTest {
     var writes = 0
     PlaybackLoop(
       isRunning = { true },
-      drain = { ByteArray(48) },
+      drain = { chunk() },
       write = {
         writes += 1
         throw IllegalStateException("the AudioTrack is gone")
@@ -42,7 +43,7 @@ class PlaybackLoopTest {
     var writes = 0
     PlaybackLoop(
       isRunning = { writes < 3 },
-      drain = { ByteArray(48) },
+      drain = { chunk() },
       write = { writes += 1 },
       sleepMs = { throw AssertionError("queued audio must be written, not slept on") },
     ).run()
@@ -56,9 +57,9 @@ class PlaybackLoopTest {
       isRunning = { drained < 2 },
       drain = {
         drained += 1
-        ByteArray(4) { 9 }
+        PlaybackChunk(1, ByteArray(4) { 9 })
       },
-      write = { written.add(it) },
+      write = { written.add(it.pcm) },
       sleepMs = { throw AssertionError("queued audio must be written, not slept on") },
     ).run()
     assertEquals(2, written.size)

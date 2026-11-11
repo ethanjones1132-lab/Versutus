@@ -16,6 +16,8 @@ package com.versutus.handsfreevoice
  * barge-in `cancel()` landing between `drain()`'s emptiness check and its
  * `removeFirst()` throws on the playback thread, which kills the app.
  */
+data class PlaybackChunk(val gen: Long, val pcm: ByteArray)
+
 class JitterBuffer(
   sampleRateHz: Int = 24000,
   channels: Int = 1,
@@ -24,7 +26,7 @@ class JitterBuffer(
   private val maxPendingMs: Int = 60_000,
   private val onCapacityReached: () -> Unit = {},
 ) {
-  private val queued = ArrayDeque<ByteArray>()
+  private val queued = ArrayDeque<PlaybackChunk>()
   private var totalBytes = 0
   private var activeGen = 0L
   private var primed = false
@@ -51,7 +53,7 @@ class JitterBuffer(
       }
       return
     }
-    queued.addLast(pcm)
+    queued.addLast(PlaybackChunk(gen, pcm))
     totalBytes += pcm.size
   }
 
@@ -81,7 +83,7 @@ class JitterBuffer(
    * rather than throwing on the playback thread.
    */
   @Synchronized
-  fun drain(): ByteArray? {
+  fun drain(): PlaybackChunk? {
     if (!primed) {
       if (pendingMs() < targetMs) return null
       primed = true
@@ -91,13 +93,16 @@ class JitterBuffer(
       primed = false
       return null
     }
-    totalBytes -= pcm.size
+    totalBytes -= pcm.pcm.size
     if (queued.isEmpty()) primed = false
     return pcm
   }
 
   @Synchronized
   fun pendingMs(): Int = totalBytes / bytesPerMs
+
+  @Synchronized
+  fun isCurrent(gen: Long): Boolean = gen == activeGen && cancelledGen != gen
 
   @Synchronized
   fun flush() {
