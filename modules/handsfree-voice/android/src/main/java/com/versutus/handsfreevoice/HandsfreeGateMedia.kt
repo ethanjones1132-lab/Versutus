@@ -17,6 +17,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import java.util.concurrent.TimeUnit
+import kotlin.math.sqrt
 
 /**
  * The phone's Gate media terminal: one WebSocket, one capture thread and one
@@ -60,6 +61,13 @@ class HandsfreeGateMedia(
   @Volatile private var running = false
   @Volatile private var stopped = false
   private val captureState = GateCaptureState()
+  // The banner's dot has no level from the Gate: U5 is the phone's own
+  // measurement of what its microphone captured, exactly as the phone engine
+  // measures its barge-in tap. Display-only, so it is throttled below.
+  private val captureLevel = GateCaptureLevelTap(
+    emit = { level -> HandsfreeEventBridge.emit("level", mapOf("level" to level)) },
+    nowMs = SystemClock::elapsedRealtime,
+  )
   private val captureLock = Any()
   @Volatile private var socketOpen = false
   private var lastMuteFrameSent: Boolean? = null
@@ -90,6 +98,7 @@ class HandsfreeGateMedia(
     stopped = false
     running = true
     captureState.setRunning(true)
+    captureLevel.reset()
     sawEnded = false
     currentGen = 0L
     playedGens.clear()
@@ -325,6 +334,9 @@ class HandsfreeGateMedia(
             }
             continue
           }
+          // Measured from the frame just read, so the meter follows the audio
+          // the Gate is actually receiving rather than a timer or a stub.
+          captureLevel.accept(frame, read)
           failedReads = 0
         }
       } catch (_: InterruptedException) {
@@ -452,6 +464,61 @@ internal class GateCaptureState {
   }
   fun shouldRead(): Boolean = running && !muted
   fun shouldSend(): Boolean = running && !muted
+}
+
+/** The banner's dot is display-only, so ten samples a second is plenty. */
+private const val CAPTURE_LEVEL_INTERVAL_MS = 100L
+
+/**
+ * Turns one captured PCM frame into the 0-1 level the banner's dot animates
+ * from. The phone engine samples its own tap; a Gate call has no tap, so the
+ * same measurement is taken from what this capture loop actually read and sent.
+ *
+ * It is display-only: the sample is dropped unless a whole interval has passed,
+ * because the banner must not be asked to redraw it per 20 ms of audio, and
+ * `level` is the protocol's first frame to drop under load.
+ */
+internal class GateCaptureLevelTap(
+  private val emit: (Double) -> Unit,
+  private val nowMs: () -> Long,
+  private val intervalMs: Long = CAPTURE_LEVEL_INTERVAL_MS,
+) {
+  private var lastAtMs: Long? = null
+
+  /** A new call reports its first frame at once, not after the last call's tick. */
+  fun reset() {
+    lastAtMs = null
+  }
+
+  fun accept(pcm: ByteArray, count: Int) {
+    if (count <= 0) return
+    val now = nowMs()
+    val previous = lastAtMs
+    if (previous != null && now - previous < intervalMs) return
+    lastAtMs = now
+    emit(GateCaptureLevel.rmsLevel(pcm, count))
+  }
+}
+
+/** The RMS math, kept out of the capture loop so it is proved on the JVM. */
+internal object GateCaptureLevel {
+  private const val SAMPLE_SCALE = 32768.0
+
+  fun rmsLevel(pcm: ByteArray, count: Int): Double {
+    // PCM16 is two bytes a sample; a trailing odd byte has no sample of its own.
+    val limit = minOf(count, pcm.size) / 2 * 2
+    if (limit <= 0) return 0.0
+    var sum = 0.0
+    var index = 0
+    while (index < limit) {
+      // Little-endian: the high byte is signed, so its shift carries the sign.
+      val sample = (pcm[index + 1].toInt() shl 8) or (pcm[index].toInt() and 0xFF)
+      sum += sample.toDouble() * sample
+      index += 2
+    }
+    val rms = sqrt(sum / (limit / 2))
+    return (rms / SAMPLE_SCALE).coerceIn(0.0, 1.0)
+  }
 }
 
 /** The service and module have separate lifetimes; this bridges their media instance. */

@@ -34,9 +34,13 @@ import {
 import { recoveryStorageKey } from '@/lib/gateway/composer-draft';
 import { handsfreeEndReasonCopy, handsfreeTurnFailureCopy } from '@/lib/voice/handsfree-call-copy';
 
+// One stable object, as the real hook is stable across renders: the provider's
+// listener captures it once and writes samples into it, so a fresh object per
+// render would hide every later write from the value the banner reads.
+const mockSharedLevel = { value: 0 };
 jest.mock('react-native-reanimated', () => ({
   Easing: { bezier: () => (value: number) => value, elastic: () => (value: number) => value },
-  useSharedValue: (value: number) => ({ value }),
+  useSharedValue: () => mockSharedLevel,
 }));
 
 const mockBacking = new Map<string, string>();
@@ -203,6 +207,7 @@ let renderer: ReactTestRenderer | null = null;
 beforeEach(async () => {
   jest.useFakeTimers();
   mockBacking.clear();
+  mockSharedLevel.value = 0;
   mockMessages.messages = [];
   seen = [];
   published.clear();
@@ -839,6 +844,57 @@ describe('a Gate approval is visible on the call, not dropped', () => {
     });
     expect(latest().approval).toMatchObject({ approvalId: 'approval-once', state: 'approved' });
     expect(mockGateway.gatewayRequest.mock.calls.filter(([method]) => method === 'approval.approve')).toHaveLength(1);
+  });
+});
+
+describe('a Gate commit cues the operator, and the dot follows the captured voice', () => {
+  test('the Gate committing an utterance plays the phone-local send earcon', async () => {
+    // Phone mode plays this cue when its turn leaves the phone. On a Gate call
+    // the turn leaves from the Gate, so the phone heard nothing at all while it
+    // waited for the answer (bar F2).
+    await startLiveCall();
+    expect(mockNative.playSendEarcon).not.toHaveBeenCalled();
+
+    await call(async () => {
+      gateFrame('{"t":"final","turnId":"t1","text":"book a table for two"}');
+    });
+
+    expect(mockNative.playSendEarcon).toHaveBeenCalledTimes(1);
+  });
+
+  test('every committed utterance gets its own cue, and nothing else does', async () => {
+    await startLiveCall();
+    await call(async () => {
+      gateFrame('{"t":"partial","text":"book a"}');
+      gateFrame(thinking);
+      gateFrame('{"t":"turn","turnId":"t1","state":"sent"}');
+      gateFrame('{"t":"reply","turnId":"t1","delta":"Sure"}');
+      gateFrame(speaking);
+    });
+    expect(mockNative.playSendEarcon).not.toHaveBeenCalled();
+
+    await call(async () => {
+      gateFrame('{"t":"final","turnId":"t1","text":"book a table for two"}');
+      gateFrame('{"t":"final","turnId":"t1","text":"and a taxi"}');
+    });
+    expect(mockNative.playSendEarcon).toHaveBeenCalledTimes(2);
+  });
+
+  test('the captured level moves the shared value the banner draws from', async () => {
+    // GateMedia measures the frames it captured and reports them as `level`,
+    // the same event the phone engine's tap uses (bar U5). The banner reads
+    // this shared value, never React state.
+    await startLiveCall();
+
+    await call(async () => {
+      nativeEvent('level', { level: 0.42 });
+    });
+    expect(latest().level.value).toBeCloseTo(0.42);
+
+    await call(async () => {
+      nativeEvent('level', { level: 4 });
+    });
+    expect(latest().level.value).toBe(1);
   });
 });
 

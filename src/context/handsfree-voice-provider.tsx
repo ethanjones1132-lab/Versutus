@@ -725,6 +725,12 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
           : parsed ?? frame;
         if (parsed) {
           noteGateTurn(parsed);
+          // The Gate has committed this utterance. The phone engine cues the
+          // operator with its local send earcon at the moment its turn leaves;
+          // a Gate call gets the same cue at the same event instead of sitting
+          // silent until the reply starts (bar F2). `final` is emitted once per
+          // committed utterance, at commit.
+          if (parsed.t === 'final') void module.playSendEarcon();
           // The Gate's own account of the phase settles an optimistic mute only
           // when it REFLECTS the request: a phase frame produced before the Gate
           // read the control proves nothing, and treating it as a confirmation
