@@ -139,7 +139,7 @@ describe('the carried rows agree with a from-scratch rebuild', () => {
 describe('chat-screen wires the fold through the pure helper', () => {
   test('the transcriptItems memo hands the helper the previous fold and the divider formatter', () => {
     const screen = readSource('components/chat/chat-screen.tsx');
-    expect(screen).toMatch(/stableTranscriptItems\(messages, formatDayDividerCached, transcriptItemsRef\.current\)/);
+    expect(screen).toMatch(/stableTranscriptItems\(transcriptMessages, formatDayDividerCached, transcriptItemsRef\.current\)/);
     // The carried list is mirrored the way `messagesRef` mirrors the messages.
     expect(screen).toMatch(/transcriptItemsRef\.current = transcriptItems;/);
     expect(screen).toMatch(/data=\{transcriptItems\}/);

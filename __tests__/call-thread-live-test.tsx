@@ -11,6 +11,9 @@ import {
 import { callProjectionForThread } from '@/lib/voice/call-thread-projection';
 
 const mockSharedValue = { value: 0 };
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
+);
 jest.mock('react-native-reanimated', () => ({
   Easing: { bezier: () => (value: number) => value, elastic: () => (value: number) => value },
   useSharedValue: () => mockSharedValue,

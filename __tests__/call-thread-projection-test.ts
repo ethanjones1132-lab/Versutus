@@ -30,15 +30,16 @@ describe('call thread projection', () => {
     ] as const;
     for (const event of events) state = projectCallFrame(state, event as never);
 
-    expect(state.messages).toHaveLength(5);
+    expect(state.messages).toHaveLength(4);
     expect(state.messages[0]).toMatchObject({ role: 'user', turnId: 'turn-1', text: 'What I said' });
     expect(state.messages[1]).toMatchObject({ text: 'First reply', streaming: true });
     expect(state.messages[1].toolCalls).toEqual([
       { id: 'tool-1', name: 'search', status: 'complete', detail: 'Found results' },
     ]);
     expect(state.messages[2].text).toContain('Approval approved');
-    expect(state.messages[3].text).toBe('Call phase: speaking');
-    expect(state.messages[4].text).toBe('Call ended: user');
+    // Phase stays on the banner; the thread shows the turns and the end.
+    expect(state.messages.some((message) => message.text.startsWith('Call phase'))).toBe(false);
+    expect(state.messages[3].text).toBe('Call ended: user');
 
     // Both sequence replay and the second turn-id guard are harmless.
     const replay = projectCallFrame(state, events[1] as never);

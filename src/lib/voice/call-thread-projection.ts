@@ -134,11 +134,8 @@ export function projectCallFrame(
       break;
     }
     case 'phase':
-      next = {
-        ...next,
-        messages: updateMessage(next.messages, `voice-phase:${projection.callId}`, () =>
-          textMessage(`voice-phase:${projection.callId}`, undefined, `Call phase: ${frame.phase}`)),
-      };
+      // Phase belongs to the call banner, not the conversation: a thread bubble
+      // per listening/speaking change is noise between the real turns.
       break;
     case 'call':
       if (frame.state === 'ended' || frame.state === 'ending') {
