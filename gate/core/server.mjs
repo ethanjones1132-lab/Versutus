@@ -64,7 +64,7 @@ import {
 import { createModelHealth, healthScopeId, modelHealthKey } from './model-health.mjs';
 import { isModelFault } from './model-fault.mjs';
 import { collectActivity, parseActivitySince, withActivityTimeout } from './activity.mjs';
-import { collectRoutines, withRoutineTimeout } from './routines.mjs';
+import { collectRoutines, unsupportedRoutineRead } from './routines.mjs';
 import { curateModels } from './model-curation.mjs';
 import { backendUpstreamRefusal } from './upstream-refusal.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
@@ -2702,21 +2702,22 @@ export async function createGate(config = {}) {
           return;
         }
         const backends = await Promise.all(entries.map(async (entry) => {
-          const canListJobs = await backendCanServe(entry, 'listJobs');
+          const base = { id: entry.id, label: entry.label };
+          // A method list that proves no `listJobs` is a backend with no
+          // routine concept: say unavailable without starting it. `null` is
+          // unknown, not proof of support — the started backend's own shape
+          // has to answer, and its answer may still be "no routines".
+          const methods = await backendManager.methodsOf(entry.id);
+          if (methods && !methods.has('listJobs')) return base;
           return {
-            id: entry.id,
-            label: entry.label,
+            ...base,
             // Omitted, not faked: collectRoutines reads the absence as
             // unavailable and the app explains why instead of showing zero.
-            ...(canListJobs ? {
-              listJobs: async () => {
-                return withRoutineTimeout(Promise.resolve().then(async () => {
-                  const backend = await backendManager.get(entry.id);
-                  if (typeof backend.listJobs !== 'function') throw new Error('Routines are unavailable');
-                  return backend.listJobs();
-                }));
-              },
-            } : {}),
+            listJobs: async () => {
+              const backend = await backendManager.get(entry.id);
+              if (typeof backend.listJobs !== 'function') throw unsupportedRoutineRead(entry.label);
+              return backend.listJobs();
+            },
           };
         }));
         try {

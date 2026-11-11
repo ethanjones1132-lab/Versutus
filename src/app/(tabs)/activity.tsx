@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ActivityGlance } from '@/components/activity/activity-glance';
 import { AgentTargets } from '@/components/activity/agent-targets';
 import { CronSection } from '@/components/activity/cron-section';
+import { RoutinesSection } from '@/components/activity/routines-section';
 import { TodaySection } from '@/components/activity/today-section';
 import { SpendEntryRow } from '@/components/gateway/spend-entry-row';
 import { PulsingDot } from '@/components/connection-badge';
@@ -74,6 +75,9 @@ export default function ActivityScreen() {
   // already in flight.
   const [cronReloadSignal, setCronReloadSignal] = useState(0);
   const [todayReloadSignal, setTodayReloadSignal] = useState(0);
+  // The Routines view reads the cross-backend feed, not the cron roster: its
+  // own signal so filing a job from the form there re-reads the feed it shows.
+  const [routinesReloadSignal, setRoutinesReloadSignal] = useState(0);
   const [activityView, setActivityView] = useState<'today' | 'routines'>('today');
   // Decision history is this device's key-value audit, not a Gateway read:
   // loaded once, and re-read alongside the pulls so a fresh decision shows.
@@ -151,6 +155,7 @@ export default function ActivityScreen() {
     // this bump costs at most the one read that is still running.
     setCronReloadSignal((n) => n + 1);
     setTodayReloadSignal((n) => n + 1);
+    setRoutinesReloadSignal((n) => n + 1);
     // Hold the spinner briefly so recovery isn't a disorienting flash.
     const elapsed = Date.now() - started;
     if (elapsed < 400) await new Promise((resolve) => setTimeout(resolve, 400 - elapsed));
@@ -298,8 +303,14 @@ export default function ActivityScreen() {
 
       <View style={styles.footer}>
       {activityView === 'routines' ? <>
-        {/* The Routine view follows; CronSection remains unchanged in this interim view. */}
-        <CronSection cronReloadSignal={cronReloadSignal} />
+        {/* Every backend's routines, honest per host. CronSection keeps the
+            form that files a gateway-level job and the two sheets it opens. */}
+        <RoutinesSection reloadSignal={routinesReloadSignal} />
+        <CronSection
+          cronReloadSignal={cronReloadSignal}
+          showList={false}
+          onCreated={() => setRoutinesReloadSignal((n) => n + 1)}
+        />
       </> : null}
 
       {/* D1: what this device has already decided — the tally plus the

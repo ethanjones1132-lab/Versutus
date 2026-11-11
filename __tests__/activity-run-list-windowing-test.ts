@@ -53,6 +53,8 @@ describe('runs list windowing', () => {
     // scheduled work remains behind Routines.
     const tab = readCronTabSource();
     expect(tab).toContain('<TodaySection');
-    expect(tab).toContain('<CronSection cronReloadSignal={cronReloadSignal} />');
+    expect(tab).toContain('<CronSection');
+    expect(tab).toContain('cronReloadSignal={cronReloadSignal}');
+    expect(tab).toContain('showList={false}');
   });
 });

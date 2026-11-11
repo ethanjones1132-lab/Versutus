@@ -29,7 +29,11 @@ describe('Activity defaults to Today and preserves Routines', () => {
 
   test('scheduled work remains on Routines', () => {
     expect(activity()).toContain("activityView === 'routines'");
-    expect(activity()).toContain('<CronSection cronReloadSignal={cronReloadSignal} />');
+    // VS-089 d2: the cross-backend routine feed owns the list, and the cron
+    // section stays for the job form and its sheets.
+    expect(activity()).toContain('<RoutinesSection reloadSignal={routinesReloadSignal} />');
+    expect(activity()).toContain('<CronSection');
+    expect(activity()).toContain('showList={false}');
   });
 
   test('the tab links to the Runs destination', () => {

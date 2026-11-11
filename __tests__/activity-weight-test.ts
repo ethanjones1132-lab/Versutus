@@ -62,7 +62,8 @@ describe('Activity carries quieter violet weight than Chat', () => {
     const screen = activity();
     expect(screen).toContain("router.push('/runs')");
     expect(readSource('src', 'components', 'activity', 'today-section.tsx')).toContain('<ApprovalInbox />');
-    expect(screen).toContain('<CronSection cronReloadSignal={cronReloadSignal} />');
+    expect(screen).toContain('<CronSection');
+    expect(screen).toContain('cronReloadSignal={cronReloadSignal}');
     expect(screen).toContain('<SpendEntryRow />');
     expect(screen).toContain('<AgentTargets');
 
