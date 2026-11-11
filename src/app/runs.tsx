@@ -84,6 +84,8 @@ export default function RunsScreen() {
 
   const [runPrompt, setRunPrompt] = useState('');
   const [starting, setStarting] = useState(false);
+  // State waits for a render; reserve synchronously so same-turn presses share one send.
+  const startingRef = useRef(false);
   // What the last start attempt actually did, for the one outcome nothing else
   // on this screen can name (see RUN_QUEUED_COPY). Cleared by the next edit and
   // by the next attempt, so it can never outlive the words it is about.
@@ -193,7 +195,8 @@ export default function RunsScreen() {
 
   const startRun = async () => {
     const prompt = runPrompt.trim();
-    if (!prompt || !runsSupported || starting) return;
+    if (!prompt || !runsSupported || startingRef.current) return;
+    startingRef.current = true;
     setStarting(true);
     // Belongs to the attempt that earned it; a new attempt replaces it.
     setStartNote(null);
@@ -215,6 +218,7 @@ export default function RunsScreen() {
       // queued run reads exactly like a refusal while a later flush starts it.
       setStartNote(outcome === 'queued' ? RUN_QUEUED_COPY : null);
     } finally {
+      startingRef.current = false;
       setStarting(false);
     }
   };
@@ -233,6 +237,7 @@ export default function RunsScreen() {
   // outcomes that leave nothing behind are written down.
   const retryRun = useCallback(
     (run: ActivityRun) => {
+      if (!runsSupported) return;
       const prompt = run.prompt.trim();
       if (!prompt) return;
       if (retryingRef.current) return;
@@ -261,7 +266,7 @@ export default function RunsScreen() {
           setRetryingRunId(null);
         });
     },
-    [sendChatInput],
+    [runsSupported, sendChatInput],
   );
 
   const onRefresh = async () => {
@@ -601,12 +606,20 @@ export default function RunsScreen() {
           const note = retrying ? RETRY_PENDING_COPY : retryNotes[item.run.id];
           return (
             <View>
-              <RunCard
-                run={item.run}
-                highlighted={item.id === focusedRunId}
-                onOpenTranscript={setOpenAgenticRunId}
-                onRetry={retrying ? undefined : (prompt) => retryRun({ ...item.run, prompt })}
-              />
+              {runsSupported ? (
+                <RunCard
+                  run={item.run}
+                  highlighted={item.id === focusedRunId}
+                  onOpenTranscript={setOpenAgenticRunId}
+                  onRetry={retrying ? undefined : (prompt) => retryRun({ ...item.run, prompt })}
+                />
+              ) : (
+                <RunCard
+                  run={item.run}
+                  highlighted={item.id === focusedRunId}
+                  onOpenTranscript={setOpenAgenticRunId}
+                />
+              )}
               {/* What the retry actually did, on the card it was tapped from —
                   the only surface a queued or refused retry has on this screen.
                   A retry that completed needs no line: the run it started is a
