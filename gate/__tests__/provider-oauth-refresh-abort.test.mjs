@@ -191,6 +191,62 @@ test('a chat that arrives just after the last waiter stopped starts a fresh refr
   assert.equal(tokens.accessToken, 'new-access');
 });
 
+test('a chat deadline aborts a stalled token refresh and rejects with its timeout', async () => {
+  const refreshToken = 'rt-keep';
+  let stored = JSON.stringify({
+    accessToken: 'old-access',
+    refreshToken,
+    expiresAt: new Date(Date.now() - 60_000).toISOString(),
+  });
+  const vault = {
+    get: async () => stored,
+    set: async (_key, value) => { stored = value; },
+    delete: async () => { stored = undefined; },
+  };
+  let refreshSignal;
+  let refreshStarted = false;
+  const oauth = new OAuthManager({
+    vault,
+    profiles: new Map([['test-oauth', {
+      issuer: 'http://127.0.0.1:8080',
+      clientId: 'public-client',
+    }]]),
+    fetchImpl: async (url, init = {}) => {
+      if (String(url).includes('.well-known')) {
+        return {
+          ok: true,
+          json: async () => ({ token_endpoint: 'http://127.0.0.1:8080/token' }),
+        };
+      }
+      refreshSignal = init.signal;
+      refreshStarted = true;
+      // Never answer: the refresh is only allowed to end on the chat's signal.
+      return new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+      });
+    },
+  });
+  const adapter = createProviderAdapter(config, { vault, oauth });
+  const controller = new AbortController();
+  const pending = adapter.chat({ model: 'test-model', messages: [], stream: false }, controller.signal);
+  pending.catch(() => {});
+
+  const deadline = Date.now() + 1000;
+  while (!refreshStarted && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(refreshStarted, 'the expired grant started a token refresh');
+  // Stands in for the upstream header watchdog: the chat's deadline aborts its
+  // signal with a timeout, and that signal reaches the refresh now.
+  controller.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+  const outcome = await pending.then(() => ({ resolved: true }), (error) => ({ error }));
+
+  assert.equal(outcome.error?.name, 'TimeoutError', 'chat rejects with the deadline error');
+  assert.match(outcome.error.message, /timeout/i);
+  assert.equal(refreshSignal.aborted, true, 'the stalled refresh fetch was aborted with the chat');
+  assert.equal(JSON.parse(stored).refreshToken, refreshToken, 'a deadline does not delete or rewrite the grant');
+});
+
 test('a stop that lands after the token endpoint answered still stores the rotated grant', async () => {
   let stored = JSON.stringify({
     accessToken: 'old-access',

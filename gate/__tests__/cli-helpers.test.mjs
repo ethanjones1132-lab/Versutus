@@ -211,6 +211,19 @@ test('classifyBindHost: wildcard, LAN and public addresses are plaintext, includ
   }
 });
 
+test('classifyBindHost: a zone-scoped link-local address is plaintext today', () => {
+  // `fe80::1%eth0` names the interface its link-local address belongs to. The
+  // zone suffix is not parsed here, and a link-local address reaches the LAN,
+  // so it must be treated as plaintext rather than loopback or tailnet.
+  assert.equal(classifyBindHost('fe80::1%eth0'), 'plaintext');
+});
+
+test('classifyBindHost: an IPv4-mapped IPv6 LAN address is plaintext today', () => {
+  // `::ffff:192.168.1.5` is a LAN address wearing IPv6 notation; it is neither
+  // loopback nor Tailscale, so the plaintext warning still applies.
+  assert.equal(classifyBindHost('::ffff:192.168.1.5'), 'plaintext');
+});
+
 test('resolvePlaintextAck accepts the flag or VERSUTUS_GATE_ALLOW_PLAINTEXT=1 only', () => {
   assert.equal(resolvePlaintextAck(['--allow-plaintext'], {}), true);
   assert.equal(resolvePlaintextAck([], { VERSUTUS_GATE_ALLOW_PLAINTEXT: '1' }), true);
