@@ -82,7 +82,7 @@ class HandsfreeGateMedia(
   @Volatile private var currentGen = 0L
   private val playedGens = mutableSetOf<Long>()
 
-  fun start(context: Context, url: String, token: String, voiceSessionId: String) {
+  @Synchronized fun start(context: Context, url: String, token: String, voiceSessionId: String) {
     stop()
     stopped = false
     running = true
@@ -137,7 +137,8 @@ class HandsfreeGateMedia(
     sent
   }
 
-  fun stop() {
+  @Synchronized fun stop() {
+    if (stopped) return
     stopped = true
     running = false
     synchronized(captureLock) { captureState.setRunning(false) }

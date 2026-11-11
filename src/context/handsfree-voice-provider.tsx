@@ -274,6 +274,11 @@ function isRetryableSocketFailure(frame: unknown): frame is string {
   return isGateSocketGone(frame);
 }
 
+/** Gate media owns its own resume window; chat transport status is not its liveness proof. */
+export function shouldEndCallForGatewayStatus(status: string, gateMode: boolean): boolean {
+  return status !== 'connected' && !gateMode;
+}
+
 /** The frame as the Gate sent it, or null when this build cannot read it. */
 function gateFrame(frame: string): GateVoiceFrame | null {
   try {
@@ -1197,8 +1202,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   useEffect(() => {
     const phase = session.phase;
     if (phase === 'idle' || phase === 'ended' || phase === 'ending') return;
-    if (status !== 'connected') dispatch({ type: 'disconnect' });
-  }, [status, session.phase, dispatch]);
+    if (shouldEndCallForGatewayStatus(status, gateMode)) {
+      dispatch({ type: 'disconnect' });
+    }
+  }, [status, session.phase, gateMode, dispatch]);
 
   // Unmounting the provider (app teardown) releases the call exactly as End does.
   useEffect(() => {
