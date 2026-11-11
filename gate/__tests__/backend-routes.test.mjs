@@ -419,6 +419,89 @@ test('session messages come back in the shape the app parses', async () => {
   }
 });
 
+test('session changes are read from the selected backend and unsupported backends stay honest', async () => {
+  const calls = [];
+  const base = stubRegistry(calls).get('stubcli');
+  const registry = {
+    get(id) {
+      if (id !== 'stubcli') throw new Error(`unknown CLI adapter "${id}"`);
+      return {
+        ...base,
+        createBackend() {
+          return {
+            ...base.createBackend(),
+            async getSessionChanges(sessionId) {
+              calls.push(`getSessionChanges:${sessionId}`);
+              return { supported: true, files: [{ path: 'src/app.ts', status: 'modified', additions: 2, deletions: 1, patch: '@@ -1 +1 @@' }] };
+            },
+          };
+        },
+      };
+    },
+    list() { return [base]; },
+  };
+  const { gate } = await makeGate({ registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/sessions/ses_1/changes?backendId=stub-local`, { headers: auth(gate) });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      supported: true,
+      files: [{ path: 'src/app.ts', status: 'modified', additions: 2, deletions: 1, patch: '@@ -1 +1 @@' }],
+    });
+    assert.ok(calls.includes('getSessionChanges:ses_1'));
+
+    const wrongOwner = await fetch(`http://127.0.0.1:${gate.port}/v1/sessions/ses_1/changes?backendId=not-here`, { headers: auth(gate) });
+    assert.equal(wrongOwner.status, 404);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('session changes report unsupported instead of inventing a diff', async () => {
+  const { gate } = await makeGate();
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/sessions/ses_1/changes?backendId=stub-local`, { headers: auth(gate) });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { files: [], supported: false });
+  } finally {
+    await gate.close();
+  }
+});
+
+test('session changes cap total included patch bytes and label files that do not fit', async () => {
+  const base = stubRegistry([]).get('stubcli');
+  const registry = {
+    get() {
+      return {
+        ...base,
+        createBackend() {
+          return {
+            ...base.createBackend(),
+            async getSessionChanges() {
+              return { supported: true, files: [
+                { path: 'large.txt', status: 'modified', additions: 1, deletions: 0, patch: 'x'.repeat(200 * 1024 + 1) },
+                { path: 'small.txt', status: 'added', additions: 1, deletions: 0, patch: 'small patch' },
+              ] };
+            },
+          };
+        },
+      };
+    },
+    list() { return [base]; },
+  };
+  const { gate } = await makeGate({ registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/sessions/ses_1/changes?backendId=stub-local`, { headers: auth(gate) });
+    const body = await response.json();
+    assert.equal(body.files[0].status, 'too_large');
+    assert.equal(body.files[0].patch, undefined);
+    assert.equal(body.files[1].patch, 'small patch');
+    assert.equal(Buffer.byteLength(body.files[1].patch), Buffer.byteLength('small patch'));
+  } finally {
+    await gate.close();
+  }
+});
+
 test('session.messages RPC reads a transcript through the Gate dialect', async () => {
   const { gate, calls } = await makeGate();
   try {

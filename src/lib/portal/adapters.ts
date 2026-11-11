@@ -198,6 +198,11 @@ export interface PortalClient {
     limit?: number,
     before?: string,
   ): Promise<SessionMessagePage>;
+  /** Read-only file diffs from backends that expose a real session diff API. */
+  getSessionChanges?(sessionId: string): Promise<{
+    supported: boolean;
+    files: { path: string; status: string; additions: number; deletions: number; patch?: string }[];
+  }>;
   stopRun(runId: string): Promise<void>;
   /**
    * Authenticated fetch against the gateway origin for routes that are not RPC

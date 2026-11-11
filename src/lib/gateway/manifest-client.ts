@@ -47,6 +47,16 @@ import type {
   SessionsResponse,
 } from '@/lib/gateway/types';
 
+export type SessionChangeFile = {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  patch?: string;
+};
+
+export type SessionChanges = { files: SessionChangeFile[]; supported: boolean };
+
 function interpolatePath(path: string, vars: Record<string, string>): string {
   return path.replace(/\{(\w+)\}|:(\w+)/g, (_match, named?: string, colon?: string) => {
     const key = named ?? colon ?? '';
@@ -1190,6 +1200,29 @@ export class ManifestClient implements PortalClient {
       hasMore: result.hasMore,
       nextBefore: result.nextBefore,
     };
+  }
+
+  /** Read the selected backend's real session diff through the Gate route. */
+  async getSessionChanges(sessionId: string): Promise<SessionChanges> {
+    const path = this.withScope(`/v1/sessions/${encodeURIComponent(sessionId)}/changes`);
+    const raw = await this.rootTransport.request<unknown>('GET', path);
+    if (!raw || typeof raw !== 'object' || !Array.isArray((raw as { files?: unknown }).files)) {
+      throw new GatewayHttpError('The gateway answered session changes with data the app could not read.', 200, 'session_changes_unreadable');
+    }
+    const result = raw as { files: unknown[]; supported?: unknown };
+    const files = result.files.filter((file): file is SessionChangeFile => {
+      if (!file || typeof file !== 'object') return false;
+      const row = file as Record<string, unknown>;
+      return typeof row.path === 'string'
+        && typeof row.status === 'string'
+        && typeof row.additions === 'number'
+        && typeof row.deletions === 'number'
+        && (row.patch === undefined || typeof row.patch === 'string');
+    });
+    if (files.length !== result.files.length || typeof result.supported !== 'boolean') {
+      throw new GatewayHttpError('The gateway answered session changes with data the app could not read.', 200, 'session_changes_unreadable');
+    }
+    return { files, supported: result.supported };
   }
 
   /**
