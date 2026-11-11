@@ -345,6 +345,11 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   // The grant a live Gate call is joined with: the reconnect path re-opens the
   // media socket with these exact ids inside the Gate's resume window.
   const gateGrantRef = useRef<GateVoiceGrant | null>(null);
+  // The device id this call was granted for. The Gate resolves the caller of
+  // `voice.session.stop` from it, so the release at teardown names the same
+  // phone the start did — without reading the secure store again while the
+  // operator is waiting for the call to end.
+  const gateDeviceRef = useRef<{ deviceId: string } | null>(null);
   const gateReconnectingRef = useRef(false);
   // An optimistic Gate mute, the mute it asked for, and the banner it replaced.
   // The Gate's own `phase` frame is the authority — but only one that REFLECTS
@@ -738,15 +743,28 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         // best-effort: the service's own teardown still runs
       }
       if (gateSessionId) {
+        // The reason the call is ending, in the reducer's own words: a link the
+        // resume window could not rejoin is not the operator walking away.
+        const reason = sessionRef.current.reason ?? 'user';
         try {
+          // The device travels with the stop, because the Gate resolves the
+          // caller from it. Without it, a phone on the Gate's own token is
+          // refused `pairing_required` and the call it just ended stays live on
+          // the Gate — every new start refused `call_in_progress` until that
+          // call's own 90 s resume window runs out. The id the start already
+          // read is reused; a call that somehow has none still sends the stop.
+          const device: { deviceId?: string } = gateDeviceRef.current
+            ?? (await pushDeviceParams().catch(() => ({} as { deviceId?: string })));
           await latest.current.gatewayRequest('voice.session.stop', {
             voiceSessionId: gateSessionId,
-            reason: 'user',
+            reason,
+            ...device,
           });
         } catch {
           // the session's own idle close ends it if this never lands
         }
       }
+      gateDeviceRef.current = null;
     } else {
       endHandsfreeCall();
       try {
@@ -1186,6 +1204,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     setEngineInfo(null);
     gateSessionIdRef.current = undefined;
     gateGrantRef.current = null;
+    gateDeviceRef.current = null;
     gateReconnectingRef.current = false;
     moduleRef.current = null;
     targetRef.current = null;
@@ -1225,6 +1244,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       setGateMode(true);
       gateSessionIdRef.current = undefined;
       gateGrantRef.current = null;
+      gateDeviceRef.current = null;
       gateReconnectingRef.current = false;
       gateBannerRef.current = INITIAL_GATE_CALL;
       setGateBanner(INITIAL_GATE_CALL);
@@ -1265,6 +1285,11 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         logHandsfreeStart({ result, transport: 'gate', engine: target.voiceEngine });
         return { result };
       }
+
+      // The identity this call is granted for, kept for its release: the Gate
+      // resolves the stop's caller from it, and reading it again at teardown
+      // would only be a second chance to fail at saying who ended the call.
+      gateDeviceRef.current = device;
 
       // The budget is disposed from a `finally`, not after the await: a chain that
       // rethrows would leave its timer pending, and a timer nobody disposed
@@ -1341,6 +1366,8 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
           await latest.current.gatewayRequest('voice.session.stop', {
             voiceSessionId: attempt.grant.voiceSessionId,
             reason: 'start-failed',
+            // Addressed to this phone, as the Gate resolves the caller from it.
+            ...device,
           });
         } catch {
           // the session's own idle close ends it if this never lands
