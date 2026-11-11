@@ -130,6 +130,11 @@ describe('notification preference registration is scoped to its gateway profile'
     await act(async () => {
       await preferences.setEnabled(true);
     });
+    // The registration is fired from the enable's own follow-up; under a loaded
+    // full run it can land a few ticks later, so let it settle before asserting.
+    for (let i = 0; i < 10 && mockSyncPushRegistration.mock.calls.length === 0; i += 1) {
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+    }
     expect(mockSyncPushRegistration).toHaveBeenCalledWith(
       expect.objectContaining({ rpcRequest: expect.any(Function) }),
       'gateway-b',
