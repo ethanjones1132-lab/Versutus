@@ -3542,12 +3542,16 @@ export function ChatScreen() {
         }
       />
 
-      <SessionChangesSheet
-        visible={sessionChangesVisible}
-        sessionId={currentSessionId}
-        onClose={() => setSessionChangesVisible(false)}
-        loadChanges={loadSessionChanges}
-      />
+      {/* Mounted only while open: it reads the session on demand, and a closed
+          sheet has nothing to hold. */}
+      {sessionChangesVisible ? (
+        <SessionChangesSheet
+          visible={sessionChangesVisible}
+          sessionId={currentSessionId}
+          onClose={() => setSessionChangesVisible(false)}
+          loadChanges={loadSessionChanges}
+        />
+      ) : null}
 
       <MessageActionsSheet
         visible={!!actionMessage}

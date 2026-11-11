@@ -129,6 +129,8 @@ describe('ListRow selected state screen-reader wiring', () => {
       return /<ListRow[\s\S]*?selected=\{/.test(src);
     });
     expect(passing).toEqual([
+      // VS-094: the changes sheet marks the file whose diff is open.
+      nodePath.join(srcRoot, 'chat', 'session-changes-sheet.tsx'),
       nodePath.join(srcRoot, 'chat', 'thread-config-sheet.tsx'),
     ]);
   });
