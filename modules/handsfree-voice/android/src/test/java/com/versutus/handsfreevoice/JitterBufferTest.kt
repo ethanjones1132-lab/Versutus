@@ -76,4 +76,15 @@ class JitterBufferTest {
     assertEquals(0, buffer.pendingMs())
     assertNull(buffer.drain())
   }
+
+  @Test fun eachGenerationReportsItsOwnQueueOverflow() {
+    var warnings = 0
+    val buffer = JitterBuffer(sampleRateHz = 24000, targetMs = 20, maxPendingMs = 20) { warnings += 1 }
+    buffer.push(1, frame(20))
+    buffer.push(1, frame(20))
+    buffer.push(2, frame(20))
+    buffer.push(2, frame(20))
+    assertEquals(2, warnings)
+    assertEquals(20, buffer.pendingMs())
+  }
 }

@@ -35,12 +35,14 @@ import kotlin.math.sqrt
 class HandsfreeGateMedia(
   private val onFrame: (String) -> Unit,
   initiallyMuted: Boolean = false,
+  private val resumeLastSeq: Long? = null,
 ) {
   companion object {
     const val CAPTURE_SAMPLE_RATE = 16000
     const val PLAYBACK_SAMPLE_RATE = 24000
     const val FRAME_MS = 20
     const val JITTER_TARGET_MS = 60
+    private const val MAX_SOCKET_QUEUE_BYTES = CAPTURE_SAMPLE_RATE * 2 * 2
 
     private const val CAPTURE_CHANNELS = 1
     private const val CAPTURE_BYTES_PER_SAMPLE = 2
@@ -78,6 +80,7 @@ class HandsfreeGateMedia(
   @Volatile private var protocolV2 = false
   private var activeCallId = ""
   private var lastMuteFrameSent: Boolean? = null
+  private val speechStartSequences = mutableMapOf<Long, Long>()
 
   init { captureState.setMuted(initiallyMuted) }
   @Volatile private var sawEnded = false
@@ -92,7 +95,11 @@ class HandsfreeGateMedia(
   private val buffer = JitterBuffer(
     sampleRateHz = PLAYBACK_SAMPLE_RATE,
     targetMs = JITTER_TARGET_MS,
-    onCapacityReached = { Log.w("HandsfreeGateMedia", "Refusing speech audio after 60 s queue limit") },
+    maxPendingMs = 2_000,
+    onCapacityReached = {
+      Log.w("HandsfreeGateMedia", "Refusing speech audio after two-second queue limit")
+      onFrame(errorFrame("backpressure", "Call playback queue exceeded its two-second limit"))
+    },
   )
   private val playbackLock = Any()
   @Volatile private var currentGen = 0L
@@ -115,6 +122,7 @@ class HandsfreeGateMedia(
     playedGens.clear()
     firstPcmReceivedAtMs = null
     firstPcmReceivedGen = null
+    speechStartSequences.clear()
     buffer.flush()
 
     val streamUrl = buildStreamUrl(url, voiceSessionId)
@@ -208,13 +216,25 @@ class HandsfreeGateMedia(
 
     override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
       if (webSocket != socket) return
+      val payload = bytes.toByteArray()
       synchronized(playbackLock) {
+        if (protocolV2) {
+          val chunk = parseGatePcmChunk(payload) ?: return
+          val gen = chunk.gen
+          if (speechStartSequences[gen] != chunk.startSeq) return
+          if (firstPcmReceivedGen != gen) {
+            firstPcmReceivedGen = gen
+            firstPcmReceivedAtMs = SystemClock.elapsedRealtime()
+          }
+          buffer.push(gen, chunk.pcm)
+          return
+        }
         if (firstPcmReceivedGen != currentGen) {
           firstPcmReceivedGen = currentGen
           firstPcmReceivedAtMs = SystemClock.elapsedRealtime()
         }
       }
-      buffer.push(currentGen, bytes.toByteArray())
+      buffer.push(currentGen, payload)
     }
 
     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -257,7 +277,11 @@ class HandsfreeGateMedia(
     if (!negotiationConfirmed && (frame.protocolVersion == 2 || frame.t == "ready" || frame.t == "phase")) {
       negotiationConfirmed = true
       captureState.setNegotiated(true)
-      sendMuteIfOpen(captureState.isMuted())
+      if (protocolV2 && resumeLastSeq != null) {
+        socket?.send(encodeNegotiatedControl(GateFrameCodec.encodePhone(GateFrame.Phone.Resume(resumeLastSeq))))
+      } else {
+        sendMuteIfOpen(captureState.isMuted())
+      }
     }
     onFrame(text)
     when (frame) {
@@ -265,6 +289,7 @@ class HandsfreeGateMedia(
         when (frame.state) {
           "start" -> synchronized(playbackLock) {
             currentGen = frame.gen
+            if (frame.sequence != null) speechStartSequences[frame.gen] = frame.sequence!!
             buffer.start(frame.gen)
           }
           "cancelled" -> {
@@ -333,7 +358,16 @@ class HandsfreeGateMedia(
           }
           val read = synchronized(captureLock) {
             captureState.readAndSend(source, frame) { bytes ->
-              socket?.send(ByteString.of(*bytes))
+              val current = socket
+              if (current != null) {
+                if (current.queueSize() + bytes.size > MAX_SOCKET_QUEUE_BYTES) {
+                  onFrame(errorFrame("backpressure", "Call audio queue exceeded its two-second limit"))
+                  running = false
+                } else if (!current.send(ByteString.of(*bytes))) {
+                  onFrame(errorFrame("backpressure", "Call audio could not be queued"))
+                  running = false
+                }
+              }
             }
           }
           if (!captureState.shouldRead()) {
@@ -450,6 +484,17 @@ class HandsfreeGateMedia(
       .put("ts", SystemClock.elapsedRealtime())
     return frame.toString()
   }
+}
+
+internal data class GatePcmChunk(val gen: Long, val startSeq: Long, val pcm: ByteArray)
+
+/** V2 carries generation and the sequence of its `speech/start` control first. */
+internal fun parseGatePcmChunk(bytes: ByteArray): GatePcmChunk? {
+  if (bytes.size < 8) return null
+  val header = java.nio.ByteBuffer.wrap(bytes, 0, 8).order(java.nio.ByteOrder.BIG_ENDIAN)
+  val gen = header.int.toLong() and 0xffffffffL
+  val startSeq = header.int.toLong() and 0xffffffffL
+  return GatePcmChunk(gen, startSeq, bytes.copyOfRange(8, bytes.size))
 }
 
 /** A monotonic duration for `played.atMs`; wall-clock time is not comparable to Gate time. */

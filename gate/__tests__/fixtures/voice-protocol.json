@@ -28,7 +28,8 @@
     { "v": 2, "callId": "vs-1", "seq": 2, "ts": 6, "t": "skip" },
     { "v": 2, "callId": "vs-1", "seq": 3, "ts": 7, "t": "bargein" },
     { "v": 2, "callId": "vs-1", "seq": 4, "ts": 8, "t": "end" },
-    { "v": 2, "callId": "vs-1", "seq": 5, "ts": 9, "t": "played", "gen": 7, "atMs": 42 }
+    { "v": 2, "callId": "vs-1", "seq": 5, "ts": 9, "t": "played", "gen": 7, "atMs": 42 },
+    { "v": 2, "callId": "vs-1", "seq": 6, "ts": 10, "t": "resume", "lastSeq": 8 }
   ],
   "v2GateToPhone": [
     { "v": 2, "callId": "vs-1", "seq": 1, "ts": 0, "t": "call", "state": "opening" },
@@ -62,6 +63,7 @@
     { "v": 2, "callId": "vs-1", "seq": 1.5, "ts": 1, "t": "mute", "on": true },
     { "v": 2, "callId": "vs-1", "seq": 1, "ts": -1, "t": "mute", "on": true },
     { "v": 3, "callId": "vs-1", "seq": 1, "ts": 1, "t": "mute", "on": true },
-    { "v": 2, "seq": 1, "ts": 1, "t": "mute", "on": true }
+    { "v": 2, "seq": 1, "ts": 1, "t": "mute", "on": true },
+    { "v": 2, "callId": "vs-1", "seq": 7, "ts": 10, "t": "resume", "lastSeq": -1 }
   ]
 }

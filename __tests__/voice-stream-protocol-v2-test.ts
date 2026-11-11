@@ -49,4 +49,13 @@ describe('v2 hands-free protocol envelope', () => {
     const huge = JSON.stringify({ ...fixture.v2GateToPhone[0], delta: 'x'.repeat(MAX_FRAME_BYTES) });
     expect(() => parseGateFrame(huge)).toThrow(VoiceProtocolError);
   });
+
+  test('resume cursors are non-negative integers and remain in the v2 envelope', () => {
+    expect(parsePhoneFrame({ v: 2, callId: 'vs-1', seq: 6, ts: 10, t: 'resume', lastSeq: 8 }))
+      .toEqual({ v: 2, callId: 'vs-1', seq: 6, ts: 10, t: 'resume', lastSeq: 8 });
+    for (const lastSeq of [-1, 1.5, Number.NaN]) {
+      expect(() => parsePhoneFrame({ v: 2, callId: 'vs-1', seq: 6, ts: 10, t: 'resume', lastSeq }))
+        .toThrow(VoiceProtocolError);
+    }
+  });
 });

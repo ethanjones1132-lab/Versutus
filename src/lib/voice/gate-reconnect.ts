@@ -89,7 +89,10 @@ export type ReconnectGateMediaInput = {
     url: string;
     token: string;
     voiceSessionId: string;
+    lastSeq: number;
   }) => Promise<boolean>;
+  /** Last contiguous Gate→phone sequence folded by the live provider. */
+  lastSeq?: number;
   /**
    * Arms the link proof before the socket is opened, so a Gate frame that
    * answers the re-attach before `proveLink` is called still counts. See
@@ -158,6 +161,7 @@ export async function reconnectGateMedia(input: ReconnectGateMediaInput): Promis
         url,
         token: input.gatewayToken,
         voiceSessionId: input.grant.voiceSessionId,
+        lastSeq: input.lastSeq ?? 0,
       });
       if (started) {
         const spoken = input.proveLink

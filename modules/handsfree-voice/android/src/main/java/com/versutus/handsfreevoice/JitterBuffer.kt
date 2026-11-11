@@ -43,6 +43,7 @@ class JitterBuffer(
     if (gen > activeGen) {
       activeGen = gen
       clear()
+      capacityLogged = false
       cancelledGen = null
     }
     if (cancelledGen == gen) return
@@ -64,6 +65,7 @@ class JitterBuffer(
     activeGen = gen
     cancelledGen = null
     clear()
+    capacityLogged = false
   }
 
   /** The Gate cancelled [gen]; anything still queued for it is stale. */

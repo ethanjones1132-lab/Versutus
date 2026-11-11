@@ -5,7 +5,7 @@
 
 export const MAX_FRAME_BYTES = 4096;
 
-export const PHONE_FRAME_TYPES = ['mute', 'skip', 'bargein', 'end', 'played'] as const;
+export const PHONE_FRAME_TYPES = ['mute', 'skip', 'bargein', 'end', 'played', 'resume'] as const;
 export const GATE_FRAME_TYPES = [
   'call',
   'ready',
@@ -35,7 +35,8 @@ export type PhoneVoiceFrame = (
   | { t: 'skip' }
   | { t: 'bargein' }
   | { t: 'end' }
-  | { t: 'played'; gen: number; atMs: number }) & Partial<VoiceV2Envelope>;
+  | { t: 'played'; gen: number; atMs: number }
+  | { t: 'resume'; lastSeq: number }) & Partial<VoiceV2Envelope>;
 
 export type GateVoiceFrame = (
   | { t: 'call'; state: 'opening' | 'ready' | 'ending' | 'ended' }
@@ -44,7 +45,7 @@ export type GateVoiceFrame = (
   | { t: 'partial'; text: string }
   | { t: 'final'; turnId: string; text: string }
   | { t: 'turn'; turnId: string; state: VoiceTurnState; error?: string }
-  | { t: 'reply'; turnId: string; delta: string }
+  | { t: 'reply'; turnId: string; delta: string; offset?: number }
   | { t: 'speech'; gen: number; state: VoiceSpeechState }
   | {
       t: 'approval';
@@ -140,6 +141,7 @@ function toRecord(value: unknown, types: readonly string[]): Record<string, unkn
 
 export function parsePhoneFrame(value: unknown, options: { callId?: string } = {}): PhoneVoiceFrame {
   const frame = toRecord(value, PHONE_FRAME_TYPES);
+  if (frame.t === 'resume' && frame.v !== 2) throw new VoiceProtocolError('resume frames require protocol version 2');
   const envelope = parseEnvelope(frame, options.callId);
   const withEnvelope = <T extends PhoneVoiceFrame>(parsed: T): T => ({ ...parsed, ...(envelope ?? {}) }) as T;
   switch (frame.t) {
@@ -152,6 +154,11 @@ export function parsePhoneFrame(value: unknown, options: { callId?: string } = {
       return withEnvelope({ t: 'bargein' });
     case 'played':
       return withEnvelope({ t: 'played', gen: requireNumber(frame, 'gen'), atMs: requireNumber(frame, 'atMs') });
+    case 'resume': {
+      const lastSeq = requireNumber(frame, 'lastSeq');
+      if (!Number.isSafeInteger(lastSeq) || lastSeq < 0) throw new VoiceProtocolError('lastSeq must be a non-negative integer');
+      return withEnvelope({ t: 'resume', lastSeq });
+    }
     default:
       return withEnvelope({ t: 'end' });
   }
@@ -196,8 +203,17 @@ export function parseGateFrame(value: unknown, options: { callId?: string } = {}
       if (frame.error !== undefined) turn.error = requireString(frame, 'error');
       return withEnvelope(turn);
     }
-    case 'reply':
-      return withEnvelope({ t: 'reply', turnId: requireString(frame, 'turnId'), delta: requireString(frame, 'delta') });
+    case 'reply': {
+      const reply: Extract<GateVoiceFrame, { t: 'reply' }> = {
+        t: 'reply', turnId: requireString(frame, 'turnId'), delta: requireString(frame, 'delta'),
+      };
+      if (frame.offset !== undefined) {
+        const offset = requireNumber(frame, 'offset');
+        if (!Number.isSafeInteger(offset) || offset < 0) throw new VoiceProtocolError('offset must be a non-negative integer');
+        reply.offset = offset;
+      }
+      return withEnvelope(reply);
+    }
     case 'speech':
       return withEnvelope({ t: 'speech', gen: requireNumber(frame, 'gen'), state: requireEnum(frame, 'state', SPEECH_STATES) });
     case 'level':

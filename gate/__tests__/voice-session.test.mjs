@@ -37,6 +37,17 @@ test('a turn moves listening → thinking → speaking → listening', () => {
   assert.ok(done.effects.some((e) => e.kind === 'send' && e.frame.t === 'phase' && e.frame.phase === 'listening'));
 });
 
+test('each committed utterance receives a fresh turn id and reply offsets count UTF-16 units', () => {
+  const first = run([{ type: 'final', text: 'first' }], listening());
+  const firstId = first.state.turnId;
+  assert.equal(typeof firstId, 'string');
+  const reply = run([{ type: 'replyDelta', text: 'A😀' }], first.state);
+  assert.equal(reply.state.replyOffset, 3);
+
+  const next = run([{ type: 'speechDone', gen: reply.state.gen }, { type: 'final', text: 'second' }], reply.state);
+  assert.notEqual(next.state.turnId, firstId);
+});
+
 test('barge-in cancels only the generation being spoken', () => {
   const live = speaking();
   const gen = live.state.gen;

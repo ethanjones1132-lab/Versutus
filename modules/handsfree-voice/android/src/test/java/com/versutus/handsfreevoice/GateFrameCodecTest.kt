@@ -100,6 +100,18 @@ class GateFrameCodecTest {
     assertEquals("skip", skip.getString("t"))
   }
 
+  @Test fun resumeCursorIsParsedAndEncodedAsAControl() {
+    val resume = GateFrameCodec.parsePhone(
+      """{"v":2,"callId":"vs-1","seq":6,"ts":10,"t":"resume","lastSeq":8}""",
+      "vs-1",
+    )
+    assertEquals(GateFrame.Phone.Resume(8), resume)
+    assertEquals(8L, JSONObject(GateFrameCodec.encodePhone(resume as GateFrame.Phone.Resume)).getLong("lastSeq"))
+    assertThrows(GateProtocolError::class.java) {
+      GateFrameCodec.parsePhone("""{"t":"resume","lastSeq":-1}""")
+    }
+  }
+
   @Test fun playedFrameCarriesGenerationAndPhoneTimestamp() {
     val encoded = JSONObject(GateFrameCodec.encodePhone(GateFrame.Phone.Played(7, 1234)))
     assertEquals("played", encoded.getString("t"))
@@ -111,5 +123,19 @@ class GateFrameCodecTest {
   @Test fun playedDurationUsesElapsedTimeAndNeverGoesNegative() {
     assertEquals(75L, elapsedSincePcmReceived(8_000L, 8_075L))
     assertEquals(0L, elapsedSincePcmReceived(8_075L, 8_000L))
+  }
+
+  @Test fun v2PcmChunkCarriesGenerationAndSpeechStartSequence() {
+    val bytes = java.nio.ByteBuffer.allocate(10)
+      .order(java.nio.ByteOrder.BIG_ENDIAN)
+      .putInt(7)
+      .putInt(42)
+      .put(byteArrayOf(1, 2))
+      .array()
+    val chunk = parseGatePcmChunk(bytes)!!
+    assertEquals(7L, chunk.gen)
+    assertEquals(42L, chunk.startSeq)
+    assertEquals(listOf<Byte>(1, 2), chunk.pcm.toList())
+    assertEquals(null, parseGatePcmChunk(byteArrayOf(1, 2)))
   }
 }

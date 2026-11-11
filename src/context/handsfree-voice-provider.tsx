@@ -383,6 +383,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   // The grant a live Gate call is joined with: the reconnect path re-opens the
   // media socket with these exact ids inside the Gate's resume window.
   const gateGrantRef = useRef<GateVoiceGrant | null>(null);
+  // Highest contiguous Gate→phone sequence applied to the current call. It is
+  // sent as the reconnect cursor before native capture resumes.
+  const gateLastSeqRef = useRef(0);
   const gateApprovalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gateApprovalBusyRef = useRef<string | null>(null);
   const gateApprovalDecisionsRef = useRef(new Map<string, 'approved' | 'denied' | 'expired'>());
@@ -717,6 +720,11 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       };
       const fold = (frame: string) => {
         const parsed = gateFrame(frame);
+        if (parsed && 'seq' in parsed && typeof parsed.seq === 'number' && parsed.v === 2) {
+          if (parsed.seq <= gateLastSeqRef.current) return;
+          if (parsed.seq !== gateLastSeqRef.current + 1) return;
+          gateLastSeqRef.current = parsed.seq;
+        }
         const localDecision = parsed?.t === 'approval' && parsed.approvalId
           ? gateApprovalDecisionsRef.current.get(parsed.approvalId)
           : undefined;
@@ -762,6 +770,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
               gatewayUrl: gateway.url,
               gatewayToken: gateway.token ?? '',
               startGateMedia: (options) => moduleRef.current?.startGateMedia(options) ?? Promise.resolve(false),
+              lastSeq: gateLastSeqRef.current,
               armLinkProof: () => gateLinkRef.current.arm(),
               proveLink: (budgetMs) => gateLinkRef.current.prove(budgetMs),
               isAborted: () =>
@@ -1373,6 +1382,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       setGateMode(true);
       gateSessionIdRef.current = undefined;
       gateGrantRef.current = null;
+      gateLastSeqRef.current = 0;
       gateDeviceRef.current = null;
       gateReconnectingRef.current = false;
       gateBannerRef.current = INITIAL_GATE_CALL;
@@ -1481,6 +1491,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
 
       gateSessionIdRef.current = attempt.grant.voiceSessionId;
       gateGrantRef.current = attempt.grant;
+      gateLastSeqRef.current = 0;
       setEngineInfo({
         engine: attempt.grant.engine ?? 'local',
         ...(attempt.grant.fellBackFrom ? { reason: attempt.grant.reason } : {}),

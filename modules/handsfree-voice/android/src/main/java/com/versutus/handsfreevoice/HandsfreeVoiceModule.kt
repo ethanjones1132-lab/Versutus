@@ -224,6 +224,7 @@ class HandsfreeVoiceModule : Module() {
       val url = (options["url"] as? String)?.trim().orEmpty()
       val token = (options["token"] as? String).orEmpty()
       val voiceSessionId = (options["voiceSessionId"] as? String)?.trim().orEmpty()
+      val lastSeq = (options["lastSeq"] as? Number)?.toLong()
       // The attempt this media link belongs to. A delayed start for an
       // abandoned attempt must not stop, or replace, the socket a newer retry
       // owns; the same id a `stopSession` would cancel.
@@ -239,7 +240,7 @@ class HandsfreeVoiceModule : Module() {
       gateMedia?.stop()
       val media = HandsfreeGateMedia({ frame ->
         sendEvent("gate", mapOf("frame" to frame))
-      }, initiallyMuted = HandsfreeGateMediaOwner.isMuted())
+      }, initiallyMuted = HandsfreeGateMediaOwner.isMuted(), resumeLastSeq = lastSeq)
       gateMedia = media
       media.start(context, url, token, voiceSessionId)
       // After start: start() begins with stop(), which detaches whatever the owner held.

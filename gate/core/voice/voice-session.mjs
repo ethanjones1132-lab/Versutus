@@ -28,8 +28,10 @@ export const INITIAL_VOICE_SESSION = Object.freeze({
   phase: 'opening',
   gen: 0,
   reply: '',
+  replyOffset: 0,
   spoken: '',
   turnId: null,
+  turnCount: 0,
   resumePhase: null,
   muted: false,
   endedReason: null,
@@ -109,11 +111,18 @@ function joinSpeech(held, next) {
 
 /** Hand the gathered utterance to the backend: one frame, one phase, one run. */
 function commitUtterance(state, text, { finals = 1, nowMs = null, before = [] } = {}) {
+  // A call id identifies the media session, not the committed user turn. The
+  // monotonically increasing suffix also stays unique when a continuation is
+  // merged into a fresh commit.
+  const turnId = `turn-${state.turnCount + 1}`;
   return {
     state: {
       ...state,
       phase: 'thinking',
+      turnId,
+      turnCount: state.turnCount + 1,
       reply: '',
+      replyOffset: 0,
       spoken: '',
       pendingText: '',
       pendingFinals: 0,
@@ -122,7 +131,7 @@ function commitUtterance(state, text, { finals = 1, nowMs = null, before = [] } 
     },
     effects: [
       ...before,
-      frameSend({ t: 'final', turnId: state.turnId, text }),
+      frameSend({ t: 'final', turnId, text }),
       phaseEffect('thinking'),
       { kind: 'utterance.commit', chars: text.length, finals },
       { kind: 'turn.run', text },
@@ -348,12 +357,12 @@ export function reduceVoiceSession(state, event) {
       const effects = [];
       let next = state;
       if (state.phase === 'thinking') {
-        next = { ...state, phase: 'speaking', gen: state.gen + 1, reply: state.reply + event.text };
+        next = { ...state, phase: 'speaking', gen: state.gen + 1, reply: state.reply + event.text, replyOffset: state.replyOffset + event.text.length };
         effects.push(phaseEffect('speaking'), frameSend({ t: 'speech', gen: next.gen, state: 'start' }));
       } else {
-        next = { ...state, reply: state.reply + event.text };
+        next = { ...state, reply: state.reply + event.text, replyOffset: state.replyOffset + event.text.length };
       }
-      effects.push(frameSend({ t: 'reply', turnId: next.turnId, delta: event.text }));
+      effects.push(frameSend({ t: 'reply', turnId: next.turnId, offset: state.replyOffset, delta: event.text }));
       // A muted reply still reaches the phone, but none of it is spoken: the
       // sentences are marked as handled so unmuting resumes at the next one
       // rather than replaying what was said while the mic was shut.

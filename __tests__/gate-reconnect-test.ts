@@ -12,7 +12,7 @@ const grant: GateVoiceGrant = {
   engine: 'local',
 };
 
-const options = { url: 'wss://gate.local:8760/v1/voice/stream?protocol=2', token: 'tok', voiceSessionId: 'vs-1' };
+const options = { url: 'wss://gate.local:8760/v1/voice/stream?protocol=2', token: 'tok', voiceSessionId: 'vs-1', lastSeq: 0 };
 
 function sleeper() {
   const sleeps: number[] = [];
@@ -78,6 +78,7 @@ describe('reconnectGateMedia', () => {
       grant,
       gatewayUrl: 'https://gate.local:8760',
       gatewayToken: 'tok',
+      lastSeq: 23,
       startGateMedia: (opts) => {
         attempts.push(opts);
         return Promise.resolve(true);
@@ -87,7 +88,7 @@ describe('reconnectGateMedia', () => {
       now: () => 0,
     });
     expect(ok).toBe(true);
-    expect(attempts).toEqual([options]);
+    expect(attempts).toEqual([{ ...options, lastSeq: 23 }]);
     // The first attempt waits one backoff step; a success asks for nothing more.
     expect(sleeps).toEqual([sleeps[0]]);
   });

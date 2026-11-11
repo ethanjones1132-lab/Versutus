@@ -50,6 +50,8 @@ export const SUPERSEDED_SOCKET_GRACE_MS = 10_000;
 // thing dropped, because the phone's only trigger to reload the thread is one.
 export const MAX_BUFFERED_AUDIO_MS = 45_000;
 export const MAX_BUFFERED_FRAMES = 1_000;
+export const V2_MAX_BUFFERED_AUDIO_MS = 2_000;
+export const V2_MAX_REPLAY_BYTES = 256 * 1024;
 // How long a turn whose phone went away may still run before the Gate gives it
 // up. Long, because the work is real and the reply is still owed; bounded,
 // because a turn nobody will hear is not worth a Gate's memory for ever.
@@ -315,6 +317,10 @@ export function attachVoiceMediaSocket({
     const replay = [];
     let bufferedAudioBytes = 0;
     let audioDropped = false;
+    let replayBytes = 0;
+    let resumeExpected = false;
+    const speechStartSeq = new Map();
+    let v2ProbeFrame = null;
 
     const api = { attach, end, get ended() { return ended; } };
 
@@ -372,7 +378,14 @@ export function attachVoiceMediaSocket({
     /** Append to the replay log, keeping it inside both of its bounds. */
     const append = (entry) => {
       replay.push(entry);
+      if (entry.frame) replayBytes += Buffer.byteLength(entry.frame);
       if (entry.pcm) bufferedAudioBytes += entry.pcm.length;
+      if (protocolVersion === 2 && (replay.length > maxBufferedFrames || replayBytes > V2_MAX_REPLAY_BYTES)) {
+        // Reliable controls are never silently evicted: an exhausted replay
+        // budget is an explicit terminal backpressure failure.
+        if (!endingNow) setImmediate(() => end('backpressure'));
+        return;
+      }
       while (replay.length > maxBufferedFrames || bufferedAudioBytes > maxBufferedAudioBytes) {
         const oldest = replay.findIndex((item) => item.pcm);
         // Audio is dropped from its head — the tail of a reply is more useful
@@ -402,6 +415,7 @@ export function attachVoiceMediaSocket({
     const flush = () => {
       if (!ws) return;
       for (const entry of replay) {
+        if (entry.acked) continue;
         if (!entry.pcm) {
           ws.send(entry.frame);
           continue;
@@ -416,6 +430,7 @@ export function attachVoiceMediaSocket({
       }
       replay.length = 0;
       bufferedAudioBytes = 0;
+      replayBytes = 0;
       // The hole went with the log: a later reply's audio has nothing in front
       // of it to be missing.
       audioDropped = false;
@@ -423,6 +438,33 @@ export function attachVoiceMediaSocket({
 
     const sendFrame = (frame) => {
       if (ended) return;
+      // A detached link cannot deliver the intermediate live transcript. Keep
+      // the latest adjacent partial at the same sequence slot rather than
+      // growing the bounded replay log with superseded text.
+      let coalescedPartial = null;
+      if (protocolVersion === 2 && !ws && frame.t === 'partial' && replay.length) {
+        const tail = replay[replay.length - 1];
+        if (tail.seq !== undefined && JSON.parse(tail.frame).t === 'partial') coalescedPartial = tail;
+      }
+      if (protocolVersion === 2 && frame.t === 'level') {
+        const overloaded = ws
+          ? ws.bufferedAmount > V2_MAX_REPLAY_BYTES / 4
+          : replayBytes > V2_MAX_REPLAY_BYTES * 0.75 || replay.length > maxBufferedFrames * 0.75;
+        // Levels are optional and lossy by design; discard before sequencing so
+        // the replay stream remains contiguous and lifecycle controls retain room.
+        if (overloaded) return;
+      }
+      // The reducer's turn ids are per-commit. Preserve the historical v1
+      // payload exactly; only negotiated v2 peers observe the new identities.
+      const turnId = protocolVersion === 1 && 'turnId' in frame
+        ? session.voiceSessionId
+        : frame.turnId;
+      const prepared = {
+        ...frame,
+        ...('turnId' in frame ? { turnId } : {}),
+        ...(protocolVersion === 1 && frame.t === 'reply' ? { offset: undefined } : {}),
+      };
+      if (prepared.offset === undefined) delete prepared.offset;
       if (frame.t === 'speech' && frame.state === 'cancelled') {
         // A detached phone must not replay audio that was cancelled while it
         // was away; keep the cancellation control frame in the replay stream.
@@ -436,19 +478,31 @@ export function attachVoiceMediaSocket({
       }
       const wireFrame = protocolVersion === 2
         ? {
-            ...frame,
+            ...prepared,
             v: 2,
             callId: session.voiceSessionId,
-            seq: ++outboundSeq,
+            seq: coalescedPartial?.seq ?? ++outboundSeq,
             ts: Math.max(0, Math.floor(performance.now() - monotonicStartedAt)),
           }
-        : frame;
+        : prepared;
       const data = serializeFrame(wireFrame);
+      if (protocolVersion === 2) {
+        if (frame.t === 'call' && frame.state === 'opening') v2ProbeFrame = data;
+        if (frame.t === 'speech' && frame.state === 'start') speechStartSeq.set(frame.gen, wireFrame.seq);
+        if (coalescedPartial) {
+          replayBytes += Buffer.byteLength(data) - Buffer.byteLength(coalescedPartial.frame);
+          coalescedPartial.frame = data;
+        } else append({ frame: data, seq: wireFrame.seq });
+      }
       if (ws) {
+        if (protocolVersion === 2 && ws.bufferedAmount + Buffer.byteLength(data) > V2_MAX_REPLAY_BYTES) {
+          if (!endingNow) setImmediate(() => end('backpressure'));
+          return;
+        }
         ws.send(data);
         return;
       }
-      append({ frame: data });
+      if (protocolVersion !== 2) append({ frame: data });
     };
 
     const sendAudio = (pcm, gen) => {
@@ -464,8 +518,27 @@ export function attachVoiceMediaSocket({
         const end = Math.min(offset + maxBytes, pcm.length) & ~1;
         if (end <= offset) continue;
         const chunk = pcm.subarray(offset, end);
-        if (ws) ws.send(chunk, { binary: true });
-        else append({ pcm: chunk, gen });
+        if (ws && protocolVersion === 2) {
+          const liveLimit = (V2_MAX_BUFFERED_AUDIO_MS / 1000) * OUTPUT_SAMPLE_RATE * 2 * OUTPUT_CHANNELS;
+          if (ws.bufferedAmount + chunk.length + 8 > liveLimit) {
+            audioDropped = true;
+            continue;
+          }
+          if (audioDropped) {
+            audioDropped = false;
+            sendFrame({ t: 'speech', gen, state: 'gap' });
+          }
+          const startSeq = speechStartSeq.get(gen) ?? 0;
+          const header = Buffer.allocUnsafe(8);
+          header.writeUInt32BE(gen >>> 0, 0);
+          header.writeUInt32BE(startSeq >>> 0, 4);
+          ws.send(Buffer.concat([header, chunk]), { binary: true });
+        } else if (ws) ws.send(chunk, { binary: true });
+        else if (protocolVersion === 2) {
+          // Do not turn a disconnected link into an unbounded PCM queue. Resume
+          // reports the omission before any later audio can be accepted.
+          audioDropped = true;
+        } else append({ pcm: chunk, gen });
       }
     };
 
@@ -867,6 +940,24 @@ export function attachVoiceMediaSocket({
           throw new Error('unexpected protocol envelope');
         }
         const control = parsePhoneFrame(candidate, { callId: session.voiceSessionId });
+        if (protocolVersion === 2 && resumeExpected) {
+          if (control.t !== 'resume') throw new Error('resume must be the first control after reconnect');
+          if (control.lastSeq > outboundSeq) throw new Error('resume cursor is ahead of Gate stream');
+          while (replay.length && replay[0].seq !== undefined && replay[0].seq <= control.lastSeq) {
+            const removed = replay.shift();
+            replayBytes -= Buffer.byteLength(removed.frame);
+          }
+          resumeExpected = false;
+          // Controls replay in their original sequence order. Audio is never
+          // replayed; its gap marker is sequenced after the retained controls.
+          for (const entry of replay) if (entry.frame) ws.send(entry.frame);
+          if (audioDropped) {
+            audioDropped = false;
+            sendFrame({ t: 'speech', gen: call.gen, state: 'gap' });
+          }
+          return;
+        }
+        if (protocolVersion === 2 && control.t === 'resume') throw new Error('resume is only valid after reconnect');
         if (control.t === 'mute') {
           lastAudioAt = now();
           dispatch({ type: control.on ? 'mute' : 'unmute' });
@@ -996,11 +1087,17 @@ export function attachVoiceMediaSocket({
         // true, the same gate the engine-open path uses: a call must never say
         // `ready`/`listening` while the engine cannot yet hear, or the operator
         // speaks into a pipe nobody reads and no error is ever shown.
-        if (engineReady) {
-          sendFrame({ t: 'ready', engine: session.engine, resumeWindowMs: resumeTimeoutMs });
+        if (protocolVersion === 2) {
+          resumeExpected = true;
+          // Do not emit fresh sequenced frames ahead of the replay cursor.
+          // The original opening frame is a harmless handshake probe: the app
+          // deduplicates it, while native learns v2 and sends resume immediately.
+          if (v2ProbeFrame) newWs.send(v2ProbeFrame);
+        } else {
+          if (engineReady) sendFrame({ t: 'ready', engine: session.engine, resumeWindowMs: resumeTimeoutMs });
+          sendFrame({ t: 'phase', phase: call.phase });
+          flush();
         }
-        sendFrame({ t: 'phase', phase: call.phase });
-        flush();
       }
     }
 

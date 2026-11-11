@@ -6,7 +6,7 @@
 
 export const MAX_FRAME_BYTES = 4096;
 
-export const PHONE_FRAME_TYPES = Object.freeze(['mute', 'skip', 'bargein', 'end', 'played']);
+export const PHONE_FRAME_TYPES = Object.freeze(['mute', 'skip', 'bargein', 'end', 'played', 'resume']);
 export const GATE_FRAME_TYPES = Object.freeze([
   'call',
   'ready',
@@ -80,6 +80,7 @@ function parseFrame(value, types, build) {
     throw new VoiceProtocolError(`unknown frame type: ${String(frame.t)}`);
   }
   if (frame.t === 'call' && frame.v !== 2) throw new VoiceProtocolError('call frames require protocol version 2');
+  if (frame.t === 'resume' && frame.v !== 2) throw new VoiceProtocolError('resume frames require protocol version 2');
   const legacyLevel = frame.t === 'level' && frame.level === undefined && frame.callId === undefined && frame.seq === undefined && frame.ts === undefined;
   const envelope = frame.v === undefined || legacyLevel ? null : parseEnvelope(frame);
   return Object.freeze({ ...build(frame), ...(envelope ?? {}) });
@@ -123,6 +124,11 @@ export function parsePhoneFrame(value, options = {}) {
         return { t: 'bargein' };
       case 'played':
         return { t: 'played', gen: requireNumber(frame, 'gen'), atMs: requireNumber(frame, 'atMs') };
+      case 'resume': {
+        const lastSeq = requireNumber(frame, 'lastSeq');
+        if (!Number.isSafeInteger(lastSeq) || lastSeq < 0) throw new VoiceProtocolError('lastSeq must be a non-negative integer');
+        return { t: 'resume', lastSeq };
+      }
       default:
         return { t: 'end' };
     }
@@ -165,8 +171,15 @@ export function parseGateFrame(value, options = {}) {
         if (frame.error !== undefined) turn.error = requireString(frame, 'error');
         return turn;
       }
-      case 'reply':
-        return { t: 'reply', turnId: requireString(frame, 'turnId'), delta: requireString(frame, 'delta') };
+      case 'reply': {
+        const reply = { t: 'reply', turnId: requireString(frame, 'turnId'), delta: requireString(frame, 'delta') };
+        if (frame.offset !== undefined) {
+          const offset = requireNumber(frame, 'offset');
+          if (!Number.isSafeInteger(offset) || offset < 0) throw new VoiceProtocolError('offset must be a non-negative integer');
+          reply.offset = offset;
+        }
+        return reply;
+      }
       case 'speech':
         return { t: 'speech', gen: requireNumber(frame, 'gen'), state: requireEnum(frame, 'state', SPEECH_STATES) };
       case 'level':

@@ -9,6 +9,7 @@ const val MAX_FRAME_BYTES = 4096
 sealed class GateFrame {
   abstract val t: String
   var protocolVersion: Int = 1
+  var sequence: Long? = null
 
   data class Ready(val engine: String, val resumeWindowMs: Long?) : GateFrame() {
     override val t get() = "ready"
@@ -81,6 +82,10 @@ sealed class GateFrame {
     data class Played(val gen: Long, val atMs: Long) : Phone() {
       override val t get() = "played"
     }
+
+    data class Resume(val lastSeq: Long) : Phone() {
+      override val t get() = "resume"
+    }
   }
 }
 
@@ -96,7 +101,7 @@ object GateFrameCodec {
   private val GATE_TYPES = setOf(
     "call", "ready", "phase", "partial", "final", "turn", "reply", "speech", "level", "approval", "error", "ended",
   )
-  private val PHONE_TYPES = setOf("mute", "skip", "bargein", "end", "played")
+  private val PHONE_TYPES = setOf("mute", "skip", "bargein", "end", "played", "resume")
   private val PHASES = setOf("opening", "listening", "thinking", "speaking", "muted")
   private val TURN_STATES = setOf("sent", "replying", "done", "failed")
   private val SPEECH_STATES = setOf("start", "end", "cancelled", "gap")
@@ -107,11 +112,17 @@ object GateFrameCodec {
       throw GateProtocolError("call frames require protocol version 2")
     }
     val version = validateEnvelope(frame, expectedCallId)
-    return fromGateRecord(frame).also { it.protocolVersion = version }
+    return fromGateRecord(frame).also {
+      it.protocolVersion = version
+      if (version == 2) it.sequence = requireNumber(frame, "seq").toLong()
+    }
   }
 
   fun parsePhone(json: String, expectedCallId: String? = null): GateFrame.Phone {
     val frame = record(json, PHONE_TYPES)
+    if (frame.getString("t") == "resume" && frame.opt("v") != 2) {
+      throw GateProtocolError("resume frames require protocol version 2")
+    }
     validateEnvelope(frame, expectedCallId)
     return when (frame.getString("t")) {
       "mute" -> {
@@ -125,6 +136,13 @@ object GateFrameCodec {
         requireNumber(frame, "gen").toLong(),
         requireNumber(frame, "atMs").toLong(),
       )
+      "resume" -> {
+        val lastSeq = requireNumber(frame, "lastSeq")
+        if (lastSeq < 0 || lastSeq > 9_007_199_254_740_991.0 || lastSeq % 1.0 != 0.0) {
+          throw GateProtocolError("lastSeq must be a non-negative integer")
+        }
+        GateFrame.Phone.Resume(lastSeq.toLong())
+      }
       else -> GateFrame.Phone.End
     }
   }
@@ -132,6 +150,7 @@ object GateFrameCodec {
   fun encodePhone(frame: GateFrame.Phone): String = when (frame) {
     is GateFrame.Phone.Mute -> JSONObject().put("t", frame.t).put("on", frame.on).toString()
     is GateFrame.Phone.Played -> JSONObject().put("t", frame.t).put("gen", frame.gen).put("atMs", frame.atMs).toString()
+    is GateFrame.Phone.Resume -> JSONObject().put("t", frame.t).put("lastSeq", frame.lastSeq).toString()
     else -> JSONObject().put("t", frame.t).toString()
   }
 
