@@ -681,7 +681,47 @@ describe('RESUME-1 — Send again / Retry is not offered while a turn is live', 
       error.props.onResume(failedTurn);
     });
     await settle();
-    expect(sendInput()).toHaveBeenCalledWith('ping', expect.objectContaining({ skills: [] }));
+    expect(sendInput()).toHaveBeenCalledWith('ping', { skills: [], attachments: undefined });
+  });
+
+  test('retrying a failed text and image turn sends the stored image', async () => {
+    const attachments = [{ kind: 'image', uri: 'data:image/jpeg;base64,AA==', mimeType: 'image/jpeg' }];
+    mockSurface.messages = [
+      { ...userMessage('describe this'), attachments },
+      failedTurn,
+    ];
+    mockSurface.isSending = false;
+    await mount();
+    await openConfigurableThread();
+
+    const error = renderer.root.findAllByType(BUBBLE)[1];
+    await act(async () => {
+      error.props.onResume(failedTurn);
+    });
+    await settle();
+
+    expect(sendInput()).toHaveBeenCalledWith('describe this', {
+      skills: [],
+      attachments,
+    });
+  });
+
+  test('an image-only failed turn offers Retry and resends its image', async () => {
+    const attachments = [{ kind: 'image', uri: 'data:image/jpeg;base64,AA==', mimeType: 'image/jpeg' }];
+    const imageOnly = { ...userMessage(''), attachments };
+    mockSurface.messages = [imageOnly, failedTurn];
+    mockSurface.isSending = false;
+    await mount();
+    await openConfigurableThread();
+
+    const error = renderer.root.findAllByType(BUBBLE)[1];
+    expect(error.props.onResume).toBeInstanceOf(Function);
+    await act(async () => {
+      error.props.onResume(failedTurn);
+    });
+    await settle();
+
+    expect(sendInput()).toHaveBeenCalledWith('', { skills: [], attachments });
   });
 });
 

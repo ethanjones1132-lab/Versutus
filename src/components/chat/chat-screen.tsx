@@ -48,6 +48,7 @@ import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDividerCached } from '@/lib/format';
 import { INITIAL_AUTO_SCROLL, nextAutoScroll, type AutoScrollState } from '@/lib/chat/auto-scroll';
+import { retryableUserMessage } from '@/lib/chat/retry';
 import { stableTranscriptItems, type TranscriptItem } from '@/lib/chat/transcript-items';
 import { haptics } from '@/lib/haptics';
 // The phone-side local notice a routine's schedule maps to; every confirmed
@@ -1818,10 +1819,13 @@ export function ChatScreen() {
     (message: ChatMessage) => {
       const current = messagesRef.current;
       const idx = current.findIndex((m) => m.id === message.id);
-      const previousUser = current.slice(0, idx).reverse().find((m) => m.role === 'user');
-      if (previousUser?.text.trim()) {
+      const previousUser = retryableUserMessage(current.slice(0, idx));
+      if (previousUser) {
         pinnedRef.current = true;
-        void sendChatInput(previousUser.text.trim(), { skills: skillsState.skills });
+        void sendChatInput(previousUser.text.trim(), {
+          skills: skillsState.skills,
+          attachments: previousUser.attachments,
+        });
         requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
       }
     },
