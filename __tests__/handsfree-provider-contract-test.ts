@@ -255,6 +255,20 @@ describe('start preconditions and captured target', () => {
     expect(provider).toContain("isDeviceIdentityError(err) ? 'identity-unavailable' : 'device-params-failed'");
   });
 
+  test('the microphone is asked before the Gate grant and before the start phase moves', () => {
+    // The first call after install spent the start's budgets behind the OS
+    // dialog. The preflight must precede both the Gate grant and the phase
+    // change that arms anything, so the dialog cannot sit inside a timed start.
+    const start = between(provider, 'const start = useCallback(', 'const mute = useCallback(');
+    const ask = start.indexOf('await askForCallMicrophone(module)');
+    const gate = start.indexOf('return startGateCall(target, module, read)');
+    const starting = start.indexOf("sessionRef.current = dispatch({ type: 'start' })");
+    expect(ask).toBeGreaterThan(-1);
+    expect(gate).toBeGreaterThan(ask);
+    expect(starting).toBeGreaterThan(ask);
+    expect(start).toContain("if (microphone === 'denied')");
+  });
+
   test('the captured gateway, session and Bot are watched, and any move ends the call', () => {
     expect(provider).toContain("dispatch({ type: 'thread-changed' })");
     expect(provider).toContain('activeGateway?.id !== target.gatewayId');

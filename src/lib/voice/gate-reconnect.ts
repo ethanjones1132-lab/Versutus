@@ -91,6 +91,12 @@ export type ReconnectGateMediaInput = {
     voiceSessionId: string;
   }) => Promise<boolean>;
   /**
+   * Arms the link proof before the socket is opened, so a Gate frame that
+   * answers the re-attach before `proveLink` is called still counts. See
+   * `createGateLinkProbe().arm`.
+   */
+  armLinkProof?: () => void;
+  /**
    * Proves an opened socket is really the Gate again, by waiting for its first
    * frame. The boolean only says the socket was handed to the network stack, so
    * an attempt that "succeeded" on it spent the whole window proving nothing and
@@ -145,6 +151,9 @@ export async function reconnectGateMedia(input: ReconnectGateMediaInput): Promis
       return false;
     }
     try {
+      // Every frame from here belongs to this attempt's proof, including one
+      // the Gate sends before the proof below is waiting.
+      input.armLinkProof?.();
       const started = await input.startGateMedia({
         url,
         token: input.gatewayToken,

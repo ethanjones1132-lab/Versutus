@@ -155,7 +155,9 @@ describe('hands-free native contract', () => {
   });
 
   it('answers availability from installed services, without constructing a TTS engine', () => {
-    const availability = kotlin.slice(kotlin.indexOf('AsyncFunction("getAvailability")'), kotlin.indexOf('AsyncFunction("startSession")'));
+    // Ends at the next function after availability: the microphone preflight now
+    // sits between it and startSession, and its settle delay is not availability's.
+    const availability = kotlin.slice(kotlin.indexOf('AsyncFunction("getAvailability")'), kotlin.indexOf('AsyncFunction("requestMicrophonePermission")'));
     expect(availability).toContain('TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE');
     expect(availability).toContain('SpeechRecognizer.isRecognitionAvailable(');
     expect(availability).not.toContain('TextToSpeech(context)');
@@ -174,6 +176,26 @@ describe('hands-free native contract', () => {
     const start = kotlin.slice(kotlin.indexOf('AsyncFunction("startSession")'), kotlin.indexOf('AsyncFunction("startListening")'));
     expect(start).toMatch(/val required = arrayOf\(Manifest\.permission\.RECORD_AUDIO\)/);
     expect(start).not.toMatch(/required[^\n]*POST_NOTIFICATIONS/);
+  });
+
+  it('asks for the call microphone before the timed start, and still keeps the in-start ask as the fallback', () => {
+    // The first call after install put the OS dialog inside the timed native
+    // start, after the Gate's grant and with the start's budget running. The
+    // preflight is declared in TS and wired on Android; the in-start ask stays
+    // for a build (or platform) that cannot preflight.
+    expect(tsModule).toContain('requestMicrophonePermission(): Promise<');
+    expect(kotlin).toContain('AsyncFunction("requestMicrophonePermission")');
+    const preflight = kotlin.slice(
+      kotlin.indexOf('AsyncFunction("requestMicrophonePermission")'),
+      kotlin.indexOf('AsyncFunction("startSession")'),
+    );
+    expect(preflight).toContain('hasGrantedPermissions(microphone)');
+    expect(preflight).toContain('permissions.askForPermissions(');
+    expect(preflight).toContain('HandsfreeCallPermissions.outcome(');
+    // The preflight asks; it never opens the call itself.
+    expect(preflight).not.toContain('startService(');
+    expect(preflight).not.toContain('startForegroundService(');
+    expect(kotlin).toContain('permissions.askForPermissions({ result ->');
   });
 
   it('lets only the newest start attempt answer a permission dialog', () => {

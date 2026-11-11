@@ -72,6 +72,14 @@ export type OpenGateVoiceSessionInput = {
     startId: string;
   }) => Promise<boolean>;
   /**
+   * Marks the link about to be opened so the proof below can use a frame the
+   * Gate sends while `startGateMedia` is still resolving. Without it, a link
+   * that answers its attach faster than JS can arm `proveLink` looks silent for
+   * the whole budget even though it is live — the first call after the
+   * permission dialog is where that race is widest.
+   */
+  armLinkProof?: () => void;
+  /**
    * Proves the audio link is really up, by waiting for the Gate's first frame on
    * it. `startGateMedia` answers as soon as the socket was handed over and has
    * no open event, so its boolean is not evidence: a dead link used to report
@@ -301,6 +309,9 @@ export async function openGateVoiceSession(
 
     let started = false;
     try {
+      // Arm before the socket exists: every frame on it then belongs to this
+      // proof, including one that arrives before `proveLink` is called.
+      input.armLinkProof?.();
       started = await deadline.guard(
         'the audio link',
         input.startGateMedia({

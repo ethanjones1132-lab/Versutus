@@ -53,6 +53,15 @@ export function isGateSocketGone(frame: string): boolean {
 }
 
 export type GateLinkProbe = {
+  /**
+   * Mark that a link is about to be opened, so its first frame is kept even
+   * while the caller is still between `startGateMedia` and `prove`. The socket
+   * can answer its attach faster than JS can arm the proof — the first call
+   * after a permission dialog, when the JS thread is busy resuming, is exactly
+   * when it does — and a frame that arrived in that gap used to be dropped,
+   * leaving a live link to time out as if the Gate had never spoken.
+   */
+  arm: () => void;
   /** Wait for the Gate's first frame on this link, its death, or the budget. */
   prove: (budgetMs?: number) => Promise<GateLinkProof>;
   /** Hand every arriving frame to the probe. Settles a pending proof. */
@@ -73,30 +82,49 @@ export type GateLinkProbe = {
 export function createGateLinkProbe(): GateLinkProbe {
   let settle: ((proof: GateLinkProof) => void) | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  // A frame that arrived after `arm` but before `prove`. It belongs to the link
+  // being opened, so the proof that follows it may use it; frames observed
+  // outside an armed link are late news about a link that is gone.
+  let latched: GateLinkProof | null = null;
+  let armed = false;
 
   const clear = (): void => {
     if (timer !== null) clearTimeout(timer);
     timer = null;
     settle = null;
+    latched = null;
+    armed = false;
   };
 
   return {
+    arm(): void {
+      clear();
+      armed = true;
+    },
     prove(budgetMs: number = GATE_LINK_READY_MS): Promise<GateLinkProof> {
       // A re-opened link supersedes the proof before it: the socket that never
-      // spoke is not the socket being waited on now.
+      // spoke is not the socket being waited on now. A frame this link already
+      // sent while it was being opened is not superseded: it is the proof.
+      const early = latched;
       clear();
+      if (early) return Promise.resolve(early);
       return new Promise<GateLinkProof>((resolve) => {
         const finish = (proof: GateLinkProof): void => {
           clear();
           resolve(proof);
         };
+        armed = true;
         settle = finish;
         timer = setTimeout(() => finish('timeout'), budgetMs);
       });
     },
     observe(frame: string): void {
-      if (!settle) return;
-      settle(isGateSocketGone(frame) ? 'failed' : 'frame');
+      const proof: GateLinkProof = isGateSocketGone(frame) ? 'failed' : 'frame';
+      if (settle) {
+        settle(proof);
+        return;
+      }
+      if (armed) latched = proof;
     },
     release(): void {
       clear();

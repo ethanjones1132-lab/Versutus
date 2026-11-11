@@ -117,6 +117,16 @@ describe('the probe', () => {
     expect(settled).toBe(false);
     jest.useRealTimers();
   });
+
+  // The first call after the permission dialog: the Gate answers its attach
+  // before JS gets to `prove`. Dropping that frame made a live link look silent
+  // for the whole budget, and the start cancelled a call the PC was ready for.
+  test('a frame that arrives while the link is being opened is held for the proof that follows', async () => {
+    const probe = createGateLinkProbe();
+    probe.arm();
+    probe.observe(ready);
+    await expect(probe.prove(100)).resolves.toBe('frame');
+  });
 });
 
 describe('openGateVoiceSession waits for the Gate to speak', () => {
@@ -179,6 +189,29 @@ describe('openGateVoiceSession waits for the Gate to speak', () => {
         probe.observe(ready);
         return proving;
       },
+      log: () => undefined,
+    });
+    expect(attempt.result).toBe('started');
+    expect(attempt.grant).toEqual(grant);
+  });
+
+  // The race the first call after a permission dialog lost: the Gate answers
+  // its attach while `startGateMedia` is still resolving, so the frame lands
+  // before JS calls `proveLink`. The link was live and the PC ready, but the
+  // proof saw silence and the start was cancelled after the whole budget.
+  test('a frame that lands before the proof is armed still proves the link', async () => {
+    const probe = createGateLinkProbe();
+    const attempt = await openGateVoiceSession({
+      ...common,
+      gatewayRequest: async (method) => (method === 'voice.session.start' ? grant : { stopped: true }),
+      armLinkProof: () => probe.arm(),
+      startGateMedia: async () => {
+        // The Gate speaks on the socket before the native call has answered.
+        probe.observe(ready);
+        return true;
+      },
+      proveLink: (budgetMs) => probe.prove(budgetMs),
+      linkReadyMs: 100,
       log: () => undefined,
     });
     expect(attempt.result).toBe('started');

@@ -22,6 +22,7 @@ import {
   type HandsfreeCallTarget,
   type HandsfreeVoiceContextValue,
 } from '@/context/handsfree-voice-provider';
+import { handsfreeStartResultCopy } from '@/lib/voice/handsfree-call-copy';
 
 jest.mock('react-native-reanimated', () => ({
   Easing: { bezier: () => (value: number) => value, elastic: () => (value: number) => value },
@@ -131,6 +132,9 @@ const mockNative = {
     synthesis: false,
     maxSpeechInputLength: 0,
   })),
+  requestMicrophonePermission: jest.fn(
+    async (): Promise<'granted' | 'denied' | 'unavailable'> => 'granted',
+  ),
   startSession: jest.fn(async () => 'started' as const),
   stopSession: jest.fn(async () => undefined),
   startListening: jest.fn(async () => true),
@@ -302,6 +306,72 @@ describe('a hands-free start against a fake Gate', () => {
     expect(latest().engine).toBe('local');
     expect(latest().label).toBe('Hermes');
     expect(latest().startedAtMs).toBeGreaterThan(0);
+  });
+});
+
+// ─── The first call after install asks for the microphone first ─────────────
+// The OS prompt used to run inside the native start, after the Gate had already
+// granted a session and while the start's own budgets were armed. On a first
+// call a person reading the microphone (and notification) dialog spent that
+// budget, and the call could be abandoned mid-prompt. These pin the order: the
+// prompt is answered while the call is still idle, before the Gate is asked for
+// anything and before any start timer exists; a refusal is the existing
+// permission-denied state and leaves no session behind.
+
+describe('the first call after install asks for the microphone first', () => {
+  test('a permission not yet granted is asked before the Gate grant, and the call opens when approved', async () => {
+    let askedWhileIdle = false;
+    let askedBeforeGrant = false;
+    let askedBeforeNativeStart = false;
+    mockNative.requestMicrophonePermission.mockImplementationOnce(async () => {
+      askedWhileIdle = latest().phase === 'idle';
+      askedBeforeGrant = !mockGateway.gatewayRequest.mock.calls
+        .some(([method]) => method === 'voice.session.start');
+      askedBeforeNativeStart = mockNative.startSession.mock.calls.length === 0;
+      return 'granted';
+    });
+
+    await startLiveCall();
+
+    // The dialog sat in front of the whole start, not inside it.
+    expect(askedWhileIdle).toBe(true);
+    expect(askedBeforeGrant).toBe(true);
+    expect(askedBeforeNativeStart).toBe(true);
+    expect(mockNative.requestMicrophonePermission).toHaveBeenCalledTimes(1);
+    // Approved, the same start proceeds all the way to a listening call.
+    expect(mockGate.sessions.size).toBe(1);
+    expect(latest().phase).toBe('listening');
+    expect(mockMediaStarts).toHaveLength(1);
+  });
+
+  test('a denied permission ends in the permission-denied state with no Gate session asked for', async () => {
+    mockNative.requestMicrophonePermission.mockResolvedValueOnce('denied');
+
+    let result = '';
+    await call(async () => {
+      result = (await latest().start(target)).result;
+    });
+
+    // The sheet's existing permission sentence, and the call settled at idle so
+    // the operator can retry after allowing it in Settings.
+    expect(result).toBe('permission-denied');
+    expect(handsfreeStartResultCopy('permission-denied')).toMatch(/needs the microphone/);
+    expect(latest().phase).toBe('idle');
+    expect(latest().active).toBe(false);
+    expect(latest().canStart).toBe(true);
+    // Nothing was granted, so no start RPC, native session, media link or
+    // compensating stop exists to leave held on the Gate.
+    expect(mockGateway.gatewayRequest).not.toHaveBeenCalledWith(
+      'voice.session.start',
+      expect.anything(),
+    );
+    expect(mockGateway.gatewayRequest).not.toHaveBeenCalledWith(
+      'voice.session.stop',
+      expect.anything(),
+    );
+    expect(mockNative.startSession).not.toHaveBeenCalled();
+    expect(mockMediaStarts).toHaveLength(0);
+    expect(mockGate.sessions.size).toBe(0);
   });
 });
 

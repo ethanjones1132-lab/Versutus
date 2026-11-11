@@ -16,6 +16,13 @@ export declare class HandsfreeVoiceModule extends NativeModule<HandsfreeVoiceMod
   /** What this device can do, asked before Start is offered. */
   getAvailability(): Promise<HandsfreeAvailability>;
   /**
+   * Ask for the call's microphone before the Gate is asked for a session or a
+   * start timer is armed, so the OS dialog never sits inside a timed start.
+   * `unavailable` means this build cannot preflight; the start still asks
+   * natively. iOS does not implement it and answers by the native start.
+   */
+  requestMicrophonePermission(): Promise<'granted' | 'denied' | 'unavailable'>;
+  /**
    * Open a call session and promote the user-visible lifetime. `startId` names
    * this attempt so a later `stopSession` can cancel exactly it.
    */

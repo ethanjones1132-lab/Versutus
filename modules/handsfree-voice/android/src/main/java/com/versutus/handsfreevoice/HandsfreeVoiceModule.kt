@@ -72,6 +72,46 @@ class HandsfreeVoiceModule : Module() {
       }
     }
 
+    // The pre-start microphone prompt. Asked by JS before it requests a Gate
+    // session and before it arms any start timer, so the OS dialog — and the
+    // notification prompt beside it on Android 13+ — never sits inside a timed
+    // start. The in-start ask below stays as the fallback for a caller that
+    // does not preflight.
+    AsyncFunction("requestMicrophonePermission") { promise: Promise ->
+      val context = appContext.reactContext
+      val permissions = appContext.permissions
+      if (context == null || permissions == null) {
+        promise.resolve("unavailable")
+        return@AsyncFunction
+      }
+      val microphone = Manifest.permission.RECORD_AUDIO
+      if (permissions.hasGrantedPermissions(microphone)) {
+        promise.resolve(HandsfreeCallPermissions.outcome(true))
+        return@AsyncFunction
+      }
+      if (appContext.currentActivity == null) {
+        // No activity to hang the prompt on; the native start will refuse it
+        // the same way it always has.
+        promise.resolve("unavailable")
+        return@AsyncFunction
+      }
+      permissions.askForPermissions({ result ->
+        val granted = result[microphone]?.status == PermissionsStatus.GRANTED
+        if (!granted) {
+          promise.resolve(HandsfreeCallPermissions.outcome(false))
+        } else {
+          // Answer only once the activity has resumed from the dialog, as the
+          // in-start ask does: JS starts the call straight after this, and a
+          // while-in-use microphone service created before the app is back in
+          // the foreground is refused on Android 14+.
+          Handler(Looper.getMainLooper()).postDelayed(
+            { promise.resolve(HandsfreeCallPermissions.outcome(true)) },
+            RESUME_SETTLE_MS,
+          )
+        }
+      }, *HandsfreeCallPermissions.asked(Build.VERSION.SDK_INT))
+    }.runOnQueue(Queues.MAIN)
+
     AsyncFunction("startSession") { options: Map<String, Any?>, promise: Promise ->
       val title = (options["title"] as? String)?.trim().orEmpty()
       // The key this attempt's cancellation will name. JS supplies it so an

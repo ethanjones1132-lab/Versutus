@@ -240,6 +240,29 @@ function cancelNativeSession(module: HandsfreeNativeModule, startId: string): vo
 }
 
 /**
+ * Ask the phone for the call's microphone before any of the call exists.
+ * Android's in-start ask can still put the OS dialog up (a build without this
+ * method, or a native path that bypasses the preflight); this is what keeps
+ * that dialog from sitting inside a timed start on the first call. A build — or
+ * platform — that cannot answer falls through to the native ask below.
+ */
+async function askForCallMicrophone(
+  module: HandsfreeNativeModule,
+): Promise<'granted' | 'denied' | 'unavailable'> {
+  // The method is absent on a build (or platform) that predates the preflight;
+  // that is the fallback path, not a refused permission.
+  const ask = module.requestMicrophonePermission as
+    | (() => Promise<'granted' | 'denied' | 'unavailable'>)
+    | undefined;
+  if (typeof ask !== 'function') return 'unavailable';
+  try {
+    return await ask();
+  } catch {
+    return 'unavailable';
+  }
+}
+
+/**
  * Only a dead media socket is worth re-opening: the Gate holds the call for
  * its resume window and re-attaches the same session. `socket_failed` and
  * `socket_closed` are the same fact from the phone's side — OkHttp's failure
@@ -641,6 +664,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
               gatewayUrl: gateway.url,
               gatewayToken: gateway.token ?? '',
               startGateMedia: (options) => moduleRef.current?.startGateMedia(options) ?? Promise.resolve(false),
+              armLinkProof: () => gateLinkRef.current.arm(),
               proveLink: (budgetMs) => gateLinkRef.current.prove(budgetMs),
               isAborted: () =>
                 endingRef.current || !gateModeRef.current || gateGrantRef.current !== grant,
@@ -1320,6 +1344,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         // cannot strand the start or leak an unhandled rejection.
         cancelStartSession: (startId) => cancelNativeSession(module, startId),
         startGateMedia: (options) => module.startGateMedia(options),
+        // Armed before the socket is opened, so the Gate's own attach frames
+        // prove the link even when they land before `proveLink` runs.
+        armLinkProof: () => gateLinkRef.current.arm(),
         // The native boolean only says the socket was handed to the network
         // stack. This is what makes the start honest: it waits for the Gate's
         // first frame on that socket, so a link that never comes up fails the
@@ -1425,6 +1452,18 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       if (!module) {
         logHandsfreeStart({ result: 'no-native-module', transport, engine: target.voiceEngine });
         return { result: 'no-native-module' };
+      }
+      // The OS prompt is asked before the Gate is asked for a session and before
+      // any start deadline is armed. Inside the timed start a person reading the
+      // dialog spent the start's budget, which is widest on the first call after
+      // install — the one with the microphone and notification prompts. A
+      // refusal has granted no session and armed no timer, so it is the existing
+      // permission-denied state with nothing to release. The native start below
+      // still asks as a fallback for a build without this preflight.
+      const microphone = await askForCallMicrophone(module);
+      if (microphone === 'denied') {
+        logHandsfreeStart({ result: 'permission-denied', transport, engine: target.voiceEngine });
+        return { result: 'permission-denied' };
       }
       if (decision.kind === 'gate') {
         return startGateCall(target, module, read);
