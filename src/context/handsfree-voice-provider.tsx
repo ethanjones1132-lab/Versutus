@@ -660,7 +660,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       clearGateApprovalTimer();
       const current = gateBannerRef.current.approval;
       if (current?.approvalId === approvalId) {
-        const state = expired ? 'expired' : decision === 'approve' ? 'approved' : 'denied';
+        const state: 'approved' | 'denied' | 'expired' = expired ? 'expired' : decision === 'approve' ? 'approved' : 'denied';
         gateApprovalDecisionsRef.current.set(approvalId, state);
         const next = { ...gateBannerRef.current, approval: { ...current, state } };
         gateBannerRef.current = next;

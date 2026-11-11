@@ -181,7 +181,8 @@ export function parseGateFrame(value: unknown): GateVoiceFrame {
       };
       if (frame.approvalId !== undefined) approval.approvalId = requireString(frame, 'approvalId');
       if (frame.state !== undefined) {
-        approval.state = requireEnum(frame, 'state', ['pending', 'approved', 'denied', 'expired']);
+        approval.state = requireEnum(frame, 'state', ['pending', 'approved', 'denied', 'expired']) as
+          'pending' | 'approved' | 'denied' | 'expired';
       }
       return approval;
     }
