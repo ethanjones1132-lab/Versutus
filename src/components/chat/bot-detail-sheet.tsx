@@ -4,7 +4,7 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { BotApprovalPolicyRow } from '@/components/chat/bot-approval-policy';
 import { BotMemoryPane } from '@/components/chat/bot-memory-pane';
-import { BaseSheet, Button, Divider, ListRow, PressableScale, Skeleton, Text } from '@/components/ui';
+import { BaseSheet, Button, Divider, Icon, ListRow, PressableScale, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { haptics } from '@/lib/haptics';
 import { describeBotDetail } from '@/lib/gateway/bot-detail';
@@ -63,6 +63,22 @@ export type BotDetailSheetProps = {
   onChangeLook?: () => void;
 };
 
+/** A soul longer than this can push the sheet's actions off a short phone. */
+const SOUL_COLLAPSE_CHARS = 280;
+const SOUL_COLLAPSE_LINES = 4;
+/** The collapsed soul keeps this many lines, enough to recognise the Bot. */
+const SOUL_PREVIEW_LINES = 3;
+
+/**
+ * Whether a soul should open as a preview rather than in full. Both lengths
+ * count: prose wraps past the character budget, and a stack of short lines is
+ * just as tall. The sheet is how an operator reaches the auto-approve row,
+ * memory, model pin and actions, so a long soul must not bury them.
+ */
+function soulNeedsCollapse(soul: string): boolean {
+  return soul.length > SOUL_COLLAPSE_CHARS || soul.split('\n').length > SOUL_COLLAPSE_LINES;
+}
+
 /**
  * The roster row's detail surface: description, model pin, routing state
  * with its fix, and the profile id. Everything here was already on the
@@ -83,7 +99,26 @@ export function BotDetailSheet({
   onChangeLook,
 }: BotDetailSheetProps) {
   const [held, setHeld] = useState(bot);
+  // The soul's disclosure is per sheet-open: opening resets it to the default
+  // (a long soul starts as a preview), a different Bot shown in the same sheet
+  // resets it again, and nothing survives a dismissal. The closing render keeps
+  // its shape so the sheet does not visibly snap while it animates away.
+  const [soulDisclosure, setSoulDisclosure] = useState<{
+    botId: string | null;
+    open: boolean;
+    expanded: boolean;
+  }>({ botId: null, open: false, expanded: false });
   if (bot && bot !== held) setHeld(bot);
+  const sheetOpen = bot !== null;
+  if (sheetOpen !== soulDisclosure.open) {
+    setSoulDisclosure(
+      sheetOpen
+        ? { botId: bot?.id ?? null, open: true, expanded: false }
+        : { ...soulDisclosure, open: false },
+    );
+  } else if (sheetOpen && soulDisclosure.botId !== (bot?.id ?? null)) {
+    setSoulDisclosure({ botId: bot?.id ?? null, open: true, expanded: false });
+  }
   if (!held) return null;
   const shown = bot ?? held;
   const detail = describeBotDetail(shown);
@@ -95,6 +130,14 @@ export function BotDetailSheet({
   const writable = botRuntimeWritable(shown.runtime);
   const soulState = soul ?? EMPTY_BOT_SOUL;
   const soulNote = botSoulCopy(soulState);
+  const soulText = soulState.soul?.trim() ?? '';
+  const soulIsLong = soulNeedsCollapse(soulText);
+  const soulCollapsed = soulIsLong && !soulDisclosure.expanded;
+  const soulExpanded = soulIsLong && soulDisclosure.expanded;
+
+  const toggleSoul = () => {
+    setSoulDisclosure((current) => ({ ...current, expanded: !current.expanded }));
+  };
 
   const handleCopyId = async () => {
     try {
@@ -128,26 +171,75 @@ export function BotDetailSheet({
 
         <View style={styles.facts}>
           <View style={styles.fact}>
-          <Text variant="micro" color="tertiary">
-            SOUL
-          </Text>
-          {soulState.soul ? (
-            <Text variant="body" color="secondary">
-              {soulState.soul.trim()}
-            </Text>
-          ) : null}
-          {soulNote ? (
-            <Text variant="caption" color={soulState.failed ? 'statusDisconnected' : 'tertiary'}>
-              {soulNote}
-            </Text>
-          ) : null}
-          {!soulState.loaded && !soulState.failed ? (
-            <Skeleton width="90%" height={44} />
-          ) : null}
-          {!soulState.loaded && soulState.failed && onRetry ? (
-            <Button label="Retry" variant="ghost" size="sm" onPress={onRetry} />
-          ) : null}
-        </View>
+            {/* The same chevron/haptic disclosure DisclosureRow draws for a
+                section, kept as a micro fact head: SOUL sits among this
+                sheet's fact labels, not in a stack of section cards. */}
+            {soulIsLong ? (
+              <PressableScale
+                onPress={async () => {
+                  await haptics.selection();
+                  toggleSoul();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={soulExpanded ? 'Soul, shown in full' : 'Soul, preview shown'}
+                accessibilityState={{ expanded: soulExpanded }}
+                hitSlop={8}
+                style={styles.soulHeader}>
+                <Text variant="micro" color="tertiary">
+                  SOUL
+                </Text>
+                <Icon
+                  name={
+                    soulExpanded
+                      ? { ios: 'chevron.up', android: 'expand_less', web: 'expand_less' }
+                      : { ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }
+                  }
+                  size={16}
+                  color="textTertiary"
+                />
+              </PressableScale>
+            ) : (
+              <Text variant="micro" color="tertiary">
+                SOUL
+              </Text>
+            )}
+            {soulState.soul ? (
+              <>
+                <Text
+                  variant="body"
+                  color="secondary"
+                  numberOfLines={soulCollapsed ? SOUL_PREVIEW_LINES : undefined}>
+                  {soulText}
+                </Text>
+                {soulCollapsed ? (
+                  <PressableScale
+                    onPress={async () => {
+                      await haptics.selection();
+                      toggleSoul();
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Show the whole soul"
+                    hitSlop={8}
+                    style={styles.soulShowAll}>
+                    <Text variant="caption" color="accent">
+                      Show all
+                    </Text>
+                  </PressableScale>
+                ) : null}
+              </>
+            ) : null}
+            {soulNote ? (
+              <Text variant="caption" color={soulState.failed ? 'statusDisconnected' : 'tertiary'}>
+                {soulNote}
+              </Text>
+            ) : null}
+            {!soulState.loaded && !soulState.failed ? (
+              <Skeleton width="90%" height={44} />
+            ) : null}
+            {!soulState.loaded && soulState.failed && onRetry ? (
+              <Button label="Retry" variant="ghost" size="sm" onPress={onRetry} />
+            ) : null}
+          </View>
 
         {/* D1: the per-Bot auto-approve opt-in (read-only classes only). */}
         <BotApprovalPolicyRow botId={shown.id} />
@@ -266,6 +358,18 @@ const styles = StyleSheet.create({
   },
   fact: {
     gap: 2,
+  },
+  soulHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: Spacing.one,
+    minHeight: 24,
+  },
+  soulShowAll: {
+    alignSelf: 'flex-start',
+    justifyContent: 'center',
+    minHeight: 24,
   },
   exportNotice: {
     paddingHorizontal: Spacing.one,
