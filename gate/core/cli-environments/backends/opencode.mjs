@@ -1,5 +1,5 @@
-import { mkdir, readFile, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, stat, unlink } from 'node:fs/promises';
+import { isAbsolute, join, relative } from 'node:path';
 
 import { writeFileAtomic } from '../../atomic-file.mjs';
 import {
@@ -7,6 +7,7 @@ import {
   flattenModelsV2,
   fromV2Agent,
   isBotAgent,
+  isFreeModelV2,
   renderAgentFile,
   resolveModelPin,
   toPublicAgentBot,
@@ -787,6 +788,7 @@ export function createOpenCodeBackend({
   readText = (path) => readFile(path, 'utf8'),
   removeFile = unlink,
   ensureDir = (path) => mkdir(path, { recursive: true }),
+  pathExists = (path) => stat(path).then(() => true, () => false),
 } = {}) {
   const root = String(baseUrl).replace(/\/+$/, '');
   const workspace = typeof directory === 'string' && directory ? directory : null;
@@ -1258,7 +1260,15 @@ export function createOpenCodeBackend({
       // prices is /api/model. Its default model is not part of that list, so
       // none is claimed here.
       const models = await call(`/api/model${locationQuery()}`, {}, readTimeoutMs, 2);
-      return { rows: flattenModelsV2(models), defaults: {} };
+      // model.default is the model a session uses with no explicit pick: the
+      // same role as v1's config `default` map, so an unpinned Bot prefers it
+      // when it is free. A server that cannot say leaves no default, not a
+      // failed create.
+      const fallback = await call(`/api/model/default${locationQuery()}`, {}, readTimeoutMs, 2).catch(() => null);
+      const defaults = {};
+      const defaultId = fallback?.modelID ?? fallback?.id;
+      if (typeof fallback?.providerID === 'string' && typeof defaultId === 'string') defaults[fallback.providerID] = defaultId;
+      return { rows: flattenModelsV2(models), defaults };
     }
     const config = await call('/config/providers');
     return { rows: flattenModels(config), defaults: config?.default ?? {} };
@@ -1284,13 +1294,43 @@ export function createOpenCodeBackend({
     return Array.isArray(agents) ? agents : [];
   }
 
-  async function resolveAgentsDir() {
-    if (agentsDir) return agentsDir;
-    const paths = await call('/path');
-    if (typeof paths?.config !== 'string' || !paths.config) {
-      throw fail('OpenCode did not report its config directory', 'backend_unsupported', 501);
+  /**
+   * Where a Bot's agent file is written. v1 names its config directory on
+   * `GET /path`; 2.x has no such route (it answers with its web app) and lists
+   * its configuration sources on `GET /api/config` instead, lowest priority
+   * first. The first directory source outside the Gate's workspace is the
+   * global config directory, the one v1's `/path` named: a Bot is the
+   * operator's, so it is never written into a project checkout. Returns the
+   * candidate directories, the one a new file goes in first.
+   */
+  async function agentDirs() {
+    if (agentsDir) return [agentsDir];
+    const { major } = await serverProfile();
+    if (major < 2) {
+      const paths = await call('/path');
+      if (typeof paths?.config !== 'string' || !paths.config) {
+        throw fail('OpenCode did not report its config directory', 'backend_unsupported', 501);
+      }
+      return [join(paths.config, 'agents')];
     }
-    return join(paths.config, 'agents');
+    const entries = await call(`/api/config${locationQuery()}`, {}, readTimeoutMs, 2);
+    const inWorkspace = (path) => {
+      if (!workspace) return false;
+      const rel = relative(workspace, path);
+      return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+    };
+    const base = (Array.isArray(entries) ? entries : [])
+      .filter((entry) => entry?.type === 'directory' && typeof entry.path === 'string' && entry.path)
+      .map((entry) => entry.path)
+      .find((path) => !inWorkspace(path));
+    if (!base) throw fail('OpenCode did not report a config directory outside the workspace', 'backend_unsupported', 501);
+    // 2.x reads both `agent/` and `agents/` (config/plugin/agent.ts). Keep a
+    // new Bot beside the operator's existing agent files: `agent/` when that is
+    // the only one there, else `agents/` as v1 used.
+    const singular = join(base, 'agent');
+    const plural = join(base, 'agents');
+    const singularOnly = (await pathExists(singular)) && !(await pathExists(plural));
+    return singularOnly ? [singular, plural] : [plural, singular];
   }
 
   /**
@@ -1299,6 +1339,20 @@ export function createOpenCodeBackend({
    * rather than interrupt it.
    */
   async function reloadAgents() {
+    const { major } = await serverProfile();
+    if (major >= 2) {
+      // session.active lists the sessions this process is draining; an absent
+      // session is idle. location.reload rebuilds every location and cancels
+      // pending permissions and forms, so it waits for an idle server too.
+      const active = await call('/api/session/active', {}, readTimeoutMs, 2);
+      if (active && typeof active === 'object' && Object.keys(active).length > 0) {
+        throw fail('OpenCode is running a turn; try again when it finishes', 'backend_busy', 409);
+      }
+      // It answers once every rebuilt location has settled, which can take
+      // longer than an ordinary read.
+      await call('/api/location/reload', { method: 'POST' }, Math.max(readTimeoutMs, 30_000), 2);
+      return;
+    }
     const busy = await call('/session/status');
     if (busy && typeof busy === 'object' && Object.keys(busy).length > 0) {
       throw fail('OpenCode is running a turn; try again when it finishes', 'backend_busy', 409);
@@ -1306,9 +1360,14 @@ export function createOpenCodeBackend({
     await call('/global/dispose', { method: 'POST' });
   }
 
+  /** The file a Bot lives in: an existing one wherever it is, else where a new one goes. */
   async function agentFile(id) {
-    const dir = await resolveAgentsDir();
-    return { dir, path: join(dir, `${id}.md`) };
+    const dirs = await agentDirs();
+    for (const dir of dirs) {
+      const path = join(dir, `${id}.md`);
+      if (dirs.length > 1 && await pathExists(path)) return { dir, path };
+    }
+    return { dir: dirs[0], path: join(dirs[0], `${id}.md`) };
   }
 
   async function botAgent(id) {
@@ -1566,13 +1625,19 @@ export function createOpenCodeBackend({
         // v2's GET /api/provider lists only custom providers; the merged
         // catalog (built-ins included) lives on GET /api/model.
         const payload = await call(`/api/model${locationQuery()}`, {}, readTimeoutMs, 2);
-        return (Array.isArray(payload) ? payload : []).map((model) => ({
-          id: `${model.providerID}/${model.modelID ?? model.id}`,
-          providerId: model.providerID,
-          modelId: model.modelID ?? model.id,
-          label: model.name ?? `${model.providerID}/${model.modelID ?? model.id}`,
-          available: model.enabled !== false && model.status !== 'disabled',
-        }));
+        // Retired models are not offered, as on v1, and `free` comes from the
+        // price tiers: the app's Bot picker lists only rows flagged free, so
+        // without it a 2.x Gate could not create a Bot at all.
+        return (Array.isArray(payload) ? payload : [])
+          .filter((model) => model?.status !== 'deprecated')
+          .map((model) => ({
+            id: `${model.providerID}/${model.modelID ?? model.id}`,
+            providerId: model.providerID,
+            modelId: model.modelID ?? model.id,
+            label: model.name ?? `${model.providerID}/${model.modelID ?? model.id}`,
+            available: model.enabled !== false && model.status !== 'disabled',
+            free: isFreeModelV2(model),
+          }));
       }
       const config = await call('/config/providers');
       const free = new Map(flattenModels(config).map((row) => [`${row.providerId}/${row.modelId}`, row.free]));
