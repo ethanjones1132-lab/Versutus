@@ -26,8 +26,9 @@ import type { SharedValue } from 'react-native-reanimated';
 import { useSharedValue } from 'react-native-reanimated';
 
 import { useChatSurface, useGateway } from '@/context/gateway-provider';
-import { composerDraftThread, type ComposerDraftThread } from '@/lib/gateway/composer-draft';
+import { composerDraftKey, composerDraftThread, type ComposerDraftThread } from '@/lib/gateway/composer-draft';
 import { createMessageId } from '@/lib/gateway/messages';
+import type { ChatMessage } from '@/lib/gateway/types';
 import {
   INITIAL_GATE_CALL,
   appPhaseForGate,
@@ -60,7 +61,7 @@ import {
   type HandsfreeStartResult,
   type HandsfreeStartTransport,
 } from '@/lib/voice/handsfree-start-reason';
-import { parseGateFrame, type GateVoiceFrame, type VoicePhase } from '@/lib/voice/voice-stream-protocol';
+import { MAX_FRAME_BYTES, parseGateFrame, type GateVoiceFrame, type VoicePhase } from '@/lib/voice/voice-stream-protocol';
 import {
   handsfreeReplyForTurn,
   isFailedReply,
@@ -91,6 +92,12 @@ import {
   type VoiceEngineCapabilities,
 } from '@/lib/voice/voice-engine-choice';
 import { isStartTimeout, startDeadline } from '@/lib/voice/start-deadline';
+import {
+  emptyCallThreadProjection,
+  projectCallFrame,
+  type CallProjectionFrame,
+  type CallThreadProjection,
+} from '@/lib/voice/call-thread-projection';
 import type { HandsfreeAvailability, HandsfreeStartOutcome } from '../../modules/handsfree-voice';
 
 /** How long a silence-triggered final is held before it sends. */
@@ -188,6 +195,8 @@ export type HandsfreeVoiceContextValue = {
     state?: 'pending' | 'approved' | 'denied' | 'expired';
   } | null;
   approvalBusy: boolean;
+  /** Live Gate transcript projection, scoped to the thread captured at call start. */
+  callThreadProjection: { threadKey: string; messages: ChatMessage[] } | null;
   label: string | undefined;
   reason: HandsfreeTerminalReason | undefined;
   lastEndReason?: HandsfreeTerminalReason;
@@ -289,9 +298,9 @@ export function shouldEndCallForGatewayStatus(status: string, gateMode: boolean)
 }
 
 /** The frame as the Gate sent it, or null when this build cannot read it. */
-function gateFrame(frame: string): GateVoiceFrame | null {
+function gateFrame(frame: string, callId?: string): GateVoiceFrame | null {
   try {
-    return parseGateFrame(frame);
+    return parseGateFrame(frame, callId ? { callId } : {});
   } catch {
     return null;
   }
@@ -346,6 +355,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const [gateMode, setGateMode] = useState(false);
   const [engineInfo, setEngineInfo] = useState<{ engine: string; reason?: string } | null>(null);
   const [approvalBusy, setApprovalBusy] = useState(false);
+  const [callProjection, setCallProjection] = useState<CallThreadProjection | null>(null);
 
   const sessionRef = useRef(session);
   const moduleRef = useRef<HandsfreeNativeModule | null>(null);
@@ -386,6 +396,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   // Highest contiguous Gate→phone sequence applied to the current call. It is
   // sent as the reconnect cursor before native capture resumes.
   const gateLastSeqRef = useRef(0);
+  const callProjectionRef = useRef<CallThreadProjection | null>(null);
   const gateApprovalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gateApprovalBusyRef = useRef<string | null>(null);
   const gateApprovalDecisionsRef = useRef(new Map<string, 'approved' | 'denied' | 'expired'>());
@@ -719,7 +730,28 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         }
       };
       const fold = (frame: string) => {
-        const parsed = gateFrame(frame);
+        let parsed = gateFrame(frame, gateSessionIdRef.current ?? callProjectionRef.current?.callId);
+        // Tool events were added to the v2 inventory in slice 3. This consumer
+        // validates only the bounded fields it renders; the protocol parser
+        // remains the authority for all established frames.
+        if (!parsed && frame.length <= MAX_FRAME_BYTES) {
+          try {
+            const candidate: unknown = JSON.parse(frame);
+            if (candidate && typeof candidate === 'object' && (candidate as { t?: unknown }).t === 'tool') {
+              const tool = candidate as Record<string, unknown>;
+              if (typeof tool.turnId === 'string' && typeof tool.toolId === 'string'
+                && typeof tool.name === 'string' && typeof tool.summary === 'string'
+                && (tool.status === 'running' || tool.status === 'complete' || tool.status === 'error')
+                && tool.v === 2 && typeof tool.callId === 'string'
+                && (!gateSessionIdRef.current || tool.callId === gateSessionIdRef.current)
+                && Number.isSafeInteger(tool.seq) && (tool.seq as number) > 0) {
+                parsed = tool as unknown as GateVoiceFrame;
+              }
+            }
+          } catch {
+            // The ordinary parser already rejected this frame.
+          }
+        }
         if (parsed && 'seq' in parsed && typeof parsed.seq === 'number' && parsed.v === 2) {
           if (parsed.seq <= gateLastSeqRef.current) return;
           if (parsed.seq !== gateLastSeqRef.current + 1) return;
@@ -732,6 +764,26 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
           ? { ...parsed, state: localDecision }
           : parsed ?? frame;
         if (parsed) {
+          const owner = targetRef.current;
+          const thread = owner ? callDraftThread(owner) : undefined;
+          const callId = 'callId' in parsed && typeof parsed.callId === 'string'
+            ? parsed.callId
+            : gateSessionIdRef.current;
+          if (thread && callId && parsed.v === 2) {
+            const existing = callProjectionRef.current;
+            const threadKey = composerDraftKey(thread);
+            const initial = existing?.threadKey === threadKey && existing.callId === callId
+              ? existing
+              : {
+                  ...emptyCallThreadProjection(threadKey, callId),
+                  // A new call can begin before the previous call's history
+                  // reconciliation has painted; keep those optimistic rows.
+                  messages: existing?.threadKey === threadKey ? existing.messages : [],
+                };
+            const projected = projectCallFrame(initial, parsed as CallProjectionFrame);
+            callProjectionRef.current = projected;
+            setCallProjection(projected);
+          }
           noteGateTurn(parsed);
           // The Gate has committed this utterance. The phone engine cues the
           // operator with its local send earcon at the moment its turn leaves;
@@ -1491,7 +1543,14 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
 
       gateSessionIdRef.current = attempt.grant.voiceSessionId;
       gateGrantRef.current = attempt.grant;
-      gateLastSeqRef.current = 0;
+      if (threadRef.current && !callProjectionRef.current) {
+        const projection = emptyCallThreadProjection(
+          composerDraftKey(threadRef.current),
+          attempt.grant.voiceSessionId,
+        );
+        callProjectionRef.current = projection;
+        setCallProjection(projection);
+      }
       setEngineInfo({
         engine: attempt.grant.engine ?? 'local',
         ...(attempt.grant.fellBackFrom ? { reason: attempt.grant.reason } : {}),
@@ -1768,6 +1827,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       turnState: gateLive ? gateBanner.turnState : null,
       approval: gateLive ? gateBanner.approval : null,
       approvalBusy,
+      callThreadProjection: callProjection
+        ? { threadKey: callProjection.threadKey, messages: callProjection.messages }
+        : null,
       label,
       reason: session.reason,
       lastEndReason: session.lastEndReason,
@@ -1802,6 +1864,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       gateBanner.turnState,
       gateBanner.approval,
       approvalBusy,
+      callProjection,
       label,
       session.reason,
       session.lastEndReason,

@@ -179,6 +179,7 @@ import {
 import { pushDeviceParams } from '@/lib/notifications/push-registration';
 import { handsfreeEndReasonCopy, handsfreeStartResultCopy } from '@/lib/voice/handsfree-call-copy';
 import { handsfreeStartBlockerCopy } from '@/lib/voice/handsfree-start-policy';
+import { callProjectionForThread } from '@/lib/voice/call-thread-projection';
 import {
   grantHandsfreeConsent,
   HANDSFREE_CONSENT_STORAGE_KEY,
@@ -592,6 +593,7 @@ export function ChatScreen() {
     active: handsfreeActive,
     canStart: canStartHandsfree,
     end: endHandsfree,
+    callThreadProjection,
   } = handsfree;
   const [callSheetVisible, setCallSheetVisible] = useState(false);
   const [callBusy, setCallBusy] = useState(false);
@@ -1145,6 +1147,16 @@ export function ChatScreen() {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+  const visibleCallProjection = useMemo(() =>
+    callProjectionForThread(
+      callThreadProjection,
+      draftThread ? composerDraftKey(draftThread) : undefined,
+      messages,
+    ), [callThreadProjection, draftThread, messages]);
+  const transcriptMessages = useMemo(
+    () => visibleCallProjection.length ? [...messages, ...visibleCallProjection] : messages,
+    [messages, visibleCallProjection],
+  );
 
   // Every surface change funnels through here so the screen-local backends
   // section cannot outlive the configurable thread it belongs to (rook
@@ -2743,8 +2755,8 @@ export function ChatScreen() {
   // messages (the memo itself stays pure).
   const transcriptItemsRef = useRef<TranscriptItem[]>([]);
   const transcriptItems = useMemo<TranscriptItem[]>(
-    () => stableTranscriptItems(messages, formatDayDividerCached, transcriptItemsRef.current),
-    [messages],
+    () => stableTranscriptItems(transcriptMessages, formatDayDividerCached, transcriptItemsRef.current),
+    [transcriptMessages],
   );
   useEffect(() => {
     transcriptItemsRef.current = transcriptItems;
