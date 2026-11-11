@@ -101,7 +101,22 @@ export function createPushRpc({ tokens, send }) {
       }
       const platform = requiredString(params?.platform, 'platform');
       const timezone = requiredString(params?.timezone, 'timezone');
-      return tokens.upsert(deviceId, { expoPushToken, platform, timezone });
+      const profileKey = params?.profileKey === undefined
+        ? undefined
+        : requiredString(params.profileKey, 'profileKey');
+      // Echoed into every push payload, so it stays a short id, never free text.
+      if (profileKey !== undefined && profileKey.length > 128) {
+        const error = new Error('profileKey must be at most 128 characters');
+        error.status = 400;
+        error.code = 'invalid_request';
+        throw error;
+      }
+      return tokens.upsert(deviceId, {
+        expoPushToken,
+        platform,
+        timezone,
+        ...(profileKey ? { profileKey } : {}),
+      });
     },
 
     'notifications.deregister': async (params, ctx) => {
@@ -138,7 +153,7 @@ export function createPushRpc({ tokens, send }) {
         to: row.expoPushToken,
         title: 'Versutus notification test',
         body: '',
-        data: { kind: 'test' },
+        data: { kind: 'test', ...(typeof row.profileKey === 'string' && row.profileKey.length > 0 ? { gatewayKey: row.profileKey } : {}) },
         channelId: 'model-replies',
         sound: 'default',
       }]);

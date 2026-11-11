@@ -34,7 +34,7 @@ export type TapRoute =
   | { kind: 'routine'; jobId: string; botId: string }
   | { kind: 'run'; runId: string }
   | { kind: 'approval'; runId: string }
-  | { kind: 'reply'; sessionId: string; botId?: string }
+  | { kind: 'reply'; sessionId: string; botId?: string; gatewayKey?: string }
   | { kind: 'weekly-report' };
 
 /**
@@ -80,7 +80,8 @@ export function routeForTap(data: unknown): TapRoute | null {
     const sessionId = nonEmptyString(payload.sessionId);
     if (!sessionId) return null;
     const botId = typeof payload.botId === 'string' && payload.botId.length > 0 ? payload.botId : undefined;
-    return { kind: 'reply', sessionId, ...(botId ? { botId } : {}) };
+    const gatewayKey = nonEmptyString(payload.gatewayKey) ?? undefined;
+    return { kind: 'reply', sessionId, ...(botId ? { botId } : {}), ...(gatewayKey ? { gatewayKey } : {}) };
   }
 
   // A weekly report notice is only its kind: the tap opens the scorecard

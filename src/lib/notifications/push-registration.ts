@@ -140,9 +140,10 @@ export async function pushDeviceParams(): Promise<{ deviceId: string }> {
   }
 }
 
-export async function registerWithGate(rpc: Rpc, token: string): Promise<void> {
+export async function registerWithGate(rpc: Rpc, token: string, profileKey?: string): Promise<void> {
   await rpc.rpcRequest('notifications.register', {
     expoPushToken: token,
+    ...(profileKey ? { profileKey } : {}),
     platform: Platform.OS,
     timezone: deviceTimezone(),
     ...(await pushDeviceParams()),
@@ -156,7 +157,7 @@ export async function deregisterWithGate(rpc: Rpc): Promise<void> {
   // gateway" case, and the Gate that answers next has never been told about
   // this device's token. Cleared BEFORE the RPC, so a refused deregistration
   // still leaves the next connect registering rather than skipping.
-  lastRegistration = null;
+  lastRegistration.clear();
   await rpc.rpcRequest('notifications.deregister', await pushDeviceParams());
 }
 
@@ -173,21 +174,25 @@ function isConfirmedDenial(permissions: PermissionStatus): boolean {
 }
 
 /** Sync the Gate token with permission; confirmed denial drops the device row. */
-export async function syncPushRegistration(rpc: Rpc): Promise<void> {
+export async function syncPushRegistration(rpc: Rpc, profileKey?: string): Promise<void> {
   // One pass at a time. The connect path fires this per `connected` transition
   // and a silent self-heal can land on top of a real one, so without this two
   // transitions in the same tick would both fetch a token and both POST it.
-  if (registrationInFlight) return registrationInFlight;
-  const pass = runPushRegistration(rpc);
-  registrationInFlight = pass;
+  // The empty key preserves the old single-registration behavior for legacy
+  // callers; app connection paths always pass the saved gateway profile id.
+  const freshnessKey = profileKey ?? '';
+  const existing = registrationsInFlight.get(freshnessKey);
+  if (existing) return existing;
+  const pass = runPushRegistration(rpc, profileKey, freshnessKey);
+  registrationsInFlight.set(freshnessKey, pass);
   try {
     return await pass;
   } finally {
-    if (registrationInFlight === pass) registrationInFlight = null;
+    if (registrationsInFlight.get(freshnessKey) === pass) registrationsInFlight.delete(freshnessKey);
   }
 }
 
-async function runPushRegistration(rpc: Rpc): Promise<void> {
+async function runPushRegistration(rpc: Rpc, profileKey: string | undefined, freshnessKey: string): Promise<void> {
   // Prepare the background widget task independently of token registration.
   // Without a push row, the widget still has its timer refresh — and once per
   // process is enough: Android keeps the task this registers, so re-asking on
@@ -215,13 +220,13 @@ async function runPushRegistration(rpc: Rpc): Promise<void> {
     // A token the Gate already holds, registered by this process and still
     // fresh: re-POSTing it costs a token fetch and a request to a
     // single-threaded Gate, roughly every reconnect on a flapping link.
-    if (await registrationIsFresh()) return;
+    if (await registrationIsFresh(freshnessKey)) return;
     const token = await obtainGrantedExpoPushToken();
     if (!token) return;
-    await registerWithGate(rpc, token);
+    await registerWithGate(rpc, token, profileKey);
     // Only a registration that LANDED is remembered, so a refused one is
     // retried at the next connect rather than skipped for six hours.
-    lastRegistration = { token, registeredAt: Date.now() };
+    lastRegistration.set(freshnessKey, { token, registeredAt: Date.now() });
   } catch {
     // Neither RPC may reject the connect path — the next connect retries.
   }
@@ -237,11 +242,11 @@ async function runPushRegistration(rpc: Rpc): Promise<void> {
  */
 const REGISTRATION_FRESH_MS = 6 * 60 * 60 * 1000;
 
-/** The registration this process last completed, or null if it holds none. */
-let lastRegistration: { token: string; registeredAt: number } | null = null;
+/** The registrations this process last completed, keyed by saved profile id. */
+const lastRegistration = new Map<string, { token: string; registeredAt: number }>();
 
-/** The pass in flight, so overlapping connects share one registration. */
-let registrationInFlight: Promise<void> | null = null;
+/** Each profile's in-flight pass, so overlapping connects share one registration. */
+const registrationsInFlight = new Map<string, Promise<void>>();
 
 /** Whether this process has already asked Android to run the widget push task. */
 let widgetPushTaskReady = false;
@@ -255,8 +260,9 @@ let widgetPushTaskReady = false;
  * the only writer), and the Gate is holding a token this device no longer has
  * — so that is a rotation, and it registers.
  */
-async function registrationIsFresh(): Promise<boolean> {
-  if (!lastRegistration) return false;
-  if (Date.now() - lastRegistration.registeredAt >= REGISTRATION_FRESH_MS) return false;
-  return (await loadStoredExpoPushToken()) === lastRegistration.token;
+async function registrationIsFresh(freshnessKey: string): Promise<boolean> {
+  const registration = lastRegistration.get(freshnessKey);
+  if (!registration) return false;
+  if (Date.now() - registration.registeredAt >= REGISTRATION_FRESH_MS) return false;
+  return (await loadStoredExpoPushToken()) === registration.token;
 }

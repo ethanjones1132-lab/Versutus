@@ -31,7 +31,7 @@ describe('push connect hooks', () => {
   test('a custom-gateway connection registers without blocking it', () => {
     const source = provider();
     expect(source).toContain("nextStatus === 'connected' && gateway.kind === 'custom'");
-    expect(source).toContain('void syncPushRegistration(client)');
+    expect(source).toContain('void syncPushRegistration(client, gateway.id)');
   });
 
   test('removing the active custom gateway starts the deregistration before disconnect', () => {
@@ -54,10 +54,10 @@ describe('push connect hooks', () => {
 
   test('registration itself never rejects the connect path', () => {
     const source = registration();
-    expect(source).toContain('await registerWithGate(rpc, token)');
+    expect(source).toContain('await registerWithGate(rpc, token, profileKey)');
     // The register call sits inside a try — a Gate that refuses the RPC
     // (unpaired grant, older build) just means no relay, never a dead connect.
-    const callAt = source.indexOf('await registerWithGate(rpc, token)');
+    const callAt = source.indexOf('await registerWithGate(rpc, token, profileKey)');
     const fnAt = source.indexOf('export async function syncPushRegistration');
     const segment = source.slice(fnAt, callAt);
     expect(segment).toContain('try {');

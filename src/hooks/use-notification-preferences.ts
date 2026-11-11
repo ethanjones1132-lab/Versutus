@@ -430,7 +430,7 @@ export function useNotificationPreferences() {
             rpcRequest: (method, params) => ownsRow()
               ? gatewayRequest(method, params ?? {})
               : Promise.reject(new Error('Notification gateway changed.')),
-          });
+          }, activeGatewayId ?? '');
         } catch {
           // Registration retries on the next connect; the toggle still stands.
         }
@@ -439,7 +439,7 @@ export function useNotificationPreferences() {
       const saved = await setPatch({ enabled: false });
       return saved && ownsRow();
     },
-    [gatewayRequest, readPermission, setPatch],
+    [activeGatewayId, gatewayRequest, readPermission, setPatch],
   );
 
   const sendTest = useCallback(async () => {

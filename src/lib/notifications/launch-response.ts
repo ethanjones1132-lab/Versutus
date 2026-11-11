@@ -16,6 +16,8 @@
 
 import * as Notifications from 'expo-notifications';
 
+import { routeForTap, type TapRoute } from './tap-route';
+
 /**
  * How long after the launch tap a listener response repeating its identifier
  * counts as the same tap. A cold launch can hand the launch response to the
@@ -33,6 +35,42 @@ export type LaunchTap = {
   identifier: string;
   at: number;
 };
+
+export type ReplyTap = Extract<TapRoute, { kind: 'reply' }>;
+
+export function replyTapDestination(
+  result: 'opened' | 'unknown-gateway' | null | undefined,
+): '/chat' | '/activity' {
+  return result === 'opened' ? '/chat' : '/activity';
+}
+
+/** Apply the gateway-specific part of a reply tap before opening its session. */
+export async function openReplyTap(
+  reply: ReplyTap,
+  options: {
+    activeGatewayKey: string | null;
+    gatewayKeys: readonly string[];
+    selectGateway: (gatewayKey: string) => Promise<void>;
+    waitForActiveGateway: (gatewayKey: string) => Promise<void>;
+    openSession: (sessionId: string) => void;
+  },
+): Promise<'opened' | 'unknown-gateway'> {
+  if (reply.gatewayKey) {
+    if (!options.gatewayKeys.includes(reply.gatewayKey)) return 'unknown-gateway';
+    if (reply.gatewayKey !== options.activeGatewayKey) {
+      await options.selectGateway(reply.gatewayKey);
+      await options.waitForActiveGateway(reply.gatewayKey);
+    }
+  }
+  options.openSession(reply.sessionId);
+  return 'opened';
+}
+
+/** A launch response follows the same reply route as a warm tap. */
+export function replyTapFromLaunch(response: Notifications.NotificationResponse): ReplyTap | null {
+  const route = routeForTap(response.notification.request.content.data);
+  return route?.kind === 'reply' ? route : null;
+}
 
 /**
  * The tap that launched the app, or null when there is none. Reading retires

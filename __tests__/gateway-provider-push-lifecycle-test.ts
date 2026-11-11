@@ -84,6 +84,6 @@ describe('push registration lifecycle', () => {
   test('reconnecting a Gate still registers the fresh token', () => {
     // The connect-time registration is untouched by the teardown additions.
     expect(provider).toContain("nextStatus === 'connected' && gateway.kind === 'custom'");
-    expect(provider).toContain('void syncPushRegistration(client)');
+    expect(provider).toContain('void syncPushRegistration(client, gateway.id)');
   });
 });

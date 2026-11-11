@@ -3393,7 +3393,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             // six-hour window, and this device's) is not worth a native read and
             // an authenticated RPC every 30–70 s of a flapping link.
             if (nextStatus === 'connected' && gateway.kind === 'custom') {
-              if (connectedFanOutDueRef.current) void syncPushRegistration(client);
+              if (connectedFanOutDueRef.current) void syncPushRegistration(client, gateway.id);
               // Restored unresolved runs must be reconciled on the first successful
               // Gateway connection, not only after a later disconnect. The
               // onHealthCheck path handles reconnects, but the initial connect

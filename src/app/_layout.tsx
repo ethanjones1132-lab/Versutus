@@ -52,8 +52,12 @@ import {
 } from '@/lib/notifications/categories';
 import {
   isLaunchReplay,
+  openReplyTap,
   readLaunchResponse,
+  replyTapDestination,
+  replyTapFromLaunch,
   type LaunchTap,
+  type ReplyTap,
 } from '@/lib/notifications/launch-response';
 import {
   ensurePushChannels,
@@ -158,6 +162,9 @@ function NotificationRouter() {
   const router = useRouter();
   const {
     isBootstrapped,
+    gateways,
+    activeGateway,
+    connectGateway,
     pendingRunApproval,
     resolveRunApproval,
     status,
@@ -167,6 +174,10 @@ function NotificationRouter() {
     requestRunFocus,
     gatewayRequest,
   } = useGateway();
+  const gatewayStateRef = useRef({ gateways, activeGateway, connectGateway, gatewayRequest });
+  useEffect(() => {
+    gatewayStateRef.current = { gateways, activeGateway, connectGateway, gatewayRequest };
+  }, [gateways, activeGateway, connectGateway, gatewayRequest]);
   // The launch tap is read once, and its route is held until bootstrap has
   // mounted the Stack: navigating any earlier loses to the boot overlay's
   // first-run redirect (the wait GatewayDeepLinkRouter already does). A tap
@@ -182,7 +193,7 @@ function NotificationRouter() {
   // cold start, and the exact conversation it is about is the whole point of
   // the route — an open dropped on the way through the bootstrap wait leaves
   // the operator on Chat but in the wrong thread.
-  const pendingReplySessionRef = useRef<{ sessionId: string } | null>(null);
+  const pendingReplySessionRef = useRef<ReplyTap | null>(null);
   // The launch tap's identifier while its replay window is open, so the same
   // tap arriving at the live listener cannot route a second time.
   const launchTapRef = useRef<LaunchTap | null>(null);
@@ -235,16 +246,36 @@ function NotificationRouter() {
   // sheet's "Open by id" row): `openSessionById` validates through `session.get`
   // before switching, which matters because a push-delivered id can be stale by
   // the time it is tapped. A miss is named, never swallowed.
-  const replySessionRef = useRef<((sessionId: string) => void) | null>(null);
+  const replySessionRef = useRef<((reply: ReplyTap) => Promise<'opened' | 'unknown-gateway'>) | null>(null);
   useEffect(() => {
-    replySessionRef.current = (sessionId: string) => {
-      void openSessionById(gatewayRequest, sessionId).then((result) => {
-        if (!result.ok) {
-          void notifySessionOpenFailed(openSessionByIdFailureText(sessionId, result.error));
-        }
+    replySessionRef.current = (reply: ReplyTap) => {
+      const state = gatewayStateRef.current;
+      return openReplyTap(reply, {
+        activeGatewayKey: state.activeGateway?.id ?? null,
+        gatewayKeys: state.gateways.map((gateway) => gateway.id),
+        selectGateway: async (gatewayKey) => {
+          const target = gatewayStateRef.current.gateways.find((gateway) => gateway.id === gatewayKey);
+          if (target) await gatewayStateRef.current.connectGateway(target);
+        },
+        waitForActiveGateway: async (gatewayKey) => {
+          // The provider can render its new active profile just after the
+          // selection promise resolves; do not read the session through A.
+          for (let attempt = 0; attempt < 500; attempt += 1) {
+            if (gatewayStateRef.current.activeGateway?.id === gatewayKey) return;
+            await new Promise<void>((resolve) => setTimeout(resolve, 10));
+          }
+          throw new Error('The notification gateway did not become active.');
+        },
+        openSession: (sessionId) => {
+          void openSessionById(gatewayStateRef.current.gatewayRequest, sessionId).then((result) => {
+            if (!result.ok) {
+              void notifySessionOpenFailed(openSessionByIdFailureText(sessionId, result.error));
+            }
+          });
+        },
       });
     };
-  }, [gatewayRequest]);
+  }, []);
 
   // The Approve / Deny buttons only exist once the category is registered, and
   // a notice may not reference a category the device has never seen — so this
@@ -289,9 +320,18 @@ function NotificationRouter() {
     // and the session rides beside it instead: the tab opens that exact
     // conversation once it lands. A notice naming no session asks for no open
     // at all.
-    const replySessionFor = (data: unknown): { sessionId: string } | null => {
+    const replySessionFor = (data: unknown): ReplyTap | null => {
       const route = routeForTap(data);
-      return route?.kind === 'reply' ? { sessionId: route.sessionId } : null;
+      return route?.kind === 'reply' ? route : null;
+    };
+
+    const applyReplyTap = async (reply: ReplyTap) => {
+      try {
+        const result = await replySessionRef.current?.(reply);
+        router.navigate(replyTapDestination(result));
+      } catch {
+        router.navigate('/activity');
+      }
     };
 
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
@@ -367,14 +407,14 @@ function NotificationRouter() {
         pendingReplySessionRef.current = replySession;
         return;
       }
-      router.navigate(destination);
+      if (replySession) void applyReplyTap(replySession);
+      else router.navigate(destination);
       // The tab may be filtered to a Bot the notice's run does not belong to,
       // so the filter is dropped. The tab applies the request and clears it.
       if (runFocus) runFocusRef.current?.(runFocus);
       // A reply notice names the conversation it is about, so that exact
       // session is opened once Chat has landed. The open is validated first,
       // and a stale id is named instead of switching (replySessionRef).
-      if (replySession) replySessionRef.current?.(replySession.sessionId);
     });
 
     // A tap that LAUNCHED the app is not replayed to a listener registered
@@ -392,7 +432,7 @@ function NotificationRouter() {
         };
         pendingTapRef.current = destinationFor(launch.notification.request.content.data);
         pendingRunFocusRef.current = runFocusFor(launch.notification.request.content.data);
-        pendingReplySessionRef.current = replySessionFor(
+        pendingReplySessionRef.current = replyTapFromLaunch(launch) ?? replySessionFor(
           launch.notification.request.content.data,
         );
       }
@@ -408,9 +448,9 @@ function NotificationRouter() {
       pendingRunFocusRef.current = null;
       const replySession = pendingReplySessionRef.current;
       pendingReplySessionRef.current = null;
-      router.navigate(destination);
+      if (replySession) void applyReplyTap(replySession);
+      else router.navigate(destination);
       if (runFocus) runFocusRef.current?.(runFocus);
-      if (replySession) replySessionRef.current?.(replySession.sessionId);
     }
 
     return () => subscription.remove();

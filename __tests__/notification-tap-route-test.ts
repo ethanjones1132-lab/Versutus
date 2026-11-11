@@ -238,16 +238,13 @@ describe('a finished model reply opens the conversation it is about', () => {
     // The destination drops the id — Chat is one tab — so the session rides
     // beside it. A routine, a run, a weekly report and an unrecognized payload
     // all ask for no open at all.
-    expect(src).toContain("route?.kind === 'reply' ? { sessionId: route.sessionId } : null");
+    expect(src).toContain("route?.kind === 'reply' ? route : null");
   });
 
-  test('the session open is asked for right after the navigation', () => {
+  test('reply taps use the gateway-aware session opener', () => {
     const src = listener();
 
-    const navigate = src.indexOf('router.navigate(destination)');
-    const ask = src.indexOf('replySessionRef.current?.(replySession.sessionId)');
-    expect(navigate).toBeGreaterThan(-1);
-    expect(ask).toBeGreaterThan(navigate);
+    expect(src).toContain('if (replySession) void applyReplyTap(replySession)');
     expect(src).toContain(
       'const replySession = replySessionFor(response.notification.request.content.data)',
     );
@@ -260,11 +257,11 @@ describe('a finished model reply opens the conversation it is about', () => {
     // switching, because a push-delivered id can be stale. A rejected read
     // surfaces the same failure copy the thread sheet posts, as a local notice
     // rather than a throw or a silent no-op.
-    expect(src).toContain('openSessionById(gatewayRequest, sessionId)');
+    expect(src).toContain('openSessionById(gatewayStateRef.current.gatewayRequest, sessionId)');
     expect(src).toContain('if (!result.ok)');
     expect(src).toContain('openSessionByIdFailureText(sessionId, result.error)');
     expect(src).toContain('void notifySessionOpenFailed(');
-    expect(src).toContain('replySessionRef.current = (sessionId: string) =>');
+    expect(src).toContain('replySessionRef.current = (reply: ReplyTap) =>');
   });
 
   test('a reply tap that launched the app keeps its open across the bootstrap wait', () => {
@@ -272,20 +269,18 @@ describe('a finished model reply opens the conversation it is about', () => {
 
     // Held in the same slot the destination is, for the same reason the run
     // focus is: a reply notice is usually tapped from a cold start.
-    expect(src).toContain(
-      'pendingReplySessionRef.current = replySessionFor(',
-    );
+    expect(src).toContain('pendingReplySessionRef.current = replyTapFromLaunch(launch) ?? replySessionFor(');
     expect(src).toContain('const replySession = pendingReplySessionRef.current');
     expect(src).toContain('pendingReplySessionRef.current = null');
     // Both call sites apply it the same way — the launch-replay path behaves
     // identically to the live listener path.
-    expect((src.match(/if \(replySession\) replySessionRef\.current\?\.\(replySession\.sessionId\);/g) ?? []).length).toBe(2);
+    expect((src.match(/if \(replySession\) void applyReplyTap\(replySession\);/g) ?? []).length).toBe(2);
   });
 
   test('the session open reaches the tab through a ref, so the listener is registered once', () => {
     const src = routerSource();
 
-    expect(src).toContain('replySessionRef.current = (sessionId: string) =>');
+    expect(src).toContain('replySessionRef.current = (reply: ReplyTap) =>');
     const listenerEnd = src.slice(src.indexOf('addNotificationResponseReceivedListener'));
     expect(listenerEnd).toContain('}, [router, isBootstrapped]);');
   });

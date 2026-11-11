@@ -156,6 +156,10 @@ function classifiedEvent(event) {
 }
 
 function messageFor(classified, event, row) {
+  const data = {
+    ...classified.data,
+    ...(nonEmptyString(row.profileKey) ? { gatewayKey: row.profileKey } : {}),
+  };
   const richBody = row.richBody === true;
   const body = richBody ? truncateText(event.text) : '';
   const bot = nonEmptyString(event.botId);
@@ -166,7 +170,7 @@ function messageFor(classified, event, row) {
       to: row.expoPushToken,
       title: `${bot ?? 'Versutus'} finished a reply`,
       body,
-      data: classified.data,
+      data,
       channelId: 'model-replies',
       sound: 'default',
       // Only a reply that names a Bot carries a category, and that is the whole
@@ -189,7 +193,7 @@ function messageFor(classified, event, row) {
       to: row.expoPushToken,
       title,
       body,
-      data: classified.data,
+      data,
       channelId: 'model-replies',
       sound: 'default',
     };
@@ -199,7 +203,7 @@ function messageFor(classified, event, row) {
       to: row.expoPushToken,
       title: 'Approval required',
       body,
-      data: classified.data,
+      data,
       channelId: 'approvals',
       sound: 'default',
       priority: 'high',
@@ -209,7 +213,7 @@ function messageFor(classified, event, row) {
     to: row.expoPushToken,
     title: `${bot ?? 'A routine'} finished`,
     body,
-    data: classified.data,
+    data,
     channelId: 'routine-results',
     sound: 'default',
   };
@@ -270,7 +274,7 @@ function widgetCompanion(row, event, snapshot) {
   };
   return {
     to: row.expoPushToken,
-    data: { kind: 'widget', widget },
+    data: { kind: 'widget', widget, ...(nonEmptyString(row.profileKey) ? { gatewayKey: row.profileKey } : {}) },
     priority: 'normal',
   };
 }
