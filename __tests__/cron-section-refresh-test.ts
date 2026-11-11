@@ -38,8 +38,9 @@ describe('cron section refresh', () => {
       'cron-section.tsx',
     );
     // The section takes the signal and folds it into its loader deps so a
-    // refresh without a remount still re-lists jobs.
-    expect(src).toMatch(/export function CronSection\(\{ cronReloadSignal = 0 \}/);
+    // refresh without a remount still re-lists jobs. The destructure now also
+    // carries the roster switch and the create hand-off.
+    expect(src).toMatch(/export function CronSection\(\{\s*cronReloadSignal = 0,\s*showList = true,\s*onCreated,\s*\}/);
     // The signal folds into the mounted/focus effect, not the loader's own
     // deps (the loader does not read it — keeping it there trips the
     // exhaustive-deps lint as an unnecessary dependency).
@@ -53,7 +54,8 @@ describe('cron section refresh', () => {
     );
     // onRefresh reaches the cron re-read...
     expect(src).toMatch(/setCronReloadSignal\(\(n\) => n \+ 1\)/);
-    // ...and the section receives the signal.
-    expect(src).toMatch(/<CronSection cronReloadSignal=\{cronReloadSignal\} \/>/);
+    // ...and the section receives the signal, with the roster switched off
+    // because the cross-backend feed owns the list on this tab.
+    expect(src).toMatch(/<CronSection\s+cronReloadSignal=\{cronReloadSignal\}\s+showList=\{false\}/);
   });
 });

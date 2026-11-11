@@ -37,8 +37,21 @@ const TONE_COLOR: Record<ReturnType<typeof describeCronHealth>['tone'], TextColo
  * Renders nothing at all when the gateway cannot join jobs to their runs. An
  * empty list on a host with twelve crons would read as "no scheduled work",
  * which is a worse lie than saying nothing.
+ *
+ * `showList={false}` keeps only the New scheduled job form and the two sheets:
+ * the Routines view's honest cross-backend list (RoutinesSection) owns the
+ * roster, while filing and editing work stay reachable from the same tab.
  */
-export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: number }) {
+export function CronSection({
+  cronReloadSignal = 0,
+  showList = true,
+  onCreated,
+}: {
+  cronReloadSignal?: number;
+  showList?: boolean;
+  /** Fires after a confirmed create, so a sibling list can re-read it. */
+  onCreated?: () => void;
+}) {
   const { botJobs, cron, status } = useGateway();
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -77,7 +90,10 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
     inFlight.current = ticket;
     ticket.promise = (async () => {
       try {
-        if (status !== 'connected' || !available) {
+        // The roster behind `showList={false}` is nobody's screen: the sibling
+        // cross-backend list owns it, so this section spends no `/v1/jobs`
+        // read on a list it will not draw.
+        if (status !== 'connected' || !available || !showList) {
           setLoaded(true);
           return;
         }
@@ -100,7 +116,7 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
       }
     })();
     return ticket.promise;
-  }, [available, cron, status]);
+  }, [available, cron, showList, status]);
 
   // The focus effect below already reads on the first focus, so this one must
   // not repeat it — two `cron.list()` calls in the same tick is the duplicate
@@ -148,6 +164,9 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
         // would withhold the notice and retire any held one. The job still runs
         // on the gateway and its roster still shows it.
         void load();
+        // The sibling list on this tab reads the cross-backend feed, not this
+        // roster; tell it so the new job appears without a pull.
+        onCreated?.();
       })
       .catch((cause: unknown) => {
         const next = applyRoutineCreate(submitted, { ok: false, cause });
@@ -177,6 +196,9 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
 
   return (
     <Card variant="stage" padding={Spacing.three} style={styles.card}>
+      {/* The roster is the interim section's; when the honest cross-backend
+          list beside it owns the rows, only the form and the sheets remain. */}
+      {showList ? <>
       <View style={styles.header}>
         <Text variant="headline">Cron ({jobs.length})</Text>
         {live > 0 ? <Badge label={`${live} running`} tone="accent" /> : null}
@@ -275,6 +297,7 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
         }
         return rows;
       })()}
+      </> : null}
 
       <Text variant="micro" color="secondary">
         New scheduled job

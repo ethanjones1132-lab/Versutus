@@ -488,7 +488,8 @@ describe('the section sits in the Runs footer, while Activity keeps the schedule
   test('Activity carries the scheduled work and never the cards', () => {
     const src = tab();
 
-    expect(src).toContain('<CronSection cronReloadSignal={cronReloadSignal} />');
+    expect(src).toContain('<CronSection');
+    expect(src).toContain('cronReloadSignal={cronReloadSignal}');
     expect(src).not.toContain('<ScorecardsSection');
   });
 });
@@ -581,7 +582,8 @@ describe('what must keep working', () => {
   test('the Activity footer still carries the scheduled work and the spend entry', () => {
     const src = tab();
 
-    expect(src).toContain('<CronSection cronReloadSignal={cronReloadSignal} />');
+    expect(src).toContain('<CronSection');
+    expect(src).toContain('cronReloadSignal={cronReloadSignal}');
     expect(src).toContain('<SpendEntryRow />');
   });
 });

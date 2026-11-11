@@ -22,6 +22,25 @@ export function withRoutineTimeout(promise, timeoutMs = 8_000) {
 }
 
 /**
+ * The reason a started backend gives when it has no routine concept after all.
+ *
+ * `/v1/routines` cannot know a backend's methods until it starts it (the
+ * method probe answers `null` for a factory that needs a live transport), and
+ * the started backend may turn out to have no `listJobs`. That is the same
+ * fact as a backend that never advertised one — unavailable — so it travels as
+ * this marker rather than as a read failure the app would paint red.
+ */
+export function unsupportedRoutineRead(label) {
+  const error = new Error(`${label ? `${label}: ` : ''}routines are not supported by this backend`);
+  error.code = 'routines_unsupported';
+  return error;
+}
+
+function isUnsupportedRoutineRead(reason) {
+  return reason?.code === 'routines_unsupported';
+}
+
+/**
  * The job rows in a host answer, or null when it is not a list at all.
  *
  * Same envelope keys `cron.jobs` reads: a host answering { crons: [...] } or
@@ -63,26 +82,35 @@ function skippedRowsMessage(skipped) {
 }
 
 /** Aggregate routine listings without inventing backend facts. */
-export async function collectRoutines({ backendId, backends = [], now = Date.now() } = {}) {
+export async function collectRoutines({ backendId, backends = [], now = Date.now(), timeoutMs = 8_000 } = {}) {
   const coverage = [];
   const routines = [];
 
   const selected = backends.filter((entry) => !backendId || entry.id === backendId);
   // Backends are read in parallel so one slow host's timeout does not add to
-  // the others' wait.
+  // the others' wait. Each read carries its own bound: a host that never
+  // answers is a failed read within the timeout, while its neighbours still
+  // report theirs.
   const reads = await Promise.all(selected.map(async (backend) => {
-    if (typeof backend.listJobs !== 'function') return { backend, result: null };
+    // A backend that offers no routine listing is unavailable, never "no
+    // routines": the app must explain unsupported, not show a false zero.
+    if (typeof backend.listJobs !== 'function') return { backend, unsupported: true };
     try {
-      return { backend, result: { status: 'fulfilled', value: await backend.listJobs() } };
+      const value = await withRoutineTimeout(
+        Promise.resolve().then(() => backend.listJobs()),
+        timeoutMs,
+      );
+      return { backend, result: { status: 'fulfilled', value } };
     } catch (reason) {
+      // A backend that only discovered it has no `listJobs` after starting is
+      // the same fact as one that never had it: unavailable, not a failure.
+      if (isUnsupportedRoutineRead(reason)) return { backend, unsupported: true };
       return { backend, result: { status: 'rejected', reason } };
     }
   }));
 
-  for (const { backend, result } of reads) {
-    // A backend that offers no routine listing is unavailable, never "no
-    // routines": the app must explain unsupported, not show a false zero.
-    if (!result) {
+  for (const { backend, unsupported, result } of reads) {
+    if (unsupported) {
       coverage.push({ id: backend.id, label: backend.label, status: 'unavailable' });
       continue;
     }

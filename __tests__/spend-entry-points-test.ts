@@ -74,7 +74,8 @@ describe('what must keep working', () => {
 
   test('Activity keeps its Cron section and its gateway targets', () => {
     const src = activityScreen();
-    expect(src).toContain('<CronSection cronReloadSignal={cronReloadSignal} />');
+    expect(src).toContain('<CronSection');
+    expect(src).toContain('cronReloadSignal={cronReloadSignal}');
     expect(src).toContain('<AgentTargets');
   });
 

@@ -50,9 +50,17 @@ async function makeGate({ environments = ['backend-a', 'backend-b'], jobs = {} }
         capabilities: ['sessions'],
         server: { defaultPort: 1, healthPath: '/', args: () => [], portFromOutput: () => null },
         async probe() { return { state: 'ready', cliVersion: '1.0.0', protocol: 'acp' }; },
-        createBackend: () => {
+        createBackend: (options = {}) => {
           // An environment with no routine listing at all — OpenCode's shape.
           if (id === 'backend-unavailable') return {};
+          // A backend whose method list cannot be proved without starting it:
+          // the inert probe throws, exactly like a factory that reads its
+          // transport. Once started it still has no routine listing — Claude
+          // Code and Codex's shape behind a factory that needs a live server.
+          if (id === 'backend-unknown') {
+            if (options?.baseUrl === 'http://127.0.0.1:0') throw new Error('cannot probe without a server');
+            return {};
+          }
           return {
             async listJobs() {
               if (id === 'backend-failing') throw new Error('fake backend is offline');
@@ -146,6 +154,24 @@ test('a failing backend is named without hiding the healthy backend routines', a
     const body = await response.json();
     assert.deepEqual(statuses(body), [['backend-a', 'complete'], ['backend-failing', 'failed']]);
     assert.match(body.backends[1].error, /offline/);
+    assert.deepEqual(body.routines.map((routine) => routine.id), ['job-1']);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a backend whose method list is unknown and that has no listJobs is unavailable', async () => {
+  const gate = await makeGate({
+    environments: ['backend-a', 'backend-unknown'],
+    jobs: { 'backend-a': [job('job-1', 'Nightly digest')] },
+  });
+  try {
+    const response = await fetch(url(gate), { headers: auth(gate) });
+    const body = await response.json();
+    // Unknown methods used to count as servable, so the started backend's
+    // missing listJobs became a "failed" read. It has no routine concept.
+    assert.deepEqual(statuses(body), [['backend-a', 'complete'], ['backend-unknown', 'unavailable']]);
+    assert.equal(Object.hasOwn(body.backends[1], 'error'), false);
     assert.deepEqual(body.routines.map((routine) => routine.id), ['job-1']);
   } finally {
     await gate.close();
