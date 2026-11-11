@@ -85,6 +85,10 @@ export class VoiceSessionRegistry {
       ...record,
       ended: false,
       attached: false,
+      // Whether a socket is on the call right now, as opposed to `attached`
+      // (a latch: this call had a phone at some point). A call can be detached
+      // and still live — that is exactly what the resume window holds.
+      socketAttached: false,
       grantedAt,
       lastSeenAt: grantedAt,
     };
@@ -143,7 +147,31 @@ export class VoiceSessionRegistry {
     const session = this.sessions.get(voiceSessionId);
     if (!session) return;
     session.attached = true;
+    session.socketAttached = true;
     session.lastSeenAt = this._now();
+  }
+
+  /**
+   * The media socket calls this the moment its socket is gone. The call stays
+   * live and waitable — that is the resume window — but it is no longer a call
+   * the phone is on, which is what `liveForDevice` reads to tell a phone that is
+   * rejoining from one that has already dialled again.
+   */
+  markDetached(voiceSessionId) {
+    const session = this.sessions.get(voiceSessionId);
+    if (!session) return;
+    session.socketAttached = false;
+  }
+
+  /**
+   * Whether this call had a socket and has none now: the phone left it and the
+   * Gate is holding it for a re-connect that may never come. A grant that never
+   * attached at all is NOT detached — it is a start that has not finished, and
+   * its own attach grace governs it.
+   */
+  isDetached(voiceSessionId) {
+    const session = this.sessions.get(voiceSessionId);
+    return Boolean(session && !session.ended && session.attached && !session.socketAttached);
   }
 
   /**
@@ -394,15 +422,15 @@ export function createVoiceRpc({
           throw rpcError('thread must name a session', 400, 'invalid_request');
         }
         const existing = registry.liveForDevice(deviceId);
-        if (existing) {
+        // A call with a socket on it is live, and a second start is still
+        // refused. So is a grant that never attached: that start has not
+        // finished, and its own attach grace decides when it has.
+        const superseding = existing && registry.isDetached(existing.voiceSessionId) ? existing : null;
+        if (existing && !superseding) {
           throw rpcError('This device already has a live voice call', 409, 'call_in_progress');
         }
         const state = decorate(capabilities());
         const maxConcurrentCalls = state.limits?.maxConcurrentCalls;
-        if (Number.isFinite(maxConcurrentCalls) && maxConcurrentCalls >= 0
-          && registry.liveCount() >= maxConcurrentCalls) {
-          throw rpcError('Another device is on a call with this Gate.', 409, 'voice_busy');
-        }
         // `auto` means the Bot's own preference when it carries one (§4.9); an
         // explicit request from the phone still wins.
         const choice = chooseEngine(requested, state.engines);
@@ -411,6 +439,27 @@ export function createVoiceRpc({
             ? state.engines[params.engine]?.reason ?? `${params.engine} is not installed.`
             : state.engines.local?.reason ?? 'No PC voice engine is installed.';
           throw rpcError(reason, 409, 'no_engine');
+        }
+        // The same phone asking for a call is how it says it has left the one it
+        // had. A call whose socket is gone is waiting out its resume window for
+        // a phone that has already chosen to start again, so it is ended here
+        // rather than refusing this start for the rest of that window: a link
+        // that died, an app the OS killed and a call the phone gave up on all
+        // used to block the operator's retry for up to 90 s. `abandoned` is the
+        // reason that window would have named itself, and it is one of the
+        // phone-gone reasons, so a turn still running is parked (its reply is
+        // pushed when it lands), never thrown away. It is ended only once this
+        // start has an engine to run on, so a start that cannot happen does not
+        // take a call down with it.
+        if (superseding) {
+          registry.end(superseding.voiceSessionId, 'abandoned');
+          log(
+            `voice.session.start supersede device=${deviceTag(deviceId)} session=${superseding.voiceSessionId} reason=abandoned`,
+          );
+        }
+        if (Number.isFinite(maxConcurrentCalls) && maxConcurrentCalls >= 0
+          && registry.liveCount() >= maxConcurrentCalls) {
+          throw rpcError('Another device is on a call with this Gate.', 409, 'voice_busy');
         }
         // What the call actually ran on, so the failure line names the engine
         // the Gate chose rather than only what the phone asked for.

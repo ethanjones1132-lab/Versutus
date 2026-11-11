@@ -314,10 +314,14 @@ describe('a Gate call whose link never comes up', () => {
     expect(phases()).not.toContain('listening');
     expect(latest().phase).toBe('idle');
     expect(latest().canStart).toBe(true);
-    // The grant is released, so the retry is not refused as call-in-progress.
+    // The grant is released, so the retry is not refused as call-in-progress —
+    // and it is released AS THIS PHONE: the Gate resolves the caller from the
+    // device id, and a phone on the Gate's own token that sends none is refused
+    // `pairing_required`, which left the call live for its whole resume window.
     expect(mockGateway.gatewayRequest).toHaveBeenCalledWith('voice.session.stop', {
       voiceSessionId: 'vs-1',
       reason: 'start-failed',
+      deviceId: 'phone-abc12345',
     });
   });
 
@@ -338,6 +342,70 @@ describe('a Gate call whose link never comes up', () => {
     await startLiveCall();
     expect(mockMediaStarts).toHaveLength(1);
     expect(latest().active).toBe(true);
+  });
+});
+
+describe('a call the phone ends is released to the Gate as this phone', () => {
+  // The Gate resolves the caller of `voice.session.stop` from the device id, as
+  // it does for every push method. A phone on the Gate's own token has no grant,
+  // so a stop sent without one was refused `pairing_required`: the call it had
+  // just ended stayed live on the Gate, and every start for the next 90 s — the
+  // Gate's whole resume window — was refused `call_in_progress` (2026-11-11
+  // 02:42:23). The release has to name this phone.
+
+  test("the operator's End releases the Gate call with this device id", async () => {
+    await startLiveCall();
+    await call(async () => {
+      latest().end();
+      await jest.advanceTimersByTimeAsync(50);
+    });
+
+    expect(latest().phase).toBe('idle');
+    expect(mockGateway.gatewayRequest).toHaveBeenCalledWith('voice.session.stop', {
+      voiceSessionId: 'vs-1',
+      reason: 'user',
+      deviceId: 'phone-abc12345',
+    });
+  });
+
+  test('giving up on a link the Gate never rejoined says so, and still names this phone', async () => {
+    await startLiveCall();
+    await call(async () => {
+      gateFrame(socketFailed);
+      await jest.advanceTimersByTimeAsync(25_000);
+    });
+
+    expect(latest().lastEndReason).toBe('link-lost');
+    expect(mockGateway.gatewayRequest).toHaveBeenCalledWith('voice.session.stop', {
+      voiceSessionId: 'vs-1',
+      reason: 'link-lost',
+      deviceId: 'phone-abc12345',
+    });
+  });
+
+  test('a release still goes out when this phone cannot read its own identity', async () => {
+    const { pushDeviceParams } = jest.requireMock('@/lib/notifications/push-registration') as {
+      pushDeviceParams: jest.Mock;
+    };
+    await startLiveCall();
+    // The identity the start read is kept for the release, so teardown never
+    // needs the secure store again — a store that stops answering must not be
+    // what keeps the Gate holding a call the operator has already ended.
+    const readsAfterStart = pushDeviceParams.mock.calls.length;
+    pushDeviceParams.mockRejectedValueOnce(new Error('no secure store'));
+    await call(async () => {
+      latest().end();
+      await jest.advanceTimersByTimeAsync(50);
+    });
+
+    expect(pushDeviceParams.mock.calls.length).toBe(readsAfterStart);
+    expect(mockGateway.gatewayRequest).toHaveBeenCalledWith('voice.session.stop', {
+      voiceSessionId: 'vs-1',
+      reason: 'user',
+      deviceId: 'phone-abc12345',
+    });
+    pushDeviceParams.mockReset();
+    pushDeviceParams.mockResolvedValue({ deviceId: 'phone-abc12345' });
   });
 });
 

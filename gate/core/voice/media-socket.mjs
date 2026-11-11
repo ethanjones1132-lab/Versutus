@@ -860,8 +860,8 @@ export function attachVoiceMediaSocket({
       registry.markAttached(session.voiceSessionId);
 
       newWs.on('message', onMessage);
-      newWs.on('close', () => {
-        if (ws === newWs) detach();
+      newWs.on('close', (code) => {
+        if (ws === newWs) detach(code);
       });
       newWs.on('error', () => {
         if (ws === newWs) detach();
@@ -898,10 +898,23 @@ export function attachVoiceMediaSocket({
       }
     }
 
-    function detach() {
+    function detach(code) {
       if (ended) return;
       clearAudioTimer();
       ws = null;
+      // The call is no longer one a phone is on: it waits for a re-connect, and
+      // a phone that dials afresh instead supersedes it (voice-rpc.mjs).
+      registry.markDetached?.(session.voiceSessionId);
+      // Which side closed the link, and how far the call got, is what decides
+      // what to look at next: the phone closes its own socket with 1000 after a
+      // stop it made itself, the Gate closes with the end reason it named, and a
+      // link that simply went away arrives as 1006. Counts and timings only —
+      // never what was said.
+      log(
+        `voice.stream close session=${session.voiceSessionId} code=${code ?? 'none'}`
+        + ` afterMs=${now() - trace.startedAt} audioFrames=${trace.audioFrames}`
+        + ` partials=${trace.partials} phase=${call.phase}`,
+      );
       // Hold the call for a re-connect; if none comes, it ends as network.
       resumeTimer = setTimeout(() => end('network'), resumeTimeoutMs);
       resumeTimer.unref?.();

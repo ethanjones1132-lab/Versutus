@@ -473,3 +473,84 @@ test('a refused start opens no session, names the refusal, and leaves the device
   assert.equal(retry.voiceSessionId, 'vs-retry-1');
   assert.equal(registry.liveForDevice('dev-1').voiceSessionId, 'vs-retry-1');
 });
+
+// A call whose socket went away is one the phone has already left: the Gate
+// holds it open for its resume window in case that phone rejoins, but a start
+// from the same phone is that phone saying it will not. Before this, the start
+// was refused `call_in_progress` for the rest of the window — 90 s on a live
+// Gate — so a link that died ten seconds into a call blocked the operator's
+// retry for a minute and a half (2026-11-11 02:42, and twice before that).
+test('a detached call is superseded by the same device starting again', async () => {
+  let clock = 1_000;
+  const registry = new VoiceSessionRegistry({ now: () => clock });
+  const lines = [];
+  let n = 0;
+  const { methods } = createVoiceRpc({
+    capabilities: capabilities(),
+    registry,
+    makeId: () => `vs-${(n += 1)}`,
+    log: (line) => lines.push(line),
+  });
+
+  const first = await methods['voice.session.start']({ engine: 'local', thread }, ctx);
+  registry.markAttached(first.voiceSessionId);
+  // A call with a socket on it is live: a second start is still refused.
+  await assert.rejects(
+    () => methods['voice.session.start']({ engine: 'local', thread }, ctx),
+    (error) => error.code === 'call_in_progress' && error.status === 409,
+  );
+
+  // The socket dies — a radio blip, an app the OS killed, a link that failed —
+  // and the phone dials again well inside the resume window.
+  registry.markDetached(first.voiceSessionId);
+  clock += 5_000;
+  const second = await methods['voice.session.start']({ engine: 'local', thread }, ctx);
+
+  assert.notEqual(second.voiceSessionId, first.voiceSessionId);
+  const superseded = registry.get(first.voiceSessionId);
+  assert.equal(superseded.ended, true);
+  // `abandoned` is one of the reasons a phone that went away ends with, so a
+  // turn the old call was still working on is parked, not cancelled.
+  assert.equal(superseded.endedReason, 'abandoned');
+  assert.equal(registry.liveForDevice('dev-1').voiceSessionId, second.voiceSessionId);
+  assert.ok(
+    lines.some((line) => /voice\.session\.start supersede/.test(line)
+      && line.includes(`session=${first.voiceSessionId}`)
+      && line.includes('reason=abandoned')),
+    'the supersede is named in the Gate log',
+  );
+  // The device is named by its tag, never by the raw id, exactly as a start is.
+  assert.ok(lines.every((line) => !line.includes('dev-1')));
+});
+
+// The other half of that rule: a phone that DID rejoin is on the call again, so
+// its next start must be refused rather than superseding the call it is using.
+test('a call re-attached after a detach is a live call again', async () => {
+  const registry = new VoiceSessionRegistry();
+  const { methods } = createVoiceRpc({ capabilities: capabilities(), registry, makeId: () => 'vs-next' });
+
+  await methods['voice.session.start']({ engine: 'local', thread }, ctx);
+  registry.markAttached('vs-next');
+  registry.markDetached('vs-next');
+  assert.equal(registry.isDetached('vs-next'), true);
+  // The phone's socket came back with the same session id.
+  registry.markAttached('vs-next');
+  assert.equal(registry.isDetached('vs-next'), false);
+
+  await assert.rejects(
+    () => methods['voice.session.start']({ engine: 'local', thread }, ctx),
+    (error) => error.code === 'call_in_progress',
+  );
+  assert.equal(registry.get('vs-next').ended, false);
+});
+
+// A grant that never attached is NOT a detached call: its start may still be
+// opening the microphone, so the attach grace — not a new start — decides when
+// it is over (see the grace test above, which this must not weaken).
+test('a start that has not attached yet is not superseded', () => {
+  const registry = new VoiceSessionRegistry();
+  registry.create({ voiceSessionId: 'vs-opening', deviceId: 'dev-1', engine: 'local', thread });
+  assert.equal(registry.isDetached('vs-opening'), false);
+  assert.equal(registry.liveForDevice('dev-1').voiceSessionId, 'vs-opening');
+});
+

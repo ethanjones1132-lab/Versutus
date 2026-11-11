@@ -100,12 +100,22 @@ async function stopGrantedSession(
   gatewayRequest: OpenGateVoiceSessionInput['gatewayRequest'],
   voiceSessionId: string | undefined,
   deadline: StartDeadline,
+  device?: { deviceId: string },
 ): Promise<void> {
   if (!voiceSessionId) return;
   try {
     await deadline.guard(
       'the release of the call',
-      gatewayRequest('voice.session.stop', { voiceSessionId, reason: 'start-failed' }),
+      // The device travels with the release because the Gate resolves the caller
+      // from it: a phone on the Gate's own token has no grant, so a stop sent
+      // without a device id was refused `pairing_required` and the session it
+      // named stayed live — the retry this release exists for was then refused
+      // as `call_in_progress` for the Gate's whole resume window.
+      gatewayRequest('voice.session.stop', {
+        voiceSessionId,
+        reason: 'start-failed',
+        ...device,
+      }),
     );
   } catch {
     // Best effort, and bounded: the session's own idle close, or the Gate's
@@ -151,12 +161,13 @@ function releaseLateGrant(
   gatewayRequest: OpenGateVoiceSessionInput['gatewayRequest'],
   startRequest: Promise<unknown>,
   deadline: StartDeadline,
+  device?: { deviceId: string },
 ): void {
   void startRequest
     .then((late) => {
       const lateGrant = parseVoiceSessionGrant(late);
       if (!lateGrant) return undefined;
-      return stopGrantedSession(gatewayRequest, lateGrant.voiceSessionId, deadline);
+      return stopGrantedSession(gatewayRequest, lateGrant.voiceSessionId, deadline, device);
     })
     .catch(() => {
       // A late refusal is not a grant; a late transport error has nothing to release.
@@ -244,7 +255,7 @@ export async function openGateVoiceSession(
         // request may answer later with a live session — release whatever it
         // names, so the retry this phone is about to offer is not refused as
         // call-in-progress. Native start and media are never reached from here.
-        if (startRequest) releaseLateGrant(input.gatewayRequest, startRequest, deadline);
+        if (startRequest) releaseLateGrant(input.gatewayRequest, startRequest, deadline, input.device);
         throw error;
       }
       const mapped = mapGateSessionStartFailure(error);
@@ -282,7 +293,7 @@ export async function openGateVoiceSession(
         // The start did not take: cancel the exact native attempt so a late
         // answer cannot open a microphone during the retry this refusal invites.
         cancelNativeStart(input.cancelStartSession, startId);
-        await stopGrantedSession(input.gatewayRequest, parsed.voiceSessionId, deadline);
+        await stopGrantedSession(input.gatewayRequest, parsed.voiceSessionId, deadline, input.device);
         const native = mapNativeSessionStartFailure(sessionOutcome, sessionRejected, rejection);
         return finish(native, log, { engine: parsed.engine });
       }
@@ -330,7 +341,7 @@ export async function openGateVoiceSession(
       // retry this failure invites, then release the grant so the retry is not
       // refused as `call_in_progress`.
       cancelNativeStart(input.cancelStartSession, startId);
-      await stopGrantedSession(input.gatewayRequest, parsed.voiceSessionId, deadline);
+      await stopGrantedSession(input.gatewayRequest, parsed.voiceSessionId, deadline, input.device);
       return finish(
         {
           result: 'media-start-failed',
@@ -360,7 +371,7 @@ export async function openGateVoiceSession(
       // it in the background, and nothing about this start depends on a Gate
       // that has just proved it does not answer.
       if (nativeInvoked) cancelNativeStart(input.cancelStartSession, startId);
-      await stopGrantedSession(input.gatewayRequest, grant?.voiceSessionId, deadline);
+      await stopGrantedSession(input.gatewayRequest, grant?.voiceSessionId, deadline, input.device);
       return finish(
         { result: 'start-timed-out', detail: error.message },
         log,
