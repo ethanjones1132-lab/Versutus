@@ -1,5 +1,13 @@
 export const ACTIVITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export const ACTIVITY_ITEM_LIMIT = 500;
+export const ACTIVITY_READ_TIMEOUT_MS = 8_000;
+/**
+ * A cold agent server's first start is not a read: `opencode serve` after a
+ * reboot is documented as taking well over 30 s, longer than the supervisor's
+ * own start bound. Giving the start its own ceiling keeps that wait out of the
+ * 8 s read bound while still capping a genuinely hung environment.
+ */
+export const ACTIVITY_START_TIMEOUT_MS = 35_000;
 
 /** Parse the required ISO instant without accepting dates that Date.parse repairs. */
 export function parseActivitySince(value) {
@@ -22,16 +30,45 @@ export function parseActivitySince(value) {
   return { since: new Date(timestamp).toISOString(), timestamp };
 }
 
-/** Bound one backend read so an unresponsive environment cannot hold the feed. */
-export function withActivityTimeout(promise, timeoutMs = 8_000) {
+/** Bound one backend step so an unresponsive environment cannot hold the feed. */
+export function withActivityTimeout(promise, timeoutMs = ACTIVITY_READ_TIMEOUT_MS, message = 'Backend activity read timed out') {
   let timer;
   return Promise.race([
     Promise.resolve(promise),
     new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error('Backend activity read timed out')), timeoutMs);
+      timer = setTimeout(() => reject(new Error(message)), timeoutMs);
       timer.unref?.();
     }),
   ]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * The `/v1/activity` session read, start included. `get` starts the
+ * environment's native server, so bounding it with the read used to report a
+ * cold server as a failed backend before its first start could finish. The
+ * start gets its own longer bound; only the list keeps the 8 s read ceiling.
+ */
+export async function readActivitySessions({
+  start,
+  limit = 500,
+  startTimeoutMs = ACTIVITY_START_TIMEOUT_MS,
+  readTimeoutMs = ACTIVITY_READ_TIMEOUT_MS,
+}) {
+  const backend = await withActivityTimeout(
+    Promise.resolve().then(start),
+    startTimeoutMs,
+    'Backend activity start timed out',
+  );
+  if (typeof backend?.listSessions !== 'function') throw new Error('Sessions are unavailable');
+  return withActivityTimeout(Promise.resolve().then(() => backend.listSessions(limit)), readTimeoutMs);
+}
+
+/** The first non-empty title wins; an empty string must not drop the row later. */
+function activityTitle(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return 'Session';
 }
 
 function timestamp(value) {
@@ -68,9 +105,10 @@ function sessionItem(backend, session) {
     sessionId: String(session.id),
     startedAt: Number.isFinite(started) ? new Date(started).toISOString() : new Date(active).toISOString(),
     status: session.ended_at == null ? 'active' : (session.end_reason ?? 'completed'),
-    title: session.title ?? session.preview ?? 'Session',
+    title: activityTitle(session.title, session.preview),
     metrics,
     _activityAt: active,
+    ...(typeof session.bot === 'string' && session.bot ? { botId: session.bot } : {}),
     ...(Number.isFinite(ended) ? { finishedAt: new Date(ended).toISOString() } : {}),
   };
 }

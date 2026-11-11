@@ -71,6 +71,19 @@ describe('a tapped Activity row carries its exact owner', () => {
     });
   });
 
+  test('an OpenCode Bot row hands over its session, backend and Bot', () => {
+    expect(pressFirstRow(item({
+      id: 'opencode:session:ses_1',
+      backendId: 'opencode',
+      sessionId: 'ses_1',
+      botId: 'build',
+    }))).toEqual({
+      sessionId: 'ses_1',
+      backendId: 'opencode',
+      botId: 'build',
+    });
+  });
+
   test('a row with no Bot names no Bot, so it cannot inherit the selected one', () => {
     expect(pressFirstRow(item())).toEqual({
       sessionId: 'session-b',

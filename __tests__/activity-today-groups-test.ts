@@ -36,6 +36,22 @@ describe('Today activity grouping', () => {
     expect(filterActivityByBackend(items, undefined)).toBe(items);
   });
 
+  test('an OpenCode Bot groups under Backend · Bot, apart from another Bot', () => {
+    const items = [
+      item('build-thread', 'b', 'opencode-build'),
+      item('review-thread', 'b', 'opencode-review'),
+    ];
+    const groups = groupActivityForToday(items, coverage, [
+      { id: 'opencode-build', displayName: 'Builder' },
+      { id: 'opencode-review', displayName: 'Reviewer' },
+    ]);
+    expect(groups.map((group) => group.title)).toEqual(['Beta · Builder', 'Beta · Reviewer']);
+    expect(groups.map((group) => group.items.map((row) => row.id))).toEqual([
+      ['build-thread'],
+      ['review-thread'],
+    ]);
+  });
+
   test('keeps an item whose backend is not in coverage', () => {
     const groups = groupActivityForToday([item('one', 'missing')], coverage, []);
     expect(groups[0]?.items).toEqual([item('one', 'missing')]);

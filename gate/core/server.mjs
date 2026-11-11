@@ -63,7 +63,7 @@ import {
 } from './backend-model-route.mjs';
 import { createModelHealth, healthScopeId, modelHealthKey } from './model-health.mjs';
 import { isModelFault } from './model-fault.mjs';
-import { collectActivity, parseActivitySince, withActivityTimeout } from './activity.mjs';
+import { collectActivity, parseActivitySince, readActivitySessions } from './activity.mjs';
 import { collectRoutines, unsupportedRoutineRead } from './routines.mjs';
 import { curateModels } from './model-curation.mjs';
 import { backendUpstreamRefusal } from './upstream-refusal.mjs';
@@ -2664,13 +2664,10 @@ export async function createGate(config = {}) {
             label: entry.label,
             listRuns: () => environmentService.listRuns(entry.id, 100),
             ...(canListSessions ? {
-              listSessions: async () => {
-                return withActivityTimeout(Promise.resolve().then(async () => {
-                  const backend = await backendManager.get(entry.id);
-                  if (typeof backend.listSessions !== 'function') throw new Error('Sessions are unavailable');
-                  return backend.listSessions(500);
-                }));
-              },
+              // The start is bounded separately from the read: a cold OpenCode
+              // server takes far longer than 8 s to come up, and counting that
+              // against the read reported it as a failed backend.
+              listSessions: () => readActivitySessions({ start: () => backendManager.get(entry.id) }),
             } : {}),
           };
         }));

@@ -134,6 +134,20 @@ test('unknown session metrics are omitted and backendId narrows coverage and ite
   }
 });
 
+test('a session from a Bot-capable backend keeps its Bot on the wire', async () => {
+  const gate = await makeGate({ sessions: {
+    'backend-a': [session('opencode-thread', Date.parse('2026-11-09T12:00:00Z'), { bot: 'build' })],
+  } });
+  try {
+    const response = await fetch(url(gate, `since=${encodeURIComponent(since)}&backendId=backend-a`), { headers: auth(gate) });
+    const body = await response.json();
+    assert.equal(body.items[0].sessionId, 'opencode-thread');
+    assert.equal(body.items[0].botId, 'build');
+  } finally {
+    await gate.close();
+  }
+});
+
 test('missing or unparseable since is rejected with a clear 400 response', async () => {
   const gate = await makeGate();
   try {

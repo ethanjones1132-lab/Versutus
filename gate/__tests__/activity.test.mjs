@@ -1,9 +1,78 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { collectActivity, parseActivitySince } from '../core/activity.mjs';
+import { collectActivity, parseActivitySince, readActivitySessions } from '../core/activity.mjs';
 
 const now = Date.parse('2026-11-10T12:00:00.000Z');
+
+test('a session item carries the Bot the backend proved, and omits it otherwise', async () => {
+  const result = await collectActivity({
+    since: '2026-11-10T00:00:00.000Z',
+    now,
+    backends: [{
+      id: 'one',
+      label: 'One',
+      listRuns: () => [],
+      listSessions: () => [
+        { id: 'tagged', started_at: now - 2000, last_active: now - 2000, bot: 'builder' },
+        { id: 'untagged', started_at: now - 1000, last_active: now - 1000 },
+        { id: 'empty-bot', started_at: now - 500, last_active: now - 500, bot: '' },
+      ],
+    }],
+  });
+  const byId = Object.fromEntries(result.items.map((item) => [item.sessionId, item]));
+  assert.equal(byId.tagged.botId, 'builder');
+  assert.equal(Object.hasOwn(byId.untagged, 'botId'), false);
+  assert.equal(Object.hasOwn(byId['empty-bot'], 'botId'), false);
+});
+
+test('an empty title falls back to the preview, then to a readable default', async () => {
+  const result = await collectActivity({
+    since: '2026-11-10T00:00:00.000Z',
+    now,
+    backends: [{
+      id: 'one',
+      label: 'One',
+      listRuns: () => [],
+      listSessions: () => [
+        { id: 'previewed', started_at: now - 2000, last_active: now - 2000, title: '', preview: 'From the preview' },
+        { id: 'blank', started_at: now - 1000, last_active: now - 1000, title: '' },
+      ],
+    }],
+  });
+  const byId = Object.fromEntries(result.items.map((item) => [item.sessionId, item]));
+  assert.equal(byId.previewed.title, 'From the preview');
+  assert.equal(byId.blank.title, 'Session');
+});
+
+test('a cold start is bounded separately, so a slow start still yields its item', async () => {
+  const result = await collectActivity({
+    since: '2026-11-10T00:00:00.000Z',
+    now,
+    backends: [{
+      id: 'one',
+      label: 'One',
+      listRuns: () => [],
+      // The start outlasts the read bound; the list itself answers immediately.
+      listSessions: () => readActivitySessions({
+        start: () => new Promise((resolve) => setTimeout(
+          () => resolve({ listSessions: async () => [{ id: 'cold', started_at: now - 1000, last_active: now - 1000 }] }),
+          80,
+        )),
+        startTimeoutMs: 1_000,
+        readTimeoutMs: 20,
+      }),
+    }],
+  });
+  assert.deepEqual(result.items.map((item) => item.sessionId), ['cold']);
+});
+
+test('a start that never finishes is still capped', async () => {
+  await assert.rejects(
+    readActivitySessions({ start: () => new Promise(() => {}), startTimeoutMs: 20 }),
+    /start timed out/,
+  );
+});
 
 test('since must be an explicit valid ISO instant', () => {
   assert.match(parseActivitySince(null).error, /since is required/);
