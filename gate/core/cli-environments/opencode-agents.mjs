@@ -78,10 +78,12 @@ export function flattenModels(config) {
  * The same free test for a 2.x catalog row (GET /api/model, Model.Info): cost
  * is a list of price tiers, so a model is free only when it has at least one
  * tier and every tier prices input and output at zero, and it is not retired.
- * An empty or missing cost list proves nothing, so it is not free.
+ * An empty or missing cost list proves nothing, so it is not free. A disabled
+ * model is not free either: the Bot picker and the pin rule both read this.
  */
 export function isFreeModelV2(model) {
-  if (!model || model.status === 'deprecated') return false;
+  // A retired or switched-off model cannot be a Bot's pin, whatever its price.
+  if (!model || model.status === 'deprecated' || model.status === 'disabled' || model.enabled === false) return false;
   const tiers = model.cost;
   if (!Array.isArray(tiers) || tiers.length === 0) return false;
   return tiers.every((tier) => tier?.input === 0 && tier?.output === 0);

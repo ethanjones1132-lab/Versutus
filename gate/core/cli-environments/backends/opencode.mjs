@@ -1314,9 +1314,19 @@ export function createOpenCodeBackend({
       return [join(paths.config, 'agents')];
     }
     const entries = await call(`/api/config${locationQuery()}`, {}, readTimeoutMs, 2);
+    // The project the server is serving: the Gate's own workspace, else the
+    // server's resolved location. Without either, a project's .opencode
+    // directory could not be told apart from the global one, so refuse.
+    let project = workspace;
+    if (!project) {
+      const location = await call('/api/location', {}, readTimeoutMs, 2, false).catch(() => null);
+      // PublicInfo is answered bare per the schema; a {data} wrapper is read too.
+      const directory = location?.directory ?? location?.data?.directory;
+      project = typeof directory === 'string' && directory ? directory : null;
+    }
+    if (!project) throw fail('OpenCode did not report which project it is serving', 'backend_unsupported', 501);
     const inWorkspace = (path) => {
-      if (!workspace) return false;
-      const rel = relative(workspace, path);
+      const rel = relative(project, path);
       return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
     };
     const base = (Array.isArray(entries) ? entries : [])

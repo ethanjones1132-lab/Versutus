@@ -30,6 +30,7 @@ const MODELS = [
   { id: 'paid-one', modelID: 'paid-one', providerID: 'opencode', name: 'Paid', status: 'active', enabled: true, cost: [{ input: 3, output: 15 }] },
   { id: 'free-two', modelID: 'free-two', providerID: 'opencode', name: 'Free Two', status: 'active', enabled: true, cost: [{ input: 0, output: 0 }] },
   { id: 'retired', modelID: 'retired', providerID: 'opencode', name: 'Retired', status: 'deprecated', enabled: true, cost: [{ input: 0, output: 0 }] },
+  { id: 'switched-off', modelID: 'switched-off', providerID: 'opencode', name: 'Off', status: 'active', enabled: false, cost: [{ input: 0, output: 0 }] },
 ];
 
 /** Read back an agent file the way the server would load it. */
@@ -47,7 +48,7 @@ function agentFromFile(id, text) {
   };
 }
 
-function world({ existingDirs = [], files = {}, active = {}, defaultModel = MODELS[2], configEntries } = {}) {
+function world({ existingDirs = [], files = {}, active = {}, defaultModel = MODELS[2], configEntries, directory = WORKSPACE, serverLocation = WORKSPACE } = {}) {
   const fsFiles = new Map(Object.entries(files));
   const dirs = new Set(existingDirs);
   const loaded = new Map();
@@ -75,6 +76,9 @@ function world({ existingDirs = [], files = {}, active = {}, defaultModel = MODE
       ] });
     }
     if (path === '/api/session/active') return json({ data: active });
+    if (path.startsWith('/api/location') && method === 'GET') {
+      return serverLocation ? json({ directory: serverLocation }) : json({ name: 'ServiceUnavailable' }, 503);
+    }
     if (path === '/api/location/reload' && method === 'POST') { load(); return noContent; }
     if (path.startsWith('/api/model/default')) return json({ data: defaultModel });
     if (path.startsWith('/api/model')) return json({ data: MODELS });
@@ -86,7 +90,7 @@ function world({ existingDirs = [], files = {}, active = {}, defaultModel = MODE
   const backend = createOpenCodeBackend({
     baseUrl: 'http://127.0.0.1:4096',
     fetchImpl,
-    directory: WORKSPACE,
+    directory,
     writeFile: async (path, text) => { fsFiles.set(path, text); },
     readText: async (path) => {
       if (!fsFiles.has(path)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
@@ -174,5 +178,35 @@ test('a 2.x Bot defined in agent/ is edited in place and keeps its pin', async (
 test('the 2.x model list flags free models for the Bot picker and drops retired ones', async () => {
   const { backend } = world();
   const rows = await backend.listModels();
-  assert.deepEqual(rows.map((row) => [row.modelId, row.free]), [['big-pickle', true], ['paid-one', false], ['free-two', true]]);
+  assert.deepEqual(
+    rows.map((row) => [row.modelId, row.free]),
+    [['big-pickle', true], ['paid-one', false], ['free-two', true], ['switched-off', false]],
+  );
+});
+
+test('a Gate with no workspace of its own uses the server location to keep Bots out of the project', async () => {
+  // The project's .opencode sorts first here; only the server's location shows it is the project's.
+  const configEntries = [{ type: 'directory', path: join(WORKSPACE, '.opencode') }, { type: 'directory', path: GLOBAL }];
+  const { backend, fsFiles } = world({ directory: null, configEntries });
+  await backend.createBot({ name: 'scribe', modelId: 'big-pickle', providerId: 'opencode' });
+  assert.deepEqual([...fsFiles.keys()], [join(GLOBAL, 'agents', 'scribe.md')]);
+});
+
+test('with neither a workspace nor a server location, a 2.x create is refused and writes nothing', async () => {
+  const { backend, fsFiles } = world({ directory: null, serverLocation: null });
+  await assert.rejects(
+    backend.createBot({ name: 'scribe', modelId: 'big-pickle', providerId: 'opencode' }),
+    (error) => error.code === 'backend_unsupported',
+  );
+  assert.equal(fsFiles.size, 0);
+});
+
+test('a disabled model can be neither a Bot pin nor its default', async () => {
+  const { backend, fsFiles } = world({ defaultModel: MODELS[4] });
+  await assert.rejects(
+    backend.createBot({ name: 'scribe', modelId: 'switched-off', providerId: 'opencode' }),
+    (error) => error.code === 'model_not_free',
+  );
+  await backend.createBot({ name: 'scribe' });
+  assert.doesNotMatch([...fsFiles.values()][0], /switched-off/);
 });
