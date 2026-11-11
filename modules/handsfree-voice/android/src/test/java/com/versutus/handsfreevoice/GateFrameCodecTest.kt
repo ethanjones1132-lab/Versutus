@@ -89,4 +89,9 @@ class GateFrameCodecTest {
     assertEquals(1234L, encoded.getLong("atMs"))
     assertEquals(GateFrame.Phone.Played(7, 1234), GateFrameCodec.parsePhone(encoded.toString()))
   }
+
+  @Test fun playedDurationUsesElapsedTimeAndNeverGoesNegative() {
+    assertEquals(75L, elapsedSincePcmReceived(8_000L, 8_075L))
+    assertEquals(0L, elapsedSincePcmReceived(8_075L, 8_000L))
+  }
 }

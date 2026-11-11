@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { AUDIT_FIELDS, buildAuditLine } from '../core/voice/audit.mjs';
-import { latencyMedian, latencyPercentile } from '../core/voice/media-socket.mjs';
+import { latencyMedian, latencyPercentile, playedLatencyMs } from '../core/voice/media-socket.mjs';
 
 const LATENCY_FIELDS = [
   'p50EosToCommitMs', 'p90EosToCommitMs',
@@ -26,4 +26,12 @@ test('call latency p50 and p90 use nearest-rank samples and null for no turns', 
   assert.equal(latencyMedian(samples), 55);
   assert.equal(latencyPercentile(samples, 0.9), 90);
   assert.equal(latencyPercentile([], 0.9), null);
+});
+
+test('played latency combines Gate elapsed time with phone monotonic duration, not wall clocks', () => {
+  // The phone wall clock may be hours ahead or behind; only its elapsed duration
+  // since receiving the first PCM is part of the calculation.
+  assert.equal(playedLatencyMs(10_000, 10_450, 75), 525);
+  assert.equal(playedLatencyMs(10_000, 9_900, 75), 75);
+  assert.equal(playedLatencyMs(10_000, 10_450, Number.NaN), null);
 });

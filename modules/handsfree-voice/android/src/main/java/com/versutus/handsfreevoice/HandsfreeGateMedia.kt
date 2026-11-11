@@ -6,6 +6,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.os.SystemClock
 import android.util.Log
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
@@ -81,6 +82,8 @@ class HandsfreeGateMedia(
   private val playbackLock = Any()
   @Volatile private var currentGen = 0L
   private val playedGens = mutableSetOf<Long>()
+  private var firstPcmReceivedAtMs: Long? = null
+  private var firstPcmReceivedGen: Long? = null
 
   @Synchronized fun start(context: Context, url: String, token: String, voiceSessionId: String) {
     stop()
@@ -90,6 +93,8 @@ class HandsfreeGateMedia(
     sawEnded = false
     currentGen = 0L
     playedGens.clear()
+    firstPcmReceivedAtMs = null
+    firstPcmReceivedGen = null
     buffer.flush()
 
     val streamUrl = buildStreamUrl(url, voiceSessionId)
@@ -183,6 +188,12 @@ class HandsfreeGateMedia(
 
     override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
       if (webSocket != socket) return
+      synchronized(playbackLock) {
+        if (firstPcmReceivedGen != currentGen) {
+          firstPcmReceivedGen = currentGen
+          firstPcmReceivedAtMs = SystemClock.elapsedRealtime()
+        }
+      }
       buffer.push(currentGen, bytes.toByteArray())
     }
 
@@ -372,7 +383,16 @@ class HandsfreeGateMedia(
           if (written > 0) {
             val firstForGen = synchronized(playedGens) { playedGens.add(gen) }
             if (firstForGen) {
-              socket?.send(GateFrameCodec.encodePhone(GateFrame.Phone.Played(gen, System.currentTimeMillis())))
+              // `atMs` is a duration from receipt of this generation's first PCM,
+              // not a phone wall-clock timestamp: the Gate can safely add it to
+              // its own commit-to-send interval regardless of device clock skew.
+              val receivedAtMs = synchronized(playbackLock) {
+                if (firstPcmReceivedGen == gen) firstPcmReceivedAtMs else null
+              }
+              if (receivedAtMs != null) {
+                val elapsedMs = elapsedSincePcmReceived(receivedAtMs, SystemClock.elapsedRealtime())
+                socket?.send(GateFrameCodec.encodePhone(GateFrame.Phone.Played(gen, elapsedMs)))
+              }
             }
           }
         },
@@ -389,6 +409,10 @@ class HandsfreeGateMedia(
     return "$normalized${separator}voiceSessionId=$voiceSessionId"
   }
 }
+
+/** A monotonic duration for `played.atMs`; wall-clock time is not comparable to Gate time. */
+internal fun elapsedSincePcmReceived(receivedAtMs: Long, playedAtMs: Long): Long =
+  (playedAtMs - receivedAtMs).coerceAtLeast(0L)
 
 /** Pure gate around AudioRecord reads, so mute behavior is JVM-testable. */
 internal class GateCaptureState {

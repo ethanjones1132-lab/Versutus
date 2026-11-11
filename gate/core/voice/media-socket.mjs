@@ -125,6 +125,12 @@ export function latencyPercentile(values, fraction) {
   return sorted[Math.ceil(sorted.length * fraction) - 1];
 }
 
+/** Combine Gate-clock time with a phone-reported duration, never its wall clock. */
+export function playedLatencyMs(committedAt, firstPcmSentAt, phoneElapsedMs) {
+  if (![committedAt, firstPcmSentAt, phoneElapsedMs].every(Number.isFinite)) return null;
+  return Math.max(0, firstPcmSentAt - committedAt) + Math.max(0, phoneElapsedMs);
+}
+
 export function attachVoiceMediaSocket({
   server,
   deviceTokens,
@@ -262,6 +268,7 @@ export function attachVoiceMediaSocket({
     let turnCommittedAt = 0;
     let turnFirstReplyAt = 0;
     let turnFirstAudioAt = 0;
+    let turnSentencePcmMs = null;
     let latestFinalTiming = null;
     let turnSentenceAt = 0;
     let turnGen = null;
@@ -509,12 +516,14 @@ export function attachVoiceMediaSocket({
           turnFirstReplyAt = 0;
           turnFirstAudioAt = 0;
           turnSentenceAt = 0;
+          turnSentencePcmMs = null;
           turnGen = null;
           turnPlayed = false;
           if (latestFinalTiming) {
             trace.eosCommitLatencies.push(Math.max(0, turnCommittedAt - latestFinalTiming.eosMs));
             trace.decodeDurations.push(latestFinalTiming.decodeMs);
           }
+          latestFinalTiming = null;
           log(
             `voice.utterance commit session=${session.voiceSessionId}`
             + ` chars=${effect.chars} finals=${effect.finals}`,
@@ -614,7 +623,8 @@ export function attachVoiceMediaSocket({
           trace.audioLatencies.push(turnFirstAudioAt - turnCommittedAt);
         }
         if (turnSentenceAt) {
-          trace.sentencePcmLatencies.push(Math.max(0, now() - turnSentenceAt));
+          turnSentencePcmMs = Math.max(0, now() - turnSentenceAt);
+          trace.sentencePcmLatencies.push(turnSentencePcmMs);
           turnSentenceAt = 0;
         }
       } else if (['bargein', 'userSpeechStart', 'skip', 'end', 'error', 'mute', 'unmute'].includes(event.type)) {
@@ -816,14 +826,19 @@ export function attachVoiceMediaSocket({
         } else if (control.t === 'played') {
           if (!turnPlayed && control.gen === turnGen && turnCommittedAt) {
             turnPlayed = true;
-            trace.playedLatencies.push(Math.max(0, control.atMs - turnCommittedAt));
+            trace.playedLatencies.push(playedLatencyMs(
+              turnCommittedAt,
+              turnFirstAudioAt,
+              control.atMs,
+            ));
             log(
               `voice.turn latency session=${session.voiceSessionId}`
               + ` eosToCommitMs=${latestFinalTiming ? Math.max(0, turnCommittedAt - latestFinalTiming.eosMs) : 'null'}`
               + ` decodeMs=${latestFinalTiming?.decodeMs ?? 'null'}`
               + ` commitToFirstReplyMs=${turnFirstReplyAt ? turnFirstReplyAt - turnCommittedAt : 'null'}`
-              + ` sentenceToPcmMs=${trace.sentencePcmLatencies.at(-1) ?? 'null'}`
-              + ` playedMs=${Math.max(0, control.atMs - turnCommittedAt)}`,
+              + ` commitToFirstPcmSentMs=${turnFirstAudioAt ? turnFirstAudioAt - turnCommittedAt : 'null'}`
+              + ` sentenceToPcmMs=${turnSentencePcmMs ?? 'null'}`
+              + ` playedMs=${playedLatencyMs(turnCommittedAt, turnFirstAudioAt, control.atMs)}`,
             );
           }
         }
