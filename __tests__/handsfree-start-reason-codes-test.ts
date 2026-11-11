@@ -230,7 +230,8 @@ describe('the structural start failures name themselves too', () => {
   });
 
   test('an unexpected throw is reported as unexpected, not as an unavailable service', () => {
-    const at = screen.indexOf('const handleStartCall = useCallback(');
+    // The start body moved into the shared startCallWith (slice 7: consent can skip the sheet).
+    const at = screen.indexOf('const startCallWith = useCallback(');
     const handler = screen.slice(at, screen.indexOf('}, [activeGateway, botVoice', at));
     const catchBlock = handler.slice(handler.indexOf('} catch'));
     expect(catchBlock).toContain("handsfreeStartResultCopy('start-failed-unexpectedly'");

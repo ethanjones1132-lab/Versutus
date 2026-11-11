@@ -222,7 +222,7 @@ describe('the call sheet can always be dismissed', () => {
   });
 
   test('a start that throws still clears busy', () => {
-    const at = screen.indexOf('const handleStartCall = useCallback(');
+    const at = screen.indexOf('const startCallWith = useCallback(');
     const handler = screen.slice(at, screen.indexOf('}, [activeGateway, botVoice', at));
     expect(handler).toMatch(/try\s*\{[\s\S]*await handsfree\.start\(/);
     expect(handler).toMatch(/finally\s*\{\s*setCallBusy\(false\);\s*\}/);
@@ -258,7 +258,7 @@ describe('an ended or refused call explains itself', () => {
   test('a throw the start path did not name is reported as unexpected, not as an unavailable service', () => {
     // The sheet used to collapse every unexpected throw into the retired
     // generic code, which blamed the call service for a bug in Versutus.
-    const at = screen.indexOf('const handleStartCall = useCallback(');
+    const at = screen.indexOf('const startCallWith = useCallback(');
     const handler = screen.slice(at, screen.indexOf('}, [activeGateway, botVoice', at));
     const catchBlock = handler.slice(handler.indexOf('} catch'));
     expect(catchBlock).toContain("handsfreeStartResultCopy('start-failed-unexpectedly'");
@@ -300,7 +300,7 @@ describe('the sheet names the engine before consent', () => {
     expect(sheet).toContain('engineWarning');
     expect(sheet).toContain('startDisabled');
     expect(sheet).toContain('disabled={Boolean(busy || startDisabled)}');
-    expect(screen).toContain('engineWarning={callEngine?.reason}');
+    expect(screen).toContain('engineWarning={callCallsOff ? undefined : callEngine?.reason}');
     expect(screen).toContain('preferredEngineUnready');
     expect(screen).toContain("handsfreeStartResultCopy('no-session')");
   });
@@ -313,7 +313,7 @@ describe('the sheet names the engine before consent', () => {
     expect(screen).toContain('chooseVoiceEngine(');
     expect(screen).toContain("gatewayRequest<VoiceEngineCapabilities>('voice.capabilities'");
     expect(screen).toContain('voiceEngineDisclosure(callEngine.engine)');
-    expect(screen).toContain("const transport = callEngine && callEngine.engine !== 'phone' ? 'gate' : 'phone'");
+    expect(screen).toContain("const transport = choice && choice.engine !== 'phone' ? 'gate' : 'phone'");
     // iOS has no Gate media terminal. The chooser has to see the platform or
     // every auto/local call on iOS is transport:gate and dies at startGateMedia.
     expect(screen).toMatch(/chooseVoiceEngine\(callPreference,\s*callCapabilities,\s*Platform\.OS\)/);

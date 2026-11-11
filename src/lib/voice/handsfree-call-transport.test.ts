@@ -160,7 +160,7 @@ describe('the Call offer and the start path share one transport decision', () =>
   });
 
   test('the start path uses the provider’s transport instead of re-deciding it', () => {
-    const start = between(screen, 'const handleStartCall = useCallback(', '}, [activeGateway');
+    const start = between(screen, 'const startCallWith = useCallback(', '}, [activeGateway');
     expect(start).toContain('const decidedTransport = handsfree.transport ?? transport');
     expect(start).toContain('transport: decidedTransport');
   });
@@ -218,7 +218,10 @@ function TransportProbe() {
 }
 
 test('a same-Gateway reconnect waits for its own capabilities before choosing phone', async () => {
-  const oldCapabilities = { enabled: false, engines: { local: { state: 'disabled' }, codex: { state: 'disabled' } } };
+  // Both PC engines unready, so the answer resolves to the phone — the one
+  // transport the stale/new pair can be told apart by. `enabled:false` is a
+  // different thing now (a no-call state), not a phone fallback.
+  const oldCapabilities = { enabled: true, engines: { local: { state: 'not-installed' }, codex: { state: 'disabled' } } };
   let resolveNew!: (value: typeof oldCapabilities) => void;
   const newReply = new Promise<typeof oldCapabilities>((resolve) => { resolveNew = resolve; });
   mockConnection.gatewayRequest.mockResolvedValueOnce(oldCapabilities).mockReturnValueOnce(newReply);

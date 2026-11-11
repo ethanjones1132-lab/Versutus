@@ -1,6 +1,11 @@
 import {
   evaluateHandsfreeStart,
+  grantHandsfreeConsent,
+  handsfreeCallsOffered,
+  handsfreeConsentKey,
+  handsfreeConsentStoreFromUnknown,
   handsfreeDeviceCanOfferCall,
+  hasHandsfreeConsent,
   type HandsfreeStartEvaluation,
 } from '@/lib/voice/handsfree-start-reason';
 
@@ -92,5 +97,49 @@ describe('hands-free Call offer policy', () => {
         }),
       ).toEqual({ kind: 'stop', result: 'refused' });
     }
+  });
+
+  test('a Gate with voice turned off offers no call on any engine', () => {
+    // S7/D7: the kill switch is not a phone-engine fallback. The offer policy
+    // answers before a transport is chosen, so there is nothing to offer.
+    expect(handsfreeCallsOffered({ enabled: false })).toBe(false);
+    expect(handsfreeCallsOffered({ enabled: true })).toBe(true);
+    expect(handsfreeCallsOffered(null)).toBe(true);
+    expect(handsfreeCallsOffered({})).toBe(true);
+
+    expect(handsfreeDeviceCanOfferCall(null, true, 'gate', false)).toBe(false);
+    expect(handsfreeDeviceCanOfferCall(readySpeech, true, 'phone', false)).toBe(false);
+    // An unknown answer is not a switch-off: the switch has to be said.
+    expect(handsfreeDeviceCanOfferCall(null, true, 'gate', undefined)).toBe(true);
+  });
+
+  test('consent is remembered per engine and transport', () => {
+    // D5: first call per engine AND transport shows the disclosure; a repeat
+    // call on the same pair is one tap. A new engine, or the same engine on the
+    // other transport, is a new choice.
+    let store = handsfreeConsentStoreFromUnknown(null);
+    expect(hasHandsfreeConsent(store, handsfreeConsentKey('local', 'gate'))).toBe(false);
+
+    store = grantHandsfreeConsent(store, handsfreeConsentKey('local', 'gate'));
+    expect(hasHandsfreeConsent(store, handsfreeConsentKey('local', 'gate'))).toBe(true);
+    expect(hasHandsfreeConsent(store, handsfreeConsentKey('codex', 'gate'))).toBe(false);
+    expect(hasHandsfreeConsent(store, handsfreeConsentKey('local', 'phone'))).toBe(false);
+    expect(hasHandsfreeConsent(store, handsfreeConsentKey('phone', 'phone'))).toBe(false);
+
+    store = grantHandsfreeConsent(store, handsfreeConsentKey('phone', 'phone'));
+    expect(hasHandsfreeConsent(store, handsfreeConsentKey('local', 'gate'))).toBe(true);
+    expect(hasHandsfreeConsent(store, handsfreeConsentKey('phone', 'phone'))).toBe(true);
+  });
+
+  test('only an explicit true counts as consent, so a bad blob asks again', () => {
+    const store = handsfreeConsentStoreFromUnknown({
+      'gate:local': 'yes',
+      'gate:codex': 1,
+      'gate:phone': {},
+      'phone:phone': true,
+    });
+    expect(store).toEqual({ 'phone:phone': true });
+    expect(handsfreeConsentStoreFromUnknown('not a record')).toEqual({});
+    expect(handsfreeConsentStoreFromUnknown(['gate:local'] as unknown)).toEqual({});
   });
 });

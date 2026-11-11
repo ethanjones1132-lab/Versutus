@@ -177,11 +177,23 @@ import {
 import { pushDeviceParams } from '@/lib/notifications/push-registration';
 import { handsfreeEndReasonCopy, handsfreeStartResultCopy } from '@/lib/voice/handsfree-call-copy';
 import { handsfreeStartBlockerCopy } from '@/lib/voice/handsfree-start-policy';
-import { logHandsfreeStart } from '@/lib/voice/handsfree-start-reason';
+import {
+  grantHandsfreeConsent,
+  HANDSFREE_CONSENT_STORAGE_KEY,
+  handsfreeConsentKey,
+  handsfreeConsentStoreFromUnknown,
+  handsfreeCallsOffered,
+  hasHandsfreeConsent,
+  logHandsfreeStart,
+  type HandsfreeCallConsentStore,
+  type HandsfreeStartTransport,
+} from '@/lib/voice/handsfree-start-reason';
+import { keyValueStorage } from '@/lib/storage/key-value';
 import { loadAppSettings } from '@/lib/settings/app-settings';
 import {
   chooseVoiceEngine,
   type VoiceEngineCapabilities,
+  type VoiceEngineChoice,
   type VoiceEnginePreference,
 } from '@/lib/voice/voice-engine-choice';
 import { VOICE_ENGINE_ROWS, voiceEngineDisclosure } from '@/lib/voice/voice-engine-copy';
@@ -240,6 +252,38 @@ function turnCarriedAttachments(outcome: SendChatInputOutcome): boolean {
  */
 function turnCarriedWords(outcome: SendChatInputOutcome): boolean {
   return outcome !== 'offline' && outcome !== 'busy';
+}
+
+/**
+ * The disclosure consent this device already holds. Read-through: a refused
+ * read is no consent, so the sheet is shown — the safe side of an uncertain
+ * answer is always asking again.
+ */
+async function readHandsfreeConsent(): Promise<HandsfreeCallConsentStore> {
+  try {
+    const raw = await keyValueStorage.getItem(HANDSFREE_CONSENT_STORAGE_KEY);
+    return raw ? handsfreeConsentStoreFromUnknown(JSON.parse(raw) as unknown) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Remember that this engine+transport pair has had its disclosure. Best-effort:
+ * a refused write only means the sheet is shown again next time, which is still
+ * true, and must never fail the call that just started.
+ */
+async function rememberHandsfreeConsent(
+  engine: string,
+  transport: HandsfreeStartTransport,
+): Promise<void> {
+  try {
+    const stored = await readHandsfreeConsent();
+    const next = grantHandsfreeConsent(stored, handsfreeConsentKey(engine, transport));
+    await keyValueStorage.setItem(HANDSFREE_CONSENT_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // best-effort: asking again is the honest fallback
+  }
 }
 
 /** Said beside the composer when a send with attachments never left the phone. */
@@ -1636,6 +1680,80 @@ export function ChatScreen() {
     return sessionLabel ?? 'Versutus chat';
   }, [rosterRows, selectedBotId, sessionLabel, surface]);
 
+  // One start path, shared by the sheet's Start and by a call this device has
+  // already consented to. `choice` is the engine resolved for THIS call; null
+  // means the capabilities read did not answer, which keeps the long-standing
+  // fallback to the phone rather than guessing an engine.
+  const startCallWith = useCallback(async (
+    choice: VoiceEngineChoice | null,
+    preference: VoiceEnginePreference,
+  ): Promise<boolean> => {
+    if (!activeGateway || !draftThread) return false;
+    if (surface.kind !== 'configurable' && surface.kind !== 'bot') return false;
+    if (choice?.engine === 'none') {
+      // S7/D7: a disabled Gate is a no-call state. Refuse here even if a caller
+      // reached Start anyway — the phone engine is never substituted.
+      setCallError(choice.reason ?? 'Calls are turned off on this PC.');
+      return false;
+    }
+    if (!draftThread.sessionId) {
+      setCallError(handsfreeStartResultCopy('no-session'));
+      return false;
+    }
+    if (handsfree.startBlocker) {
+      setCallError(handsfreeStartBlockerCopy(handsfree.startBlocker));
+      return false;
+    }
+    setCallBusy(true);
+    setCallError(undefined);
+    // The provider's decision is authoritative; this local expression is only
+    // a fallback for a context that does not carry it.
+    const transport = choice && choice.engine !== 'phone' ? 'gate' : 'phone';
+    const decidedTransport = handsfree.transport ?? transport;
+    try {
+      const attempt = await handsfree.start({
+        gatewayId: activeGateway.id,
+        sessionId: draftThread.sessionId,
+        surfaceKind: surface.kind,
+        botId: surface.kind === 'bot' ? surface.botId : undefined,
+        label: callTargetLabel,
+        voice: botVoice ?? {},
+        transport: decidedTransport,
+        voiceEngine: preference,
+      });
+      if (attempt.result === 'started') {
+        // Consent belongs to the engine AND transport that actually opened. An
+        // unresolved choice records nothing, so the next call asks again.
+        if (choice) {
+          void rememberHandsfreeConsent(choice.engine, decidedTransport);
+        }
+        setCallSheetVisible(false);
+        return true;
+      }
+      setCallError(
+        handsfreeStartResultCopy(attempt.result, {
+          transport,
+          engine: choice?.engine ?? preference,
+          detail: attempt.detail,
+        }),
+      );
+      return false;
+    } catch (error) {
+      // The provider names every failure it knows; a throw it did not name is
+      // this screen's to report, and it must not disappear from the phone log.
+      logHandsfreeStart({
+        result: 'start-failed-unexpectedly',
+        transport,
+        engine: choice?.engine ?? preference,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      setCallError(handsfreeStartResultCopy('start-failed-unexpectedly', { transport, engine: choice?.engine ?? preference }));
+      return false;
+    } finally {
+      setCallBusy(false);
+    }
+  }, [activeGateway, botVoice, callTargetLabel, draftThread, handsfree, surface]);
+
   // Which open of the sheet a `voice.capabilities` answer belongs to. Opening the
   // sheet twice inside one request's latency left both reads live: the slower
   // first one then cleared the loading flag and installed ITS capabilities while
@@ -1645,12 +1763,18 @@ export function ChatScreen() {
   // saying so. The same sequence guard the provider's own session and model
   // reads use (`sessionReadSeqRef` / `modelReadSeqRef`) answers it.
   const callCapsReadSeqRef = useRef(0);
-  const openCallSheet = useCallback(() => {
+  /**
+   * Offer a call: show the disclosure, or — once this device has consented to
+   * this engine AND transport — start on the same tap (D5). The sheet only
+   * opens after the answer arrives, because that answer is what says whether
+   * there is a consent to honour or a kill switch to report. `requireSheet`
+   * serves a `versutus://call` link: a link is never a tap, so it always asks.
+   */
+  const openCallSheet = useCallback((options?: { requireSheet?: boolean }) => {
     const seq = ++callCapsReadSeqRef.current;
     setCallError(
       draftThread?.sessionId ? undefined : handsfreeStartResultCopy('no-session'),
     );
-    setCallSheetVisible(true);
     setCallCapsLoading(true);
     // The engine is chosen from the stored preference and the Gate's live
     // readiness, so the sheet can name where the audio will go before consent.
@@ -1658,21 +1782,42 @@ export function ChatScreen() {
       const stored = await loadAppSettings();
       if (seq !== callCapsReadSeqRef.current) return;
       setCallPreference(stored.voiceEngine);
+      let capabilities: VoiceEngineCapabilities | null = null;
       try {
-        const capabilities =
-          await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', await pushDeviceParams());
-        if (seq !== callCapsReadSeqRef.current) return;
-        setCallCapabilities(capabilities);
+        capabilities = await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', await pushDeviceParams());
       } catch {
         // A Gate that predates voice leaves the phone engine as the only choice.
-        if (seq !== callCapsReadSeqRef.current) return;
-        setCallCapabilities(null);
-      } finally {
-        if (seq !== callCapsReadSeqRef.current) return;
-        setCallCapsLoading(false);
+        capabilities = null;
       }
+      if (seq !== callCapsReadSeqRef.current) return;
+      setCallCapabilities(capabilities);
+      setCallCapsLoading(false);
+      if (!capabilities) {
+        setCallSheetVisible(true);
+        return;
+      }
+      const choice = chooseVoiceEngine(stored.voiceEngine, capabilities, Platform.OS);
+      if (!options?.requireSheet && choice.engine !== 'none') {
+        const transport: HandsfreeStartTransport = choice.engine === 'phone' ? 'phone' : 'gate';
+        const consent = await readHandsfreeConsent();
+        if (seq !== callCapsReadSeqRef.current) return;
+        if (hasHandsfreeConsent(consent, handsfreeConsentKey(choice.engine, transport))) {
+          setCallSheetVisible(false);
+          // A one-tap start that fails still owes the operator the sheet and the
+          // reason; the start path has already put the reason in `callError`.
+          if (!(await startCallWith(choice, stored.voiceEngine))) {
+            if (seq === callCapsReadSeqRef.current) setCallSheetVisible(true);
+          }
+          return;
+        }
+      }
+      setCallSheetVisible(true);
     })();
-  }, [draftThread?.sessionId, gatewayRequest]);
+  }, [draftThread?.sessionId, gatewayRequest, startCallWith]);
+  const openCallSheetFromLink = useCallback(
+    () => openCallSheet({ requireSheet: true }),
+    [openCallSheet],
+  );
 
   // A `versutus://call` link lands here: the router opened the Bot Chat and
   // passed `call=1`. A link never starts capture on its own — the confirm
@@ -1692,10 +1837,10 @@ export function ChatScreen() {
     // to open the sheet on the next pass.
     const timer = setTimeout(() => {
       callEntryHandledRef.current = callEntry;
-      openCallSheet();
+      openCallSheetFromLink();
     }, 0);
     return () => clearTimeout(timer);
-  }, [isFocused, callEntry, draftThread, openCallSheet]);
+  }, [isFocused, callEntry, draftThread, openCallSheetFromLink]);
 
   const handleChangeEngine = useCallback(() => {
     setCallPreference((current) => {
@@ -1708,14 +1853,21 @@ export function ChatScreen() {
     [callCapabilities, callPreference],
   );
   const callEngineLabel = useMemo(() => {
-    if (!callEngine) return undefined;
+    if (!callEngine || callEngine.engine === 'none') return undefined;
     return VOICE_ENGINE_ROWS.find((row) => row.id === callEngine.engine)?.label ?? callEngine.engine;
   }, [callEngine]);
+  const callEngineDisclosure = useMemo(() => {
+    if (!callEngine || callEngine.engine === 'none') return undefined;
+    return voiceEngineDisclosure(callEngine.engine);
+  }, [callEngine]);
+  // S7/D7: the Gate switch is a no-call state for every engine, so the sheet
+  // says why and Start is never offered on a phone call in its place.
+  const callCallsOff = callEngine?.engine === 'none' || !handsfreeCallsOffered(callCapabilities);
   const preferredEngineUnready =
     (callPreference === 'local' || callPreference === 'codex') &&
     callEngine?.fellBackFrom === callPreference;
   const callStartBlocked =
-    callCapsLoading || !draftThread?.sessionId || preferredEngineUnready;
+    callCapsLoading || !draftThread?.sessionId || preferredEngineUnready || callCallsOff;
   const handleCancelCall = useCallback(() => {
     // Dismissing the sheet ends the open that asked: a read still in flight has
     // nobody to answer for and must not clear the next sheet's loading flag.
@@ -1724,58 +1876,8 @@ export function ChatScreen() {
     setCallError(undefined);
   }, []);
   const handleStartCall = useCallback(async () => {
-    if (!activeGateway || !draftThread) return;
-    if (surface.kind !== 'configurable' && surface.kind !== 'bot') return;
-    if (!draftThread.sessionId) {
-      setCallError(handsfreeStartResultCopy('no-session'));
-      return;
-    }
-    if (handsfree.startBlocker) {
-      setCallError(handsfreeStartBlockerCopy(handsfree.startBlocker));
-      return;
-    }
-    setCallBusy(true);
-    setCallError(undefined);
-    // The provider's decision is authoritative; this local expression is only
-    // a fallback for a context that does not carry it.
-    const transport = callEngine && callEngine.engine !== 'phone' ? 'gate' : 'phone';
-    const decidedTransport = handsfree.transport ?? transport;
-    try {
-      const attempt = await handsfree.start({
-        gatewayId: activeGateway.id,
-        sessionId: draftThread.sessionId,
-        surfaceKind: surface.kind,
-        botId: surface.kind === 'bot' ? surface.botId : undefined,
-        label: callTargetLabel,
-        voice: botVoice ?? {},
-        transport: decidedTransport,
-        voiceEngine: callPreference,
-      });
-      if (attempt.result === 'started') {
-        setCallSheetVisible(false);
-        return;
-      }
-      setCallError(
-        handsfreeStartResultCopy(attempt.result, {
-          transport,
-          engine: callEngine?.engine ?? callPreference,
-          detail: attempt.detail,
-        }),
-      );
-    } catch (error) {
-      // The provider names every failure it knows; a throw it did not name is
-      // this screen's to report, and it must not disappear from the phone log.
-      logHandsfreeStart({
-        result: 'start-failed-unexpectedly',
-        transport,
-        engine: callEngine?.engine ?? callPreference,
-        detail: error instanceof Error ? error.message : String(error),
-      });
-      setCallError(handsfreeStartResultCopy('start-failed-unexpectedly', { transport, engine: callEngine?.engine ?? callPreference }));
-    } finally {
-      setCallBusy(false);
-    }
-  }, [activeGateway, botVoice, callEngine, callPreference, callTargetLabel, draftThread, handsfree, surface]);
+    await startCallWith(callEngine, callPreference);
+  }, [callEngine, callPreference, startCallWith]);
 
   const { callsEnded: handsfreeCallsEnded, lastEndReason: handsfreeLastEndReason } = handsfree;
   // A call that ended without the operator ending it reopens the sheet with the
@@ -3330,10 +3432,10 @@ export function ChatScreen() {
         label={callTargetLabel}
         busy={callBusy || callCapsLoading}
         startDisabled={callStartBlocked}
-        error={callError}
+        error={callError ?? (callCallsOff ? callEngine?.reason : undefined)}
         engineLabel={callEngineLabel}
-        engineWarning={callEngine?.reason}
-        disclosure={callEngine ? voiceEngineDisclosure(callEngine.engine) : undefined}
+        engineWarning={callCallsOff ? undefined : callEngine?.reason}
+        disclosure={callEngineDisclosure}
         onChangeEngine={callEngine ? handleChangeEngine : undefined}
         onCancel={handleCancelCall}
         onStart={() => void handleStartCall()}

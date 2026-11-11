@@ -4,6 +4,8 @@
 // test rather than a device session: it names the engine actually chosen, and
 // whenever that differs from the request it names the fallback and the reason
 // the requested engine gave. `auto` is the Gate's own order, `local` first.
+// A Gate whose voice switch is off chooses no engine at all: calls are off on
+// every engine, and the phone is never the answer to that (S7/D7).
 //
 // M1 removed `codex` from shipping (it cannot run on the ChatGPT login), but it
 // stays a real state here so a future CLI that accepts the login is a data
@@ -13,6 +15,13 @@ export type VoiceEnginePreference = 'auto' | 'local' | 'codex' | 'phone';
 
 /** The engines that can actually run, as opposed to the preference. */
 export type RunningVoiceEngine = 'local' | 'codex' | 'phone';
+
+/**
+ * What a call will run on. `none` is the Gate's voice switch being off: calls
+ * are off on every engine, so there is no engine to name. It exists so a
+ * disabled Gate can never be read as "use the phone instead" (S7/D7).
+ */
+export type ResolvedVoiceEngine = RunningVoiceEngine | 'none';
 
 /** What the Gate says about one engine right now. */
 export type VoiceEngineRuntimeState =
@@ -43,7 +52,7 @@ export type VoiceEngineCapabilities = {
 };
 
 export type VoiceEngineChoice = {
-  engine: RunningVoiceEngine;
+  engine: ResolvedVoiceEngine;
   /** Set when the chosen engine is not the one requested. */
   fellBackFrom?: 'local' | 'codex';
   /** Why the requested engine could not be used. */
@@ -71,18 +80,23 @@ export function chooseVoiceEngine(
   capabilities: VoiceEngineCapabilities,
   platform?: string,
 ): VoiceEngineChoice {
+  // S7/D7: the Gate's one switch turns calls off for every engine, and it is
+  // checked before the preference and before any fallback. A phone call in its
+  // place is exactly the silent fallback the switch exists to stop — even when
+  // the operator's stored preference names the phone.
+  if (capabilities.enabled === false) {
+    const asked = preference === 'local' || preference === 'codex' ? preference : undefined;
+    return {
+      engine: 'none',
+      ...(asked ? { fellBackFrom: asked } : {}),
+      reason: KILL_SWITCH_REASON,
+    };
+  }
+
   if (preference === 'phone') return { engine: 'phone' };
 
   const requested = preference === 'auto' ? undefined : preference;
   const requestedStatus = requested ? statusOf(capabilities, requested) : undefined;
-
-  if (!capabilities.enabled) {
-    return {
-      engine: 'phone',
-      ...(requested ? { fellBackFrom: requested } : {}),
-      reason: KILL_SWITCH_REASON,
-    };
-  }
 
   // The Gate media terminal has no iOS implementation. A ready `local` would
   // otherwise win on auto and every call would die at media-start-failed.

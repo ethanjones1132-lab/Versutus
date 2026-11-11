@@ -19,14 +19,21 @@ describe('chooseVoiceEngine', () => {
     expect(chooseVoiceEngine('phone', caps(localReady, codexReady))).toEqual({ engine: 'phone' });
   });
 
-  test('the kill switch leaves only the phone, and names why', () => {
+  test('the kill switch is a no-call state, never a fallback to the phone', () => {
+    // S7/D7: `voice.json {enabled:false}` turns calls off for EVERY engine. It
+    // used to select the phone engine, so the switch turned nothing off.
     expect(chooseVoiceEngine('local', caps(localReady, codexReady, false))).toEqual({
-      engine: 'phone',
+      engine: 'none',
       fellBackFrom: 'local',
       reason: 'Gate voice is turned off.',
     });
     expect(chooseVoiceEngine('auto', caps(localReady, codexReady, false))).toEqual({
-      engine: 'phone',
+      engine: 'none',
+      reason: 'Gate voice is turned off.',
+    });
+    // Even an explicit phone preference is not a way round the switch.
+    expect(chooseVoiceEngine('phone', caps(localReady, codexReady, false))).toEqual({
+      engine: 'none',
       reason: 'Gate voice is turned off.',
     });
   });

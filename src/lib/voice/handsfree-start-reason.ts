@@ -25,6 +25,18 @@ export function handsfreeTransportForCall(
   return 'gate';
 }
 
+/**
+ * Whether the Gate's one voice switch permits an offer at all (S7/D7). A
+ * disabled Gate means no call on any engine from that gateway — the phone
+ * engine is not a fallback the switch says nothing about. Only an explicit
+ * `false` switches calls off; an absent answer is not guessed into one.
+ */
+export function handsfreeCallsOffered(
+  capabilities: { enabled?: boolean } | null | undefined,
+): boolean {
+  return capabilities?.enabled !== false;
+}
+
 /** What `getAvailability` reports, without taking a dependency on the native module. */
 export type HandsfreeStartAvailability = {
   recognition: boolean;
@@ -136,17 +148,22 @@ export function handsfreeDeviceCanOfferCall(
   availability: HandsfreeStartAvailability | null,
   moduleLoaded: boolean,
   transport: HandsfreeStartTransport,
+  callsEnabled?: boolean,
 ): boolean;
 export function handsfreeDeviceCanOfferCall(
   availability: HandsfreeStartAvailability | null,
   moduleLoaded?: boolean,
   transport?: HandsfreeStartTransport,
+  callsEnabled?: boolean,
 ): boolean {
   // Keep the original probe-only call shape for existing consumers: a
   // successful availability response proves the module answered. The provider
   // uses the explicit form below so an unreadable phone probe can still offer
   // a Gate call without mistaking a missing native module for readiness.
   if (moduleLoaded === undefined || transport === undefined) return availability !== null;
+  // The Gate switch is the first thing it says, and it outranks both device
+  // support and the transport: "off" means there is no call to offer (S7).
+  if (callsEnabled === false) return false;
   if (!moduleLoaded) return false;
   if (transport === 'gate') return true;
   return phoneSpeechBlocker(availability) === null;
@@ -280,6 +297,48 @@ export function parseVoiceSessionGrant(value: unknown): GateVoiceGrant | null {
   if (fellBackFrom) grant.fellBackFrom = fellBackFrom;
   if (reason) grant.reason = reason;
   return grant;
+}
+
+// ─── Call consent, remembered per engine and transport ───────────────────
+// D5: the disclosure is owed on the first call per engine AND transport, then
+// the Call control is one tap. The key names both, so moving from the PC to
+// the phone, or from local to Codex, asks again; a repeat call on the same
+// pair does not. Only an explicit `true` is consent, so a truncated, edited or
+// older blob can only ever ask again — never skip the disclosure.
+
+export const HANDSFREE_CONSENT_STORAGE_KEY = 'versutus:handsfree-call-consent';
+
+export type HandsfreeCallConsentStore = Record<string, true>;
+
+/** The one key a call's consent is stored under: who drove it, and on what. */
+export function handsfreeConsentKey(engine: string, transport: HandsfreeStartTransport): string {
+  return `${transport}:${engine}`;
+}
+
+/** Read a stored blob. Anything that is not the literal `true` is not consent. */
+export function handsfreeConsentStoreFromUnknown(value: unknown): HandsfreeCallConsentStore {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const store: HandsfreeCallConsentStore = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (entry === true) store[key] = true;
+  }
+  return store;
+}
+
+export function hasHandsfreeConsent(
+  store: HandsfreeCallConsentStore,
+  key: string,
+): boolean {
+  return store[key] === true;
+}
+
+/** Record one engine+transport pair, leaving every other pair's consent alone. */
+export function grantHandsfreeConsent(
+  store: HandsfreeCallConsentStore,
+  key: string,
+): HandsfreeCallConsentStore {
+  if (store[key] === true) return store;
+  return { ...store, [key]: true };
 }
 
 /** One line on the phone console so a failed start is greppable in logcat. */
