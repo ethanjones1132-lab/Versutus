@@ -35,9 +35,9 @@ const STAMP_UNREADABLE_LABEL = 'Could not check what changed while you were away
  * while the card is showing cannot move the window under the operator's eyes.
  */
 type VisitWindow =
-  | { state: 'never' }
-  | { state: 'ok'; lastSeenAt: number; visitStartedAt: number }
-  | { state: 'error' };
+  | { state: 'never'; gatewayId: string }
+  | { state: 'ok'; gatewayId: string; lastSeenAt: number; visitStartedAt: number }
+  | { state: 'error'; gatewayId: string };
 
 export function HomeBriefingCard() {
   const router = useRouter();
@@ -52,15 +52,15 @@ export function HomeBriefingCard() {
   const adopt = useCallback(
     (read: LastSeenRead, gatewayId: string) => {
       if (read.state === 'never') {
-        setVisit({ state: 'never' });
+        setVisit({ state: 'never', gatewayId });
         return;
       }
       if (read.state === 'error') {
-        setVisit({ state: 'error' });
+        setVisit({ state: 'error', gatewayId });
         return;
       }
       const visitStartedAt = Date.now();
-      setVisit({ state: 'ok', lastSeenAt: read.at, visitStartedAt });
+      setVisit({ state: 'ok', gatewayId, lastSeenAt: read.at, visitStartedAt });
       // Written only once THIS visit's digest has been read: the next window
       // opens at this arrival, so nothing already shown repeats, and a run
       // that finishes while the card is up belongs to the next one.
@@ -72,7 +72,7 @@ export function HomeBriefingCard() {
   const readWindow = useCallback(() => {
     const gatewayId = activeGatewayId;
     if (!gatewayId) {
-      setVisit({ state: 'never' });
+      setVisit(null);
       return;
     }
     const pending = reading.current;
@@ -118,7 +118,7 @@ export function HomeBriefingCard() {
   }, [readWindow]);
 
   const summary = useMemo(() => {
-    if (!visit || visit.state !== 'ok') return null;
+    if (!visit || visit.gatewayId !== activeGatewayId || visit.state !== 'ok') return null;
     const briefing = buildHomeBriefing(
       activityRunsForActiveGateway,
       visit.lastSeenAt,
@@ -128,12 +128,12 @@ export function HomeBriefingCard() {
       visit.visitStartedAt,
     );
     return briefing ? homeBriefingSummary(briefing) : null;
-  }, [activityRunsForActiveGateway, visit]);
+  }, [activeGatewayId, activityRunsForActiveGateway, visit]);
 
   // No stamp means no window; no news means no card. Either way, nothing —
   // except a stamp this device could not read, which is not the same fact and
   // gets a row that says so and retries on tap.
-  if (visit?.state === 'error') {
+  if (visit?.gatewayId === activeGatewayId && visit.state === 'error') {
     return (
       <PressableScale
         onPress={retry}

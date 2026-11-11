@@ -31,6 +31,7 @@ export function OnboardingScreen() {
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
+  const connectingRef = useRef(false);
   const [retrying, setRetrying] = useState(false);
   // The cycle in flight, in a ref rather than in the state above: two taps
   // inside one frame come off the same rendered closure, where `setRetrying`
@@ -69,12 +70,13 @@ export function OnboardingScreen() {
   const fieldState = !pcAddress.trim() ? 'default' : validation.valid ? 'valid' : 'invalid';
 
   async function handleContinue() {
-    if (!validation.valid) return;
+    if (!validation.valid || connectingRef.current) return;
+    connectingRef.current = true;
 
-    await haptics.medium();
-    setError(null);
-    setWorking(true);
     try {
+      await haptics.medium();
+      setError(null);
+      setWorking(true);
       const result = await setupFromPcAddress(pcAddress, token);
       if (result.kind === 'connected') {
         await haptics.success();
@@ -94,6 +96,7 @@ export function OnboardingScreen() {
       await haptics.error();
       setError(err instanceof Error ? err.message : String(err));
     } finally {
+      connectingRef.current = false;
       setWorking(false);
     }
   }

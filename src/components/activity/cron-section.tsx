@@ -63,6 +63,7 @@ export function CronSection({
   const [schedule, setSchedule] = useState(DEFAULT_ROUTINE_SCHEDULE);
   const [createError, setCreateError] = useState<string | undefined>();
   const [creating, setCreating] = useState(false);
+  const creatingRef = useRef(false);
   // The list can outgrow one screen: a title filter over what the section
   // already holds, client-side, applied before the owner grouping. No empty
   // query means no fold ran differently — the idle field is a no-op.
@@ -150,6 +151,8 @@ export function CronSection({
       schedule: schedule.trim() || DEFAULT_ROUTINE_SCHEDULE,
     };
     if (!submitted.title || !submitted.prompt || creating) return;
+    if (creatingRef.current) return;
+    creatingRef.current = true;
     setCreating(true);
     setCreateError(undefined);
     void Promise.resolve(botJobs.create(gatewayJobInput(submitted)))
@@ -175,7 +178,10 @@ export function CronSection({
         setSchedule(next.draft.schedule);
         setCreateError(next.error);
       })
-      .finally(() => setCreating(false));
+      .finally(() => {
+        creatingRef.current = false;
+        setCreating(false);
+      });
   };
 
   if (status !== 'connected' || !available) return null;
