@@ -42,12 +42,16 @@ test('resend-text-identical: resume still resends the exact previous user text',
 
 test('skills-passthrough-identical: resume keeps the same skills passthrough', () => {
   const block = resumeBlock(screenSrc());
-  expect(block).toContain('{ skills: skillsState.skills }');
+  // VS-071: the same skills travel beside the original attachments.
+  expect(block).toContain('skills: skillsState.skills,');
+  expect(block).toContain('attachments: previousUser.attachments');
 });
 
 test('no-previous-user-noop: resume stays a no-op with no previous user text', () => {
   const block = resumeBlock(screenSrc());
-  expect(block).toContain('if (previousUser?.text.trim())');
+  // VS-071: retryableUserMessage decides (text or attachments); nothing to resend is a no-op.
+  expect(block).toContain('retryableUserMessage(current.slice(0, idx))');
+  expect(block).toContain('if (previousUser) {');
 });
 
 test('handleSend-untouched: the sibling send path keeps its own pin and scroll', () => {
