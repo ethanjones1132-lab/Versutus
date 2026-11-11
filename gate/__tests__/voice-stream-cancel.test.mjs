@@ -61,7 +61,7 @@ async function callHarness(t) {
 }
 
 test('speech is chunked and a speech onset cancels without sending stale audio', async (t) => {
-  const { engine, received, ws } = await callHarness(t);
+  const { engine, received } = await callHarness(t);
   const firstAudioIndex = received.findIndex(Buffer.isBuffer);
   const startIndex = received.findIndex((frame) => frame?.t === 'speech' && frame.state === 'start');
   assert.ok(startIndex >= 0 && startIndex < firstAudioIndex, 'start precedes first PCM chunk');
