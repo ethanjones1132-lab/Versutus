@@ -25,7 +25,7 @@ describe('gateway settings inherits the quiet violet stage', () => {
     // named by sentence-case section headers — no ALL-CAPS violet eyebrows.
     expect(src).not.toContain('style={styles.eyebrow}');
     expect(src).not.toContain("textTransform: 'uppercase'");
-    for (const title of ['Gate', 'Privacy', 'Voice', 'Notifications', 'Approvals', 'This device', 'This build']) {
+    for (const title of ['Gateway', 'Privacy', 'Voice', 'Notifications', 'Approvals', 'This device', 'This build']) {
       expect(src).toContain(`<SectionHeader title="${title}" />`);
     }
     expect(src).toContain('<RowGroup>');

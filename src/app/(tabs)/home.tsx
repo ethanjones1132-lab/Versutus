@@ -88,18 +88,18 @@ export default function HomeScreen() {
           />
         }>
         <PageTitle
-          title="Gate"
+          title="Home"
           status={
             <Text variant="caption" color="secondary">
               {gateways.length === 0
-                ? 'Connect your gateway'
+                ? 'Connect your PC'
                 : status === 'connected'
                   ? 'Connected'
                   : status === 'connecting' || status === 'reconnecting'
                     ? 'Connecting'
                     : status === 'pairing'
-                      ? 'Needs approval'
-                      : 'Disconnected'}
+                      ? 'Approve this device'
+                      : 'Offline'}
             </Text>
           }
         />

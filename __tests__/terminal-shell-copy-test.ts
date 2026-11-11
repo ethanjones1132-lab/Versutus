@@ -43,11 +43,14 @@ describe('terminal shell live-output copy', () => {
     expect(file).toMatch(/outputCopied \? 'Copied' : 'Copy'/);
   });
 
-  test('the banner status dot and connection copy are byte-identical', () => {
+  test('the banner keeps its dot and speaks in human connection states', () => {
     const file = readScreen();
     expect(file).toMatch(/terminalBannerDot/);
-    expect(file).toMatch(/terminalConnected\s*\? 'connected'/);
-    expect(file).toMatch(/activeHello\?\.server\?\.version\s*\? ` · v\$\{activeHello\.server\.version\}` : ''/);
+    expect(file).toMatch(/terminalConnected\s*\? 'Connected'/);
+    expect(file).toContain('"Couldn\'t start"');
+    expect(file).toContain("'Starting…'");
+    // The raw server version lives in Diagnostics, not the main view.
+    expect(file).not.toContain('activeHello');
   });
 
   test('TerminalOutput keeps no clipboard path and its ANSI rendering is untouched', () => {

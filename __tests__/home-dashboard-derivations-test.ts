@@ -63,7 +63,7 @@ describe('home hero action organization', () => {
   });
 
   test('one hoisted verdict feeds both the ErrorCard and the ghost retry', () => {
-    // The ErrorCard (with its own Retry) and the ghost "Retry connection" both
+    // The ErrorCard (with its own Retry) and the ghost "Reconnect" both
     // rendered whenever disconnected-with-lastError — two retry controls for
     // one failure. A single connectionErrorShown verdict now gates both: the
     // card when a failure is shown, the ghost only when none is.
@@ -73,7 +73,7 @@ describe('home hero action organization', () => {
     expect(src).toMatch(/\{!connected && !shownConnectionError \? \(/);
     const retryBlock = src.match(/\{!connected && !shownConnectionError \? \([\s\S]*?\) : null\}/)?.[0];
     expect(retryBlock).toBeDefined();
-    expect(retryBlock).toContain('label="Retry connection"');
+    expect(retryBlock).toContain('label="Reconnect"');
     // The retry haptic goes through the wrapper (HAPTIC-1 / ONB-1): a rejected
     // `expo-haptics` call must not be able to stop the retry below it.
     expect(retryBlock).toContain('await haptics.light();');

@@ -29,16 +29,16 @@ describe('Home is a residual status strip, not a command center', () => {
   test('the header no longer brands Command center', () => {
     expect(home()).not.toContain('Command center');
     expect(home()).toContain('<PageTitle');
-    expect(home()).toContain('title="Gate"');
-    expect(home()).toContain("'Connect your gateway'");
+    expect(home()).toContain('title="Home"');
+    expect(home()).toContain("'Connect your PC'");
   });
 
   test('the header subtitle carries the live connection status', () => {
     const src = home();
     expect(src).toContain("'Connected'");
-    expect(src).toContain("'Needs approval'");
-    expect(src).toContain("'Disconnected'");
-    expect(src).toMatch(/gateways\.length === 0\s*\?\s*'Connect your gateway'/);
+    expect(src).toContain("'Approve this device'");
+    expect(src).toContain("'Offline'");
+    expect(src).toMatch(/gateways\.length === 0\s*\?\s*'Connect your PC'/);
   });
 
   test('the StatTile grid is gone — counts live on one flat status strip', () => {
@@ -72,7 +72,7 @@ describe('Home is a residual status strip, not a command center', () => {
       '<PairedDevicesPane',
       '<CapabilityHive',
       '<GatewayCapabilities',
-      'Refresh capabilities',
+      'Refresh features',
     ]) {
       expect(block).toContain(needle);
     }
@@ -91,6 +91,6 @@ describe('Home is a residual status strip, not a command center', () => {
     expect(src).toContain('onConnect={() => void retryAutoConnect()}');
     expect(src).toContain("onOpenChat={() => router.push('/chat')}");
     // Saved-gateway retry stays on the status card.
-    expect(src).toContain('label="Retry connection"');
+    expect(src).toContain('label="Reconnect"');
   });
 });

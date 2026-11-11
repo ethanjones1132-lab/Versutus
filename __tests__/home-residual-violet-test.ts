@@ -98,8 +98,8 @@ describe('the residual keeps its behaviour and semantic status colours', () => {
   it('the dashboard keeps approval review, retry and status-strip entries', () => {
     const src = dashboard();
     for (const needle of [
-      'label="Review approval"',
-      'label="Retry connection"',
+      'label="Review run"',
+      'label="Reconnect"',
       "onOpenChat={() => router.push('/chat')}",
       'statusStrip',
       '<ChannelStatusRow',
