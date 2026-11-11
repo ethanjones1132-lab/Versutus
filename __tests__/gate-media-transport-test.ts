@@ -217,7 +217,7 @@ describe('a call never opens a plaintext media socket off this machine', () => {
       log: () => undefined,
     });
     expect(attempt.result).toBe('started');
-    expect(media).toEqual(['ws://100.101.102.103:8760/v1/voice/stream']);
+    expect(media).toEqual(['ws://100.101.102.103:8760/v1/voice/stream?protocol=2']);
   });
 
   test('an https gateway off the LAN opens a wss call', async () => {
@@ -236,7 +236,7 @@ describe('a call never opens a plaintext media socket off this machine', () => {
       log: () => undefined,
     });
     expect(attempt.result).toBe('started');
-    expect(media).toEqual(['wss://calls.example.com:8760/v1/voice/stream']);
+    expect(media).toEqual(['wss://calls.example.com:8760/v1/voice/stream?protocol=2']);
   });
 });
 
