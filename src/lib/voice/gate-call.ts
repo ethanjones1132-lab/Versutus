@@ -46,7 +46,12 @@ export type GateCallBanner = {
   speechGen: number;
   speechState: VoiceSpeechState | null;
   muted: boolean;
-  approval: { turnId: string; summary: string } | null;
+  approval: {
+    turnId: string;
+    summary: string;
+    approvalId?: string;
+    state?: 'pending' | 'approved' | 'denied' | 'expired';
+  } | null;
   endedReason: string | null;
   /**
    * A finished operator turn, held for the composer. It is recovery only: no
@@ -164,7 +169,15 @@ export function reduceGateCall(
       return stay(state);
 
     case 'approval':
-      return stay({ ...state, approval: { turnId: frame.turnId, summary: frame.summary } });
+      return stay({
+        ...state,
+        approval: {
+          turnId: frame.turnId,
+          summary: frame.summary,
+          ...(frame.approvalId ? { approvalId: frame.approvalId } : {}),
+          ...(frame.state ? { state: frame.state } : {}),
+        },
+      });
 
     case 'error':
       if (frame.fatal) {

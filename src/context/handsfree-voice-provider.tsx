@@ -98,6 +98,8 @@ export const HANDSFREE_GRACE_MS = 600;
 
 /** How long a sent turn may wait for its reply before the call fails. */
 export const HANDSFREE_REPLY_WATCHDOG_MS = 120_000;
+/** An unanswered call approval is rejected after one minute; silence never accepts it. */
+export const HANDSFREE_APPROVAL_EXPIRY_MS = 60_000;
 
 /** How many times a listen that did not start is asked again before the call ends.
  * Cold Samsung binds take seconds; the boolean is now "ready", not "posted". */
@@ -179,7 +181,13 @@ export type HandsfreeVoiceContextValue = {
    * none is pending. The Gate does not block the turn on this frame, so the
    * banner has to say so or the operator never hears the ask.
    */
-  approval: { turnId: string; summary: string } | null;
+  approval: {
+    turnId: string;
+    summary: string;
+    approvalId?: string;
+    state?: 'pending' | 'approved' | 'denied' | 'expired';
+  } | null;
+  approvalBusy: boolean;
   label: string | undefined;
   reason: HandsfreeTerminalReason | undefined;
   lastEndReason?: HandsfreeTerminalReason;
@@ -208,6 +216,7 @@ export type HandsfreeVoiceContextValue = {
   mute: () => void;
   unmute: () => void;
   skipReply: () => void;
+  decideApproval: (decision: 'approve' | 'deny') => Promise<void>;
   end: () => void;
 };
 
@@ -336,6 +345,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const [gateBanner, setGateBanner] = useState<GateCallBanner>(INITIAL_GATE_CALL);
   const [gateMode, setGateMode] = useState(false);
   const [engineInfo, setEngineInfo] = useState<{ engine: string; reason?: string } | null>(null);
+  const [approvalBusy, setApprovalBusy] = useState(false);
 
   const sessionRef = useRef(session);
   const moduleRef = useRef<HandsfreeNativeModule | null>(null);
@@ -373,6 +383,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   // The grant a live Gate call is joined with: the reconnect path re-opens the
   // media socket with these exact ids inside the Gate's resume window.
   const gateGrantRef = useRef<GateVoiceGrant | null>(null);
+  const gateApprovalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gateApprovalBusyRef = useRef<string | null>(null);
+  const gateApprovalDecisionsRef = useRef(new Map<string, 'approved' | 'denied' | 'expired'>());
   // The device id this call was granted for. The Gate resolves the caller of
   // `voice.session.stop` from it, so the release at teardown names the same
   // phone the start did — without reading the secure store again while the
@@ -617,6 +630,72 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     dispatch({ type: 'end' });
   }, [dispatch]);
 
+  const clearGateApprovalTimer = useCallback(() => {
+    if (gateApprovalTimerRef.current) {
+      clearTimeout(gateApprovalTimerRef.current);
+      gateApprovalTimerRef.current = null;
+    }
+  }, []);
+
+  const decideApproval = useCallback(async (
+    decision: 'approve' | 'deny',
+    expired = false,
+  ): Promise<void> => {
+    const approval = gateBannerRef.current.approval;
+    const approvalId = approval?.approvalId;
+    if (!approvalId || approval.state === 'approved' || approval.state === 'denied'
+      || approval.state === 'expired' || gateApprovalBusyRef.current) return;
+    const owner = targetRef.current;
+    if (!owner || latest.current.status !== 'connected' || latest.current.activeGateway?.id !== owner.gatewayId) return;
+    gateApprovalBusyRef.current = approvalId;
+    setApprovalBusy(true);
+    try {
+      // These existing RPCs are the only decision path. Their paired-device
+      // authentication, once-only semantics and reject-only alternative remain
+      // authoritative; the call never sends an implicit or reusable approval.
+      await latest.current.gatewayRequest(
+        decision === 'approve' ? 'approval.approve' : 'approval.deny',
+        { approvalId },
+      );
+      clearGateApprovalTimer();
+      const current = gateBannerRef.current.approval;
+      if (current?.approvalId === approvalId) {
+        const state = expired ? 'expired' : decision === 'approve' ? 'approved' : 'denied';
+        gateApprovalDecisionsRef.current.set(approvalId, state);
+        const next = { ...gateBannerRef.current, approval: { ...current, state } };
+        gateBannerRef.current = next;
+        setGateBanner(next);
+      }
+    } finally {
+      gateApprovalBusyRef.current = null;
+      setApprovalBusy(false);
+    }
+  }, [clearGateApprovalTimer]);
+
+  const trackGateApproval = useCallback((frame: GateVoiceFrame) => {
+    if (frame.t !== 'approval') {
+      if (!gateBannerRef.current.approval) clearGateApprovalTimer();
+      return;
+    }
+    const approvalId = frame.approvalId;
+    if (!approvalId || frame.state === 'approved' || frame.state === 'denied' || frame.state === 'expired') {
+      clearGateApprovalTimer();
+      return;
+    }
+    if (gateBannerRef.current.approval?.approvalId === approvalId && gateApprovalTimerRef.current) return;
+    clearGateApprovalTimer();
+    // Do not speak untrusted summary/input aloud; this prompt only directs the
+    // operator to the decision waiting in the banner.
+    void Promise.resolve(moduleRef.current?.speak({
+      chunks: ['A tool needs your approval. Check the call banner.'],
+    })).catch(() => undefined);
+    gateApprovalTimerRef.current = setTimeout(() => {
+      gateApprovalTimerRef.current = null;
+      if (gateBannerRef.current.approval?.approvalId !== approvalId) return;
+      void decideApproval('deny', true).catch(() => undefined);
+    }, HANDSFREE_APPROVAL_EXPIRY_MS);
+  }, [clearGateApprovalTimer, decideApproval]);
+
   const subscribeGate = useCallback(
     (module: HandsfreeNativeModule) => {
       unsubscribe();
@@ -638,6 +717,12 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       };
       const fold = (frame: string) => {
         const parsed = gateFrame(frame);
+        const localDecision = parsed?.t === 'approval' && parsed.approvalId
+          ? gateApprovalDecisionsRef.current.get(parsed.approvalId)
+          : undefined;
+        const effective = parsed?.t === 'approval' && parsed.approvalId && localDecision
+          ? { ...parsed, state: localDecision }
+          : parsed ?? frame;
         if (parsed) {
           noteGateTurn(parsed);
           // The Gate's own account of the phase settles an optimistic mute only
@@ -649,9 +734,11 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
             clearGateMute();
           }
         }
-        const next = reduceGateCall(gateBannerRef.current, frame);
+        const next = reduceGateCall(gateBannerRef.current, effective);
         gateBannerRef.current = next.state;
         setGateBanner(next.state);
+        if (effective !== frame && typeof effective !== 'string') trackGateApproval(effective);
+        else if (parsed) trackGateApproval(parsed);
         noteWaiting(appPhaseForGate(next.state.phase) === 'sending');
         for (const gateEffect of next.effects) runGateEffect(gateEffect);
       };
@@ -734,7 +821,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         }),
       ];
     },
-    [clearGateMute, dispatch, level, runGateEffect, unsubscribe],
+    [clearGateMute, dispatch, level, runGateEffect, trackGateApproval, unsubscribe],
   );
 
   const teardown = useCallback(async () => {
@@ -744,6 +831,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     clearGrace();
     clearWatchdog();
     clearGateMute();
+    clearGateApprovalTimer();
     // A proof the call never finished proving settles nothing now: the link it
     // was waiting on is being closed underneath it.
     gateLinkRef.current.release();
@@ -819,7 +907,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       }
     }
     dispatch({ type: 'stopped' });
-  }, [clearGateMute, clearGrace, clearWatchdog, dispatch, resetSpeech, unsubscribe]);
+  }, [clearGateApprovalTimer, clearGateMute, clearGrace, clearWatchdog, dispatch, resetSpeech, unsubscribe]);
 
   useEffect(() => {
     teardownRef.current = teardown;
@@ -1271,6 +1359,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       threadRef.current = callDraftThread(target);
       setLabel(target.label);
       endingRef.current = false;
+      clearGateApprovalTimer();
+      gateApprovalBusyRef.current = null;
+      gateApprovalDecisionsRef.current.clear();
+      setApprovalBusy(false);
       gateModeRef.current = true;
       setGateMode(true);
       gateSessionIdRef.current = undefined;
@@ -1412,7 +1504,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       dispatch({ type: 'started', startedAtMs: Date.now() });
       return { result: 'started' };
     },
-    [abandonGateStart, dispatch, refuseGateStart, subscribeGate],
+    [abandonGateStart, clearGateApprovalTimer, dispatch, refuseGateStart, subscribeGate],
   );
 
   const start = useCallback(
@@ -1658,6 +1750,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       turnError: gateLive ? gateBanner.turnError : null,
       turnState: gateLive ? gateBanner.turnState : null,
       approval: gateLive ? gateBanner.approval : null,
+      approvalBusy,
       label,
       reason: session.reason,
       lastEndReason: session.lastEndReason,
@@ -1677,6 +1770,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       mute,
       unmute,
       skipReply,
+      decideApproval,
       end,
     }),
     [
@@ -1690,6 +1784,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       gateBanner.turnError,
       gateBanner.turnState,
       gateBanner.approval,
+      approvalBusy,
       label,
       session.reason,
       session.lastEndReason,
@@ -1706,6 +1801,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       mute,
       unmute,
       skipReply,
+      decideApproval,
       end,
     ],
   );

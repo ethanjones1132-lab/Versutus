@@ -67,4 +67,15 @@ describe('the app parses the shared voice protocol fixture', () => {
       expect(parseGateFrame(serializeFrame(frame))).toEqual(frame);
     }
   });
+
+  test('approval frames accept the old shape and additive id/state fields', () => {
+    expect(parseGateFrame({ t: 'approval', turnId: 't1', summary: 'Run it?' })).toEqual({
+      t: 'approval', turnId: 't1', summary: 'Run it?',
+    });
+    expect(parseGateFrame({
+      t: 'approval', turnId: 't1', summary: 'Run it?', approvalId: 'a1', state: 'pending',
+    })).toEqual({
+      t: 'approval', turnId: 't1', summary: 'Run it?', approvalId: 'a1', state: 'pending',
+    });
+  });
 });

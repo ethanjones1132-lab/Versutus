@@ -25,6 +25,7 @@ import { AppState } from 'react-native';
 import {
   HANDSFREE_GRACE_MS,
   HANDSFREE_REPLY_WATCHDOG_MS,
+  HANDSFREE_APPROVAL_EXPIRY_MS,
   HandsfreeVoiceProvider,
   useHandsfreeVoice,
   type HandsfreeCallTarget,
@@ -788,6 +789,56 @@ describe('a Gate approval is visible on the call, not dropped', () => {
     expect(latest().approval).toEqual({ turnId: 't1', summary: 'Run ls?' });
     expect(latest().phase).toBe('sending');
     expect(latest().active).toBe(true);
+  });
+
+  test('an identified approval is spoken briefly and denied through approvals RPC at expiry', async () => {
+    await startLiveCall();
+    await call(async () => {
+      gateFrame(thinking);
+      gateFrame('{"t":"approval","turnId":"t1","approvalId":"approval-1","summary":"Run ls?","state":"pending"}');
+    });
+
+    expect(mockNative.speak).toHaveBeenCalledWith({
+      chunks: ['A tool needs your approval. Check the call banner.'],
+    });
+    expect(latest().approval).toMatchObject({ approvalId: 'approval-1', state: 'pending' });
+    expect(mockGateway.gatewayRequest).not.toHaveBeenCalledWith('approval.approve', expect.anything());
+
+    await call(async () => {
+      await jest.advanceTimersByTimeAsync(HANDSFREE_APPROVAL_EXPIRY_MS);
+      await Promise.resolve();
+    });
+
+    expect(mockGateway.gatewayRequest).toHaveBeenCalledWith('approval.deny', { approvalId: 'approval-1' });
+    expect(latest().approval).toMatchObject({ approvalId: 'approval-1', state: 'expired' });
+    expect(mockGateway.gatewayRequest).not.toHaveBeenCalledWith('approval.approve', expect.anything());
+  });
+
+  test('a banner approval is approved once through the existing RPC', async () => {
+    await startLiveCall();
+    await call(async () => {
+      gateFrame('{"t":"approval","turnId":"t1","approvalId":"approval-once","summary":"Read status?","state":"pending"}');
+    });
+
+    await call(async () => {
+      await latest().decideApproval('approve');
+    });
+    await call(async () => {
+      await latest().decideApproval('approve');
+    });
+
+    expect(mockGateway.gatewayRequest.mock.calls.filter(([method]) => method === 'approval.approve')).toHaveLength(1);
+    expect(mockGateway.gatewayRequest).toHaveBeenCalledWith('approval.approve', { approvalId: 'approval-once' });
+    expect(mockGateway.gatewayRequest).not.toHaveBeenCalledWith('approval.deny', expect.anything());
+    expect(latest().approval).toMatchObject({ approvalId: 'approval-once', state: 'approved' });
+    await call(async () => {
+      // A Gate replay after reconnect is still the old pending frame; it cannot
+      // reopen an approval this device already settled.
+      gateFrame('{"t":"approval","turnId":"t1","approvalId":"approval-once","summary":"Read status?","state":"pending"}');
+      await jest.advanceTimersByTimeAsync(HANDSFREE_APPROVAL_EXPIRY_MS);
+    });
+    expect(latest().approval).toMatchObject({ approvalId: 'approval-once', state: 'approved' });
+    expect(mockGateway.gatewayRequest.mock.calls.filter(([method]) => method === 'approval.approve')).toHaveLength(1);
   });
 });
 

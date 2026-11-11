@@ -35,7 +35,7 @@ export function HandsfreeCallBanner() {
 }
 
 function ActiveHandsfreeCallBanner() {
-  const { phase, partial, label, level, engine, engineReason, muted, mute, unmute, skipReply, end, startedAtMs, sendingSinceMs, turnError, approval } =
+  const { phase, partial, label, level, engine, engineReason, muted, mute, unmute, skipReply, end, startedAtMs, sendingSinceMs, turnError, approval, approvalBusy, decideApproval } =
     useHandsfreeVoice();
   const tokens = useTokens();
   const insets = useSafeAreaInsets();
@@ -124,10 +124,15 @@ function ActiveHandsfreeCallBanner() {
               </Text>
             ) : null}
             {approval?.summary ? (
-              // The Gate notified; it does not block the turn. Silence here is
-              // a tool waiting on a decision nobody was told about.
+              // Approval actions appear only when an identified pending request
+              // arrived. Legacy frames remain visible but cannot guess an id.
               <Text variant="micro" color="accentWarm" numberOfLines={1}>
-                Waiting for your approval — {approval.summary}
+                {approval.state === 'approved'
+                  ? 'Approval granted once'
+                  : approval.state === 'denied' || approval.state === 'expired'
+                    ? 'Approval denied'
+                    : 'Waiting for your approval'}
+                {' — '}{approval.summary}
               </Text>
             ) : null}
             {partial ? (
@@ -175,6 +180,27 @@ function ActiveHandsfreeCallBanner() {
             </Text>
           </PressableScale>
         </View>
+
+        {approval?.approvalId && (!approval.state || approval.state === 'pending') ? (
+          <View style={styles.controls}>
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Approve tool once"
+              disabled={approvalBusy}
+              onPress={() => { void decideApproval('approve').catch(() => undefined); }}
+              style={[styles.control, { borderColor: tokens.accentWarmMuted }]}>
+              <Text variant="caption" color="primary">Approve once</Text>
+            </PressableScale>
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Deny tool approval"
+              disabled={approvalBusy}
+              onPress={() => { void decideApproval('deny').catch(() => undefined); }}
+              style={[styles.control, { borderColor: tokens.statusDisconnected }]}>
+              <Text variant="caption" color="primary">Deny</Text>
+            </PressableScale>
+          </View>
+        ) : null}
 
         <Text variant="micro" color="tertiary" style={styles.autoSend}>
           {HANDSFREE_AUTOSEND_LABEL}

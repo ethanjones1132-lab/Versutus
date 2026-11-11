@@ -410,7 +410,13 @@ export function reduceVoiceSession(state, event) {
 
     case 'approvalRequired':
       return stay(state, [
-        frameSend({ t: 'approval', turnId: state.turnId, summary: event.summary }),
+        frameSend({
+          t: 'approval',
+          turnId: state.turnId,
+          summary: event.summary,
+          ...(typeof event.approvalId === 'string' ? { approvalId: event.approvalId } : {}),
+          ...(typeof event.state === 'string' ? { state: event.state } : {}),
+        }),
       ]);
 
     case 'speechDone': {

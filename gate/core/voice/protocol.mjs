@@ -136,8 +136,16 @@ export function parseGateFrame(value) {
         return { t: 'speech', gen: requireNumber(frame, 'gen'), state: requireEnum(frame, 'state', SPEECH_STATES) };
       case 'level':
         return { t: 'level', v: requireNumber(frame, 'v') };
-      case 'approval':
-        return { t: 'approval', turnId: requireString(frame, 'turnId'), summary: requireString(frame, 'summary') };
+      case 'approval': {
+        const approval = {
+          t: 'approval',
+          turnId: requireString(frame, 'turnId'),
+          summary: requireString(frame, 'summary'),
+        };
+        if (frame.approvalId !== undefined) approval.approvalId = requireString(frame, 'approvalId');
+        if (frame.state !== undefined) approval.state = requireEnum(frame, 'state', ['pending', 'approved', 'denied', 'expired']);
+        return approval;
+      }
       case 'error':
         if (typeof frame.fatal !== 'boolean') throw new VoiceProtocolError('fatal must be a boolean');
         return {

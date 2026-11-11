@@ -718,8 +718,15 @@ export function attachVoiceMediaSocket({
             said += delta;
             deliver({ type: 'replyDelta', text: delta });
           },
-          onApproval: (approval) =>
-            deliver({ type: 'approvalRequired', summary: approval?.summary ?? 'Approval needed' }),
+          // The source travels with the turn so backends can apply their voice
+          // approval policy without changing the shared typed-turn contract.
+          source: 'voice',
+          onApproval: (approval) => deliver({
+            type: 'approvalRequired',
+            approvalId: approval?.approvalId,
+            summary: approval?.summary ?? 'Approval needed',
+            state: 'pending',
+          }),
           // How far the runner got, so a silent turn is placed in the log: which
           // backend answered, was the turn sent, was it accepted, did any
           // activity arrive, and if it stalled, which step it was waiting on.

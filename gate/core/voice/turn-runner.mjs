@@ -86,7 +86,9 @@ export function modelReport(runtime, requested) {
  * @throws {Error & { code: 'stream_truncated' }} when the stream reaches EOF
  *   with no terminal frame and the caller has not aborted.
  */
-async function relayStreamingTurn(upstream, { onDelta, onToolCall, onChunk, onProgress = NOOP, signal }) {
+async function relayStreamingTurn(upstream, {
+  onDelta, onToolCall, onApproval, onChunk, onProgress = NOOP, signal,
+}) {
   const reader = upstream.body?.getReader?.();
   if (!reader) return false;
 
@@ -126,6 +128,11 @@ async function relayStreamingTurn(upstream, { onDelta, onToolCall, onChunk, onPr
     // A batch can land in the same turn as the caller hanging up; no callback
     // may cross the wire after the abort that ended the turn.
     if (aborted()) return;
+    const eventType = frame
+      .split('\n')
+      .find((line) => line.startsWith('event:'))
+      ?.slice('event:'.length)
+      .trim();
     const data = frame
       .split('\n')
       .filter((line) => line.startsWith('data:'))
@@ -142,7 +149,12 @@ async function relayStreamingTurn(upstream, { onDelta, onToolCall, onChunk, onPr
     // owns the end of the turn, and nothing it aborted may be reported after.
     if (aborted()) return;
     try {
-      const choice = JSON.parse(data)?.choices?.[0];
+      const payload = JSON.parse(data);
+      if (eventType === 'approval.required' || payload?.type === 'approval.required') {
+        onApproval(payload.payload ?? payload);
+        return;
+      }
+      const choice = payload?.choices?.[0];
       const delta = choice?.delta;
       if (delta?.content) {
         sawContent = true;
@@ -249,18 +261,21 @@ function isStreamUnsupported(error) {
  *   onDelta?: (text: string) => void,
  *   onToolCall?: (call: { index: number, name?: string, callId?: string }) => void,
  *   onApproval?: (approval: object) => void,
+ *   source?: string,
  *   onChunk?: (data: string) => void,
  *   onStage?: (stage: { stage: string, elapsedMs: number, [key: string]: unknown }) => void,
  *   signal?: AbortSignal,
  *   stallTimeoutMs?: number,
  * }} handlers `onChunk` carries the raw OpenAI-shaped payload for callers that
  *   relay bytes verbatim; `onDelta`/`onToolCall`/`onApproval` are the parsed
- *   events a voice loop consumes. `onStage` is best-effort telemetry that names
- *   how far the turn got, so a silent turn can be attributed to a step rather
- *   than reported only as "no reply". `signal` ends the turn the moment the
- *   caller lets go of it, and always wins. `stallTimeoutMs` optionally bounds
- *   the wait for the next sign of life (0, the default, waits as long as the
- *   caller allows) — see `TURN_STALL_TIMEOUT_MS` for why it is not on.
+ *   events a voice loop consumes. `source` identifies the origin to a backend
+ *   without changing the typed-turn path. `onStage` is best-effort telemetry
+ *   that names how far the turn got, so a silent turn can be attributed to a
+ *   step rather than reported only as "no reply". `signal` ends the turn the
+ *   moment the caller lets go of it, and always wins. `stallTimeoutMs`
+ *   optionally bounds the wait for the next sign of life (0, the default, waits
+ *   as long as the caller allows) — see `TURN_STALL_TIMEOUT_MS` for why it is
+ *   not on.
  * @returns {Promise<{ hasContent: boolean, report: object, aborted?: boolean }>}
  * @throws {BackendStallError} only when a caller opts in with `stallTimeoutMs`
  *   and the backend then goes silent for that long. It never fires on its own.
@@ -269,6 +284,7 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
   onDelta = NOOP,
   onToolCall = NOOP,
   onApproval = NOOP,
+  source,
   onChunk = NOOP,
   onStage = NOOP,
   attempt,
@@ -395,7 +411,9 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
         let upstream = null;
         try {
           upstream = await raceStop(
-            backend.sendMessageStreaming(sessionId, { text, model, images, files }, controller.signal),
+            backend.sendMessageStreaming(sessionId, {
+              text, model, images, files, ...(source === undefined ? {} : { source }),
+            }, controller.signal),
           );
         } catch (error) {
           upstream = null;
@@ -426,6 +444,7 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
           const relay = relayStreamingTurn(upstream, {
             onDelta,
             onToolCall,
+            onApproval,
             onChunk,
             onProgress: () => noteActivity('the reply stream'),
             signal: controller.signal,
@@ -556,7 +575,9 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
         seenTools.delete(callId);
         return;
       }
-      if (event.type === 'approval.required') onApproval(event.payload);
+      if (event.type === 'approval.required') {
+        onApproval(event.payload);
+      }
     };
 
     // Stdio/HTTP backends subscribe before sending. Claude Code is one
@@ -622,7 +643,11 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
       // HTTP turn and leaves the agent running. Backends that take no signal
       // ignore the extra key, and their turn is still released by the race.
       const result = await raceStop(backend.sendMessage(
-        sessionId, { text, model, images, files, signal: controller.signal },
+        sessionId, {
+          text, model, images, files,
+          ...(source === undefined ? {} : { source }),
+          signal: controller.signal,
+        },
         typeof backend.streamEvents === 'function' ? undefined : handleEvent,
       ));
       if (result === ABORTED_OUTCOME) return ABORTED_OUTCOME;
