@@ -25,6 +25,11 @@ import {
 
 export type CronJobSheetProps = {
   job: CronJob | null;
+  /**
+   * The environment that owns this job. Activity's routines carry one; a job
+   * opened from the default roster names none and keeps every call as it was.
+   */
+  backendId?: string;
   onClose: () => void;
   /** Opens one run's transcript; the parent owns that surface. */
   onOpenRun: (runId: string) => void;
@@ -61,7 +66,7 @@ function Row({ label, value }: { label: string; value?: string | null }) {
  * because "show raw" is what makes the curation trustworthy rather than a
  * story the app tells.
  */
-export function CronJobSheet({ job, onClose, onOpenRun, onRemoved, onChanged }: CronJobSheetProps) {
+export function CronJobSheet({ job, backendId, onClose, onOpenRun, onRemoved, onChanged }: CronJobSheetProps) {
   const { botJobs, cron } = useGateway();
   const [runs, setRuns] = useState<CronRun[]>([]);
   const [runsError, setRunsError] = useState<string | null>(null);
@@ -83,24 +88,33 @@ export function CronJobSheet({ job, onClose, onOpenRun, onRemoved, onChanged }: 
 
   const jobId = job?.id ?? null;
   const paused = pausedOverride ?? job?.paused ?? false;
+  // Activity names the environment that owns the routine it opened. A sheet
+  // mounted from the default roster passes none, and every call below then
+  // keeps today's exact shape (no second/third argument).
+  const namedBackend = backendId?.trim() || undefined;
   const loadRuns = useCallback(async () => {
     if (!jobId) return;
     try {
-      setRuns(await cron.runs(jobId));
+      const nextRuns = namedBackend ? await cron.runs(jobId, namedBackend) : await cron.runs(jobId);
+      setRuns(nextRuns);
       setRunsError(null);
       setRunsLoaded(true);
     } catch (caught) {
       setRunsError(caught instanceof Error ? caught.message : String(caught));
       setRunsLoaded(true);
     }
-  }, [cron, jobId]);
+  }, [cron, jobId, namedBackend]);
 
   const submitRun = useCallback(async () => {
     if (!jobId || acting) return;
     setActing(true);
     setControlError(null);
     try {
-      await botJobs.run(jobId);
+      if (namedBackend) {
+        await botJobs.run(jobId, namedBackend);
+      } else {
+        await botJobs.run(jobId);
+      }
       // The run just started reads back through the same history the sheet
       // renders; without this the new run is missing until a remount.
       await loadRuns();
@@ -110,14 +124,18 @@ export function CronJobSheet({ job, onClose, onOpenRun, onRemoved, onChanged }: 
     } finally {
       setActing(false);
     }
-  }, [acting, botJobs, jobId, loadRuns, onChanged]);
+  }, [acting, botJobs, jobId, loadRuns, namedBackend, onChanged]);
 
   const submitTogglePause = useCallback(async () => {
     if (!jobId || acting) return;
     setActing(true);
     setControlError(null);
     try {
-      await botJobs.pause(jobId, !paused);
+      if (namedBackend) {
+        await botJobs.pause(jobId, !paused, namedBackend);
+      } else {
+        await botJobs.pause(jobId, !paused);
+      }
       setPausedOverride(!paused);
       // `paused` is the state BEFORE the toggle above, so it reads true exactly
       // when the host has just resumed this job. A resume rebuilds the held
@@ -141,7 +159,7 @@ export function CronJobSheet({ job, onClose, onOpenRun, onRemoved, onChanged }: 
     } finally {
       setActing(false);
     }
-  }, [acting, botJobs, jobId, onChanged, paused]);
+  }, [acting, botJobs, jobId, namedBackend, onChanged, paused]);
 
   // Destructive counterpart to submitRun / submitTogglePause. The Gate
   // dispatches the jobs.remove RPC to removeJob on the resolved backend;
@@ -156,7 +174,11 @@ export function CronJobSheet({ job, onClose, onOpenRun, onRemoved, onChanged }: 
     setActing(true);
     setControlError(null);
     try {
-      await botJobs.remove(target);
+      if (namedBackend) {
+        await botJobs.remove(target, namedBackend);
+      } else {
+        await botJobs.remove(target);
+      }
       setRemoveTarget(null);
       // Stop the phone-side notice too: the job no longer exists on the
       // gateway, so its schedule must not outlive it. Fire-and-forget.
@@ -171,7 +193,7 @@ export function CronJobSheet({ job, onClose, onOpenRun, onRemoved, onChanged }: 
     } finally {
       setActing(false);
     }
-  }, [acting, botJobs, jobId, onRemoved, removeTarget]);
+  }, [acting, botJobs, jobId, namedBackend, onRemoved, removeTarget]);
 
   // Keyed by job id upstream, so each job opens as a fresh component with
   // collapsed toggles and no stale run list — no setState in the effect body.

@@ -60,7 +60,7 @@ describe('routine sheet actions re-list the roster', () => {
     // refusal jumps to catch and never reaches it — so a refused action
     // never triggers the parent re-read.
     const sheetSrc = sheet();
-    const toggle = sheetSrc.match(/const submitRun = useCallback\([\s\S]*?\n  \}, \[acting, botJobs, jobId, loadRuns, onChanged\]\);/)?.[0];
+    const toggle = sheetSrc.match(/const submitRun = useCallback\([\s\S]*?\n  \}, \[acting, botJobs, jobId, loadRuns, namedBackend, onChanged\]\);/)?.[0];
     expect(toggle).toBeDefined();
     const tryBlock = toggle?.match(/try \{[\s\S]*?\n    \} catch/)?.[0] ?? '';
     expect(tryBlock).toContain('onChanged?.()');

@@ -46,6 +46,10 @@ export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number })
   const failureKind = failure && failure.gatewayId === gatewayId ? failure.kind : undefined;
   const [backendFilter, setBackendFilter] = useState<string | undefined>();
   const [openJob, setOpenJob] = useState<CronJob | null>(null);
+  // The backend that owns the open routine, so every action lands there. A
+  // routine on the backend the Gate would resolve to anyway names none: its
+  // request stays exactly what it is today.
+  const [openJobBackendId, setOpenJobBackendId] = useState<string | undefined>();
   const [openRunId, setOpenRunId] = useState<string | null>(null);
   const requestId = useRef(0);
   const inFlight = useRef<{ settled: boolean; promise: Promise<void>; gatewayId?: string } | null>(null);
@@ -66,6 +70,7 @@ export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number })
       setFailure(null);
       setBackendFilter(undefined);
       setOpenJob(null);
+      setOpenJobBackendId(undefined);
       setOpenRunId(null);
     }, 0);
     return () => clearTimeout(timer);
@@ -161,6 +166,10 @@ export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number })
   // refused or unreadable backend keeps the empty claim off the screen.
   const everyBackendAnswered =
     visibleBackends.length > 0 && visibleBackends.every((backend) => backend.status === 'complete');
+  // The Gate's unscoped job resolution walks its environments in this order and
+  // picks the first that serves jobs. A routine on that environment needs no
+  // explicit pin, so its calls stay exactly what they are today.
+  const defaultBackendId = feed?.backends.find((backend) => backend.status !== 'unavailable')?.id;
 
   return (
     <View style={styles.root}>
@@ -223,7 +232,12 @@ export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number })
                   key={`${routine.backendId}:${routine.id}`}
                   title={routine.name}
                   subtitle={routineJobSummary(routine)}
-                  onPress={() => setOpenJob(routineJobView(routine))}
+                  onPress={() => {
+                    setOpenJob(routineJobView(routine));
+                    setOpenJobBackendId(
+                      routine.backendId === defaultBackendId ? undefined : routine.backendId,
+                    );
+                  }}
                   trailing={
                     <Text variant="micro" color="secondary">
                       {backendLabel(feed.backends, routine.backendId)}
@@ -264,13 +278,18 @@ export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number })
       ) : null}
 
       <CronJobSheet
-        key={openJob?.id ?? 'no-job'}
+        key={`${openJobBackendId ?? ''}:${openJob?.id ?? 'no-job'}`}
         // Hide while a run transcript is open so two BaseSheets do not stack.
         job={openRunId ? null : openJob}
-        onClose={() => setOpenJob(null)}
+        backendId={openJobBackendId}
+        onClose={() => {
+          setOpenJob(null);
+          setOpenJobBackendId(undefined);
+        }}
         onOpenRun={(runId) => setOpenRunId(runId)}
         onRemoved={() => {
           setOpenJob(null);
+          setOpenJobBackendId(undefined);
           void read();
         }}
         onChanged={() => void read()}

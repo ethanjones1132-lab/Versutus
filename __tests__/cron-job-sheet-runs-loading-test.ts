@@ -46,7 +46,7 @@ describe('cron job sheet runs loading', () => {
     // A refused read must reach the runsError caption + Retry path, never
     // the skeletons: both loadRuns outcomes flip the flag.
     const src = readSheetSource();
-    const loader = src.match(/const loadRuns = useCallback\(async \(\) => \{[\s\S]*?\}, \[cron, jobId\]\);/)?.[0];
+    const loader = src.match(/const loadRuns = useCallback\(async \(\) => \{[\s\S]*?\}, \[cron, jobId, namedBackend\]\);/)?.[0];
     expect(loader).toBeDefined();
     expect(loader).toMatch(/setRunsLoaded\(true\)/);
     expect(loader?.match(/setRunsLoaded\(true\)/g)).toHaveLength(2);

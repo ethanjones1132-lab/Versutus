@@ -149,7 +149,7 @@ export interface PortalClient {
    * rather than showing an empty list that looks like "no scheduled work".
    */
   listCronJobs?(): Promise<import('@/lib/gateway/cron').CronJob[]>;
-  cronRuns?(jobId: string): Promise<import('@/lib/gateway/cron').CronRun[]>;
+  cronRuns?(jobId: string, backendId?: string): Promise<import('@/lib/gateway/cron').CronRun[]>;
   cronTranscript?(runId: string, limit?: number): Promise<import('@/lib/gateway/cron').CronTurn[]>;
   /**
    * Activity's universal read. Optional: a direct host or an older Gate that
@@ -160,9 +160,9 @@ export interface PortalClient {
   getRoutineFeed?(backendId?: string): Promise<import('@/lib/gateway/activity-feed').RoutineFeed>;
   listJobs?(): Promise<{ id: string; name?: string; paused?: boolean }[]>;
   createJob?(input: { name: string; prompt: string; schedule: string }): Promise<{ id: string; name?: string }>;
-  runJob?(jobId: string): Promise<void>;
-  setJobPaused?(jobId: string, paused: boolean): Promise<void>;
-  removeJob?(jobId: string): Promise<void>;
+  runJob?(jobId: string, backendId?: string): Promise<void>;
+  setJobPaused?(jobId: string, paused: boolean, backendId?: string): Promise<void>;
+  removeJob?(jobId: string, backendId?: string): Promise<void>;
   /** Gate-owned group rooms. Omitted when the manifest advertises no botGroups endpoint. */
   listGroups?(): Promise<BotGroupRoom[]>;
   createGroup?(input: { name: string; memberIds: string[] }): Promise<BotGroupRoom>;

@@ -724,6 +724,21 @@ export class ManifestClient implements PortalClient {
   }
 
   /**
+   * Append the environment that owns a job action.
+   *
+   * A routine read from every backend carries the one that owns it; without
+   * naming it here the Gate resolves to the first environment that serves jobs,
+   * so a routine on a second Hermes backend answered "not found". Absent leaves
+   * the path exactly as it was, which is what the default roster still sends.
+   */
+  private withNamedBackend(path: string, backendId?: string): string {
+    const id = backendId?.trim();
+    if (!id) return path;
+    const separator = path.includes('?') ? '&' : '?';
+    return `${path}${separator}backendId=${encodeURIComponent(id)}`;
+  }
+
+  /**
    * Scope a conversation or run route.
    *
    * A Bot names its own environment — it is a Hermes profile, and the Gate
@@ -832,21 +847,27 @@ export class ManifestClient implements PortalClient {
     });
   }
 
-  async runJob(jobId: string): Promise<void> {
+  async runJob(jobId: string, backendId?: string): Promise<void> {
     const path = this.requireEndpoint('jobs');
     await this.rootTransport.request(
       'POST',
-      this.withBotOnly(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}/run`),
+      this.withNamedBackend(
+        this.withBotOnly(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}/run`),
+        backendId,
+      ),
       this.botId ? { bot: this.botId } : {},
     );
   }
 
-  async setJobPaused(jobId: string, paused: boolean): Promise<void> {
+  async setJobPaused(jobId: string, paused: boolean, backendId?: string): Promise<void> {
     const path = this.requireEndpoint('jobs');
     const action = paused ? 'pause' : 'resume';
     await this.rootTransport.request(
       'POST',
-      this.withBotOnly(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}/${action}`),
+      this.withNamedBackend(
+        this.withBotOnly(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}/${action}`),
+        backendId,
+      ),
       this.botId ? { bot: this.botId } : {},
     );
   }
@@ -857,11 +878,14 @@ export class ManifestClient implements PortalClient {
    * Hermes backend answers it with `DELETE /api/jobs/{id}`. A refused
    * remove throws and the caller surfaces the failure.
    */
-  async removeJob(jobId: string): Promise<void> {
+  async removeJob(jobId: string, backendId?: string): Promise<void> {
     const path = this.requireEndpoint('jobs');
     await this.rootTransport.request(
       'DELETE',
-      this.withBotOnly(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}`),
+      this.withNamedBackend(
+        this.withBotOnly(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}`),
+        backendId,
+      ),
       this.botId ? { bot: this.botId } : {},
     );
   }
@@ -877,8 +901,15 @@ export class ManifestClient implements PortalClient {
     return result?.data ?? [];
   }
 
-  async cronRuns(jobId: string): Promise<CronRun[]> {
-    const result = await this.rpcRequest<{ data?: CronRun[] }>('cron.runs', { jobId });
+  async cronRuns(jobId: string, backendId?: string): Promise<CronRun[]> {
+    // The Gate's cron.runs RPC resolves `params.backendId` through the same
+    // scope rules as the job routes, so a routine on a second environment reads
+    // its own history instead of the first environment's.
+    const namedBackend = backendId?.trim();
+    const result = await this.rpcRequest<{ data?: CronRun[] }>('cron.runs', {
+      jobId,
+      ...(namedBackend ? { backendId: namedBackend } : {}),
+    });
     return result?.data ?? [];
   }
 

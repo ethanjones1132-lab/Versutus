@@ -507,9 +507,9 @@ type GatewayContextValue = {
     list: () => Promise<{ id: string; name?: string; paused?: boolean }[]>;
     /** Resolves to the created job's id so a caller can keep the phone-side notice in step. */
     create: (input: { name: string; prompt: string; schedule: string }) => Promise<{ id: string; name?: string }>;
-    run: (jobId: string) => Promise<void>;
-    pause: (jobId: string, paused: boolean) => Promise<void>;
-    remove: (jobId: string) => Promise<void>;
+    run: (jobId: string, backendId?: string) => Promise<void>;
+    pause: (jobId: string, paused: boolean, backendId?: string) => Promise<void>;
+    remove: (jobId: string, backendId?: string) => Promise<void>;
   };
   /**
    * Cron transparency, read-only. `available` is false on a gateway whose
@@ -520,7 +520,7 @@ type GatewayContextValue = {
   cron: {
     available: boolean;
     list: () => Promise<import('@/lib/gateway/cron').CronJob[]>;
-    runs: (jobId: string) => Promise<import('@/lib/gateway/cron').CronRun[]>;
+    runs: (jobId: string, backendId?: string) => Promise<import('@/lib/gateway/cron').CronRun[]>;
     transcript: (runId: string, limit?: number) => Promise<import('@/lib/gateway/cron').CronTurn[]>;
   };
   /**
@@ -6961,25 +6961,25 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // surface) can schedule the phone-side notice under the real job id.
       return client.createJob(input);
     },
-    run: async (jobId: string) => {
+    run: async (jobId: string, backendId?: string) => {
       const client = clientRef.current;
       if (!client?.runJob) throw new Error('This gateway does not run jobs.');
-      await client.runJob(jobId);
+      await client.runJob(jobId, backendId);
     },
-    pause: async (jobId: string, paused: boolean) => {
+    pause: async (jobId: string, paused: boolean, backendId?: string) => {
       const client = clientRef.current;
       if (!client?.setJobPaused) throw new Error('This gateway does not pause jobs.');
-      await client.setJobPaused(jobId, paused);
+      await client.setJobPaused(jobId, paused, backendId);
     },
     // Destructive counterpart to run/pause. The Gate dispatches the
     // `jobs.remove` RPC (gate/core/capabilities/gateway-methods.mjs) to the
     // resolved backend's `removeJob`; a backend without that method throws
     // and the caller surfaces the refusal through the same control-error
     // path the run/pause calls already use.
-    remove: async (jobId: string) => {
+    remove: async (jobId: string, backendId?: string) => {
       const client = clientRef.current;
       if (!client?.removeJob) throw new Error('This gateway does not remove jobs.');
-      await client.removeJob(jobId);
+      await client.removeJob(jobId, backendId);
     },
   }), []);
 
@@ -7048,10 +7048,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (!client?.listCronJobs) return [];
       return client.listCronJobs();
     },
-    runs: async (jobId: string) => {
+    runs: async (jobId: string, backendId?: string) => {
       const client = clientRef.current;
       if (!client?.cronRuns) return [];
-      return client.cronRuns(jobId);
+      return client.cronRuns(jobId, backendId);
     },
     transcript: async (runId: string, limit?: number) => {
       const client = clientRef.current;

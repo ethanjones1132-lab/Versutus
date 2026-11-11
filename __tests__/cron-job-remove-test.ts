@@ -160,11 +160,11 @@ describe('cron job sheet remove', () => {
     // remove follows the same pattern so a backend without removeJob fails
     // honestly instead of crashing deeper in the call.
     const src = readGatewayProviderSource();
-    expect(src).toMatch(/remove:\s*async\s*\(jobId: string\) =>\s*\{/);
+    expect(src).toMatch(/remove:\s*async\s*\(jobId: string, backendId\?: string\) =>\s*\{/);
     expect(src).toMatch(/if \(!client\?\.removeJob\)\s*throw\s*new Error\(['"]This gateway does not remove jobs\.['"]\)/);
-    expect(src).toMatch(/await client\.removeJob\(jobId\)/);
+    expect(src).toMatch(/await client\.removeJob\(jobId, backendId\)/);
     // The botJobs context type includes remove.
-    expect(src).toMatch(/remove:\s*\(jobId: string\)\s*=>\s*Promise<void>/);
+    expect(src).toMatch(/remove:\s*\(jobId: string, backendId\?: string\)\s*=>\s*Promise<void>/);
   });
 
   test('ManifestClient.removeJob mirrors setJobPaused with a DELETE request', () => {
@@ -173,7 +173,7 @@ describe('cron job sheet remove', () => {
     // hits the Gate's DELETE /v1/jobs/{id} route with the same auth/bot
     // headers as every other job call.
     const src = readManifestClientSource();
-    expect(src).toMatch(/async removeJob\(jobId: string\):\s*Promise<void>/);
+    expect(src).toMatch(/async removeJob\(jobId: string, backendId\?: string\):\s*Promise<void>/);
     // The function body must contain: this.requireEndpoint('jobs'), a
     // 'DELETE' method, this.withBotOnly(template), the jobId URL encode,
     // and the botId-aware body — same five pieces setJobPaused carries.
@@ -196,7 +196,7 @@ describe('cron job sheet remove', () => {
     // without removeJob is still a valid client and the provider's guard
     // is the only failure path — matching the run/pause contract.
     const src = readAdaptersSource();
-    expect(src).toMatch(/removeJob\?\(jobId: string\):\s*Promise<void>/);
+    expect(src).toMatch(/removeJob\?\(jobId: string, backendId\?: string\):\s*Promise<void>/);
   });
 
   test("rpc-routes maps 'jobs.remove' to DELETE /api/jobs/{jobId}", () => {

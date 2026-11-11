@@ -57,7 +57,7 @@ test('a rejected control call surfaces the named error and keeps the last good p
   expect(src).toContain('setControlError(describeCronJobControlError(caught))');
   // Only a confirmed Pause/Resume may move the label; a refusal leaves the
   // override alone so it still reads the last good state.
-  const pauseFn = src.slice(src.indexOf('submitTogglePause'), src.indexOf('}, [acting, botJobs, jobId, paused])'));
+  const pauseFn = src.slice(src.indexOf('submitTogglePause'), src.indexOf('}, [acting, botJobs, jobId, namedBackend, onChanged, paused])'));
   expect(pauseFn).toContain('setPausedOverride(!paused)');
   const catchIdx = pauseFn.indexOf('catch');
   const overrideIdx = pauseFn.indexOf('setPausedOverride(!paused)');
