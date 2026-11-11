@@ -9,7 +9,7 @@
 
 import { requireDevice } from '../push-rpc.mjs';
 import { randomUUID } from 'node:crypto';
-import { deviceTag } from './audit.mjs';
+import { deviceTag, redactedLogText } from './audit.mjs';
 import { codexRealtimeStatus } from './codex-status.mjs';
 
 /**
@@ -502,7 +502,7 @@ export function createVoiceRpc({
         // only device this failure can name, and it is hashed either way.
         const loggedDevice = deviceId === 'unknown' ? claimedDevice : deviceId;
         log(
-          `voice.session.start fail device=${deviceTag(loggedDevice)} engine=${engineLabel} session=${voiceSessionId} code=${code} reason=${reason}`,
+          `voice.session.start fail device=${deviceTag(loggedDevice)} engine=${engineLabel} session=${voiceSessionId} code=${code} reason=${redactedLogText(reason)}`,
         );
         throw error;
       }

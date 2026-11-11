@@ -1,16 +1,27 @@
-// Voice privacy (S4, D6): neither the Gate log nor the audit line holds a raw
-// device id, and the audit rotates so a month of calls is the whole retention.
-// Every case is hermetic: temp dirs, the real sink, and an injected clock or
-// size bound for the two rotation triggers.
+// Voice privacy (S3, S4, D6): neither the Gate log nor the audit line holds a
+// raw device id or the words of an untrusted error, and the audit rotates so a
+// month of calls is the whole retention. Every case is hermetic: temp dirs or a
+// loopback socket, the real sink, and an injected clock or size bound for the
+// two rotation triggers.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { buildAuditLine, createVoiceAudit, deviceTag } from '../core/voice/audit.mjs';
-import { createVoiceRpc } from '../core/voice/voice-rpc.mjs';
+import { WebSocket } from 'ws';
+
+import {
+  AUDIT_MAX_AGE_MS,
+  buildAuditLine,
+  createVoiceAudit,
+  deviceTag,
+} from '../core/voice/audit.mjs';
+import { VOICE_STREAM_PATH, attachVoiceMediaSocket } from '../core/voice/media-socket.mjs';
+import { VoiceSessionRegistry, createVoiceRpc } from '../core/voice/voice-rpc.mjs';
 
 function tempDir() {
   return mkdtempSync(join(tmpdir(), 'voice-audit-privacy-'));
@@ -18,6 +29,78 @@ function tempDir() {
 
 function readLines(path) {
   return readFileSync(path, 'utf8').trim().split('\n');
+}
+
+async function waitUntil(predicate, timeoutMs = 4000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = predicate();
+    if (value) return value;
+    if (Date.now() > deadline) throw new Error('timed out waiting for a condition');
+    await new Promise((done) => setTimeout(done, 5));
+  }
+}
+
+/**
+ * The smallest real call: one controllable engine, one socket, and the real
+ * media socket writing to this test's collectors. What the test emits is what
+ * the Gate hears, so every logging path can be exercised without a model.
+ */
+async function startPrivacyCall(t, { runTurn } = {}) {
+  const registry = new VoiceSessionRegistry();
+  registry.create({ voiceSessionId: 'vs-privacy', deviceId: 'device-1', engine: 'local' });
+  const listeners = new Map();
+  const engine = {
+    open: async () => {},
+    pushAudio() {},
+    close() {},
+    spoken: [],
+    cancelled: [],
+    on: (event, fn) => {
+      listeners.set(event, fn);
+      return engine;
+    },
+    emit: (event, payload) => listeners.get(event)?.(payload),
+    speak: (text, { gen } = {}) => engine.spoken.push({ text, gen }),
+    cancelSpeech: (gen) => engine.cancelled.push(gen),
+  };
+  const server = createServer((_req, res) => {
+    res.writeHead(404);
+    res.end();
+  });
+  const lines = [];
+  const audit = [];
+  const wss = attachVoiceMediaSocket({
+    server,
+    deviceTokens: {
+      verify: async (authorization) => (authorization === 'Bearer tok-1' ? { deviceId: 'device-1' } : null),
+    },
+    registry,
+    createEngine: () => engine,
+    runTurn,
+    audit: (summary) => audit.push(summary),
+    log: (line) => lines.push(line),
+    utteranceHoldMs: 0,
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  t.after(
+    () => new Promise((done) => {
+      for (const client of wss.clients) client.terminate();
+      wss.close(() => server.close(done));
+    }),
+  );
+  const frames = [];
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${server.address().port}${VOICE_STREAM_PATH}?voiceSessionId=vs-privacy`,
+    { headers: { Authorization: 'Bearer tok-1' } },
+  );
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary) frames.push(JSON.parse(data.toString()));
+  });
+  await once(ws, 'open');
+  await waitUntil(() => frames.some((frame) => frame.t === 'ready'));
+  return { ws, frames, lines, audit, engine };
 }
 
 function capabilities() {
@@ -184,4 +267,96 @@ test('a rotation that fails still writes the line and is reported once', () => {
   assert.equal(existsSync(`${path}.1`), false, 'nothing was moved');
   assert.equal(reported.length, 1, 'one report per failure, not one per call');
   assert.match(reported[0], /^voice\.audit rotate failed reason=EPERM/);
+  assert.equal(
+    reported[0].includes('audit is locked'),
+    false,
+    'the filesystem message can name a path, so only its code is logged',
+  );
+});
+
+test('the audit retention is 30 days, as D6 states', () => {
+  assert.equal(AUDIT_MAX_AGE_MS, 30 * 24 * 60 * 60 * 1000);
+});
+
+// ─── Untrusted error text never reaches a log or the audit ───────────────
+
+test('an audit error that is not one of the Gate’s end reasons is reduced to its size', () => {
+  const secret = 'backend said: the transcript asked what is my balance';
+  const line = buildAuditLine({ error: secret });
+  assert.match(line.error, /^redacted chars=\d+$/);
+  assert.equal(JSON.stringify(line).includes('balance'), false);
+  assert.equal(buildAuditLine({ error: 'network' }).error, 'network');
+  assert.equal(buildAuditLine({}).error, null);
+  assert.equal(buildAuditLine({ error: { text: secret } }).error, null);
+});
+
+test('a backend failure is logged by size, never by the words it failed on', async (t) => {
+  const secret = 'the operator said my account number is 4417 and my postcode is EH1 1AA';
+  const { ws, frames, lines, audit, engine } = await startPrivacyCall(t, {
+    runTurn: async () => {
+      throw new Error(secret);
+    },
+  });
+
+  engine.emit('final', { text: 'what is the weather' });
+  const failure = await waitUntil(() => lines.find((line) => /^voice\.turn fail /.test(line)));
+  assert.match(failure, /reason=redacted chars=\d+/);
+  assert.ok(failure.includes(`chars=${secret.length}`), 'the size is what a log may keep');
+  assert.equal(failure.includes('4417'), false);
+  assert.equal(failure.includes('postcode'), false);
+
+  // The phone still learns the turn failed; the dropped words are the
+  // backend's account of why, not anything the operator said.
+  await waitUntil(() => frames.some((frame) => frame.t === 'turn' && frame.state === 'failed'));
+
+  const closed = once(ws, 'close');
+  ws.send(JSON.stringify({ t: 'end' }));
+  await waitUntil(() => audit.length === 1);
+  await closed;
+  assert.equal(JSON.stringify(audit[0]).includes('4417'), false);
+  assert.equal(audit[0].error, 'user');
+});
+
+test('an engine error is logged by size, never by its words', async (t) => {
+  const secret = 'worker traceback: the prompt asked what is my balance';
+  const { ws, lines, engine } = await startPrivacyCall(t, {
+    runTurn: async () => ({ hasContent: true }),
+  });
+
+  engine.emit('error', { code: 'engine_failed', message: secret });
+  const event = await waitUntil(() => lines.find((line) => /^voice\.event .*type=error/.test(line)));
+  assert.match(event, /code=engine_failed/);
+  assert.match(event, /message=redacted chars=\d+/);
+  assert.equal(event.includes('balance'), false);
+
+  const closed = once(ws, 'close');
+  ws.close();
+  await closed;
+});
+
+test('a refused start logs its reason by size, never by the words in it', async () => {
+  const secret = 'The PC voice models are missing from C:\\Users\\operator\\transcript.txt';
+  const lines = [];
+  const { methods } = createVoiceRpc({
+    capabilities: () => ({
+      enabled: true,
+      engines: { local: { state: 'not-installed', reason: secret } },
+      limits: { maxConcurrentCalls: 1 },
+    }),
+    log: (line) => lines.push(line),
+  });
+
+  await assert.rejects(
+    () => methods['voice.session.start'](
+      { engine: 'auto', thread },
+      { deviceId: 'device-raw-7f3a9c2e' },
+    ),
+    (error) => error.code === 'no_engine',
+  );
+
+  const failure = lines.find((line) => /voice\.session\.start fail/.test(line));
+  assert.ok(failure, 'the refused start was logged');
+  assert.match(failure, /reason=redacted chars=\d+/);
+  assert.equal(failure.includes('transcript.txt'), false);
+  assert.equal(failure.includes('device-raw'), false);
 });

@@ -33,6 +33,18 @@ export function deviceTag(deviceId) {
   return createHash('sha256').update(String(deviceId)).digest('hex').slice(0, 12);
 }
 
+/**
+ * What a voice log may say about text the Gate did not author. A backend or
+ * worker error can quote the prompt or transcript it failed on, so the words
+ * stay out of both the log and the audit (S3): the marker says a value existed,
+ * and the count is enough to tell a terse failure from a detailed one.
+ */
+export function redactedLogText(value) {
+  if (value === undefined || value === null) return 'none';
+  const text = String(value);
+  return text ? `redacted chars=${text.length}` : 'none';
+}
+
 // D6: one month is the whole retention. The size bound is the second half of
 // the same promise — a Gate that makes a call every few minutes must not grow
 // the file without limit inside its month.
@@ -99,13 +111,28 @@ function taggedDevice(summary) {
   return deviceTag(raw);
 }
 
+/**
+ * The audit's `error` field is one of the reducer's end reasons: a short code
+ * the Gate wrote, never a backend's sentence. Anything else handed to the sink
+ * is reduced to the same size marker the logs use (S3), so a stray message
+ * cannot turn into transcript bytes on disk.
+ */
+function auditError(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') return null;
+  if (!value) return null;
+  return /^[a-z][a-z0-9-]{0,31}$/i.test(value) ? value : redactedLogText(value);
+}
+
 /** Pick the fixed fields out of a call summary. Anything else is not written. */
 export function buildAuditLine(summary = {}, now = () => new Date().toISOString()) {
   const providedTs = scalar(summary.ts);
   const line = { ts: typeof providedTs === 'string' && providedTs ? providedTs : now() };
   for (const field of AUDIT_FIELDS) {
     if (field === 'ts') continue;
-    line[field] = field === 'deviceTag' ? taggedDevice(summary) : scalar(summary[field]);
+    if (field === 'deviceTag') line[field] = taggedDevice(summary);
+    else if (field === 'error') line[field] = auditError(summary[field]);
+    else line[field] = scalar(summary[field]);
   }
   if (typeof line.turns !== 'number') line.turns = 0;
   return line;
@@ -163,6 +190,18 @@ function rotateAudit(path) {
   renameSync(path, previous);
 }
 
+/**
+ * The diagnostic part of a failed fs call: Node sets `code` (`EPERM`,
+ * `ENOSPC`), and a message with no code still leads with the operating
+ * system's own. The rest — which can name a path — never reaches the log (S3).
+ */
+function auditErrorCode(error) {
+  const code = error?.code;
+  if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,31}$/.test(code)) return code;
+  const lead = /^([A-Z][A-Z0-9_]{1,31})\b/.exec(String(error?.message ?? ''));
+  return lead ? lead[1] : 'unknown';
+}
+
 /** A JSONL sink for audit lines; the directory is created on first use. */
 export function createVoiceAudit({
   dir,
@@ -205,7 +244,7 @@ export function createVoiceAudit({
       } catch (error) {
         if (!rotateFailureLogged) {
           rotateFailureLogged = true;
-          log(`voice.audit rotate failed reason=${error?.message ?? String(error)}`);
+          log(`voice.audit rotate failed reason=${auditErrorCode(error)}`);
         }
       }
       appendFile(path, `${JSON.stringify(buildAuditLine(summary, now))}\n`);

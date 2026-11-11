@@ -4,8 +4,22 @@
 // banner that draws them, and so it is pinned without mounting a screen.
 
 import {
+  HANDSFREE_DISCLOSURE,
   handsfreeElapsedCopy,
 } from '@/lib/voice/handsfree-call-copy';
+
+describe('the call’s disclosure', () => {
+  test('says the voice streams continuously while the call is unmuted', () => {
+    expect(HANDSFREE_DISCLOSURE).toContain('streams continuously');
+    expect(HANDSFREE_DISCLOSURE).toContain('unmuted');
+  });
+
+  test('keeps the auto-send, interruption and end instructions', () => {
+    expect(HANDSFREE_DISCLOSURE).toContain('sent automatically when you pause');
+    expect(HANDSFREE_DISCLOSURE).toContain('interrupt a reply');
+    expect(HANDSFREE_DISCLOSURE).toContain('End it here');
+  });
+});
 
 describe('the call’s elapsed time', () => {
   test('says minutes under the hour and folds hours in past one', () => {

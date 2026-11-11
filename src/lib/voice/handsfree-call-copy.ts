@@ -18,7 +18,7 @@ import type {
 
 /** The exact disclosure the sheet shows before the first call, and every one. */
 export const HANDSFREE_DISCLOSURE =
-  'Hands-free calls listen only after you start them. Speech is sent automatically when you pause. You can interrupt a reply just by talking. The call continues while Versutus is in the background. End it here or from Android’s notification.';
+  'Hands-free calls listen only after you start them. While the call is unmuted your voice streams continuously to the engine for this call. Speech is sent automatically when you pause. You can interrupt a reply just by talking. The call continues while Versutus is in the background. End it here or from Android’s notification.';
 
 /**
  * The one sentence that says where a dead call's words go. Crash recovery is

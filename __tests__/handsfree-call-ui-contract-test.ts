@@ -43,9 +43,9 @@ const fallback = readSource(
 const native = readSource('src', 'components', 'voice', 'handsfree-call-indicator.native.tsx');
 
 describe('the disclosure a call must show', () => {
-  test('spells out auto-send, interruption and background lifetime exactly', () => {
+  test('spells out continuous streaming, auto-send, interruption and background lifetime exactly', () => {
     expect(HANDSFREE_DISCLOSURE).toBe(
-      'Hands-free calls listen only after you start them. Speech is sent automatically when you pause. You can interrupt a reply just by talking. The call continues while Versutus is in the background. End it here or from Android’s notification.',
+      'Hands-free calls listen only after you start them. While the call is unmuted your voice streams continuously to the engine for this call. Speech is sent automatically when you pause. You can interrupt a reply just by talking. The call continues while Versutus is in the background. End it here or from Android’s notification.',
     );
     expect(sheet).toContain('HANDSFREE_DISCLOSURE');
     expect(sheet).toContain('label="Cancel"');

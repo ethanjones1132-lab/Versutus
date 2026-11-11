@@ -33,14 +33,46 @@ describe('the engine rows Settings and the start sheet share', () => {
     }
   });
 
-  test('the local disclosure promises the PC and no recording', () => {
-    expect(LOCAL_DISCLOSURE).toContain('nowhere else');
+  test('the local disclosure names the PC, the encrypted link and continuous streaming', () => {
+    expect(LOCAL_DISCLOSURE).toContain('Versutus on your PC');
+    expect(LOCAL_DISCLOSURE).not.toContain('nowhere else');
+    expect(LOCAL_DISCLOSURE).toContain('streams continuously');
+    expect(LOCAL_DISCLOSURE).toContain('unmuted');
+    expect(LOCAL_DISCLOSURE).toContain('encrypted link');
     expect(LOCAL_DISCLOSURE).toContain('Nothing is recorded');
   });
 
-  test('the codex disclosure names OpenAI and the plan allowance', () => {
+  test('the local disclosure says speech auto-sends and how to end the call', () => {
+    expect(LOCAL_DISCLOSURE).toContain('when you pause');
+    expect(LOCAL_DISCLOSURE).toContain('End it here');
+  });
+
+  test('the codex disclosure names OpenAI, the plan allowance and the transport', () => {
     expect(CODEX_DISCLOSURE).toContain('OpenAI');
     expect(CODEX_DISCLOSURE).toContain("ChatGPT plan's voice allowance");
+    expect(CODEX_DISCLOSURE).toContain('streams continuously');
+    expect(CODEX_DISCLOSURE).toContain('unmuted');
+    expect(CODEX_DISCLOSURE).toContain('encrypted link');
+  });
+
+  test('every engine disclosure says audio streams continuously while the call is unmuted', () => {
+    for (const row of VOICE_ENGINE_ROWS) {
+      expect(row.disclosure).toContain('streams continuously');
+      expect(row.disclosure).toContain('unmuted');
+    }
+  });
+
+  test('every engine disclosure says speech auto-sends and how to end', () => {
+    for (const row of VOICE_ENGINE_ROWS) {
+      expect(row.disclosure).toContain('sent automatically');
+      expect(row.disclosure).toContain('End it here');
+    }
+  });
+
+  test('no engine claims the audio goes nowhere else', () => {
+    for (const row of VOICE_ENGINE_ROWS) {
+      expect(row.disclosure).not.toContain('nowhere else');
+    }
   });
 
   test('the phone row keeps the Phase 0 disclosure verbatim', () => {

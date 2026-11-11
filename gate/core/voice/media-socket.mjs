@@ -26,6 +26,7 @@
 
 import { WebSocketServer } from 'ws';
 
+import { redactedLogText } from './audit.mjs';
 import { parsePhoneFrame, serializeFrame } from './protocol.mjs';
 import { INITIAL_VOICE_SESSION, reduceVoiceSession } from './voice-session.mjs';
 
@@ -559,10 +560,14 @@ export function attachVoiceMediaSocket({
     };
 
     const dispatch = (event) => {
-      // The phone only hears "that turn could not be completed"; the host
-      // log has to say why, or a wrong backend looks like a flaky model.
+      // The phone only hears "that turn could not be completed"; the host log
+      // names the failure and its size, while the stage line above names the
+      // backend and step, so a wrong backend still reads differently from a
+      // flaky model without the backend's words reaching disk (S3).
       if (event.type === 'replyFailed') {
-        log(`voice.turn fail session=${session.voiceSessionId} reason=${event.message}`);
+        // The backend's own words can quote the prompt or transcript it failed
+        // on, so the log names the failure and its size, never the text.
+        log(`voice.turn fail session=${session.voiceSessionId} reason=${redactedLogText(event.message)}`);
       }
       // One line per step a call takes, so "it never answered" can be placed:
       // no audio, no transcript, a transcript but no turn, or a turn with no
@@ -593,7 +598,7 @@ export function attachVoiceMediaSocket({
           turnSentenceAt = 0;
         }
       } else if (['bargein', 'userSpeechStart', 'skip', 'end', 'error', 'mute', 'unmute'].includes(event.type)) {
-        log(`voice.event session=${session.voiceSessionId} type=${event.type}${event.code ? ` code=${event.code}` : ''}${event.message ? ` message=${event.message}` : ''}`);
+        log(`voice.event session=${session.voiceSessionId} type=${event.type}${event.code ? ` code=${event.code}` : ''}${event.message ? ` message=${redactedLogText(event.message)}` : ''}`);
       } else if (event.type === 'socketClosed') {
         log(
           `voice.end session=${session.voiceSessionId} reason=${event.reason}`
@@ -1059,7 +1064,9 @@ export function attachVoiceMediaSocket({
       })
       .catch((error) => {
         const message = error?.message ?? 'The PC voice engine would not start.';
-        log(`voice.stream engine-open fail session=${session.voiceSessionId} ${message}`);
+        // An engine that fails to open is a worker error by the time it gets
+        // here; its words can carry a traceback, so only the size is logged.
+        log(`voice.stream engine-open fail session=${session.voiceSessionId} reason=${redactedLogText(message)}`);
         sendFrame({
           t: 'error',
           code: 'engine_open_failed',

@@ -255,7 +255,12 @@ test('an engine that will not open ends the call with a logged fatal error', asy
   const fatal = await waitUntil(() => frames.find((frame) => frame.t === 'error' && frame.fatal));
   assert.equal(fatal.code, 'engine_open_failed');
   assert.match(fatal.message, /worker missing/);
-  assert.ok(lines.some((line) => /engine-open fail/.test(line) && /worker missing/.test(line)));
+  // The phone is told the engine's own reason; the Gate log keeps its size and
+  // drops the words, which a worker error can fill with a traceback (S3).
+  assert.ok(
+    lines.some((line) => /engine-open fail/.test(line) && /reason=redacted chars=\d+/.test(line)),
+  );
+  assert.ok(lines.every((line) => !line.includes('worker missing')));
   await once(ws, 'close');
   // Every call leaves one summary line saying how far it got.
   const summary = await waitUntil(() => lines.find((line) => /^voice\.end /.test(line)));

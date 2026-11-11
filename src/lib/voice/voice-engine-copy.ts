@@ -16,18 +16,22 @@ export type VoiceEngineRow = {
   disclosure: string;
 };
 
+// The local engine's audio still crosses the network from the phone to the PC,
+// and a plaintext link would let the network read it. S1 refuses that link
+// rather than warn, so the one truthful sentence names the encrypted transport
+// the call can actually use instead of claiming the audio goes "nowhere else".
 export const LOCAL_DISCLOSURE =
-  'Your voice goes to Versutus on your PC and nowhere else. Nothing is recorded. What you say becomes chat messages.';
+  'Your voice streams continuously from this phone to Versutus on your PC while the call is unmuted, over an encrypted link (Tailscale or HTTPS). Nothing is recorded. Speech is sent automatically as a chat message when you pause. End it here or from Android’s notification.';
 
 export const CODEX_DISCLOSURE =
-  "Your voice goes through your PC to OpenAI and uses your ChatGPT plan's voice allowance. Versutus records nothing. What you say becomes chat messages.";
+  "Your voice streams continuously from this phone through your PC to OpenAI while the call is unmuted, over an encrypted link (Tailscale or HTTPS). It uses your ChatGPT plan's voice allowance. Versutus records nothing. Speech is sent automatically as a chat message when you pause. End it here or from Android’s notification.";
 
 export const VOICE_ENGINE_ROWS: VoiceEngineRow[] = [
   {
     id: 'auto',
     label: 'Automatic',
     summary: 'This PC when its voice models are ready, otherwise this phone. Only the engine it picks receives audio.',
-    disclosure: 'Versutus picks the best available engine for the call and shows which one it used.',
+    disclosure: 'Versutus picks the best available engine for the call and shows which one it used. Whichever engine it picks, your voice streams continuously to it while the call is unmuted. Speech is sent automatically when you pause. End it here or from Android’s notification.',
   },
   {
     id: 'local',
