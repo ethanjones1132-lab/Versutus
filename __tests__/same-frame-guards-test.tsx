@@ -92,7 +92,7 @@ test('Connect ignores same-frame duplicates and is available after settling', as
   const first = deferred<{ kind: string }>();
   mockGateway.setupFromPcAddress.mockReturnValueOnce(first.promise).mockResolvedValue({ kind: 'unreachable' });
   await act(async () => { renderer = create(createElement(OnboardingScreen)); });
-  const address = renderer.root.findAllByType(FIELD).find((item) => String(item.props.placeholder).endsWith('ts.net'));
+  const address = renderer!.root.findAllByType(FIELD).find((item) => String(item.props.placeholder).endsWith('ts.net'));
   await act(async () => address?.props.onChangeText('my-pc.tailnet.ts.net'));
   await act(async () => {
     button('Connect your PC').props.onPress();
@@ -108,7 +108,7 @@ test('Add ignores same-frame duplicates and is available after rejection', async
   const first = deferred<unknown>();
   mockGateway.botJobs.create.mockReturnValueOnce(first.promise).mockRejectedValueOnce(new Error('refused'));
   await act(async () => { renderer = create(createElement(CronSection, { showList: false })); });
-  const fields = renderer.root.findAllByType(FIELD);
+  const fields = renderer!.root.findAllByType(FIELD);
   await act(async () => {
     fields[0]?.props.onChangeText('Overnight');
     fields[1]?.props.onChangeText('0 9 * * *');
