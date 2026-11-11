@@ -1,0 +1,37 @@
+{
+  "sampleRate": 16000,
+  "frameMs": 20,
+  "utterances": [
+    {
+      "id": "silence-200ms",
+      "label": "silence",
+      "description": "200 ms of digital silence. Nothing should be heard, so no final and no turn.",
+      "segments": [{ "kind": "silence", "ms": 200 }],
+      "finals": [],
+      "expect": { "outcome": "no-final", "utterances": 0 }
+    },
+    {
+      "id": "tone-300ms",
+      "label": "tone",
+      "description": "One 300 ms 440 Hz tone with one labelled endpoint: one answered turn.",
+      "segments": [{ "kind": "tone", "ms": 300, "hz": 440, "amplitude": 0.2 }],
+      "finals": [{ "afterMs": 300, "text": "a steady tone" }],
+      "expect": { "outcome": "answered", "utterances": 1 }
+    },
+    {
+      "id": "tone-pause-tone",
+      "label": "thinking-pause",
+      "description": "Two 260 ms tones split by a 1.2 s thinking pause. The default 1.8 s hold gathers both endpoints into one turn.",
+      "segments": [
+        { "kind": "tone", "ms": 260, "hz": 440, "amplitude": 0.2 },
+        { "kind": "silence", "ms": 1200 },
+        { "kind": "tone", "ms": 260, "hz": 440, "amplitude": 0.2 }
+      ],
+      "finals": [
+        { "afterMs": 260, "text": "first half" },
+        { "afterMs": 1720, "text": "second half" }
+      ],
+      "expect": { "outcome": "answered", "utterances": 1 }
+    }
+  ]
+}
