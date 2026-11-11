@@ -30,6 +30,7 @@ import { DayDivider } from '@/components/chat/day-divider';
 import { ChatEmptyState } from '@/components/chat/chat-empty-state';
 import { ChatHeader } from '@/components/chat/chat-header';
 import { ChatOverflowSheet, type ChatSessionStats } from '@/components/chat/chat-overflow-sheet';
+import { SessionChangesSheet } from '@/components/chat/session-changes-sheet';
 import { ConfirmationSheet } from '@/components/chat/confirmation-sheet';
 import { MessageActionsSheet } from '@/components/chat/message-actions-sheet';
 import { MessageBubble } from '@/components/chat/message-bubble';
@@ -41,6 +42,7 @@ import { Motion, Radius, Spacing } from '@/constants/tokens';
 import { entering } from '@/lib/motion/presets';
 import { useChatSurface, useGateway } from '@/context/gateway-provider';
 import type { SendChatInputOutcome } from '@/context/gateway-provider';
+import type { SessionChanges } from '@/lib/gateway/manifest-client';
 import { useHandsfreeVoice } from '@/context/handsfree-voice-provider';
 import { describeGatewayError, errorBannerButton, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import { modelLockFor, type ModelTurnLock } from '@/lib/gateway/run-failures';
@@ -570,6 +572,7 @@ export function ChatScreen() {
     selectedBotId,
     relatedWorkflows,
     gatewayRequest,
+    gatewayFetch,
     requestedSurface,
     clearRequestedSurface,
     requestedComposerFocus,
@@ -611,6 +614,7 @@ export function ChatScreen() {
   const [copyNotice, setCopyNotice] = useState<string | undefined>();
   const [dismissedPairingKey, setDismissedPairingKey] = useState<string | null>(null);
   const [overflowVisible, setOverflowVisible] = useState(false);
+  const [sessionChangesVisible, setSessionChangesVisible] = useState(false);
   // The Bot's own panel (voice, skills, tools, routines), opened from its name.
   const [botPanelVisible, setBotPanelVisible] = useState(false);
   // The Look studio: which Bot's form, face and colour are being chosen.
@@ -627,6 +631,39 @@ export function ChatScreen() {
   const headerScrolledRef = useRef(false);
   const [refreshing, setRefreshing] = useState(false);
   const [surface, setSurface] = useState<ChatSurface>({ kind: 'roster' });
+
+  const loadSessionChanges = useCallback(async (sessionId: string): Promise<SessionChanges> => {
+    // A direct Hermes/OpenClaw connection is not a Gate-hosted CLI backend, so
+    // no session-diff route exists there to ask.
+    if (backends.length === 0) return { supported: false, files: [] };
+    const query = selectedBotId
+      ? `bot=${encodeURIComponent(selectedBotId)}`
+      : selectedBackendId
+        ? `backendId=${encodeURIComponent(selectedBackendId)}`
+        : '';
+    const suffix = query ? `?${query}` : '';
+    const response = await gatewayFetch(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/changes${suffix}`,
+    );
+    const raw = await response.text();
+    let body: unknown;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      throw new Error(`The gateway returned an unreadable session diff (HTTP ${response.status}).`);
+    }
+    if (!response.ok) {
+      const message = body && typeof body === 'object'
+        ? (body as { error?: { message?: unknown } }).error?.message
+        : undefined;
+      throw new Error(typeof message === 'string' ? message : `Could not load session changes (HTTP ${response.status}).`);
+    }
+    if (!body || typeof body !== 'object' || typeof (body as { supported?: unknown }).supported !== 'boolean'
+      || !Array.isArray((body as { files?: unknown }).files)) {
+      throw new Error('The gateway returned session changes in an unreadable format.');
+    }
+    return body as SessionChanges;
+  }, [backends.length, gatewayFetch, selectedBackendId, selectedBotId]);
   const [rosterRows, setRosterRows] = useState<RosterRow[]>([{ kind: 'configurable' }]);
   // Starts true: nothing has loaded yet. The roster effect's resolve/reject
   // callbacks clear it — the flag is never written synchronously in an effect
@@ -3486,6 +3523,9 @@ export function ChatScreen() {
           setDraft('/run ');
           setOverflowVisible(false);
         }}
+        onChangesPress={threadSurface && currentSessionId
+          ? () => setSessionChangesVisible(true)
+          : undefined}
         onEditAgent={
           surface.kind === 'bot' && hasBotManagement && botRuntimeWritable(activeBotRow?.runtime)
             ? () => {
@@ -3500,6 +3540,13 @@ export function ChatScreen() {
               }
             : undefined
         }
+      />
+
+      <SessionChangesSheet
+        visible={sessionChangesVisible}
+        sessionId={currentSessionId}
+        onClose={() => setSessionChangesVisible(false)}
+        loadChanges={loadSessionChanges}
       />
 
       <MessageActionsSheet

@@ -54,6 +54,10 @@ function v2Server() {
     if (path.startsWith('/agent') || path.startsWith('/config/')) return html; // the real 2.x answer to v1 routes
     if (path.startsWith('/api/agent')) return json({ data: V2_AGENTS });
     if (path.startsWith('/api/model')) return json({ data: V2_MODELS });
+    if (path.includes('/diff')) return json({ data: [
+      { file: 'src/changed.ts', additions: 1, deletions: 1, patch: '--- a/src/changed.ts\n+++ b/src/changed.ts\n@@ -1 +1 @@\n-old\n+new' },
+      { file: 'src/new.ts', additions: 1, deletions: 0, patch: '--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1 @@\n+new' },
+    ] });
     if (path.startsWith('/api/session') && method === 'GET') return json({ data: V2_SESSIONS });
     if (path.startsWith('/api/session') && method === 'POST') {
       return json({ data: { id: 'ses_new', title: 'x', agent: JSON.parse(init.body ?? '{}').agent, time: { created: 3 } } });
@@ -78,6 +82,49 @@ test('a 2.x server lists its own agent files as Bots, read from /api/agent', asy
   // 2.x takes Basic auth; v1's Bearer would be refused.
   const agentRead = requests.find((request) => request.path.startsWith('/api/agent'));
   assert.match(agentRead.auth ?? '', /^Basic /);
+});
+
+test('a 2.x session diff is read from the documented diff endpoint with its workspace scope', async () => {
+  const { requests, fetchImpl } = v2Server();
+  const backend = createOpenCodeBackend({
+    baseUrl: 'http://127.0.0.1:4096',
+    fetchImpl,
+    password: 'test-only',
+    directory: 'C:\\workspace',
+  });
+  const result = await backend.getSessionChanges('ses_review');
+  assert.equal(result.supported, true);
+  assert.deepEqual(result.files, [
+    { path: 'src/changed.ts', status: 'modified', additions: 1, deletions: 1, patch: '--- a/src/changed.ts\n+++ b/src/changed.ts\n@@ -1 +1 @@\n-old\n+new' },
+    { path: 'src/new.ts', status: 'added', additions: 1, deletions: 0, patch: '--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1 @@\n+new' },
+  ]);
+  const diffRead = requests.find((request) => request.path.includes('/diff'));
+  assert.equal(diffRead.method, 'GET');
+  assert.match(diffRead.path, /^\/api\/session\/ses_review\/diff\?location\[directory\]=/);
+  assert.match(diffRead.auth ?? '', /^Basic /);
+});
+
+test('a 1.x OpenCode server reports session diffs as unsupported', async () => {
+  const requests = [];
+  const fetchImpl = async (url) => {
+    const path = String(url).replace(/^https?:\/\/[^/]+/, '');
+    requests.push(path);
+    return path === '/session' ? json([]) : json({ data: [] });
+  };
+  const backend = createOpenCodeBackend({ baseUrl: 'http://127.0.0.1:4096', fetchImpl });
+  assert.deepEqual(await backend.getSessionChanges('ses_v1'), { supported: false, files: [] });
+  assert.deepEqual(requests, ['/session']);
+});
+
+test('an older 2.x server without the diff route reports unsupported for a session that exists', async () => {
+  const { fetchImpl: baseFetch } = v2Server();
+  const fetchImpl = async (url, init = {}) => {
+    const path = String(url).replace(/^https?:\/\/[^/]+/, '');
+    if (path.includes('/diff')) return json({ name: 'NotFound' }, 404);
+    return baseFetch(url, init);
+  };
+  const backend = createOpenCodeBackend({ baseUrl: 'http://127.0.0.1:4096', fetchImpl, password: 'test-only' });
+  assert.deepEqual(await backend.getSessionChanges('ses_existing'), { supported: false, files: [] });
 });
 
 test('a 2.x getBot returns the agent system prompt as the soul and refuses a built-in', async () => {

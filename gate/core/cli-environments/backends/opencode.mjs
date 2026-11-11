@@ -1517,6 +1517,52 @@ export function createOpenCodeBackend({
       return typeof limit === 'number' ? (limit === 0 ? [] : mapped.slice(-limit)) : mapped;
     },
 
+    /** OpenCode 2.x exposes the session's actual structured file diff. */
+    async getSessionChanges(sessionId) {
+      const { major } = await serverProfile();
+      if (major < 2) return { supported: false, files: [] };
+      let result;
+      try {
+        result = await call(
+          `/api/session/${encodeURIComponent(sessionId)}/diff${locationQuery()}`,
+          {},
+          readTimeoutMs,
+          2,
+        );
+      } catch (error) {
+        if (error?.status !== 404) throw error;
+        // Older 2.x builds predate the diff route. A session read distinguishes
+        // that from a genuinely missing session before reporting unsupported.
+        try {
+          await call(`/api/session/${encodeURIComponent(sessionId)}${locationQuery()}`, {}, readTimeoutMs, 2);
+          return { supported: false, files: [] };
+        } catch {
+          throw error;
+        }
+      }
+      const rows = Array.isArray(result) ? result : Array.isArray(result?.data) ? result.data : [];
+      return {
+        supported: true,
+        files: rows.filter((row) => row && typeof row.file === 'string').map((row) => {
+          const patch = typeof row.patch === 'string' ? row.patch : typeof row.diff === 'string' ? row.diff : undefined;
+          const status = typeof row.status === 'string'
+            ? row.status
+            : /^(?:new file mode|--- \/dev\/null)/m.test(patch ?? '')
+              ? 'added'
+              : /^(?:deleted file mode|\+\+\+ \/dev\/null)/m.test(patch ?? '')
+                ? 'deleted'
+                : 'modified';
+          return {
+            path: row.file,
+            status,
+            additions: Number.isFinite(row.additions) ? row.additions : 0,
+            deletions: Number.isFinite(row.deletions) ? row.deletions : 0,
+            ...(patch !== undefined ? { patch } : {}),
+          };
+        }),
+      };
+    },
+
     /**
      * Submit the turn and complete it from the bus; live deltas come from
      * streamEvents.

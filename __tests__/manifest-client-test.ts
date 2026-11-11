@@ -834,6 +834,28 @@ describe('ManifestClient sessions and runs when advertised', () => {
     );
   });
 
+  test('session changes are requested for the selected backend and parsed as a real diff', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        supported: true,
+        files: [{ path: 'src/main.ts', status: 'modified', additions: 1, deletions: 1, patch: '@@ diff @@' }],
+      }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = clientWithEndpoints({ health: '/health', sessions: '/v1/sessions' });
+    client.setBackendId('opencode-local');
+    await expect(client.getSessionChanges('odd/session')).resolves.toEqual({
+      supported: true,
+      files: [{ path: 'src/main.ts', status: 'modified', additions: 1, deletions: 1, patch: '@@ diff @@' }],
+    });
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      '/v1/sessions/odd%2Fsession/changes?backendId=opencode-local',
+    );
+  });
+
   test('an advertised sessionMessages template keeps its own query and interpolation byte-for-byte', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

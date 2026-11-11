@@ -75,6 +75,7 @@ const FLAVOR_MODULES = { openai: openaiFlavor, anthropic: anthropicFlavor };
 // Authenticated routes get a generous body cap because chat turns can carry
 // base64 images.
 const AUTH_MAX_BODY_BYTES = 64 * 1024 * 1024;
+const SESSION_PATCH_MAX_BYTES = 200 * 1024;
 
 // A phone that names its turn can detach from it: a backgrounded app has its
 // socket suspended or killed by Android, which says nothing about the turn
@@ -2575,6 +2576,7 @@ export async function createGate(config = {}) {
         (pathname === '/v1/sessions' && (method === 'GET' || method === 'POST')) ||
         (method === 'DELETE' && /^\/v1\/sessions\/[^/]+$/.test(pathname)) ||
         /^\/v1\/sessions\/[^/]+\/messages$/.test(pathname) ||
+        (method === 'GET' && /^\/v1\/sessions\/[^/]+\/changes$/.test(pathname)) ||
         (pathname === '/v1/environments' && method === 'GET') ||
         /^\/v1\/environments\/[^/]+\/runs$/.test(pathname) ||
         /^\/v1\/environments\/[^/]+\/runs\/[^/]+\/events$/.test(pathname) ||
@@ -4193,6 +4195,49 @@ export async function createGate(config = {}) {
             nextBefore: lower > 0 ? (page[0]?.id ?? null) : null,
           }),
         );
+        return;
+      }
+
+      const sessionChangesMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/changes$/);
+      if (sessionChangesMatch && method === 'GET') {
+        const scope = await resolveConversationScope(url.searchParams.get('backendId'), readBotId(url));
+        if (!scope?.backend) return;
+        const backend = scope.backend;
+        if (typeof backend.getSessionChanges !== 'function') {
+          res.writeHead(200);
+          res.end(JSON.stringify({ files: [], supported: false }));
+          return;
+        }
+        let changes;
+        try {
+          changes = await backend.getSessionChanges(decodeURIComponent(sessionChangesMatch[1]));
+        } catch (error) {
+          sessionReadError(error, readBotId(url), 'session_changes_failed');
+          return;
+        }
+        const files = [];
+        let patchBytes = 0;
+        for (const file of Array.isArray(changes?.files) ? changes.files : []) {
+          if (!file || typeof file.path !== 'string') continue;
+          const row = {
+            path: file.path,
+            status: typeof file.status === 'string' ? file.status : 'modified',
+            additions: Number.isFinite(file.additions) ? file.additions : 0,
+            deletions: Number.isFinite(file.deletions) ? file.deletions : 0,
+          };
+          if (typeof file.patch === 'string') {
+            const bytes = Buffer.byteLength(file.patch, 'utf8');
+            if (patchBytes + bytes > SESSION_PATCH_MAX_BYTES) {
+              row.status = 'too_large';
+            } else {
+              patchBytes += bytes;
+              row.patch = file.patch;
+            }
+          }
+          files.push(row);
+        }
+        res.writeHead(200);
+        res.end(JSON.stringify({ files, supported: changes?.supported === true }));
         return;
       }
 

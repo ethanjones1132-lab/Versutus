@@ -57,6 +57,8 @@ export type ChatOverflowSheetProps = {
   rowCount: number;
   /** Present on a Bot's own chat — opens the edit sheet for that agent. */
   onEditAgent?: () => void;
+  /** Opens this session's file-change review. */
+  onChangesPress?: () => void;
 };
 
 /** Chat header overflow: session usage at a glance + session/connection actions. */
@@ -81,6 +83,7 @@ export function ChatOverflowSheet({
   sessions = [],
   rowCount,
   onEditAgent,
+  onChangesPress,
 }: ChatOverflowSheetProps) {
   const tokens = useTokens();
   // Disconnect arms a danger confirmation first — same pattern as session
@@ -161,6 +164,18 @@ export function ChatOverflowSheet({
             chevron={false}
             onPress={() => {
               onStartRun();
+              onClose();
+            }}
+          />
+        ) : null}
+        {onChangesPress ? (
+          <ListRow
+            title="Changes"
+            subtitle="Review files changed in this session"
+            icon={{ ios: 'doc.text.magnifyingglass', android: 'difference', web: 'difference' }}
+            chevron={false}
+            onPress={() => {
+              onChangesPress();
               onClose();
             }}
           />
