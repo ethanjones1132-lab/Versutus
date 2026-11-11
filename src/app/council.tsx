@@ -71,6 +71,16 @@ const COUNCIL_MAX_BOTS = 3;
 const ROSTER_REFRESH_FAILED_COPY = "Couldn't refresh the Bot list";
 
 /**
+ * A roster read and the gateway that answered it. Carrying the id with the Bots
+ * is what lets the screen tell the previous gateway's answer from this one's,
+ * even when it lands after a switch.
+ */
+type RosterRead = { gatewayId: string; bots: PublicBot[] };
+
+/** No roster at all, with one stable identity so the targets memo can trust it. */
+const NO_BOTS: PublicBot[] = [];
+
+/**
  * D7's screen: one prompt, up to three Bots, answers side by side.
  *
  * The app has no per-Bot "ask and await one answer" call, so the send reuses
@@ -89,8 +99,11 @@ const ROSTER_REFRESH_FAILED_COPY = "Couldn't refresh the Bot list";
  */
 export default function CouncilScreen() {
   const router = useRouter();
-  const { status, hasGroupRooms, botGroups, listBots, openBot, requestSurface } = useGateway();
-  const [roster, setRoster] = useState<PublicBot[]>([]);
+  const { activeGateway, status, hasGroupRooms, botGroups, listBots, openBot, requestSurface } = useGateway();
+  // The gateway every Bot on this screen must belong to. No active gateway is an
+  // identity of its own: a switch to "none" must not keep the last one's roster.
+  const gatewayId = activeGateway?.id ?? '';
+  const [rosterRead, setRosterRead] = useState<RosterRead>({ gatewayId: '', bots: [] });
   // The roster read starts empty, so in-flight, refused, and genuinely-empty
   // all used to render the same dead chip box. Three phases keep them apart;
   // only `ready` may claim the roster is empty, and a refused re-read keeps the
@@ -103,6 +116,13 @@ export default function CouncilScreen() {
   const [columns, setColumns] = useState<CouncilColumn[]>([]);
   const [note, setNote] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+
+  // What this gateway is allowed to draw. A read answered for another gateway
+  // stays in state but never appears under this one's name, so a switch drops
+  // the previous gateway's Bots — and the picks that went with them — in the
+  // very render that made the switch, before any effect could clear them.
+  const rosterOwned = rosterRead.gatewayId === gatewayId;
+  const roster = rosterOwned ? rosterRead.bots : NO_BOTS;
 
   // React state cannot guard a handler with side effects: two taps inside one
   // render both read `sending === false`, and the second room was created before
@@ -117,11 +137,13 @@ export default function CouncilScreen() {
   // a request it has already stopped listening to.
   const liveRoomRef = useRef<string | undefined>(undefined);
   // Reads carry a generation: a slow one that lands after a newer read is
-  // dropped instead of overwriting it.
+  // dropped instead of overwriting it. A gateway switch takes one too, so a
+  // read the previous gateway still owes never lands under the new one.
   const rosterGenerationRef = useRef(0);
-  // The roster as the last read saw it, readable from a catch without making
-  // `loadRoster` depend on the roster it writes.
-  const rosterRef = useRef<PublicBot[]>([]);
+  // The roster as the last read saw it, tagged with the gateway that answered
+  // it, readable from a catch without making `loadRoster` depend on the roster
+  // it writes.
+  const rosterRef = useRef<RosterRead | null>(null);
 
   const loadRoster = useCallback(
     async (isLive?: () => boolean): Promise<void> => {
@@ -130,14 +152,18 @@ export default function CouncilScreen() {
       const live = () => generation === rosterGenerationRef.current && (!isLive || isLive());
       // A re-read keeps the chips the operator is looking at: the loading flip
       // is for a read with no roster behind it, and a failure only counts when
-      // there is nothing to keep.
-      setRosterState(rosterRef.current.length > 0 ? 'ready' : 'loading');
+      // there is nothing to keep. Chips another gateway answered are not this
+      // one's to keep — a failed first read of a new gateway is an honest
+      // failure, never A's roster under B's name.
+      const lastRead = rosterRef.current;
+      const kept = lastRead !== null && lastRead.gatewayId === gatewayId ? lastRead.bots : [];
+      setRosterState(kept.length > 0 ? 'ready' : 'loading');
       setRosterError(null);
       try {
         const bots = await listBots();
         if (!live()) return;
-        rosterRef.current = bots;
-        setRoster(bots);
+        rosterRef.current = { gatewayId, bots };
+        setRosterRead({ gatewayId, bots });
         setRosterState('ready');
         // Selection follows the roster: a Bot still on it stays selected, and a
         // Bot the gateway no longer has cannot stay picked for a round.
@@ -149,11 +175,30 @@ export default function CouncilScreen() {
         // A refusal keeps the last-good roster the way chat does. Only a read
         // with no roster behind it may claim failure — the chips the operator
         // selected from are not wiped by a connection blip.
-        if (rosterRef.current.length === 0) setRosterState('failed');
+        if (kept.length === 0) setRosterState('failed');
       }
     },
-    [listBots],
+    [gatewayId, listBots],
   );
+
+  // A gateway switch hands the roster to a new owner. The read the previous
+  // gateway still owes is retired here, before anything else could join it, and
+  // its Bots and picks are cleared before the new read starts. Deferred a tick
+  // because an effect body that writes state trips
+  // react-hooks/set-state-in-effect; the `rosterOwned` boundary above already
+  // hides the old roster in the switch render itself, so nothing of A's shows
+  // in between.
+  useEffect(() => {
+    rosterGenerationRef.current += 1;
+    rosterRef.current = null;
+    const timer = setTimeout(() => {
+      setRosterRead({ gatewayId, bots: [] });
+      setRosterState('loading');
+      setRosterError(null);
+      setSelected([]);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [gatewayId]);
 
   // Deferred one tick so the loading flip is not a setState in the effect
   // body (react-hooks/set-state-in-effect), matching CronSection's mount read.
@@ -411,7 +456,7 @@ export default function CouncilScreen() {
               <Text variant="micro" color="tertiary">
                 {`Bots to compare (${targets.length}/${COUNCIL_MAX_BOTS})`}
               </Text>
-              {rosterState === 'failed' ? (
+              {rosterOwned && rosterState === 'failed' ? (
                 <ErrorCard
                   cause={rosterError ?? 'The Bot list could not be read.'}
                   affected="Choosing Bots for this council"
@@ -426,7 +471,10 @@ export default function CouncilScreen() {
                   title="Not connected to a gateway"
                   description={COUNCIL_OFFLINE_COPY}
                 />
-              ) : rosterState === 'loading' && roster.length === 0 ? (
+              ) : !rosterOwned || (rosterState === 'loading' && roster.length === 0) ? (
+                // A new gateway's roster is loading even before its read starts:
+                // the previous gateway's phase and chips are not this one's to
+                // draw, so the slot claims the read it is about to make.
                 <View style={styles.chips} accessibilityLabel="Loading bots">
                   <Skeleton width={96} height={34} radius={Radius.full} />
                   <Skeleton width={78} height={34} radius={Radius.full} />
