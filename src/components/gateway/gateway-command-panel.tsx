@@ -14,7 +14,7 @@ import { haptics } from '@/lib/haptics';
  * the old grid painted the safe reads as the loud violet ones.
  */
 export function GatewayCommandPanel({
-  title = 'Quick commands',
+  title = 'Commands',
   commands,
   runningCommandId,
   lastSummary,
@@ -37,7 +37,7 @@ export function GatewayCommandPanel({
           {title}
         </Text>
         {lastSummary ? (
-          <Button label="Raw" variant="ghost" size="sm" onPress={onOpenOutput} style={styles.rawButton} />
+          <Button label="View output" variant="ghost" size="sm" onPress={onOpenOutput} style={styles.rawButton} />
         ) : null}
       </View>
 

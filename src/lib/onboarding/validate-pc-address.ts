@@ -3,7 +3,7 @@ import { isCanonicalIpv4 } from '@/lib/gateway/url';
 export function validatePcAddress(value: string): { valid: boolean; message: string } {
   const trimmed = value.trim();
   if (!trimmed) {
-    return { valid: false, message: 'Enter your PC Tailscale name or 100.x.x.x address.' };
+    return { valid: false, message: 'Enter your PC name or 100.x.x.x address.' };
   }
 
   // Optional :port so Gate (:8760) can be named explicitly; Hermes defaults to :8642.
@@ -36,7 +36,7 @@ export function validatePcAddress(value: string): { valid: boolean; message: str
   // some other address.
   if (dottedDecimalPattern.test(withoutPort)) {
     if (!isCanonicalIpv4(withoutPort)) {
-      return { valid: false, message: 'Use a Tailscale hostname, tailnet IP (100.x.x.x), or LAN IP — optional :port (Gate is 8760).' };
+      return { valid: false, message: 'Use a PC name, 100.x.x.x address, or LAN IP — optional :port (Gate is 8760).' };
     }
     return { valid: true, message: 'Looks good — ready to connect.' };
   }
@@ -47,6 +47,6 @@ export function validatePcAddress(value: string): { valid: boolean; message: str
 
   return {
     valid: false,
-    message: 'Use a Tailscale hostname, tailnet IP (100.x.x.x), or LAN IP — optional :port (Gate is 8760).',
+    message: 'Use a PC name, 100.x.x.x address, or LAN IP — optional :port (Gate is 8760).',
   };
 }

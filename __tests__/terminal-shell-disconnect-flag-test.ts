@@ -48,7 +48,7 @@ describe('terminal shell disconnect flag', () => {
   test('the banner dot still reads the flag', () => {
     const src = readScreen();
     expect(src).toContain('terminalConnected ? tokens.statusConnected : tokens.statusConnecting');
-    expect(src).toContain("terminalConnected\n                  ? 'connected'");
+    expect(src).toContain("terminalConnected\n                  ? 'Connected'");
   });
 
   test('the onError and onExit false-setters stay byte-identical', () => {

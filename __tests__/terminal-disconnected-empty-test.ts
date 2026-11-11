@@ -41,9 +41,9 @@ describe('terminal disconnected empty state', () => {
     expect(src.indexOf('actionLabel="Reconnect"')).toBeGreaterThan(src.indexOf("status === 'connected' ? ("));
   });
 
-  test('the disconnected copy stays byte-identical', () => {
+  test('the disconnected copy names the offline state and the one action', () => {
     const src = readScreen();
-    expect(src).toContain('Connect to the gateway to run commands.');
+    expect(src).toContain('Reconnect to run a command.');
   });
 
   test('the connected empty state gives one instruction, and no action of its own', () => {

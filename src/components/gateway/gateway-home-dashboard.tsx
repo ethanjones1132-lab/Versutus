@@ -35,7 +35,6 @@ export function GatewayHomeDashboard() {
   const {
     gateways,
     activeGateway,
-    activeHello,
     status,
     statusDetail,
     lastError,
@@ -299,18 +298,13 @@ export function GatewayHomeDashboard() {
           </View>
           <View style={styles.summaryText}>
             <Text variant="eyebrow" numberOfLines={1} style={styles.eyebrow}>
-              Active gateway
+              Connected to
             </Text>
             <Text variant="title" numberOfLines={1} style={styles.title}>
               {activeLabel}
             </Text>
             <View style={styles.statusText}>
               <Badge label={statusLabel} tone={connected ? 'success' : status === 'pairing' ? 'accent' : 'neutral'} />
-              {activeHello?.server?.version && connected ? (
-                <Text variant="caption" color="tertiary" numberOfLines={1} style={styles.onGlassTertiary}>
-                  v{activeHello.server.version}
-                </Text>
-              ) : null}
             </View>
           </View>
         </View>
@@ -383,7 +377,7 @@ export function GatewayHomeDashboard() {
 
         {!connected && !shownConnectionError ? (
           <Button
-            label="Retry connection"
+            label="Reconnect"
             onPress={async () => {
               await haptics.light();
               void retryAutoConnect();
@@ -395,7 +389,7 @@ export function GatewayHomeDashboard() {
         ) : null}
         <View style={styles.primaryActions}>
           <Button
-            label="Open fleet map"
+            label="View your gateways"
             onPress={async () => {
               await haptics.light();
               router.push('/fleet');
@@ -406,7 +400,7 @@ export function GatewayHomeDashboard() {
             style={styles.primaryAction}
           />
           <Button
-            label="Compare Bots"
+            label="Compare answers"
             onPress={async () => {
               await haptics.light();
               router.push('/council');
@@ -438,21 +432,21 @@ export function GatewayHomeDashboard() {
               color="accent"
             />
             <Text variant="caption" color="accent" style={styles.approvalLabel}>
-              Run needs approval
+              A run is waiting for you
             </Text>
           </View>
           <Text variant="body" numberOfLines={2}>
             {pendingRunApproval.prompt}
           </Text>
-          <Button label="Review approval" variant="secondary" size="sm" onPress={() => router.push('/activity')} />
+          <Button label="Review run" variant="secondary" size="sm" onPress={() => router.push('/activity')} />
         </Card>
       ) : runsSupported && activeRuns.length === 0 ? (
         <Card padding={Spacing.three} style={styles.runHintCard}>
           <Text variant="caption" color="accent" style={styles.approvalLabel}>
-            Agentic runs
+            Runs
           </Text>
           <Text variant="body" color="secondary">
-            Start a tracked task with approval gates from Activity.
+            Start and track a task in Activity.
           </Text>
           <Button
             label="Open Activity"
@@ -484,7 +478,7 @@ export function GatewayHomeDashboard() {
           </Text>
           <Text variant="caption" color="secondary">
             run{activityRuns.length === 1 ? '' : 's'}
-            {activeRuns.length > 0 ? ` · ${activeRuns.length} live` : ''}
+            {activeRuns.length > 0 ? ` · ${activeRuns.length} active` : ''}
           </Text>
         </View>
         <View style={styles.figure}>
@@ -492,14 +486,14 @@ export function GatewayHomeDashboard() {
             {String(capabilityCount)}
           </Text>
           <Text variant="caption" color="secondary">
-            capabilities
+            features
           </Text>
         </View>
       </View>
 
       <HomeBriefingCard />
 
-      <SectionHeader title="Gateways" actionLabel="Add gateway" onAction={() => router.push('/gateway/add')} />
+      <SectionHeader title="Saved gateways" actionLabel="Add gateway" onAction={() => router.push('/gateway/add')} />
 
       {/* A connect this row refused names itself here, rather than leaving an
           unhandled rejection behind and the row looking untouched — and only
@@ -531,7 +525,7 @@ export function GatewayHomeDashboard() {
         <CapabilityHive groups={capabilitySnapshot.groups} status={capabilitySnapshot.status} />
         <GatewayCapabilities snapshot={capabilitySnapshot} />
         <Button
-          label="Refresh capabilities"
+          label="Refresh features"
           variant="ghost"
           onPress={async () => {
             await haptics.light();
@@ -543,11 +537,11 @@ export function GatewayHomeDashboard() {
 
       <ConfirmSheet
         visible={deleteCandidate !== null}
-        title="Remove gateway?"
+        title="Remove saved gateway?"
         message={
           deleteFailure
             ? `${deleteCandidate?.name ?? 'This gateway'} is still saved. ${deleteFailure}`
-            : `${deleteCandidate?.name ?? 'This gateway'} will stay available if discovered again.`
+            : 'You can add it again later.'
         }
         confirmLabel="Remove"
         danger

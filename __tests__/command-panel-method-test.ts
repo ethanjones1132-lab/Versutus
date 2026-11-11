@@ -79,8 +79,8 @@ test('run behaviour, the write mark, and the Running/disabled states hold', () =
   expect(src).toContain('onRun(command);');
 });
 
-test('the Raw output sheet trigger stays untouched', () => {
+test('the output sheet trigger stays untouched', () => {
   const src = panel();
-  expect(src).toContain('label="Raw"');
+  expect(src).toContain('label="View output"');
   expect(src).toContain('onOpenOutput');
 });

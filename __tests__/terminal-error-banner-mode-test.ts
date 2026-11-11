@@ -16,7 +16,7 @@ function readScreen(): string {
 // The ErrorCard used to render only on `terminalError && shellReady &&
 // mode === 'shell'`, so the default RPC/Agent modes surfaced a refused
 // command as `Command failed: …` caption text with no affected/next
-// guidance — while the shell-only gate existed because "Retry terminal"
+// guidance — while the shell-only gate existed because the shell retry
 // opens a background shell instead of retrying the command. The card now
 // renders whenever terminalError is set; mode only picks the copy and the
 // retry (shell keeps its session retry, RPC/Agent re-runs the failed
@@ -48,12 +48,12 @@ describe('terminal error card mode coverage', () => {
     expect(src).toContain('lastSummary={commandOutput || undefined}');
   });
 
-  test('the shell-mode banner copy and retry stay byte-identical', () => {
+  test('the shell-mode banner names the terminal and offers one reconnect', () => {
     const src = readScreen();
-    expect(src).toContain('retryLabel="Retry terminal"');
+    expect(src).toContain('retryLabel="Reconnect"');
     expect(src).toContain('() => void startTerminal()');
-    expect(src).toContain('next="Retry the session or ensure the gateway is connected."');
-    expect(src).toContain('affected={`${modeLabel.toLowerCase()} session`}');
+    expect(src).toContain('next="Reconnect, then try again."');
+    expect(src).toContain('affected="Terminal"');
   });
 
   test('command modes get a command retry wired to the failed command, not a shell retry', () => {
@@ -61,7 +61,7 @@ describe('terminal error card mode coverage', () => {
     expect(src).toContain('retryLabel="Retry command"');
     expect(src).toContain('onRetry={lastFailedCommand ? () => void runGatewayCommand(lastFailedCommand) : undefined}');
     // Exactly one shell retry in the whole screen — the shell branch's.
-    expect(src.match(/retryLabel="Retry terminal"/g)).toHaveLength(1);
+    expect(src.match(/retryLabel="Reconnect"/g)).toHaveLength(1);
     expect(src.match(/retryLabel="Retry command"/g)).toHaveLength(1);
   });
 

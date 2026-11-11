@@ -51,7 +51,6 @@ export function TerminalScreen() {
   const tokens = useTokens();
   const {
     activeGateway,
-    activeHello,
     status,
     statusDetail,
     settings,
@@ -250,7 +249,7 @@ export function TerminalScreen() {
       <Screen>
         <ChatEmptyState
           title="Tools"
-          description="Connect to your PC first — terminal and commands unlock automatically."
+          description="Connect to your PC to use its tools."
           onConnect={() => void retryAutoConnect()}
           onGoHome={() => router.replace('/home')}
         />
@@ -295,16 +294,16 @@ export function TerminalScreen() {
           {mode === 'shell' ? (
             <ErrorCard
               cause={terminalError}
-              affected={`${modeLabel.toLowerCase()} session`}
-              next="Retry the session or ensure the gateway is connected."
-              retryLabel="Retry terminal"
+              affected="Terminal"
+              next="Reconnect, then try again."
+              retryLabel="Reconnect"
               onRetry={() => void startTerminal()}
             />
           ) : (
             <ErrorCard
               cause={terminalError}
-              affected={`${modeLabel.toLowerCase()} command`}
-              next="Check the gateway, then run the command again."
+              affected="Command"
+              next="Check the connection, then try again."
               retryLabel="Retry command"
               onRetry={lastFailedCommand ? () => void runGatewayCommand(lastFailedCommand) : undefined}
             />
@@ -340,11 +339,10 @@ export function TerminalScreen() {
               />
               <Text variant="caption" color={terminalConnected ? 'statusConnected' : 'secondary'}>
                 {terminalConnected
-                  ? 'connected'
+                  ? 'Connected'
                   : terminalError
-                    ? 'session error'
-                    : 'starting…'}
-                {terminalConnected && activeHello?.server?.version ? ` · v${activeHello.server.version}` : ''}
+                    ? "Couldn't start"
+                    : 'Starting…'}
               </Text>
               <Pressable
                 style={styles.terminalBannerCopy}
@@ -388,7 +386,7 @@ export function TerminalScreen() {
                     value={input}
                     onChangeText={setInput}
                     onKeyPress={handleInputKeyPress}
-                    placeholder="Shell input (Enter sends)"
+                    placeholder="Enter a command"
                     onSubmitEditing={() => void sendToTerminal()}
                     returnKeyType="send"
                     accessibilityLabel="Terminal input"
@@ -452,8 +450,8 @@ export function TerminalScreen() {
               // the retry, instead of a caption with no tap anywhere.
               <EmptyState
                 icon={{ ios: 'terminal', android: 'terminal', web: 'terminal' }}
-                title="Connect to run commands"
-                description="Connect to the gateway to run commands."
+                title="Gateway offline"
+                description="Reconnect to run a command."
                 actionLabel="Reconnect"
                 onAction={() => void retryAutoConnect()}
               />

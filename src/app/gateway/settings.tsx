@@ -644,12 +644,12 @@ export default function GatewaySettingsScreen() {
         />
 
         <View style={styles.section}>
-          <SectionHeader title="Gate" />
+          <SectionHeader title="Gateway" />
           <RowGroup>
             <Link href="/gateway/setup" asChild>
               <RowGroupRow
-                title="Providers & gateways"
-                subtitle="Providers, environments, saved gateways"
+                title="Models and connections"
+                subtitle="Set up models and saved gateways."
                 icon={{ ios: 'server.rack', android: 'dns', web: 'dns' }}
                 chevron
               />
@@ -657,9 +657,9 @@ export default function GatewaySettingsScreen() {
             {settings.tailscaleHost ? (
               <Link href="/onboarding" asChild>
                 <RowGroupRow
-                  title="Your PC"
+                  title="PC address"
                   subtitle={`${settings.pcName ?? settings.tailscaleHost} · ${settings.tailscaleHost}`}
-                  detail="Update address or API key"
+                  detail="Change address or key"
                   icon={{ ios: 'desktopcomputer', android: 'computer', web: 'computer' }}
                   chevron
                 />
@@ -720,9 +720,9 @@ export default function GatewaySettingsScreen() {
             </Text>
             {voiceCheckState === 'failed' ? (
               <ErrorCard
-                cause={voiceCheckError ?? "The Gate did not answer this PC's voice check."}
-                affected="Voice engine readiness on this PC"
-                next="Retry — the rows below only reflect the Gate after a successful read."
+                cause={voiceCheckError ?? "Couldn't check voice setup."}
+                affected="Voice settings"
+                next="Reconnect and try again."
                 onRetry={retryVoiceCapabilities}
               />
             ) : null}

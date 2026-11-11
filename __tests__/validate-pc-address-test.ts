@@ -37,7 +37,7 @@ describe('validatePcAddress', () => {
     const verdict = validatePcAddress(value);
     expect(verdict.valid).toBe(false);
     expect(verdict.message).toBe(
-      'Use a Tailscale hostname, tailnet IP (100.x.x.x), or LAN IP — optional :port (Gate is 8760).',
+      'Use a PC name, 100.x.x.x address, or LAN IP — optional :port (Gate is 8760).',
     );
   });
 

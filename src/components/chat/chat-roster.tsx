@@ -308,7 +308,7 @@ function ChatRosterImpl({
           <View>
             {item.showSectionLabel ? (
               <Text variant="eyebrow" color="tertiary" style={styles.sectionLabel}>
-                Rooms
+                Group chats
               </Text>
             ) : null}
             <RosterMemberRow
@@ -533,7 +533,7 @@ function ChatRosterImpl({
           {onNewAgent || onImportAgent || onNewGroup ? (
             <View style={styles.actions}>
               <Text variant="eyebrow" color="tertiary" style={styles.sectionLabel}>
-                Grow the team
+                Add to your team
               </Text>
               {onNewAgent ? (
                 <RosterAction

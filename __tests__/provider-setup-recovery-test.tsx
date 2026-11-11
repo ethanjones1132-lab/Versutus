@@ -329,7 +329,7 @@ describe('the Gate missing-provider-credential refusal reaches provider setup', 
     expect(humanized.cause).toMatch(/gateway connection itself succeeded/i);
     expect(humanized.affected).toBe('model provider');
     // ...and the exact next step named.
-    expect(humanized.next).toMatch(/Settings > Providers & gateways/);
+    expect(humanized.next).toMatch(/Settings > Models and connections/);
     expect(humanized.action).toBe('setup');
 
     // The action the chat banner maps to `/gateway/setup`.
@@ -337,7 +337,7 @@ describe('the Gate missing-provider-credential refusal reaches provider setup', 
       kind: 'setup',
       label: 'Open gateway setup',
     });
-    expect(describeGatewayError(error)).toContain('Settings > Providers & gateways');
+    expect(describeGatewayError(error)).toContain('Settings > Models and connections');
   }
 
   test('classifies the message when the transport retained only text', () => {

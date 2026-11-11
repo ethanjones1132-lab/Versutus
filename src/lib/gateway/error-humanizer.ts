@@ -121,7 +121,7 @@ export function humanizeGatewayError(
       title: 'Model provider needs configuration',
       cause: 'The model provider has no credential, so the Gate had nothing to send. The gateway connection itself succeeded.',
       affected: 'model provider',
-      next: 'Open Settings > Providers & gateways and add the provider key or sign in.',
+      next: 'Open Settings > Models and connections and add the provider key or sign in.',
       action: 'setup',
     };
   }

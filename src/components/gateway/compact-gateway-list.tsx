@@ -77,8 +77,8 @@ function GatewayRow({
   const tokens = useTokens();
   const secureLabel =
     gateway.discoverySource === 'tailscale' || gateway.url.startsWith('wss://')
-      ? 'Tailscale/TLS'
-      : gateway.discoverySource ?? 'manual';
+      ? 'Private network'
+      : gateway.discoverySource ?? 'Added manually';
   // Default collapsed keeps the row slim; the full URL is one tap away when a
   // connection fails and the operator must read the address to debug it.
   const [urlExpanded, setUrlExpanded] = useState(false);
