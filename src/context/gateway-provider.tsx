@@ -1805,6 +1805,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    */
   const scheduleTurnReattachRef = useRef<(turnId: string) => void>(() => undefined);
   const turnRetryRef = useRef<(turnId: string) => void>(() => undefined);
+  /** Settling a bubble whose turn the journal no longer holds. */
+  const settleLostTurnRef = useRef<(turnId: string) => void>(() => undefined);
   /**
    * `resumeRunningTurns`, for the edges declared before it (connect, lifecycle).
    * `owedTurnId` is the turn a send just lost, which the mirrored message list
@@ -2751,6 +2753,71 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   );
 
   /**
+   * Settle a bubble whose turn the journal no longer holds.
+   *
+   * The Gate prunes finished turns (retention), and a Gate restarted on a fresh
+   * journal has none of them either — so the re-attach ladder's read can come
+   * back empty for a turn this process is still showing. The old arm returned on
+   * that answer and nothing was left to finish the bubble: the orb streamed
+   * forever. An empty answer is the journal's verdict that there is nothing left
+   * to read, so the follow stands down and the bubble says what happened.
+   *
+   * The history reload beside it is what can still recover the reply itself,
+   * when the conversation holds it. The bubble is settled first so the reload
+   * carries it across: the read replaces the message list wholesale.
+   */
+  const settleLostTurn = useCallback(
+    async (turnId: string) => {
+      const generation = clientGenerationRef.current;
+      const followEpoch = turnFollowEpochRef.current;
+      // A turn another subscriber is streaming right now is not lost: that
+      // follow is the one that will settle it, and its ladder state is still in
+      // use.
+      if (turnControllersRef.current.has(turnId)) return;
+      // Nothing is left to re-attach, so this follow's seq and spent windows go
+      // with the answer.
+      turnSeqRef.current.delete(turnId);
+      turnAttemptsRef.current.delete(turnId);
+      const timer = turnTimersRef.current.get(turnId);
+      if (timer) {
+        clearTimeout(timer);
+        turnTimersRef.current.delete(turnId);
+      }
+      // The same busy slot `attachTurn` releases on its way out. A read that
+      // lost the race with a newer turn must not unlock the composer under it.
+      if (activeRunIdRef.current === turnId) {
+        activeRunIdRef.current = null;
+        if (turnIdRef.current === turnId) turnIdRef.current = null;
+        setIsSending(false);
+        isSendingRef.current = false;
+      }
+      let previous: ChatMessage[] = [];
+      setMessages((current) => {
+        previous = settleInterruptedFromTurns(current, [
+          {
+            turnId,
+            settlement: { kind: 'interrupted', reason: 'unknown', copy: 'The PC no longer has a record of this reply.' },
+          },
+        ]);
+        return previous;
+      });
+      const gateway = activeGatewayRef.current;
+      if (!gateway) return;
+      await reloadHistoryFor(gateway);
+      // A Stop, a thread switch or a gateway move made while the reload was in
+      // flight owns the list now; this settle must not put its bubble back.
+      if (
+        turnFollowEpochRef.current !== followEpoch ||
+        clientGenerationRef.current !== generation
+      ) {
+        return;
+      }
+      setMessages((history) => preserveInterruptedAfterReload(history, previous));
+    },
+    [reloadHistoryFor],
+  );
+
+  /**
    * Read one turn and do what it now says: follow it again, or settle it.
    *
    * The re-attach ladder's one step. It asks the journal rather than guessing,
@@ -2780,8 +2847,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         if (clientGenerationRef.current === generation) scheduleTurnReattach(turnId);
         return;
       }
+      if (clientGenerationRef.current !== generation) return;
       const turn = read.turn;
-      if (!turn || clientGenerationRef.current !== generation) return;
+      if (!turn) {
+        // The journal answered, and its answer is that this turn is not there:
+        // retention pruned it, or this Gate keeps no journal any more. There is
+        // nothing left to follow, and returning here left the bubble streaming
+        // with nothing able to finish it — settle it with a named reason and
+        // let the history reload try for the reply itself.
+        settleLostTurnRef.current(turnId);
+        return;
+      }
       const action = decideTurnResume({
         turn,
         streamingTurnIds: [...turnControllersRef.current.keys()],
@@ -2808,10 +2884,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   );
   useEffect(() => {
     scheduleTurnReattachRef.current = scheduleTurnReattach;
+    settleLostTurnRef.current = (turnId) => {
+      void settleLostTurn(turnId);
+    };
     turnRetryRef.current = (turnId) => {
       void reattachTurn(turnId);
     };
-  }, [reattachTurn, scheduleTurnReattach]);
+  }, [reattachTurn, scheduleTurnReattach, settleLostTurn]);
 
   /**
    * Ask the Gate's journal what this thread is still running, and settle what
