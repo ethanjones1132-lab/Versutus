@@ -4736,6 +4736,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
                 (m.role === 'user' || m.role === 'assistant')
                 && !m.command
                 && !m.queued
+                // A failed turn's error notice is the app's copy, not model
+                // output: sending it back as an assistant turn put words in the
+                // model's mouth.
+                && m.synthetic !== 'error'
                 // An image-only user turn has no text but must still travel.
                 && (m.text.trim() || (m.attachments?.length ?? 0) > 0),
             )

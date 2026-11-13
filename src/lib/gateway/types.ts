@@ -230,6 +230,13 @@ export type ChatMessage = {
   streaming?: boolean;
   /** True while an offline message waits for the next connected state. */
   queued?: boolean;
+  /**
+   * The app authored this bubble, not the model: today the error notice a
+   * failed turn leaves in the thread. The notice is shown, but it is not a
+   * conversational turn, so outgoing context must never send it back as an
+   * assistant message. Cleared when model output replaces the text.
+   */
+  synthetic?: 'error';
   /** Set when the connection drops mid-stream; the bubble may be reconciled later. */
   interrupted?: boolean;
   /**

@@ -95,6 +95,10 @@ export function addStreamingPlaceholder(
       streaming: true,
       interrupted: false,
       interruptedReason: undefined,
+      // The replay replaces whatever the bubble held — including a failed
+      // turn's error notice — with model output, so it is no longer the app's
+      // synthetic text and may travel as an assistant turn again.
+      synthetic: undefined,
       ...(turnId ? { turnId } : {}),
       ...(runHandle ? { runHandle } : {}),
     };
@@ -147,7 +151,15 @@ export function markTurnStreaming(
     interruptedReason: undefined,
     turnId,
     ...(replayFromStart && !stopped
-      ? { text: '', reasoning: undefined, toolCalls: undefined, activityAnchor: undefined }
+      ? {
+          text: '',
+          reasoning: undefined,
+          toolCalls: undefined,
+          activityAnchor: undefined,
+          // The replay's frames are what fill this bubble now; a failed turn's
+          // synthetic notice no longer describes it.
+          synthetic: undefined,
+        }
       : {}),
   };
   return copy;
@@ -296,6 +308,9 @@ export function convertStreamError(
   copy[idx] = {
     ...copy[idx],
     text: `Error: ${errorMessage}`,
+    // This text is the app's notice, not a model turn: marked so outgoing
+    // context leaves it out.
+    synthetic: 'error',
     streaming: false,
     toolCalls: tools,
   };
