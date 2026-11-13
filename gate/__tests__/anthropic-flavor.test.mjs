@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildChatRequest, parseDelta, parseResponseText, parseStreamError } from '../flavors/anthropic.mjs';
+import { buildChatRequest, isStreamTerminal, parseDelta, parseResponseText, parseStreamError } from '../flavors/anthropic.mjs';
 
 const config = {
   flavor: 'anthropic',
@@ -99,4 +99,11 @@ test('an ordinary event is not an error frame', () => {
   assert.equal(parseStreamError(JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'hi' } })), null);
   assert.equal(parseStreamError(JSON.stringify({ type: 'ping' })), null);
   assert.equal(parseStreamError('not json'), null);
+});
+
+test('only message_stop is this dialect\'s terminal frame', () => {
+  assert.equal(isStreamTerminal(JSON.stringify({ type: 'message_stop' })), true);
+  assert.equal(isStreamTerminal(JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn' } })), false);
+  assert.equal(isStreamTerminal(JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'hi' } })), false);
+  assert.equal(isStreamTerminal('not json'), false);
 });

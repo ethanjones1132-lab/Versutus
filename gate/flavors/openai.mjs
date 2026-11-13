@@ -66,6 +66,22 @@ export function parseDelta(data) {
 }
 
 /**
+ * Whether an SSE data frame is this vendor's own "reply finished" marker.
+ *
+ * An OpenAI-compatible endpoint ends a streamed reply with `data: [DONE]`. The
+ * relay must not read the body closing as the end of the reply: a proxy that
+ * dies mid-answer, or a connection cut in the middle of the body, closes the
+ * stream too — and the phone would render half an answer as if it were whole.
+ * Only the vendor's own marker says the reply was finished.
+ *
+ * @param {string} data - Raw SSE chunk data (JSON string, or `[DONE]`)
+ * @returns {boolean}
+ */
+export function isStreamTerminal(data) {
+  return data === '[DONE]';
+}
+
+/**
  * The failure a vendor announced inside an SSE stream, if this chunk is one.
  *
  * An OpenAI-compatible endpoint is free to close a turn with `{"error":{...}}`

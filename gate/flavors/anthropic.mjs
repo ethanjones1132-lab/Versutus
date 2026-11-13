@@ -76,6 +76,25 @@ export function parseDelta(data) {
   }
 }
 
+/**
+ * Whether an SSE data frame is this vendor's own "reply finished" marker.
+ *
+ * A streamed Messages reply ends with a `message_stop` event. `message_delta`
+ * carries the stop reason but is not the end: the body can still be cut between
+ * the two, so the relay cannot treat the body closing as a finished reply. Only
+ * the vendor's own terminal frame says the reply was finished.
+ *
+ * @param {string} data - Raw SSE chunk data (JSON string)
+ * @returns {boolean}
+ */
+export function isStreamTerminal(data) {
+  try {
+    return JSON.parse(data)?.type === 'message_stop';
+  } catch {
+    return false;
+  }
+}
+
 // The HTTP status Anthropic documents for each mid-stream error type. Carried
 // on the error so `classifyProviderError` -- which reads `error.status` -- files
 // a rate limit as a rate limit and an overloaded vendor as overloaded, instead of

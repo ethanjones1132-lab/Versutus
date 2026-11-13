@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildChatRequest, parseDelta, parseResponseText, parseStreamError } from '../flavors/openai.mjs';
+import { buildChatRequest, isStreamTerminal, parseDelta, parseResponseText, parseStreamError } from '../flavors/openai.mjs';
 
 const config = {
   flavor: 'openai',
@@ -72,4 +72,11 @@ test('an ordinary chunk is not an error frame', () => {
   assert.equal(parseStreamError(JSON.stringify({ choices: [{ delta: { content: 'hi' } }] })), null);
   assert.equal(parseStreamError(JSON.stringify({ choices: [] })), null);
   assert.equal(parseStreamError('not json'), null);
+});
+
+test('only [DONE] is this dialect\'s terminal frame', () => {
+  assert.equal(isStreamTerminal('[DONE]'), true);
+  assert.equal(isStreamTerminal(JSON.stringify({ choices: [{ delta: { content: 'hi' } }] })), false);
+  assert.equal(isStreamTerminal(JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })), false);
+  assert.equal(isStreamTerminal('not json'), false);
 });

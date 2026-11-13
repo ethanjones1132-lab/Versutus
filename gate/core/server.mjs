@@ -1101,6 +1101,22 @@ function endProviderStreamWithError(res, error, emit) {
 }
 
 /**
+ * The vendor's body closed without the frame that says its reply was finished.
+ *
+ * A body that simply stops is the shape of a truncated reply: the connection
+ * dropped, a proxy gave up, or the process died mid-answer. Relayed as if it
+ * were the end, the phone renders half an answer as a whole one and the
+ * provider is recorded as having completed a turn. `endProviderStreamWithError`
+ * already sends exactly this shape, so there is no second vocabulary here.
+ */
+function streamTruncatedError() {
+  return Object.assign(
+    new Error('The provider cut the reply short: the stream ended before the reply was finished'),
+    { code: 'upstream_error' },
+  );
+}
+
+/**
  * Read an upstream SSE body and re-emit it in the OpenAI delta shape the app's
  * clients parse, whatever dialect the vendor speaks.
  *
@@ -1115,10 +1131,12 @@ function endProviderStreamWithError(res, error, emit) {
  * heartbeat the headers advertise is really sent here.
  *
  * Resolves with how the turn ENDED, not with the fact that headers were sent:
- * `{ ok: true }` for a stream that reached its end, `{ ok: false, error }` for
- * one that died, `{ abandoned: true }` for a turn that was cancelled. A caller
- * that records the turn has nothing to learn from a stream whose outcome is
- * still open, and the legacy twin ignores the answer entirely.
+ * `{ ok: true }` for a stream that reached the flavour's own terminal frame,
+ * `{ ok: false, error }` for one that died — including a body that closed
+ * before that frame, which is a reply cut short — and `{ abandoned: true }` for
+ * a turn that was cancelled. A caller that records the turn has nothing to
+ * learn from a stream whose outcome is still open, and the legacy twin ignores
+ * the answer entirely.
  */
 async function relayNormalizedSse(upstreamResponse, flavorModule, res, {
   upstream,
@@ -1154,16 +1172,67 @@ async function relayNormalizedSse(upstreamResponse, flavorModule, res, {
     : (res.destroyed || res.writableEnded || upstream?.clientGone === true));
   const decoder = new TextDecoder();
   let buffer = '';
+  // The vendor's own "this reply is finished" frame. Before this, the body
+  // closing means the turn was cut, not that the vendor finished talking.
+  let sawTerminal = false;
   const MAX_BUFFER_BYTES = 1024 * 1024; // 1MB — a single SSE line has no legitimate reason to exceed this
   const writeDelta = (text) => {
     const payload = JSON.stringify({ choices: [{ delta: { content: text } }] });
     if (durable) durable.emit(payload);
     else res.write(`data: ${payload}\n\n`);
   };
+  /**
+   * One `data:` line from the vendor: text, its terminal marker, or a failure
+   * it announced mid-reply. Returns the failure to end the turn with, or null.
+   */
+  const handleLine = (line) => {
+    if (!line.startsWith('data:')) return null;
+    const data = line.slice(5).trim();
+    // The vendor's terminal frame is not a delta: it is the only proof that
+    // the reply was finished rather than cut off where the body stopped.
+    if (flavorModule.isStreamTerminal(data)) {
+      sawTerminal = true;
+      return null;
+    }
+    // A vendor that announces a failure mid-reply (`overloaded_error`, a
+    // gateway's quota refusal) sends it as an ordinary `data:` frame, and
+    // `parseDelta` answers '' for it — the same answer as "no text here". So
+    // the failure was dropped, the body closed cleanly, and the turn was
+    // recorded as a success that promoted a broken provider to `ready`.
+    const announced = flavorModule.parseStreamError?.(data);
+    if (announced) {
+      return Object.assign(new Error(announced.message), {
+        code: announced.code ?? 'upstream_error',
+        // Only where the vendor documented one: `classifyProviderError`
+        // reads `status`, and a rate limit with no status is filed as an
+        // unknown transient fault instead of as a rate limit.
+        ...(Number.isInteger(announced.status) ? { status: announced.status } : {}),
+      });
+    }
+    const text = flavorModule.parseDelta(data);
+    if (text) writeDelta(text);
+    return null;
+  };
   try {
     while (!turnGone()) {
       const { done, value } = await readWithin(reader, idleTimeoutMs);
-      if (done) break;
+      if (done) {
+        // Flush what the vendor wrote without a trailing newline: its terminal
+        // frame, or one last delta. The marker is what says "finished", not
+        // the delimiter after it; and text that arrived before the cut is
+        // still real output the phone is owed.
+        buffer += decoder.decode();
+        for (const line of buffer.split('\n')) {
+          const failure = handleLine(line);
+          if (failure) {
+            await release();
+            endProviderStreamWithError(res, failure, durable?.emit);
+            return { ok: false, error: failure };
+          }
+        }
+        buffer = '';
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       if (buffer.length > MAX_BUFFER_BYTES) {
         await release();
@@ -1177,29 +1246,12 @@ async function relayNormalizedSse(upstreamResponse, flavorModule, res, {
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
       for (const line of lines) {
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (data === '[DONE]') continue;
-        // A vendor that announces a failure mid-reply (`overloaded_error`, a
-        // gateway's quota refusal) sends it as an ordinary `data:` frame, and
-        // `parseDelta` answers '' for it — the same answer as "no text here". So
-        // the failure was dropped, the body closed cleanly, and the turn was
-        // recorded as a success that promoted a broken provider to `ready`.
-        const announced = flavorModule.parseStreamError?.(data);
-        if (announced) {
+        const failure = handleLine(line);
+        if (failure) {
           await release();
-          const error = Object.assign(new Error(announced.message), {
-            code: announced.code ?? 'upstream_error',
-            // Only where the vendor documented one: `classifyProviderError`
-            // reads `status`, and a rate limit with no status is filed as an
-            // unknown transient fault instead of as a rate limit.
-            ...(Number.isInteger(announced.status) ? { status: announced.status } : {}),
-          });
-          endProviderStreamWithError(res, error, durable?.emit);
-          return { ok: false, error };
+          endProviderStreamWithError(res, failure, durable?.emit);
+          return { ok: false, error: failure };
         }
-        const text = flavorModule.parseDelta(data);
-        if (text) writeDelta(text);
       }
     }
   } catch (error) {
@@ -1223,9 +1275,21 @@ async function relayNormalizedSse(upstreamResponse, flavorModule, res, {
   }
   if (durable) {
     if (turnGone()) return { abandoned: true };
+    // The body closed without the vendor's own terminal frame: the reply was
+    // cut, and a success would hand the phone half an answer as a whole one.
+    if (!sawTerminal) {
+      const error = streamTruncatedError();
+      endProviderStreamWithError(res, error, durable.emit);
+      return { ok: false, error };
+    }
     return { ok: true };
   }
   if (turnGone()) return { abandoned: true };
+  if (!sawTerminal) {
+    const error = streamTruncatedError();
+    endProviderStreamWithError(res, error);
+    return { ok: false, error };
+  }
   res.write('data: [DONE]\n\n');
   res.end();
   return { ok: true };

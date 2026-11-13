@@ -16,6 +16,10 @@ import { ProviderService } from '../core/providers/service.mjs';
 
 const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
 
+// The OpenAI-compatible vendor's own "reply finished" frame. A body that stops
+// without it is a reply cut short, so a fixture that means "finished" writes it.
+const TERMINAL_FRAME = 'data: [DONE]\n\n';
+
 /**
  * An upstream the test controls: it can answer and finish, answer and keep
  * streaming, or take the request and stay silent forever. It reports whether
@@ -34,18 +38,21 @@ async function startUpstream({ answer, hold = false, holdForMs = 0, silentForMs 
       // Headers, then silence for a while: a reasoning model that has taken a
       // long time over its first token. The head has to be flushed now, not
       // with the body, or the vendor's stall would arrive at the Gate as one
-      // late response instead of an open stream. The stream then ends normally,
-      // so the test leaves nothing behind.
+      // late response instead of an open stream. The stream then ends normally
+      // -- with the vendor's own terminal frame -- so the test leaves nothing
+      // behind and the turn is a complete, if slow, reply.
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.flushHeaders();
-      setTimeout(() => { if (!res.writableEnded) res.end(); }, silentForMs).unref?.();
+      setTimeout(() => { if (!res.writableEnded) res.end(TERMINAL_FRAME); }, silentForMs).unref?.();
     } else if (answer) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.write(answer);
       // Head and first frame together, then a stream that stays open for
       // `holdForMs`: the wait that follows is on the body, not on the headers.
-      if (holdForMs) setTimeout(() => { if (!res.writableEnded) res.end(); }, holdForMs).unref?.();
-      else if (!hold) res.end();
+      // The vendor's own terminal frame is what says the reply was finished;
+      // without it the Gate would be right to call the body cut short.
+      if (holdForMs) setTimeout(() => { if (!res.writableEnded) res.end(TERMINAL_FRAME); }, holdForMs).unref?.();
+      else if (!hold) res.end(TERMINAL_FRAME);
     }
     // With no `answer`, the response is simply never written: a vendor that
     // has taken the request and gone quiet.
