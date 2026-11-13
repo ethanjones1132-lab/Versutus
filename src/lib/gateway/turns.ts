@@ -39,8 +39,16 @@ export type TurnMeta = {
   finishedAt?: number | null;
   /** The last journal seq written for this turn. */
   lastSeq?: number;
-  /** The failure a `failed` turn ended with. */
+  /**
+   * The failure a `failed` turn ended with, as its message.
+   *
+   * A journal that predates the code wrote a bare string here; the current Gate
+   * journals `{ message, code }`, so this is the message half and `errorCode`
+   * is the other. A caller that still passes a string keeps working unchanged.
+   */
   error?: string | null;
+  /** The code that went with `error` (`backend_error`, `rate_limited`, …), when named. */
+  errorCode?: string | null;
   /** Why the Gate itself ended an `interrupted` turn. */
   reason?: string | null;
   /** The assembled reply so far — on a single-turn read (`GET /v1/turns/{id}`). */
@@ -92,7 +100,7 @@ export type TurnStreamResult = {
  */
 export type TurnSettlement =
   | { kind: 'done'; text: string }
-  | { kind: 'failed'; message: string }
+  | { kind: 'failed'; message: string; code?: string }
   | { kind: 'cancelled' }
   | { kind: 'interrupted'; reason: TurnEndReason | 'unknown'; copy: string }
   | { kind: 'running' }
@@ -142,8 +150,17 @@ export function turnFromMeta(value: unknown): TurnMeta | null {
     status: turnStatusOf(raw.status) ?? 'unknown',
   };
   if (sessionId) meta.sessionId = sessionId;
-  const error = typeof raw.error === 'string' ? raw.error : undefined;
-  if (error) meta.error = error;
+  // The current journal writes `error: { message, code }`; an older one wrote the
+  // message alone as a string. Both are read, and a field that names nothing is
+  // dropped rather than stored as `''`.
+  const failure = raw.error;
+  if (typeof failure === 'string') {
+    if (failure) meta.error = failure;
+  } else if (failure && typeof failure === 'object') {
+    const { message, code } = failure as { message?: unknown; code?: unknown };
+    if (typeof message === 'string' && message.trim()) meta.error = message;
+    if (typeof code === 'string' && code.trim()) meta.errorCode = code;
+  }
   const reason = typeof raw.reason === 'string' ? raw.reason : undefined;
   if (reason) meta.reason = reason;
   if (text !== undefined) meta.text = text;
@@ -181,8 +198,13 @@ export function turnSettlement(turn: TurnMeta): TurnSettlement {
       return { kind: 'running' };
     case 'done':
       return { kind: 'done', text: turn.text?.trim() ?? '' };
-    case 'failed':
-      return { kind: 'failed', message: turn.error?.trim() || 'The turn failed on your PC.' };
+    case 'failed': {
+      // The journal's own words win; the generic copy is the last resort, used
+      // only when the record named neither a message nor a code.
+      const message = turn.error?.trim() || 'The turn failed on your PC.';
+      const code = turn.errorCode?.trim();
+      return code ? { kind: 'failed', message, code } : { kind: 'failed', message };
+    }
     case 'cancelled':
       return { kind: 'cancelled' };
     case 'interrupted':
