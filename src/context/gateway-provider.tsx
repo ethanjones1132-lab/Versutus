@@ -1753,6 +1753,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    */
   const liveControllersRef = useRef<WeakSet<AbortController>>(new WeakSet());
   /**
+   * Chat controllers a provider-initiated teardown aborted — a gateway switch,
+   * a Disconnect, a deleted profile or a re-attach.
+   *
+   * A send unwinds the same way whether the operator pressed Stop or the
+   * provider threw its client away, so the signal alone cannot tell the two
+   * apart. They are not the same fact for the outbox: Stop means the operator
+   * ended the turn and its queued row is no longer owed, while a teardown
+   * happened because the phone left before the Gate had the words. The row must
+   * stay owed — turn id and all — so the next connection retries it.
+   */
+  const providerAbortedControllersRef = useRef<WeakSet<AbortController>>(new WeakSet());
+  /**
    * The turn id the Gate minted for the send in flight. A detachable turn
    * outlives the phone's connection, so Stop has to name it to the Gate
    * (`cancelTurn`) — the abort below only stops what this phone is listening
@@ -3110,6 +3122,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * answer, and it used to survive the gateway switch itself.
    */
   const abandonLiveTurn = useCallback(() => {
+    // Name the turn's ending BEFORE the abort fires: the send's catch reads this
+    // membership on the microtask the rejection schedules, and only the provider
+    // path is in here — Stop's own abort is not.
+    const liveChat = abortControllerRef.current;
+    if (liveChat) providerAbortedControllersRef.current.add(liveChat);
     abortAndClear(abortControllerRef);
     abortAndClear(runAbortControllerRef);
     setRunApproval(null);
@@ -4920,8 +4937,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               : convertStreamError(prev, runId, message, true),
           );
           // The operator's own stop: the turn is over either way, so a queued
-          // line must not be offered back as owed.
-          return 'sent';
+          // line must not be offered back as owed. A provider-initiated stop —
+          // a gateway switch, Disconnect, deleted profile or re-attach — is not
+          // the operator ending the turn: the phone left before the Gate had the
+          // words, so the queued row stays owed, turn id and all, and the next
+          // connection retries it.
+          return providerAbortedControllersRef.current.has(abortController) ? 'failed' : 'sent';
         }
         if (isGateRestartFailure(error)) {
           // The Gate restarted under the turn (§3.5). That is an interruption
@@ -4981,6 +5002,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // Cancel doing nothing. Dropping out of the live set is what lets that
         // command put the slot back to empty instead of to this dead one.
         liveControllersRef.current.delete(abortController);
+        providerAbortedControllersRef.current.delete(abortController);
         if (abortControllerRef.current === abortController) {
           abortControllerRef.current = null;
         }
