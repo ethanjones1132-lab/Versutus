@@ -51,7 +51,17 @@ export function createNativeServer({
   /** The detected major-version profile of a contacted server, cached. */
   const serverProfiles = new Map();
 
-  return { ensureRunning, stop, isOwned: () => owned, current: () => handle, reachable };
+  return {
+    ensureRunning,
+    stop,
+    isOwned: () => owned,
+    current: () => handle,
+    reachable,
+    // Internal manager-to-adapter handoff. Keep the runtime credential off
+    // the serializable server handle and return a copy so callers cannot mutate
+    // the supervisor's bound credentials.
+    credentialsForBackend,
+  };
 
   async function ensureRunning() {
     const descriptor = adapter?.server;
@@ -319,6 +329,7 @@ export function createNativeServer({
     child = null;
     handle = null;
     owned = false;
+    bannerPassword = null;
     // Detected profiles are cheap to re-resolve and keyed by URL; a spawned
     // server is gone for good, so its cached profile must not accumulate
     // across generations (ephemeral ports make a fresh key every spawn).
@@ -347,6 +358,13 @@ export function createNativeServer({
       return { Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` };
     }
     return { Authorization: `Bearer ${password}` };
+  }
+
+  function credentialsForBackend() {
+    const resolved = { ...credentials };
+    const password = credentials?.OPENCODE_SERVER_PASSWORD ?? bannerPassword;
+    if (password) resolved.OPENCODE_SERVER_PASSWORD = password;
+    return resolved;
   }
 
   function note(message) {

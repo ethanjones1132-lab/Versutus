@@ -43,6 +43,44 @@ function reachable(urls) {
   };
 }
 
+function serverWithBannerPassword({ credentials = {}, onDiagnostic = () => {} } = {}) {
+  const password = 'generated-runtime-password';
+  const passwordAdapter = {
+    ...adapter,
+    server: {
+      ...adapter.server,
+      healthPathFor: () => '/api/info',
+      healthJson: true,
+      detectMajor: async () => 2,
+      authSchemeFor: () => 'basic',
+      passwordFromOutput: (line) => /server password\s+(\S+)/i.exec(line)?.[1],
+    },
+  };
+  const server = createNativeServer({
+    record,
+    adapter: passwordAdapter,
+    credentials,
+    onDiagnostic,
+    spawnImpl: () => {
+      const child = fakeChild({ announce: false });
+      setTimeout(() => child.stdout.emit('data', `server password ${password}\n`), 5);
+      setTimeout(() => child.stdout.emit('data', 'opencode server listening on http://127.0.0.1:4599\n'), 10);
+      return child;
+    },
+    fetchImpl: async (url, init = {}) => {
+      if (!String(url).startsWith('http://127.0.0.1:4599')) throw new Error('ECONNREFUSED');
+      const expected = credentials.OPENCODE_SERVER_PASSWORD ?? password;
+      const authorization = init.headers?.Authorization;
+      const expectedAuthorization = `Basic ${Buffer.from(`opencode:${expected}`).toString('base64')}`;
+      if (authorization !== expectedAuthorization) {
+        return { ok: false, status: 401, async text() { return ''; } };
+      }
+      return { ok: true, status: 200, async text() { return '{"version":"2.0.0"}'; } };
+    },
+  });
+  return { server, password };
+}
+
 test('attaches to a server that is already listening instead of spawning', async () => {
   let spawned = 0;
   const server = createNativeServer({
@@ -90,6 +128,38 @@ test('spawns when nothing answers, and learns the port from stdout', async () =>
   assert.equal(handle.attached, false);
   assert.equal(server.isOwned(), true);
   assert.ok(spawnArgs.args.includes('serve'), 'should pass the adapter server args');
+});
+
+test('keeps the generated password internal while making it available to the backend', async () => {
+  const diagnostics = [];
+  const { server, password } = serverWithBannerPassword({
+    onDiagnostic: ({ message }) => diagnostics.push(message),
+  });
+
+  const handle = await server.ensureRunning();
+
+  assert.deepEqual(server.credentialsForBackend(), { OPENCODE_SERVER_PASSWORD: password });
+  assert.equal(Object.hasOwn(handle, 'OPENCODE_SERVER_PASSWORD'), false, 'the server handle must not carry secrets');
+  assert.equal(JSON.stringify(handle).includes(password), false, 'serializing the handle must not expose the secret');
+  assert.equal(diagnostics.some((message) => message.includes(password)), false, 'the startup banner must stay redacted');
+
+  const backendCredentials = server.credentialsForBackend();
+  backendCredentials.OPENCODE_SERVER_PASSWORD = 'changed-by-caller';
+  assert.deepEqual(server.credentialsForBackend(), { OPENCODE_SERVER_PASSWORD: password }, 'callers receive a copy');
+  await server.stop();
+  assert.deepEqual(server.credentialsForBackend(), {}, 'stopping clears the recovered runtime secret');
+});
+
+test('a bound password takes precedence over the generated banner password', async () => {
+  const { server, password } = serverWithBannerPassword({
+    credentials: { OPENCODE_SERVER_PASSWORD: 'bound-vault-password' },
+  });
+
+  await server.ensureRunning();
+
+  assert.notEqual(password, 'bound-vault-password');
+  assert.deepEqual(server.credentialsForBackend(), { OPENCODE_SERVER_PASSWORD: 'bound-vault-password' });
+  await server.stop();
 });
 
 test('a spawned server is registered with the job so cancel kills the tree', async () => {

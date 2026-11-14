@@ -330,6 +330,12 @@ export function createBackendManager({
     const cached = backends.get(environmentId);
     if (cached?.key === key) return cached.backend;
 
+    // A native server may recover an ephemeral runtime credential from its
+    // startup output. Hand that in-memory value to the adapter only when
+    // building its backend; it is not part of the public server handle or the
+    // vault-backed credentials cache.
+    const backendCredentials = server.credentialsForBackend?.() ?? credentials;
+
     const opencodePermissionBridge = record.adapterId === 'opencode' && approvals
       ? createOpenCodePermissionBridge({
           approvals,
@@ -359,7 +365,7 @@ export function createBackendManager({
         })
       : adapter.createBackend({
           baseUrl: handle.baseUrl,
-          credentials,
+          credentials: backendCredentials,
           record,
           ...(opencodePermissionBridge ? { permissionBridge: opencodePermissionBridge } : {}),
         });

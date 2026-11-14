@@ -147,3 +147,32 @@ test('an unresolved optional binding is reported once, not again on the second l
   assert.deepEqual(reads, ['hermes/api-key']);
   assert.deepEqual(created[0].credentials, {}, 'the failed binding still leaves no credential behind');
 });
+
+test('passes a native server runtime credential into the backend without requiring a vault binding', async () => {
+  const record = { ...opencode, credentialBindings: {} };
+  const manager = createBackendManager({
+    store: {
+      get: async (id) => id === record.id ? record : null,
+      list: async () => [record],
+    },
+    registry: {
+      get: () => ({
+        capabilities: ['chat'],
+        server: { transport: 'http' },
+        createBackend: ({ credentials }) => ({ credentials }),
+      }),
+    },
+    vault: { get: async () => undefined },
+    createServer: ({ credentials }) => ({
+      ensureRunning: async () => ({ baseUrl: 'http://127.0.0.1:4599' }),
+      credentialsForBackend: () => ({
+        ...credentials,
+        OPENCODE_SERVER_PASSWORD: 'generated-at-runtime',
+      }),
+    }),
+  });
+
+  const backend = await manager.get(record.id);
+
+  assert.deepEqual(backend.credentials, { OPENCODE_SERVER_PASSWORD: 'generated-at-runtime' });
+});
