@@ -406,7 +406,7 @@ test('jobs pass through and every cron field the Gate curates survives', async (
   });
 
   const jobs = await hermes.listJobs();
-  assert.equal(calls[0].url, 'http://h:8642/api/jobs');
+  assert.equal(calls[0].url, 'http://h:8642/api/jobs?include_disabled=true');
   assert.deepEqual(jobs, jobsFixture);
 
   const view = toCronJobView(jobs[0]);

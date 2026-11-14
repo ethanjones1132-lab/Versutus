@@ -1167,6 +1167,7 @@ function stubFrontedRegistry(calls) {
     async healthDetailed() { calls.push('healthDetailed'); return { status: 'ok', checks: { db: 'ok' } }; },
     async listJobs() { calls.push('listJobs'); return { data: [{ id: 'job-1', paused: false }] }; },
     async createJob(body) { calls.push(`createJob:${body?.name}`); return { id: 'job-new', name: body?.name }; },
+    async updateJob(id, body) { calls.push(`updateJob:${id}:${JSON.stringify(body)}`); return { job: { id, ...body } }; },
     async runJob(id) { calls.push(`runJob:${id}`); return { started: true }; },
     async setJobPaused(id, paused) { calls.push(`setJobPaused:${id}:${paused}`); return { paused }; },
     async listBots() {
@@ -1222,6 +1223,7 @@ function stubFrontedRegistry(calls) {
         },
         async listJobs() { calls.push(`listJobs:${botId}`); return { data: [{ id: 'job-1' }] }; },
         async createJob(body) { calls.push(`createJob:${botId}:${body?.name}`); return { id: 'job-2', name: body?.name }; },
+        async updateJob(id, body) { calls.push(`updateJob:${botId}:${id}:${JSON.stringify(body)}`); return { job: { id, ...body } }; },
         async sendMessage() {
           return { text: 'ok', message: { id: 'm', role: 'assistant', content: [{ type: 'text', text: 'ok' }] } };
         },
@@ -1262,6 +1264,28 @@ test('skills, diagnostics and cron are advertised only when a backend fronts the
   } finally {
     await gate.close();
   }
+});
+
+test('routine editing updates only the chosen home and rejects unusable fields', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  const base = `http://127.0.0.1:${gate.port}`;
+  try {
+    const patch = (body, headers = auth(gate)) => fetch(`${base}/v1/jobs/job-1?bot=researcher`, {
+      method: 'PATCH', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const refused = await patch({ schedule: '0 9 * * *' }, {});
+    assert.equal(refused.status, 401);
+    const updated = await patch({ name: '[bot:researcher] Brief', schedule: '0 9 * * *', prompt: 'Summarize', ignored: true });
+    assert.equal(updated.status, 200);
+    assert.deepEqual((await updated.json()).job, {
+      id: 'job-1', name: '[bot:researcher] Brief', schedule: '0 9 * * *', prompt: 'Summarize',
+    });
+    assert.ok(calls.some((call) => call.startsWith('updateJob:researcher:job-1:')));
+    assert.equal(calls.some((call) => call.startsWith('updateJob:job-1:')), false);
+    assert.equal((await patch({ schedule: '' })).status, 400);
+    assert.equal((await patch({ providerKey: 'no' })).status, 400);
+  } finally { await gate.close(); }
 });
 
 test('the fronted routes proxy to the backend and are reachable', async () => {

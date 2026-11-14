@@ -426,11 +426,19 @@ export function createHermesBackend({
      * what it can observably proxy, not from that self-report.
      */
     async listJobs() {
-      return readCall('/api/jobs', 'list cron jobs');
+      // Paused jobs are disabled on Hermes. Omitting them makes Pause look
+      // like Delete and leaves the phone with no way to resume the routine.
+      return readCall('/api/jobs?include_disabled=true', 'list cron jobs');
     },
 
     async createJob(body) {
       return writeCall('/api/jobs', { method: 'POST', body: JSON.stringify(body ?? {}) }, 'create a cron job');
+    },
+
+    async updateJob(jobId, body) {
+      return writeCall(`/api/jobs/${encodeURIComponent(jobId)}`, {
+        method: 'PATCH', body: JSON.stringify(body ?? {}),
+      }, 'update a cron job');
     },
 
     async runJob(jobId) {

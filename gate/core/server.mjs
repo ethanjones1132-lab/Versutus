@@ -66,6 +66,7 @@ import { createModelHealth, healthScopeId, modelHealthKey } from './model-health
 import { isModelFault } from './model-fault.mjs';
 import { collectActivity, parseActivitySince, readActivitySessions } from './activity.mjs';
 import { collectRoutines, unsupportedRoutineRead } from './routines.mjs';
+import { readBotScopedRows } from './bot-scoped-read.mjs';
 import { curateModels } from './model-curation.mjs';
 import { backendUpstreamRefusal } from './upstream-refusal.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
@@ -775,6 +776,7 @@ const DEVICE_ACT_SCOPES = [
   { method: 'POST', path: /^\/v1\/jobs\/[^/]+\/pause$/, scope: 'routines:manage', action: 'pause a routine' },
   { method: 'POST', path: /^\/v1\/jobs\/[^/]+\/resume$/, scope: 'routines:manage', action: 'resume a routine' },
   { method: 'DELETE', path: /^\/v1\/jobs\/[^/]+$/, scope: 'routines:manage', action: 'delete a routine' },
+  { method: 'PATCH', path: /^\/v1\/jobs\/[^/]+$/, scope: 'routines:manage', action: 'edit a routine' },
 ];
 
 /**
@@ -2638,6 +2640,7 @@ export async function createGate(config = {}) {
         (pathname === '/v1/jobs' && (method === 'GET' || method === 'POST')) ||
         /^\/v1\/jobs\/[^/]+\/(run|pause|resume)$/.test(pathname) ||
         (method === 'DELETE' && /^\/v1\/jobs\/[^/]+$/.test(pathname)) ||
+        (method === 'PATCH' && /^\/v1\/jobs\/[^/]+$/.test(pathname)) ||
         (pathname === '/v1/sessions' && (method === 'GET' || method === 'POST')) ||
         (method === 'DELETE' && /^\/v1\/sessions\/[^/]+$/.test(pathname)) ||
         /^\/v1\/sessions\/[^/]+\/messages$/.test(pathname) ||
@@ -2732,7 +2735,12 @@ export async function createGate(config = {}) {
               // The start is bounded separately from the read: a cold OpenCode
               // server takes far longer than 8 s to come up, and counting that
               // against the read reported it as a failed backend.
-              listSessions: () => readActivitySessions({ start: () => backendManager.get(entry.id) }),
+              listSessions: () => readActivitySessions({
+                start: () => backendManager.get(entry.id),
+                ...(entry.adapterId === 'hermes' ? {
+                  readSessions: (backend, limit) => readBotScopedRows({ backend, method: 'listSessions', limit }),
+                } : {}),
+              }),
             } : {}),
           };
         }));
@@ -2780,7 +2788,9 @@ export async function createGate(config = {}) {
             listJobs: async () => {
               const backend = await backendManager.get(entry.id);
               if (typeof backend.listJobs !== 'function') throw unsupportedRoutineRead(entry.label);
-              return backend.listJobs();
+              return entry.adapterId === 'hermes'
+                ? readBotScopedRows({ backend, method: 'listJobs' })
+                : backend.listJobs();
             },
           };
         }));
@@ -4086,6 +4096,34 @@ export async function createGate(config = {}) {
             : await backend.setJobPaused(jobId, action === 'pause');
           return result ?? { ok: true };
         }, `job_${action}_failed`);
+        return;
+      }
+
+      const jobUpdateMatch = pathname.match(/^\/v1\/jobs\/([^/]+)$/);
+      if (jobUpdateMatch && method === 'PATCH') {
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
+        const update = {};
+        for (const field of ['name', 'schedule', 'prompt']) {
+          if (!Object.hasOwn(body, field)) continue;
+          if (typeof body[field] !== 'string' || (field !== 'prompt' && !body[field].trim())) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: `${field} must be ${field === 'prompt' ? 'text' : 'non-empty text'}`, code: 'invalid_job_update' } }));
+            return;
+          }
+          update[field] = body[field];
+        }
+        if (Object.keys(update).length === 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'No routine changes were provided', code: 'invalid_job_update' } }));
+          return;
+        }
+        const botId = readBotId(url, body);
+        if (!url.searchParams.has('backendId') && body.backendId) url.searchParams.set('backendId', body.backendId);
+        const backend = botId
+          ? await resolveConversationBackend(url.searchParams.get('backendId'), botId)
+          : await resolveBackendFor('updateJob');
+        if (!backend || !requireBackendMethod(backend, 'updateJob')) return;
+        await frontedRequest(() => backend.updateJob(decodeURIComponent(jobUpdateMatch[1]), update), 'job_update_failed');
         return;
       }
 

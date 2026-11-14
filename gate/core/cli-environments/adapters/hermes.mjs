@@ -90,7 +90,7 @@ export const hermesAdapter = {
   // `skills`, `diagnostics`, `cron` and `bots` are fronted by the Gate over
   // this backend's passthroughs. They are declared here because `backendCan(...)`
   // in manifest.mjs is what turns each into an advertised endpoint.
-  capabilities: ['chat', 'tools', 'mcp', 'sessions', 'models', 'runs', 'skills', 'diagnostics', 'cron', 'bots'],
+  capabilities: ['chat', 'tools', 'mcp', 'sessions', 'models', 'runs', 'skills', 'diagnostics', 'cron', 'cron-edit', 'bots'],
   operations: {
     prompt: {
       inputSchema: { type: 'object', required: ['prompt'], properties: { prompt: { type: 'string' } } },

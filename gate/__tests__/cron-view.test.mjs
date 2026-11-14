@@ -19,6 +19,21 @@ test('a cron session id yields its job and start time', () => {
   assert.equal(parsed.at, '20260824_180021');
 });
 
+test('structured Hermes schedules become readable strings without losing the raw record', () => {
+  for (const [schedule, expected] of [
+    [{ kind: 'cron', expr: '0 9 * * *', display: 'Every day at 09:00' }, '0 9 * * *'],
+    [{ kind: 'interval', minutes: 30, display: 'every 30m' }, 'every 30m'],
+    [{ kind: 'once', run_at: '2026-11-14T16:00:00-05:00', display: 'once at 16:00' }, '2026-11-14T16:00:00-05:00'],
+  ]) {
+    const job = { id: 'job1', schedule };
+    const view = toCronJobView(job);
+    assert.equal(view.schedule, expected);
+    assert.equal(view.scheduleDisplay, schedule.display);
+    assert.equal(view.raw, job);
+  }
+  assert.equal(toCronJobView({ id: 'unknown', schedule: { mystery: true } }).schedule, null);
+});
+
 test('ids that are not cron runs decode to null, never a guess', () => {
   for (const id of ['api_1787256183_54a46d4a', '20260824_221245_7a9be4', 'cron_', 'cron_abc', '', null]) {
     assert.equal(parseCronSessionId(id), null, `should not parse: ${id}`);

@@ -24,6 +24,13 @@ test('declares the manifest spec version and kind', () => {
   assert.equal(manifest.name, "Ethan's Gate");
 });
 
+test('routine editing is advertised only by a backend that supports it', () => {
+  const plain = buildManifest({ name: 'Gate', backends: [{ capabilities: ['cron'] }] });
+  assert.equal(plain.endpoints.jobUpdate, undefined);
+  const editing = buildManifest({ name: 'Gate', backends: [{ capabilities: ['cron', 'cron-edit'] }] });
+  assert.equal(editing.endpoints.jobUpdate, '/v1/jobs/{id}');
+});
+
 test('advertises tailnet IPv4s on transport when given, and omits an empty list', () => {
   const withIp = buildManifest({
     name: 'Gate',

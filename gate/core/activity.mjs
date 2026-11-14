@@ -53,6 +53,7 @@ export async function readActivitySessions({
   limit = 500,
   startTimeoutMs = ACTIVITY_START_TIMEOUT_MS,
   readTimeoutMs = ACTIVITY_READ_TIMEOUT_MS,
+  readSessions = (backend, count) => backend.listSessions(count),
 }) {
   const backend = await withActivityTimeout(
     Promise.resolve().then(start),
@@ -60,7 +61,7 @@ export async function readActivitySessions({
     'Backend activity start timed out',
   );
   if (typeof backend?.listSessions !== 'function') throw new Error('Sessions are unavailable');
-  return withActivityTimeout(Promise.resolve().then(() => backend.listSessions(limit)), readTimeoutMs);
+  return withActivityTimeout(Promise.resolve().then(() => readSessions(backend, limit)), readTimeoutMs);
 }
 
 /** The first non-empty title wins; an empty string must not drop the row later. */
@@ -81,7 +82,7 @@ function optionalMetric(metrics, key, value) {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) metrics[key] = value;
 }
 
-function sessionItem(backend, session) {
+function sessionItem(backend, session, since) {
   const started = timestamp(session?.started_at);
   const active = timestamp(session?.last_active ?? session?.updated_at ?? session?.started_at);
   if (!Number.isFinite(active)) return null;
@@ -97,18 +98,25 @@ function sessionItem(backend, session) {
   ].filter((value) => typeof value === 'number' && Number.isFinite(value) && value > 0);
   if (tokenValues.length) metrics.tokens = tokenValues.reduce((sum, value) => sum + value, 0);
   optionalMetric(metrics, 'costUsd', session.actual_cost_usd ?? session.estimated_cost_usd);
+  // These are session-lifetime totals. If the conversation predates the day,
+  // its list row cannot establish how much of that work happened today.
+  if (!Number.isFinite(started) || started < since) {
+    for (const key of Object.keys(metrics)) delete metrics[key];
+  }
   const ended = timestamp(session.ended_at);
+  const botId = typeof session.bot === 'string' && session.bot ? session.bot : undefined;
   return {
-    id: `${backend.id}:session:${session.id}`,
+    id: `${backend.id}:session:${botId ? `${encodeURIComponent(botId)}:` : ''}${encodeURIComponent(session.id)}`,
     backendId: backend.id,
     kind: 'session',
     sessionId: String(session.id),
     startedAt: Number.isFinite(started) ? new Date(started).toISOString() : new Date(active).toISOString(),
+    lastActiveAt: new Date(active).toISOString(),
     status: session.ended_at == null ? 'active' : (session.end_reason ?? 'completed'),
     title: activityTitle(session.title, session.preview),
     metrics,
     _activityAt: active,
-    ...(typeof session.bot === 'string' && session.bot ? { botId: session.bot } : {}),
+    ...(botId ? { botId } : {}),
     ...(Number.isFinite(ended) ? { finishedAt: new Date(ended).toISOString() } : {}),
   };
 }
@@ -165,14 +173,17 @@ export async function collectActivity({
       .map(([result]) => result);
     // failed: nothing that exists could be read. partial: some of it could, or the
     // backend offers only one of the two reads. unavailable: it offers neither.
+    const scopeErrors = sessionsResult.status === 'fulfilled' && Array.isArray(sessionsResult.value?.errors)
+      ? sessionsResult.value.errors : [];
     const status = available === 0 ? 'unavailable'
       : failed.length === available ? 'failed'
-        : failed.length > 0 || available < 2 ? 'partial' : 'complete';
+        : failed.length > 0 || scopeErrors.length > 0 || available < 2 ? 'partial' : 'complete';
     coverage.push({
       id: backend.id,
       label: backend.label,
       status,
-      ...(failed.length ? { error: String(failed[0].reason?.message ?? failed[0].reason).slice(0, 160) } : {}),
+      ...(failed.length ? { error: String(failed[0].reason?.message ?? failed[0].reason).slice(0, 160) }
+        : scopeErrors.length ? { error: scopeErrors.join('; ').slice(0, 160) } : {}),
     });
     if (runsResult.status === 'fulfilled') {
       for (const run of Array.isArray(runsResult.value) ? runsResult.value : []) {
@@ -181,9 +192,10 @@ export async function collectActivity({
       }
     }
     if (sessionsResult.status === 'fulfilled') {
-      const rows = Array.isArray(sessionsResult.value) ? sessionsResult.value : [];
+      const rows = Array.isArray(sessionsResult.value) ? sessionsResult.value
+        : Array.isArray(sessionsResult.value?.rows) ? sessionsResult.value.rows : [];
       for (const session of rows) {
-        const item = sessionItem(backend, session);
+        const item = sessionItem(backend, session, effectiveSince);
         if (item && item._activityAt >= effectiveSince) items.push(item);
       }
     }

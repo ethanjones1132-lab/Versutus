@@ -119,6 +119,7 @@ const BOT_AND_ROUTINE_ACTIONS = [
   ['POST', '/v1/jobs/job-1/pause', {}, 'routines:manage'],
   ['POST', '/v1/jobs/job-1/resume', {}, 'routines:manage'],
   ['DELETE', '/v1/jobs/job-1', undefined, 'routines:manage'],
+  ['PATCH', '/v1/jobs/job-1', { schedule: '0 9 * * *' }, 'routines:manage'],
 ];
 
 afterEach(async () => {
@@ -152,6 +153,7 @@ function stubRegistry(calls) {
     async updateBot({ id }) { calls.push(`updateBot:${id}`); return { id, name: id }; },
     async handoffMention({ toId }) { calls.push(`handoffMention:${toId}`); return { ok: true }; },
     async createJob({ name }) { calls.push(`createJob:${name}`); return { id: 'job-1', name }; },
+    async updateJob(id, body) { calls.push(`updateJob:${id}:${body.schedule}`); return { id, ...body }; },
     async listJobs() { return []; },
     async setJobPaused(id, paused) { calls.push(`setJobPaused:${id}:${paused}`); return { ok: true }; },
     async removeJob(id) { calls.push(`removeJob:${id}`); },

@@ -88,6 +88,18 @@ export function orphanJobIds(sessions, jobs) {
 const asList = (value) => (Array.isArray(value) ? value : []);
 const orNull = (value) => (value === undefined || value === '' ? null : value);
 
+/** Hermes stores parsed schedules; older gateways return the original text. */
+function scheduleText(schedule) {
+  if (typeof schedule === 'string') return schedule || null;
+  if (!schedule || typeof schedule !== 'object') return null;
+  if (schedule.kind === 'cron' && typeof schedule.expr === 'string') return schedule.expr || null;
+  if (schedule.kind === 'once' && typeof schedule.run_at === 'string') return schedule.run_at || null;
+  if (schedule.kind === 'interval' && Number.isFinite(schedule.minutes) && schedule.minutes > 0) {
+    return `every ${schedule.minutes}m`;
+  }
+  return null;
+}
+
 /**
  * The curated view, with the untouched record attached.
  *
@@ -106,8 +118,9 @@ export function toCronJobView(job) {
     title,
     name: orNull(job.name),
     botId,
-    schedule: orNull(job.schedule),
-    scheduleDisplay: orNull(job.schedule_display),
+    schedule: scheduleText(job.schedule),
+    scheduleDisplay: typeof job.schedule_display === 'string' ? orNull(job.schedule_display)
+      : typeof job.schedule?.display === 'string' ? orNull(job.schedule.display) : null,
     nextRunAt: orNull(job.next_run_at),
     lastRunAt: orNull(job.last_run_at),
     lastStatus: orNull(job.last_status),

@@ -49,7 +49,7 @@ function isUnsupportedRoutineRead(reason) {
  */
 export function routineRows(payload) {
   if (Array.isArray(payload)) return payload;
-  const rows = payload?.data ?? payload?.jobs ?? payload?.crons ?? payload?.items;
+  const rows = payload?.data ?? payload?.jobs ?? payload?.crons ?? payload?.items ?? payload?.rows;
   return Array.isArray(rows) ? rows : null;
 }
 
@@ -67,9 +67,11 @@ export function routineRow(backend, job) {
   return {
     id: view.id,
     backendId: backend.id,
-    ...(view.botId ? { botId: view.botId } : {}),
+    ...((job.scopeBotId || view.botId) ? { botId: job.scopeBotId || view.botId } : {}),
+    ...(Object.hasOwn(job, 'scopeBotId') ? { scopeBotId: job.scopeBotId } : {}),
     name: view.title || view.id,
     ...(view.schedule ? { schedule: view.schedule } : {}),
+    ...(view.scheduleDisplay ? { scheduleDisplay: view.scheduleDisplay } : {}),
     paused: view.paused,
     ...(view.lastRunAt ? { lastRunAt: view.lastRunAt } : {}),
     ...(view.lastStatus ? { lastStatus: view.lastStatus } : {}),
@@ -136,12 +138,15 @@ export async function collectRoutines({ backendId, backends = [], now = Date.now
     const parsed = rows.map((job) => routineRow(backend, job));
     const readable = parsed.filter(Boolean);
     const skipped = rows.length - readable.length;
+    const scopeErrors = Array.isArray(result.value?.errors) ? result.value.errors : [];
+    const errors = [...scopeErrors, ...(skipped ? [skippedRowsMessage(skipped)] : [])];
     // failed: nothing that exists could be read. partial: some of it could.
     coverage.push({
       id: backend.id,
       label: backend.label,
-      status: skipped === 0 ? 'complete' : readable.length === 0 ? 'failed' : 'partial',
-      ...(skipped ? { error: skippedRowsMessage(skipped) } : {}),
+      status: skipped === 0 && scopeErrors.length === 0 ? 'complete'
+        : skipped > 0 && readable.length === 0 && scopeErrors.length === 0 ? 'failed' : 'partial',
+      ...(errors.length ? { error: errors.join('; ').slice(0, 160) } : {}),
     });
     routines.push(...readable);
   }

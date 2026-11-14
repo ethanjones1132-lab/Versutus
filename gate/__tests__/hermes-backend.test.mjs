@@ -64,12 +64,29 @@ test('the fronted read surfaces hit the paths Hermes actually serves', async () 
   assert.deepEqual(calls.map((c) => c.url), [
     'http://h:8642/v1/skills',
     'http://h:8642/health/detailed',
-    'http://h:8642/api/jobs',
+    'http://h:8642/api/jobs?include_disabled=true',
     'http://h:8642/v1/toolsets',
   ]);
   for (const call of calls) {
     assert.equal(call.init.headers.Authorization, 'Bearer k');
   }
+});
+
+test('pausing a routine does not remove it from the subsequent listing', async () => {
+  let paused = false;
+  const { hermes } = backend((url, init) => {
+    const target = new URL(url);
+    if (target.pathname.endsWith('/pause') && init.method === 'POST') {
+      paused = true;
+      return Response.json({ ok: true });
+    }
+    const jobs = paused && target.searchParams.get('include_disabled') !== 'true'
+      ? [] : [{ id: 'nightly', enabled: !paused }];
+    return Response.json({ jobs });
+  });
+  await hermes.setJobPaused('nightly', true);
+  const result = await hermes.listJobs();
+  assert.deepEqual(result.jobs, [{ id: 'nightly', enabled: false }]);
 });
 
 test('job actions address the job by id and distinguish pause from resume', async () => {
@@ -84,6 +101,18 @@ test('job actions address the job by id and distinguish pause from resume', asyn
     'http://h:8642/api/jobs/nightly%20build/resume',
   ]);
   assert.ok(calls.every((c) => c.init.method === 'POST'));
+});
+
+test('routine edits PATCH the existing job and preserve a refused save', async () => {
+  const { calls, hermes } = backend((_url, init) => init.body?.includes('invalid')
+    ? Response.json({ error: 'Invalid schedule' }, { status: 400 })
+    : Response.json({ job: { id: 'nightly', name: 'Updated' } }));
+  const input = { name: '[bot:scout] Updated', schedule: '0 9 * * *', prompt: 'Brief me' };
+  assert.deepEqual(await hermes.updateJob('nightly build', input), { job: { id: 'nightly', name: 'Updated' } });
+  assert.equal(calls[0].url, 'http://h:8642/api/jobs/nightly%20build');
+  assert.equal(calls[0].init.method, 'PATCH');
+  assert.deepEqual(calls[0].body, input);
+  await assert.rejects(() => hermes.updateJob('nightly', { schedule: 'invalid' }), /Invalid schedule/);
 });
 
 for (const [method, path] of [['deleteSession', 'sessions'], ['removeJob', 'jobs']]) {
