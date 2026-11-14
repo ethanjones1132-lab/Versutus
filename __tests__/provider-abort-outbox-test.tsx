@@ -330,6 +330,13 @@ async function mount(): Promise<void> {
     );
   });
   await settle();
+  // Mounting is not connecting: bootstrap, the probe and the attach are several
+  // awaits deep, and a send that starts before the attach lands parks itself in
+  // the outbox instead of reaching `streamChat`. Every test here drives a real
+  // send, so wait for the connection that send needs — the client (and its
+  // `streams`) exists by the time `connected` is published.
+  await waitFor(() => observed.gateway?.status === 'connected');
+  await settleStream();
 }
 
 /** Mount with the durable row already waiting, and let the flush start its send. */
@@ -428,16 +435,37 @@ describe('a provider-initiated abort leaves the queued line owed', () => {
   // owed row with it: deleteGateway purges the queued rows of every removed
   // gateway in the same teardown, so the row cannot outlive the profile it was
   // addressed to. What must NOT happen is the send reporting 'sent' — the words
-  // never reached the Gate — so the outcome is what this pins.
+  // never reached the Gate — so the outcome is what this pins. The row this
+  // file's fixture parks is cleared before the mount: its flush would hold the
+  // composer, and the live send below would be parked as 'busy' instead of
+  // reaching the stream the delete has to tear down. The owed row the delete
+  // purges is parked while that send is in flight — the way the outbox really
+  // holds one beside a live turn, since a composer line typed meanwhile is
+  // queued rather than sent.
   test('deleting the active profile never reports the send as sent', async () => {
+    await saveOfflineQueue([]);
     await mount();
     const outcome = await startLiveSend('explain');
+    // The delete's teardown has a real stream to abort, not a parked line.
+    expect(allStreams()).toHaveLength(1);
+
+    let parked: SendChatInputOutcome = 'sent';
+    await act(async () => {
+      parked = await gatewayApi().sendChatInput('one more');
+    });
+    expect(parked).toBe('queued');
+    await settle();
+    expect(await loadOfflineQueue()).toHaveLength(1);
 
     await act(async () => {
       await gatewayApi().deleteGateway('alpha');
     });
     await settleStream();
 
+    // The provider's teardown aborted this turn — not the operator's Stop — so
+    // the send reports failed rather than sent.
+    expect(allStreams()[0].signal?.aborted).toBe(true);
+    expect(outcome()).toBe('failed');
     expect(outcome()).not.toBe('sent');
     expect(outcome()).not.toBeNull();
     expect(await loadOfflineQueue()).toEqual([]);
@@ -523,24 +551,32 @@ describe("Stop keeps today's behaviour exactly", () => {
   test('a live send stopped by the operator resolves sent', async () => {
     await mount();
     const outcome = await startLiveSend('explain');
+    expect(allStreams()).toHaveLength(1);
 
     await act(async () => {
       await gatewayApi().stopStreaming();
     });
     await settleStream();
 
+    // Stop aborted a stream that really was running, and the send still calls
+    // it sent: the operator ended the turn, so the line is not owed back.
+    expect(allStreams()[0].signal?.aborted).toBe(true);
     expect(outcome()).toBe('sent');
   });
 
   test('a live send the provider tears down resolves failed', async () => {
     await mount();
     const outcome = await startLiveSend('explain');
+    expect(allStreams()).toHaveLength(1);
 
     await act(async () => {
-      gatewayApi().disconnectGateway();
+      await gatewayApi().disconnectGateway();
     });
     await settleStream();
 
+    // The same abort from the provider's own teardown is not the operator
+    // ending the turn: the words never reached the Gate.
+    expect(allStreams()[0].signal?.aborted).toBe(true);
     expect(outcome()).toBe('failed');
   });
 });
