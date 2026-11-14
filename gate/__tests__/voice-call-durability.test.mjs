@@ -239,15 +239,14 @@ test('a reply streams into a call with no phone for 40 s, replays on re-attach, 
   await once(second.ws, 'open');
   assert.equal(call.registry.get('vs-1').ended, false, 're-attaching inside the window keeps the call');
 
-  // What it missed, in the order it happened: the phase first, then every delta,
-  // the turn's own end, the end of the speech, and every audio chunk.
+  // What it missed, in the order it happened: reply text can arrive before
+  // playback starts; speech start names the first PCM, then end closes it.
   const expectedReplay = [
     'frame:ready',
     'frame:phase',
     'frame:phase',
-    // The generation's start precedes its first reply text and audio.
-    'frame:speech',
     'frame:reply',
+    'frame:speech',
     'audio:1',
     'audio:2',
     'audio:3',
@@ -309,8 +308,8 @@ test('a replay log past its bound drops the oldest audio, keeps every control fr
     'frame:ready',
     'frame:phase',
     'frame:phase',
-    'frame:speech',
     'frame:reply',
+    'frame:speech',
     // The gap sits directly in front of the audio it explains.
     'frame:speech',
     'audio:4',

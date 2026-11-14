@@ -9,10 +9,14 @@ import { VoiceSessionRegistry } from '../core/voice/voice-rpc.mjs';
 
 function fakeEngine() {
   const listeners = new Map();
-  return {
+  const engine = {
     open: async () => {},
     close: async () => {},
     pushAudio: () => {},
+    // W5: playback starts with the first PCM chunk, so the test needs the
+    // reducer's generation before it can feed audio. The engine's speak effect
+    // is where that generation is assigned.
+    speak: (_text, options) => { engine.gen = options.gen; },
     on(name, listener) {
       listeners.set(name, listener);
       return this;
@@ -21,6 +25,7 @@ function fakeEngine() {
       listeners.get(name)?.(payload);
     },
   };
+  return engine;
 }
 
 async function startCall(t, { sessionId, protocol, runTurn, log = () => {} }) {
@@ -123,6 +128,10 @@ test('a played control is consumed as the turn latency sample', async (t) => {
   });
 
   engine.emit('final', { text: 'time it' });
+  // W5: `start` now marks real playback, so it leaves with the first PCM chunk
+  // rather than with the reply text. Feed audio, then read the frame.
+  await until(() => typeof engine.gen === 'number');
+  engine.emit('speechAudio', { gen: engine.gen, pcm: Buffer.alloc(960, 5) });
   await until(() => frames.some((frame) => frame.t === 'speech' && frame.state === 'start'));
   const gen = frames.find((frame) => frame.t === 'speech' && frame.state === 'start').gen;
   ws.send(JSON.stringify({ v: 2, callId: 'vs-played', seq: 1, ts: 0, t: 'played', gen, atMs: 42 }));

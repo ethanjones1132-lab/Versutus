@@ -320,6 +320,7 @@ export function attachVoiceMediaSocket({
     let replayBytes = 0;
     let resumeExpected = false;
     const speechStartSeq = new Map();
+    const speechLifecycle = new Map();
     let v2ProbeFrame = null;
 
     const api = { attach, end, get ended() { return ended; } };
@@ -436,8 +437,24 @@ export function attachVoiceMediaSocket({
       audioDropped = false;
     };
 
-    const sendFrame = (frame) => {
+    const sendFrame = (frame, fromAudio = false) => {
       if (ended) return;
+      if (frame.t === 'speech') {
+        const lifecycle = speechLifecycle.get(frame.gen);
+        if (frame.state === 'start') {
+          // The reducer knows when reply text exists, but playback has not
+          // started until the first PCM chunk actually leaves this socket.
+          if (!fromAudio) {
+            if (lifecycle === undefined) speechLifecycle.set(frame.gen, 'pending');
+            return;
+          }
+          if (lifecycle === 'active' || lifecycle === 'ended' || lifecycle === 'cancelled') return;
+          speechLifecycle.set(frame.gen, 'active');
+        } else if (frame.state === 'end' || frame.state === 'cancelled') {
+          if (lifecycle !== 'active') return;
+          speechLifecycle.set(frame.gen, frame.state === 'end' ? 'ended' : 'cancelled');
+        }
+      }
       // Tool lifecycle is v2-only. A v1 phone never declared the type, so the
       // Gate keeps its old byte stream rather than sending a frame that peer
       // cannot read.
@@ -520,6 +537,12 @@ export function attachVoiceMediaSocket({
             audioDropped = true;
             continue;
           }
+        }
+        if (typeof gen === 'number' && (ws || protocolVersion !== 2)
+          && speechLifecycle.get(gen) !== 'active') {
+          sendFrame({ t: 'speech', gen, state: 'start' }, true);
+        }
+        if (ws && protocolVersion === 2) {
           if (audioDropped) {
             audioDropped = false;
             sendFrame({ t: 'speech', gen, state: 'gap' });

@@ -53,18 +53,20 @@ async function callHarness(t) {
   await once(ws, 'open');
   await wait(() => received.some((frame) => frame?.t === 'ready'));
   engine.emit('final', { text: 'question' });
-  await wait(() => received.some((frame) => frame?.t === 'speech' && frame.state === 'start'));
-  const pcm = Buffer.alloc(24_000 * 2 * 35 / 100, 7);
-  engine.emit('speechAudio', { gen: engine.gen, pcm });
-  await wait(() => received.some(Buffer.isBuffer));
+  await wait(() => engine.gen !== undefined);
   return { engine, received, ws };
 }
 
 test('speech is chunked and a speech onset cancels without sending stale audio', async (t) => {
   const { engine, received } = await callHarness(t);
+  assert.equal(received.some((frame) => frame?.t === 'speech' && frame.state === 'start'), false,
+    'reply text alone does not start playback');
+  const pcm = Buffer.alloc(24_000 * 2 * 35 / 100, 7);
+  engine.emit('speechAudio', { gen: engine.gen, pcm });
+  await wait(() => received.some(Buffer.isBuffer));
   const firstAudioIndex = received.findIndex(Buffer.isBuffer);
   const startIndex = received.findIndex((frame) => frame?.t === 'speech' && frame.state === 'start');
-  assert.ok(startIndex >= 0 && startIndex < firstAudioIndex, 'start precedes first PCM chunk');
+  assert.ok(startIndex >= 0 && startIndex < firstAudioIndex, 'start is emitted with the first PCM chunk');
 
   const pcmChunks = received.filter(Buffer.isBuffer);
   const maxBytes = OUTPUT_SAMPLE_RATE * 2 * MAX_SPEECH_CHUNK_MS / 1000;
@@ -80,10 +82,37 @@ test('speech is chunked and a speech onset cancels without sending stale audio',
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(received.filter(Buffer.isBuffer).length, chunksBefore, 'no chunk from the cancelled generation follows cancellation');
   assert.ok(cancelIndex > firstAudioIndex);
+
+  const cancelledGen = engine.gen;
+  engine.emit('final', { text: 'next question' });
+  await wait(() => engine.gen > cancelledGen);
+  const nextGen = engine.gen;
+  engine.emit('speechAudio', { gen: nextGen, pcm: Buffer.alloc(960, 2) });
+  await wait(() => received.some((frame) => frame?.t === 'speech' && frame.gen === nextGen && frame.state === 'start'));
+  const lifecycle = received.filter((frame) => frame?.t === 'speech').map(({ gen, state }) => ({ gen, state }));
+  assert.deepEqual(lifecycle, [
+    { gen: cancelledGen, state: 'start' },
+    { gen: cancelledGen, state: 'cancelled' },
+    { gen: nextGen, state: 'start' },
+  ]);
+});
+
+test('normal playback emits one start and one end without cancellation', async (t) => {
+  const { engine, received } = await callHarness(t);
+  const pcm = Buffer.alloc(960, 3);
+  engine.emit('speechAudio', { gen: engine.gen, pcm });
+  await wait(() => received.some(Buffer.isBuffer));
+  engine.emit('speechDone', { gen: engine.gen });
+  await wait(() => received.some((frame) => frame?.t === 'speech' && frame.state === 'end'));
+
+  const states = received.filter((frame) => frame?.t === 'speech').map((frame) => frame.state);
+  assert.deepEqual(states, ['start', 'end']);
 });
 
 test('skip cancels the reply and suppresses its later audio', async (t) => {
   const { engine, received, ws } = await callHarness(t);
+  engine.emit('speechAudio', { gen: engine.gen, pcm: Buffer.alloc(960, 1) });
+  await wait(() => received.some(Buffer.isBuffer));
   ws.send(JSON.stringify({ t: 'skip' }));
   await wait(() => received.some((frame) => frame?.t === 'speech' && frame.state === 'cancelled'));
   const chunksBefore = received.filter(Buffer.isBuffer).length;
@@ -94,6 +123,8 @@ test('skip cancels the reply and suppresses its later audio', async (t) => {
 
 test('mute leaves the reply playing and sends its remaining chunks', async (t) => {
   const { engine, received, ws } = await callHarness(t);
+  engine.emit('speechAudio', { gen: engine.gen, pcm: Buffer.alloc(960, 1) });
+  await wait(() => received.some(Buffer.isBuffer));
   const chunksBeforeMute = received.filter(Buffer.isBuffer).length;
   ws.send(JSON.stringify({ t: 'mute', on: true }));
   await wait(() => received.some((frame) => frame?.t === 'phase' && frame.phase === 'muted'));
