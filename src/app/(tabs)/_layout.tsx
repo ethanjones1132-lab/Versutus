@@ -1,9 +1,7 @@
-import { Drawer, type DrawerContentComponentProps, useDrawerStatus } from 'expo-router/drawer';
-import type { ReactNode } from 'react';
+import { Drawer, type DrawerContentComponentProps } from 'expo-router/drawer';
 
 import { SideDrawerContent } from '@/components/nav/side-drawer-content';
 import { Palette } from '@/constants/tokens';
-import { StageMotionProvider, stageMotionActiveForDrawerStatus } from '@/lib/stage/stage-motion-context';
 
 /**
  * The drawer's content renderer, built once at module level: a fresh function
@@ -11,19 +9,6 @@ import { StageMotionProvider, stageMotionActiveForDrawerStatus } from '@/lib/sta
  * rebuilds a drawer that is usually closed.
  */
 const renderDrawerContent = (props: DrawerContentComponentProps) => <SideDrawerContent {...props} />;
-
-function DrawerMotionScreenLayout({ children }: { children: ReactNode }) {
-  const drawerStatus = useDrawerStatus();
-  return (
-    <StageMotionProvider active={stageMotionActiveForDrawerStatus(drawerStatus)}>
-      {children}
-    </StageMotionProvider>
-  );
-}
-
-const renderDrawerScreen = ({ children }: { children: ReactNode }) => (
-  <DrawerMotionScreenLayout>{children}</DrawerMotionScreenLayout>
-);
 
 /**
  * Navigation IA per docs/visual-direction-2026-09.md + CHARTER (LOCKED
@@ -40,7 +25,6 @@ export default function TabsLayout() {
     <Drawer
       initialRouteName="chat"
       drawerContent={renderDrawerContent}
-      screenLayout={renderDrawerScreen}
       screenOptions={{
         headerShown: false,
         drawerType: 'front',

@@ -18,7 +18,6 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { useAppForeground } from '@/hooks/use-app-foreground';
-import { useStageMotionActive } from '@/lib/stage/stage-motion-context';
 import {
   STAGE_GAIN,
   STAGE_TIMING,
@@ -101,6 +100,13 @@ function TiltSource({ tiltX, tiltY }: { tiltX: SharedValue<number>; tiltY: Share
       tiltY.set(tiltY.get() + (dy - tiltY.get()) * 0.2);
     },
   );
+  useEffect(
+    () => () => {
+      tiltX.set(withTiming(0, { duration: 600 }));
+      tiltY.set(withTiming(0, { duration: 600 }));
+    },
+    [tiltX, tiltY],
+  );
   return null;
 }
 
@@ -110,15 +116,14 @@ function TiltSource({ tiltX, tiltY }: { tiltX: SharedValue<number>; tiltY: Share
  * the web renderer (src/lib/stage/choreography.ts), on shared values.
  *
  * It renders at a fraction of the screen's resolution and is scaled back up,
- * redraws at the governor's field rate (24 a second by default), and sleeps
- * while unfocused, backgrounded, reduced-motion, or covered by the drawer.
- * The governor (src/lib/stage/governor.ts) steps it down if the phone cannot keep up.
+ * redraws at the governor's field rate (24 a second by default), and never
+ * sleeps while the screen is focused, foregrounded, and motion is allowed: the
+ * governor (src/lib/stage/governor.ts) steps it down if the phone cannot keep up.
  */
 function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; lights: StageLights; parallaxY: number }) {
   const focused = useIsFocused();
   const foreground = useAppForeground();
   const reduced = useReducedMotion();
-  const stageMotionActive = useStageMotionActive();
   const pixelRatio = PixelRatio.get();
 
   const size = useSharedValue({ width: 1, height: 1 });
@@ -222,7 +227,7 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
 
   // The air's clock: advanced on the UI thread at the governor's field rate.
   // The same callback feeds the governor the frame gaps it judges.
-  const running = focused && foreground && stageMotionActive && !reduced;
+  const running = focused && foreground && !reduced;
   // The tool-work breath rides the shared clock, which runs only while something breathes.
   const breath = useBreath(working && running);
   // The flag follows `running` too: under Reduce Motion the breath clock never starts and sits at 0,
@@ -233,14 +238,6 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
   // At rest nothing may write the shader's inputs: the tilt sensor writes every sample and would keep the
   // shader redrawing at the sensor rate, which would make the last rung costlier than the one above it.
   const tiltOn = running && GOVERNOR_LEVELS[level].fieldHz !== 0;
-  // Pausing for the drawer keeps the last tilt transform under the overlay.
-  // Other stops still ease the phone back to level.
-  useEffect(() => {
-    if (!stageMotionActive) return;
-    if (focused && foreground && !reduced && GOVERNOR_LEVELS[level].fieldHz !== 0) return;
-    tiltX.set(withTiming(0, { duration: 600 }));
-    tiltY.set(withTiming(0, { duration: 600 }));
-  }, [focused, foreground, reduced, stageMotionActive, level, tiltX, tiltY]);
   const clock = useFrameCallback((info) => {
     'worklet';
     const dt = info.timeSincePreviousFrame ?? 0;
