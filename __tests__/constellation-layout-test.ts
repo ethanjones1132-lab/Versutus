@@ -1,4 +1,5 @@
 import {
+  CONSTELLATION_HEIGHT,
   CONSTELLATION_WIDTH,
   constellationLayout,
   constellationModel,
@@ -130,6 +131,50 @@ describe('constellationLayout places the graph the model emitted', () => {
         expect(y).toBeGreaterThanOrEqual(0);
         expect(y).toBeLessThanOrEqual(520);
       });
+    }
+  });
+
+  test('a long roster under a bottom-ring gateway stays on the map at every width', () => {
+    // Two gateways put the connected one at the bottom of the ring (y=530).
+    // Its seventh Bot used to start a second row at y=666 — 26 design units
+    // below the 640 square — so the node was drawn off the map and could not
+    // be tapped (QUALITY-SCAN-2026-10-11 L807).
+    const model = constellationModel({
+      profiles: [
+        { id: 'gw-home', name: 'Home' },
+        { id: 'gw-travel', name: 'Travel' },
+      ],
+      connectedGatewayId: 'gw-travel',
+      roster: Array.from({ length: 9 }, (_, i) => ({ id: `bot-${i}`, displayName: `B${i}` })),
+    });
+    const gateway = model.nodes.find((node) => node.id === 'gateway:gw-travel')!;
+    const bots = model.nodes.filter((node) => node.kind === 'bot');
+    expect(gateway.y).toBeGreaterThan(CONSTELLATION_HEIGHT / 2);
+    expect(bots).toHaveLength(9);
+    for (const bot of bots) {
+      expect(bot.y).toBeGreaterThanOrEqual(0);
+      expect(bot.y).toBeLessThanOrEqual(CONSTELLATION_HEIGHT);
+    }
+    // The rendered geometry, measured the way the neighbouring layout tests
+    // measure it: no node and no edge end leaves the box at any supported width.
+    for (const width of [320, 360, 414, 640]) {
+      const layout = constellationLayout(model, width);
+      for (const node of layout.nodes) {
+        expect(node.x).toBeGreaterThanOrEqual(0);
+        expect(node.x).toBeLessThanOrEqual(width);
+        expect(node.y).toBeGreaterThanOrEqual(0);
+        expect(node.y).toBeLessThanOrEqual(width);
+      }
+      for (const edge of layout.edges) {
+        [edge.x1, edge.x2].forEach((x) => {
+          expect(x).toBeGreaterThanOrEqual(0);
+          expect(x).toBeLessThanOrEqual(width);
+        });
+        [edge.y1, edge.y2].forEach((y) => {
+          expect(y).toBeGreaterThanOrEqual(0);
+          expect(y).toBeLessThanOrEqual(width);
+        });
+      }
     }
   });
 

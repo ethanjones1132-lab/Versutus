@@ -37,6 +37,10 @@ const BOT_ROW_OFFSET = 72;
 const BOT_SPACING = 128;
 const BOT_LABEL_WIDTH = 120;
 const BOT_ROW_GAP = 64;
+// A Bot row stays on the sky only when its node's whole label anchor is inside
+// the design square: the label box starts 34 design units above the node, and
+// the node's own edge needs a few more.
+const BOT_SKY_MARGIN = 40;
 
 export type FleetGatewayInput = { id: string; name?: string };
 export type FleetReachability = Record<string, {
@@ -259,6 +263,17 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
       1,
       Math.floor((CONSTELLATION_WIDTH - BOT_LABEL_WIDTH) / BOT_SPACING) + 1,
     );
+    // Rows run into whichever half of the sky has more room. A gateway at the
+    // bottom of the ring has only ~110 design units below it, so a second row
+    // used to land at y=666 — outside the 640 square and untappable (2026-10-11).
+    // The gap shrinks only as far as the roster needs, so a long list stays on
+    // the sky instead of running past its edge.
+    const botRowCount = Math.ceil(roster.length / botsPerRow);
+    const roomBelow = CONSTELLATION_HEIGHT - BOT_SKY_MARGIN - (y + BOT_ROW_OFFSET);
+    const roomAbove = y - BOT_ROW_OFFSET - BOT_SKY_MARGIN;
+    const rowDirection = roomAbove > roomBelow ? -1 : 1;
+    const room = Math.max(0, rowDirection > 0 ? roomBelow : roomAbove);
+    const rowGap = botRowCount > 1 ? Math.min(BOT_ROW_GAP, room / (botRowCount - 1)) : BOT_ROW_GAP;
     roster.forEach((bot, botIndex) => {
       const row = Math.floor(botIndex / botsPerRow);
       const rowStart = row * botsPerRow;
@@ -271,7 +286,7 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
         Math.max(BOT_LABEL_WIDTH / 2, x - rowWidth / 2),
       );
       const botX = rowLeft + (botIndex - rowStart) * BOT_SPACING;
-      const botY = y + BOT_ROW_OFFSET + row * BOT_ROW_GAP;
+      const botY = y + rowDirection * (BOT_ROW_OFFSET + row * rowGap);
       const botBadges: ConstellationBadge[] = rosterWarning ? [rosterWarning] : [];
       let runningRunName: string | undefined;
       if (runningBots.has(bot.id)) {

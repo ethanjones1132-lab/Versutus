@@ -259,13 +259,14 @@ function hermesInternal(): HermesInternalLike | null {
  * `Libraries/Core/polyfillPromise.js` wires Hermes' `enablePromiseRejectionTracker`
  * to this object, and it is the only way the platform's own unhandled-rejection
  * reporting is reached. It is a Flow module with no type declarations, so it
- * cannot be imported in a typed build; `require` is the seam, and a runtime
- * that does not ship it simply gets no chain.
+ * cannot be imported in a typed build; a string-literal `require` is the seam.
+ * The literal matters: Metro resolves dependencies statically, so a variable
+ * specifier leaves the module out of the production bundle, where the call
+ * then throws and the platform's options are silently lost.
  */
 function reactNativeRejectionOptions(): RejectionTrackerOptions | null {
   try {
-    const specifier = 'react-native/Libraries/promiseRejectionTrackingOptions';
-    const module: unknown = require(specifier);
+    const module: unknown = require('react-native/Libraries/promiseRejectionTrackingOptions');
     const options =
       module && typeof module === 'object' && 'default' in module
         ? (module as { default: unknown }).default
@@ -286,11 +287,16 @@ function reactNativeRejectionOptions(): RejectionTrackerOptions | null {
 function chainRejectionTracking(hermes: HermesInternalLike): boolean {
   if (typeof hermes.enablePromiseRejectionTracker !== 'function') return false;
   const rnOptions = reactNativeRejectionOptions();
+  // Hermes keeps ONE tracker and enabling ours overwrites whatever is there.
+  // With no options to forward to, the installed tracker can only be React
+  // Native's own: replacing it would silence the platform reporting this chain
+  // exists to preserve, so the existing tracker is left in place.
+  if (!rnOptions) return false;
   try {
     hermes.enablePromiseRejectionTracker({
       allRejections: true,
       onHandled: (id) => {
-        rnOptions?.onHandled?.(id);
+        rnOptions.onHandled?.(id);
       },
       onUnhandled: (id, rejection) => {
         void recordFailure({
@@ -298,7 +304,7 @@ function chainRejectionTracking(hermes: HermesInternalLike): boolean {
           message: describeThrown(rejection),
           stack: stackOf(rejection),
         });
-        rnOptions?.onUnhandled?.(id, rejection);
+        rnOptions.onUnhandled?.(id, rejection);
       },
     });
   } catch {
