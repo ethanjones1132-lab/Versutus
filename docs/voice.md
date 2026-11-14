@@ -39,7 +39,7 @@ Internal term → what the screen says.
 | capability | feature |
 | manifest | setup details |
 | endpoint | address |
-| listen key | kept out of the main view (the roster shows "No listen key" on the Bot) |
+| listen key | kept out of the main view; the roster says "Not set up yet" and Details names the fix |
 | session | conversation |
 | routine | scheduled task |
 | pairing | approve this phone |
@@ -72,5 +72,6 @@ The roster already had the voice to match, and these stay:
 
 `__tests__/copy-guard-test.ts` fails on `API_SERVER_KEY`, `RPC`, `vshowcase`, a
 dangling `" - "` separator, or the word "profile" in the user-facing strings of
-the priority screens. Add a screen to its list when it joins the priority set —
-the guard is only as wide as the list.
+the priority screens. It also guards the roster's routing verdict, the call's
+end line and the address check's wording. Add a screen to its list when it joins
+the priority set — the guard is only as wide as the list.

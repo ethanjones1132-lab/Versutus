@@ -118,7 +118,7 @@ export function handsfreeEndReasonCopy(reason: HandsfreeTerminalReason): string 
     case 'thread-changed':
       return null;
     case 'disconnect':
-      return 'The call ended because the gateway connection dropped.';
+      return 'The call ended because the connection to your computer dropped.';
     case 'system-interruption':
       return 'The call ended because another app or a phone call took the audio.';
     case 'app-killed':

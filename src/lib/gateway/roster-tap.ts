@@ -1,7 +1,7 @@
 // ─── Roster row tap: what pressing a Bot's row does ────────────────────────
 //
 // The roster row is one line by design, so the routing verdict lives in the
-// subtitle ("No listen key" / "Default listen key refused") and the FIX lives
+// subtitle ("Not set up yet" / "Default listen key refused") and the FIX lives
 // in the detail surface. That split left the unroutable row's press as a
 // silent no-op: an operator reading "Default listen key refused" tapped the
 // row anyway — the natural gesture — and nothing happened. This module makes

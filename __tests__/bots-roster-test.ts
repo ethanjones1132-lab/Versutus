@@ -171,7 +171,7 @@ test('botRowSubtitle still flags unroutable bots over any pin', () => {
       routable: false,
       model: { default: 'anthropic/claude-sonnet-4', provider: null },
     }),
-  ).toBe('No listen key');
+  ).toBe('Not set up yet');
 });
 
 test('botChipModelPin shows the pinned default and stays silent without one', () => {
@@ -222,10 +222,10 @@ test('botChipRoutingTag names the routing cause or stays silent', () => {
   expect(botChipRoutingTag({ id: 'b', displayName: 'b', routable: true, routingIssue: null })).toBe('');
   // No key at all and a refused default key are different fixes, so they
   // stay the same two verdict words the roster row uses.
-  expect(botChipRoutingTag({ id: 'c', displayName: 'c', routable: false })).toBe('No listen key');
+  expect(botChipRoutingTag({ id: 'c', displayName: 'c', routable: false })).toBe('Not set up yet');
   expect(
     botChipRoutingTag({ id: 'd', displayName: 'd', routable: true, routingIssue: 'listen_key_missing' }),
-  ).toBe('No listen key');
+  ).toBe('Not set up yet');
   expect(
     botChipRoutingTag({ id: 'e', displayName: 'e', routable: true, routingIssue: 'default_key_refused' }),
   ).toBe('Default listen key refused');
@@ -252,7 +252,7 @@ test('routing tag outranks the model pin on a member chip', () => {
   });
   expect(chips[0]).toEqual({ id: 'echo', tag: 'Default listen key refused', pin: '' });
   expect(chips[1]).toEqual({ id: 'live', tag: '', pin: 'm-live' });
-  expect(chips[2]).toEqual({ id: 'mute', tag: 'No listen key', pin: '' });
+  expect(chips[2]).toEqual({ id: 'mute', tag: 'Not set up yet', pin: '' });
 });
 
 test('unroutable subtitles name the cause: missing key vs refused default key', () => {
@@ -263,7 +263,7 @@ test('unroutable subtitles name the cause: missing key vs refused default key', 
       routable: false,
       routingIssue: 'listen_key_missing',
     }),
-  ).toBe('No listen key');
+  ).toBe('Not set up yet');
   // A copied default listen key is a DIFFERENT fix (set a distinct one), so it
   // must not hide behind the generic "no key" line.
   expect(
@@ -281,7 +281,7 @@ test('routingIssue wins over a stale routable boolean, older Gates degrade', () 
   expect(
     botRowSubtitle({ id: 'e', displayName: 'e', routable: true, routingIssue: 'default_key_refused' }),
   ).toBe('Default listen key refused');
-  expect(botRowSubtitle({ id: 'x', displayName: 'x', routable: false })).toBe('No listen key');
+  expect(botRowSubtitle({ id: 'x', displayName: 'x', routable: false })).toBe('Not set up yet');
 });
 
 test('filterRosterRows keeps navigation rows and ignores blank queries', () => {

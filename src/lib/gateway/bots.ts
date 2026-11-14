@@ -145,7 +145,7 @@ export function botRuntimeWritable(runtime?: string | null): boolean {
 export function botRowSubtitle(bot: PublicBot): string {
   if (bot.routingIssue === 'multiplex_disabled') return 'Multiplex is off';
   if (bot.routingIssue === 'default_key_refused') return 'Default listen key refused';
-  if (!bot.routable || bot.routingIssue === 'listen_key_missing') return 'No listen key';
+  if (!bot.routable || bot.routingIssue === 'listen_key_missing') return 'Not set up yet';
   const pin = bot.model?.default ?? null;
   const kind = botRuntimeLabel(bot.runtime);
   const label = kind ? `${kind} Bot` : 'Bot';
@@ -165,14 +165,14 @@ export function botChipModelPin(bot: PublicBot): string {
 /**
  * The unroutable tag on a group-room member chip: '' when the member can
  * route, else the same verdict words the roster row uses ('Multiplex is off' /
- * 'No listen key' / 'Default listen key refused'). Same precedence as
+ * 'Not set up yet' / 'Default listen key refused'). Same precedence as
  * botRowSubtitle — a reported routingIssue wins over a stale routable boolean,
  * and older Gates that report neither degrade to the boolean alone.
  */
 export function botChipRoutingTag(bot: PublicBot): string {
   if (bot.routingIssue === 'multiplex_disabled') return 'Multiplex is off';
   if (bot.routingIssue === 'default_key_refused') return 'Default listen key refused';
-  if (!bot.routable || bot.routingIssue === 'listen_key_missing') return 'No listen key';
+  if (!bot.routable || bot.routingIssue === 'listen_key_missing') return 'Not set up yet';
   return '';
 }
 
