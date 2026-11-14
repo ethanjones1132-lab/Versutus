@@ -344,9 +344,12 @@ test('nothing claims the provider path records the verdicts rule (d) reads', () 
     );
     assert.doesNotMatch(source, /by how it has actually answered \(d\)/, `${name} still claims rule (d) runs there`);
   }
-  // ...and the truth is stated where the rows are assembled.
+  // ...and the truth is stated where the rows are assembled - now in the
+  // extracted provider route module, which is what this test reads instead of
+  // the file that used to hold those rows inline.
+  const providers = readFileSync(fileURLToPath(new URL('../core/routes/providers.mjs', import.meta.url)), 'utf8');
   assert.match(curation, /rule d applies\s*\n?\s*\*?\s*ONLY if a verdict exists/);
-  assert.match(server, /records none today/);
+  assert.match(providers, /records none today/);
 });
 test("a Bot's failures are held against that Bot's catalogue only", async () => {
   // Each Bot is its own Hermes profile with its own provider keys. Two refused
