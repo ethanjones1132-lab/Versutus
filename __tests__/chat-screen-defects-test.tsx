@@ -681,7 +681,11 @@ describe('RESUME-1 — Send again / Retry is not offered while a turn is live', 
       error.props.onResume(failedTurn);
     });
     await settle();
-    expect(sendInput()).toHaveBeenCalledWith('ping', { skills: [], attachments: undefined });
+    expect(sendInput()).toHaveBeenCalledWith('ping', {
+      messageId: 'm-ping',
+      skills: [],
+      attachments: undefined,
+    });
   });
 
   test('retrying a failed text and image turn sends the stored image', async () => {
@@ -701,6 +705,7 @@ describe('RESUME-1 — Send again / Retry is not offered while a turn is live', 
     await settle();
 
     expect(sendInput()).toHaveBeenCalledWith('describe this', {
+      messageId: 'm-describe this',
       skills: [],
       attachments,
     });
@@ -721,7 +726,11 @@ describe('RESUME-1 — Send again / Retry is not offered while a turn is live', 
     });
     await settle();
 
-    expect(sendInput()).toHaveBeenCalledWith('', { skills: [], attachments });
+    expect(sendInput()).toHaveBeenCalledWith('', {
+      messageId: 'm-',
+      skills: [],
+      attachments,
+    });
   });
 });
 

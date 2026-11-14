@@ -1974,6 +1974,7 @@ export function ChatScreen() {
       if (previousUser) {
         pinnedRef.current = true;
         void sendChatInput(previousUser.text.trim(), {
+          messageId: previousUser.id,
           skills: skillsState.skills,
           attachments: previousUser.attachments,
         });
