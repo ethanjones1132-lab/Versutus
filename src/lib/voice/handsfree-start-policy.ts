@@ -23,7 +23,7 @@ export function handsfreeStartBlocker(inputs: HandsfreeStartInputs): HandsfreeSt
 }
 
 const COPY: Record<HandsfreeStartBlocker, string> = {
-  disconnected: 'Versutus is not connected to the gateway yet. The call can start once it reconnects.',
+  disconnected: 'Versutus is not connected to your computer yet. The call can start once it reconnects.',
   approval: 'A run is waiting for your approval. Decide it first, then start the call.',
   command: 'A command is still running. Start the call when it finishes.',
   streaming: 'Wait for this reply to finish, or stop it, then start the call.',

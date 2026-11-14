@@ -197,7 +197,7 @@ describe('a call never opens a plaintext media socket off this machine', () => {
     expect(requested).toBe(0);
     if (attempt.result === 'started') throw new Error('an insecure call must not start');
     expect(handsfreeStartResultCopy(attempt.result)).toContain(
-      'Calls need a secure connection to your gateway. Use HTTPS or Tailscale.',
+      'Calls need a secure connection to your computer. Use HTTPS or Tailscale.',
     );
   });
 

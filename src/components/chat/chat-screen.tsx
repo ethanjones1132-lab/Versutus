@@ -195,6 +195,7 @@ import { keyValueStorage } from '@/lib/storage/key-value';
 import { loadAppSettings } from '@/lib/settings/app-settings';
 import {
   chooseVoiceEngine,
+  VOICE_CALLS_OFF_REASON,
   type VoiceEngineCapabilities,
   type VoiceEngineChoice,
   type VoiceEnginePreference,
@@ -1742,7 +1743,7 @@ export function ChatScreen() {
     if (choice?.engine === 'none') {
       // S7/D7: a disabled Gate is a no-call state. Refuse here even if a caller
       // reached Start anyway — the phone engine is never substituted.
-      setCallError(choice.reason ?? 'Calls are turned off on this PC.');
+      setCallError(choice.reason ?? VOICE_CALLS_OFF_REASON);
       return false;
     }
     if (!draftThread.sessionId) {

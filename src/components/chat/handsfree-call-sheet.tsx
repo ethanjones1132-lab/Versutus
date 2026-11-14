@@ -3,7 +3,6 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { BaseSheet, Button, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import {
-  HANDSFREE_BANNER_TITLE,
   HANDSFREE_DISCLOSURE,
   HANDSFREE_RECOVERY_DISCLOSURE,
 } from '@/lib/voice/handsfree-call-copy';
@@ -61,18 +60,18 @@ export function HandsfreeCallSheet({
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scroll}>
         <Text variant="title">
-          {label ? `Start a hands-free call with ${label}?` : `Start a ${HANDSFREE_BANNER_TITLE}?`}
+          {label ? `Start a hands-free call with ${label}?` : 'Start a hands-free call?'}
         </Text>
 
         {engineLabel ? (
           <View style={styles.engineLine}>
             <Text variant="caption" color="secondary">
-              Using: {engineLabel}
+              Using {engineLabel}
             </Text>
             {onChangeEngine ? (
               <Pressable accessibilityRole="button" onPress={onChangeEngine}>
                 <Text variant="link" color="accent">
-                  Change
+                  Change engine
                 </Text>
               </Pressable>
             ) : null}

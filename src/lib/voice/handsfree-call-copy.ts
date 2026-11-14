@@ -130,7 +130,7 @@ export function handsfreeEndReasonCopy(reason: HandsfreeTerminalReason): string 
       // the phone could not get back onto it before the PC let the call go.
       return 'The call ended because the audio link to the PC dropped.';
     case 'send-failed':
-      return 'The call ended because a turn could not be sent or no reply arrived. What you said is back in the composer.';
+      return 'The call ended because a turn could not be sent or no reply arrived. What you said is back in the message box.';
     case 'speech-failed':
       return 'The call ended because this phone could not speak the reply.';
   }
@@ -173,35 +173,35 @@ export function handsfreeStartResultCopy(
     case 'availability-unreadable':
       return 'This phone would not say whether it can take a call. Try again.';
     case 'phone-recognition-unavailable':
-      return 'This phone would not open a call session. Try again; if it keeps failing, check that a speech recognition service is installed and enabled.';
+      return 'This phone would not start a call. Try again; if it keeps failing, check that a speech recognition service is installed and enabled.';
     case 'phone-synthesis-unavailable':
       return 'This phone cannot speak a reply. Check that a text-to-speech engine is installed and enabled.';
     case 'no-gateway-url':
-      return 'Versutus does not have this PC’s address, so it cannot start a call on the host. Reconnect to the PC, then try again.';
+      return 'Versutus does not have this PC’s address, so a call cannot start. Reconnect to the PC, then try again.';
     case 'device-params-failed':
       return 'This phone could not name itself to the PC. Try reconnecting, then start again.';
     case 'no-session':
-      return 'This thread does not have a chat session yet. Send a message first, then start the call.';
+      return 'This conversation has not started yet. Send a message first, then start the call.';
     case 'not-paired':
-      return 'This phone is not paired with the PC, so the PC will not open a call. Reconnect and approve it, then start again.';
+      return 'The PC has not approved this phone, so it will not open a call. Approve this phone on the PC, then start again.';
     case 'call-in-progress':
       return 'The PC still has a live call for this phone. End it, wait a moment, then start again.';
     case 'no-engine':
       return withDetail(
-        'The PC voice engine is not ready. Check Voice in Settings, or run voice install on the PC.',
+        'The PC voice engine is not ready. Install the voice models in Settings, then start again.',
         detail,
       );
     case 'insecure-media-url':
       // The call's audio would cross the network unencrypted. There is no
       // override (D2), so the one useful thing to say is how to make it secure.
-      return 'Calls need a secure connection to your gateway. Use HTTPS or Tailscale. Then start again.';
+      return 'Calls need a secure connection to your computer. Use HTTPS or Tailscale. Then start again.';
     case 'session-start-failed':
       return withDetail(
         'The call request to the PC failed. Check the connection to the PC, then try again.',
         detail,
       );
     case 'session-grant-incomplete':
-      return 'The PC opened a call without a media path, so this phone could not join it. Try again.';
+      return 'The PC opened a call without an audio link, so this phone could not join it. Try again.';
     case 'media-start-failed':
       return 'This phone could not open the audio link to the PC. Stay on the same network and try again.';
     case 'start-timed-out':
@@ -215,11 +215,11 @@ export function handsfreeStartResultCopy(
         detail,
       );
     case 'call-torn-down-while-starting':
-      return 'The call ended before it finished opening. The connection dropped or the thread changed. Start again when you are back on the thread.';
+      return 'The call ended before it finished opening. The connection dropped or you changed conversations. Start again from the conversation you want to call.';
     case 'native-session-unavailable':
-      return 'This phone could not open its hands-free call session right now. Bring Versutus to the foreground, then try again.';
+      return 'This phone could not open a hands-free call right now. Bring Versutus to the foreground, then try again.';
     case 'native-session-rejected':
-      return 'This phone failed to open the call session. Try again, or restart Versutus if it keeps failing.';
+      return 'This phone failed to open a call. Try again, or restart Versutus if it keeps failing.';
     case 'start-failed-unexpectedly':
       return 'An unexpected problem in Versutus stopped the call from starting. Try again; if it keeps happening, restart Versutus.';
     default: {

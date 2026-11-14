@@ -220,15 +220,16 @@ test('botChipRoutingTag names the routing cause or stays silent', () => {
   // Routable members render silence — never an empty pill segment.
   expect(botChipRoutingTag({ id: 'a', displayName: 'a', routable: true })).toBe('');
   expect(botChipRoutingTag({ id: 'b', displayName: 'b', routable: true, routingIssue: null })).toBe('');
-  // No key at all and a refused default key are different fixes, so they
-  // stay the same two verdict words the roster row uses.
+  // No key at all and a refused default key are different fixes, but both are
+  // "Not set up yet" on the row: the listen key stays out of the main view and
+  // the detail surface names the fix.
   expect(botChipRoutingTag({ id: 'c', displayName: 'c', routable: false })).toBe('Not set up yet');
   expect(
     botChipRoutingTag({ id: 'd', displayName: 'd', routable: true, routingIssue: 'listen_key_missing' }),
   ).toBe('Not set up yet');
   expect(
     botChipRoutingTag({ id: 'e', displayName: 'e', routable: true, routingIssue: 'default_key_refused' }),
-  ).toBe('Default listen key refused');
+  ).toBe('Not set up yet');
 });
 
 test('routing tag outranks the model pin on a member chip', () => {
@@ -250,12 +251,12 @@ test('routing tag outranks the model pin on a member chip', () => {
     const tag = botChipRoutingTag(bot);
     return { id: bot.id, tag, pin: tag ? '' : botChipModelPin(bot) };
   });
-  expect(chips[0]).toEqual({ id: 'echo', tag: 'Default listen key refused', pin: '' });
+  expect(chips[0]).toEqual({ id: 'echo', tag: 'Not set up yet', pin: '' });
   expect(chips[1]).toEqual({ id: 'live', tag: '', pin: 'm-live' });
   expect(chips[2]).toEqual({ id: 'mute', tag: 'Not set up yet', pin: '' });
 });
 
-test('unroutable subtitles name the cause: missing key vs refused default key', () => {
+test('unroutable subtitles say "Not set up yet"; Details carries which fix', () => {
   expect(
     botRowSubtitle({
       id: 'silent',
@@ -264,8 +265,9 @@ test('unroutable subtitles name the cause: missing key vs refused default key', 
       routingIssue: 'listen_key_missing',
     }),
   ).toBe('Not set up yet');
-  // A copied default listen key is a DIFFERENT fix (set a distinct one), so it
-  // must not hide behind the generic "no key" line.
+  // A copied default listen key is a DIFFERENT fix (set a distinct one), but the
+  // roster's one line never speaks the key's name — botRoutingView names it on
+  // the detail surface.
   expect(
     botRowSubtitle({
       id: 'echo',
@@ -274,13 +276,13 @@ test('unroutable subtitles name the cause: missing key vs refused default key', 
       routingIssue: 'default_key_refused',
       model: { default: 'anthropic/claude-sonnet-4', provider: null },
     }),
-  ).toBe('Default listen key refused');
+  ).toBe('Not set up yet');
 });
 
 test('routingIssue wins over a stale routable boolean, older Gates degrade', () => {
   expect(
     botRowSubtitle({ id: 'e', displayName: 'e', routable: true, routingIssue: 'default_key_refused' }),
-  ).toBe('Default listen key refused');
+  ).toBe('Not set up yet');
   expect(botRowSubtitle({ id: 'x', displayName: 'x', routable: false })).toBe('Not set up yet');
 });
 

@@ -60,7 +60,8 @@ export type VoiceEngineChoice = {
 };
 
 const FALLBACK_ORDER: RunningVoiceEngine[] = ['local', 'codex', 'phone'];
-const KILL_SWITCH_REASON = 'Gate voice is turned off.';
+/** The one sentence for a switched-off Gate; Settings shows the same words. */
+export const VOICE_CALLS_OFF_REASON = 'Gate voice is turned off on this PC.';
 /** iOS `startGateMedia` is a stub that resolves false. PC voice cannot run there. */
 const IOS_GATE_MEDIA_REASON = 'PC voice cannot run on this phone.';
 
@@ -89,7 +90,7 @@ export function chooseVoiceEngine(
     return {
       engine: 'none',
       ...(asked ? { fellBackFrom: asked } : {}),
-      reason: KILL_SWITCH_REASON,
+      reason: VOICE_CALLS_OFF_REASON,
     };
   }
 

@@ -35,13 +35,13 @@ export const VOICE_ENGINE_ROWS: VoiceEngineRow[] = [
   },
   {
     id: 'local',
-    label: 'This PC — local voice',
+    label: 'This PC',
     summary: 'Free. Audio stays on your PC and is never recorded.',
     disclosure: LOCAL_DISCLOSURE,
   },
   {
     id: 'codex',
-    label: 'ChatGPT subscription (via Codex on this PC)',
+    label: 'ChatGPT on this PC',
     summary: "Spends your ChatGPT plan's voice allowance. Audio goes through your PC to OpenAI.",
     disclosure: CODEX_DISCLOSURE,
   },

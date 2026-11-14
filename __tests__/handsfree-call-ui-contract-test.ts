@@ -290,10 +290,10 @@ describe('the call says how long it has been running', () => {
 });
 
 describe('the sheet names the engine before consent', () => {
-  test('shows "Using:" with a one-tap Change', () => {
-    expect(sheet).toContain('Using: {engineLabel}');
+  test('shows "Using" with a one-tap Change engine', () => {
+    expect(sheet).toContain('Using {engineLabel}');
     expect(sheet).toContain('onChangeEngine');
-    expect(sheet).toContain('Change');
+    expect(sheet).toContain('Change engine');
   });
 
   test('names an unready host engine and withholds Start until the call can open', () => {

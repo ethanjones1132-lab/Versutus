@@ -41,6 +41,7 @@ Internal term → what the screen says.
 | endpoint | address |
 | listen key | kept out of the main view; the roster says "Not set up yet" and Details names the fix |
 | session | conversation |
+| composer | message box |
 | routine | scheduled task |
 | pairing | approve this phone |
 | token | access key (technical view only) |
@@ -72,6 +73,7 @@ The roster already had the voice to match, and these stay:
 
 `__tests__/copy-guard-test.ts` fails on `API_SERVER_KEY`, `RPC`, `vshowcase`, a
 dangling `" - "` separator, or the word "profile" in the user-facing strings of
-the priority screens. It also guards the roster's routing verdict, the call's
-end line and the address check's wording. Add a screen to its list when it joins
-the priority set — the guard is only as wide as the list.
+the priority screens. It also guards the roster's routing verdict, the call
+surface's words (the sheet, the end line, the engine names and the start
+failures) and the address check's wording. Add a screen to its list when it
+joins the priority set — the guard is only as wide as the list.

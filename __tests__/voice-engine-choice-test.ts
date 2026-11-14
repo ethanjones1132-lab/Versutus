@@ -25,16 +25,16 @@ describe('chooseVoiceEngine', () => {
     expect(chooseVoiceEngine('local', caps(localReady, codexReady, false))).toEqual({
       engine: 'none',
       fellBackFrom: 'local',
-      reason: 'Gate voice is turned off.',
+      reason: 'Gate voice is turned off on this PC.',
     });
     expect(chooseVoiceEngine('auto', caps(localReady, codexReady, false))).toEqual({
       engine: 'none',
-      reason: 'Gate voice is turned off.',
+      reason: 'Gate voice is turned off on this PC.',
     });
     // Even an explicit phone preference is not a way round the switch.
     expect(chooseVoiceEngine('phone', caps(localReady, codexReady, false))).toEqual({
       engine: 'none',
-      reason: 'Gate voice is turned off.',
+      reason: 'Gate voice is turned off on this PC.',
     });
   });
 

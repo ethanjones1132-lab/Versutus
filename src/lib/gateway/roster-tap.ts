@@ -1,14 +1,13 @@
 // ─── Roster row tap: what pressing a Bot's row does ────────────────────────
 //
 // The roster row is one line by design, so the routing verdict lives in the
-// subtitle ("Not set up yet" / "Default listen key refused") and the FIX lives
-// in the detail surface. That split left the unroutable row's press as a
-// silent no-op: an operator reading "Default listen key refused" tapped the
-// row anyway — the natural gesture — and nothing happened. This module makes
-// the decision explicit and pure: a routable row opens its chat; an
-// unroutable row opens the detail surface that names the fix; when no detail
-// surface exists (older callers), the press stays undefined rather than
-// pretending.
+// subtitle ("Not set up yet" / "Multiplex is off") and the FIX lives in the
+// detail surface. That split left the unroutable row's press as a silent
+// no-op: an operator reading "Not set up yet" tapped the row anyway — the
+// natural gesture — and nothing happened. This module makes the decision
+// explicit and pure: a routable row opens its chat; an unroutable row opens the
+// detail surface that names the fix; when no detail surface exists (older
+// callers), the press stays undefined rather than pretending.
 //
 // Routability here follows the SAME precedence as botRowSubtitle,
 // botChipRoutingTag, and describeBotDetail: a Gate-reported routingIssue wins
