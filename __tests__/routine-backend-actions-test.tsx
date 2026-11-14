@@ -238,6 +238,20 @@ describe('a routine on a second backend acts there', () => {
 });
 
 describe('a Bot-owned routine uses its proven home even when ids collide', () => {
+  test('a paused routine does not promise the stale next-run date retained by Hermes', async () => {
+    const staleNextRun = '2027-01-01T00:00:00-05:00';
+    await mountRoutines(feed([{
+      ...routine('hermes-a', 'nova'),
+      paused: true,
+      schedule: '15 9 * * 1',
+      nextRunAt: staleNextRun,
+    }]));
+    await openRoutine();
+
+    expect(textContent()).not.toContain(staleNextRun);
+    expect(textContent()).toContain('Paused');
+  });
+
   test('duplicate job ids keep distinct home identity through run history and controls', async () => {
     await mountRoutines(feed([
       routine('hermes-a', 'mira'),

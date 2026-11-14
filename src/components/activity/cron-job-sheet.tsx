@@ -411,7 +411,7 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
         <Divider />
 
         <Row label="Schedule" value={displayedJob.scheduleDisplay ?? displayedJob.schedule} />
-        <Row label="Next run" value={displayedJob.nextRunAt} />
+        <Row label="Next run" value={displayedJob.paused ? 'Paused' : displayedJob.nextRunAt} />
         <Row label="Last run" value={displayedJob.lastRunAt} />
         <Row label="Owner" value={displayedJob.botId ? `Bot: ${displayedJob.botId}` : 'the gateway itself'} />
         <Row label="Model" value={displayedJob.model ?? 'gateway default'} />

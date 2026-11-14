@@ -272,6 +272,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'flex-start',
     gap: 3,
   },
   subtitle: {
