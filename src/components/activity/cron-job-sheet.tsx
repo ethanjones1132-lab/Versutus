@@ -13,6 +13,7 @@ import {
 } from '@/lib/gateway/cron-job-controls';
 import {
   cronRunSummary,
+  cronJobOriginText,
   describeCronHealth,
   type CronJob,
   type CronRun,
@@ -306,6 +307,8 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
   if (!job) return null;
   const health = describeCronHealth(job);
   const displayedJob = editDetail ?? job;
+  const promptLength =
+    displayedJob.promptLength ?? (typeof displayedJob.prompt === 'string' ? displayedJob.prompt.length : null);
 
   return (
     <BaseSheet visible onClose={onClose} title={displayedJob.title || displayedJob.id} eyebrow="SCHEDULED JOB">
@@ -416,19 +419,21 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
         <Row label="Toolsets" value={displayedJob.toolsets?.length ? displayedJob.toolsets.join(', ') : 'none'} />
         <Row label="Workdir" value={displayedJob.workdir} />
         <Row label="Delivery" value={displayedJob.deliver} />
-        <Row label="Origin" value={displayedJob.origin} />
+        <Row label="Origin" value={cronJobOriginText(displayedJob.origin)} />
 
         <Divider />
 
         <Button
-          label={showPrompt ? 'Hide prompt' : `Show prompt (${displayedJob.promptLength ?? 0} chars)`}
+          label={showPrompt ? 'Hide prompt' : promptLength === null ? 'Show prompt (not loaded)' : `Show prompt (${promptLength} chars)`}
           variant="ghost"
           size="sm"
           expanded={showPrompt}
           onPress={() => setShowPrompt((open) => !open)}
         />
         {showPrompt ? (
-          <Text variant="micro" style={styles.mono} selectable>{displayedJob.prompt || '—'}</Text>
+          <Text variant="micro" style={styles.mono} selectable>
+            {typeof displayedJob.prompt === 'string' ? displayedJob.prompt || '—' : 'Prompt not loaded.'}
+          </Text>
         ) : null}
 
         <Button

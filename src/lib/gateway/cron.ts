@@ -37,7 +37,8 @@ export type CronJob = {
   toolsets?: string[];
   workdir?: string | null;
   deliver?: string | null;
-  origin?: string | null;
+  /** The source can be a label or a structured Hermes origin payload. */
+  origin?: unknown;
   prompt?: string;
   promptLength?: number;
   running?: boolean;
@@ -45,6 +46,23 @@ export type CronJob = {
   /** The untouched host record, so "show raw" can never be a curated lie. */
   raw?: Record<string, unknown>;
 };
+
+/** A short readable origin label; the complete source payload remains in `raw`. */
+export function cronJobOriginText(origin: unknown): string | null {
+  if (typeof origin === 'string') return origin.trim() || null;
+  if (typeof origin !== 'object' || origin === null || Array.isArray(origin)) return null;
+
+  const record = origin as Record<string, unknown>;
+  const field = (value: unknown): string | null => {
+    if (typeof value === 'string') return value.trim() || null;
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+    return null;
+  };
+  const platform = field(record.platform);
+  const chatId = field(record.chat_id ?? record.chatId);
+  const label = [platform, chatId ? `chat-${chatId}` : null].filter((part): part is string => part !== null).join(' · ');
+  return label || 'Origin details available';
+}
 
 /** One past or in-flight run of a job. */
 export type CronRun = {

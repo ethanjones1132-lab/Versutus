@@ -40,7 +40,7 @@ type ApprovalRowShape = Parameters<typeof import('@/lib/gateway/approvals').batc
 
 const mockState = {
   pendingApprovals: [] as ApprovalRowShape[],
-  pendingApprovalsState: 'ready' as 'loading' | 'ready' | 'failed',
+  pendingApprovalsState: 'ready' as 'loading' | 'ready' | 'failed' | 'unavailable',
   pendingApprovalsError: null as string | null,
   approvalBusy: null as string | null,
 };
@@ -328,6 +328,17 @@ describe('a failed read leaves the rows the operator still has to act on', () =>
       renderer?.update(createElement(ApprovalInbox));
     });
     expect(stringsIn(renderer?.toJSON())).toContain('No approvals are waiting.');
+  });
+
+  it('an unavailable inbox invites connection without claiming it is empty', async () => {
+    mockState.pendingApprovals = [];
+    mockState.pendingApprovalsState = 'unavailable';
+    await mount();
+
+    const strings = stringsIn(renderer?.toJSON());
+    expect(strings).toContain('Connect to a gateway to check approvals.');
+    expect(strings).not.toContain('No approvals are waiting.');
+    expect(renderer?.root.findAllByType('Icon' as ElementType)).toHaveLength(0);
   });
 });
 

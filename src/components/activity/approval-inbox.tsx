@@ -148,6 +148,14 @@ export function ApprovalInbox() {
         />
       ) : null}
 
+      {pendingApprovalsState === 'unavailable' ? (
+        <View style={styles.quiet}>
+          <Text variant="caption" color="secondary">
+            Connect to a gateway to check approvals.
+          </Text>
+        </View>
+      ) : null}
+
       {/* The rows stay on screen under a failed read: the refusal says nothing
           about what the Gate is still holding, and a half-decided approval that
           vanished took its context with it. Only `ready` may claim the list is

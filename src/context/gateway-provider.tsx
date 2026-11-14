@@ -610,8 +610,8 @@ type GatewayContextValue = {
   resolveRunApproval: (approved: boolean, feedback?: string) => void;
   /** D1: the Gate's pending CLI-environment approvals, with their class. */
   pendingApprovals: ApprovalRow[];
-  /** Three phases of the pending read: never an in-flight/failed list claiming empty. */
-  pendingApprovalsState: 'loading' | 'ready' | 'failed';
+  /** Read phase; unavailable means no live Gate answered, not that the inbox is empty. */
+  pendingApprovalsState: 'loading' | 'ready' | 'failed' | 'unavailable';
   /** Why the last pending read failed; null unless `pendingApprovalsState` is `failed`. */
   pendingApprovalsError: string | null;
   /**
@@ -1521,7 +1521,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [recentCommands, setRecentCommands] = useState<string[]>([]);
   const [pendingRunApproval, setPendingRunApproval] = useState<{ runId: string; prompt: string } | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalRow[]>([]);
-  const [pendingApprovalsState, setPendingApprovalsState] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const [pendingApprovalsState, setPendingApprovalsState] = useState<'loading' | 'ready' | 'failed' | 'unavailable'>('loading');
   const [pendingApprovalsError, setPendingApprovalsError] = useState<string | null>(null);
   const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
   const [tlsFingerprintChange, setTlsFingerprintChange] = useState<TlsFingerprintChange | null>(null);
@@ -5244,11 +5244,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // disconnect empties the list; a live connection re-reads it.
     if (status !== 'connected') {
       queueMicrotask(() => {
-        // Settled empty: there is no Gate to be waiting on, so the card
-        // answers ready+empty rather than spinning or claiming a failure.
+        // There is no live Gate to confirm the inbox is empty. Keep this
+        // distinct from a successful ready+empty read.
         setPendingApprovals([]);
         setPendingApprovalsError(null);
-        setPendingApprovalsState('ready');
+        setPendingApprovalsState('unavailable');
       });
       return undefined;
     }

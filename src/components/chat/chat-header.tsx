@@ -267,6 +267,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   subtitleRow: {
+    flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
@@ -286,7 +289,8 @@ const styles = StyleSheet.create({
     borderRadius: 1.5,
   },
   spend: {
-    flexShrink: 0,
+    minWidth: 0,
+    flexShrink: 1,
     fontVariant: ['tabular-nums'],
   },
   name: {

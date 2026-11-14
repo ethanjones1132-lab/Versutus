@@ -441,6 +441,14 @@ afterEach(async () => {
 });
 
 describe('one manifest read per connect', () => {
+  test('a disconnected provider reports approvals as unavailable, not successfully empty', async () => {
+    await mount();
+
+    expect(gatewayApi().status).toBe('disconnected');
+    expect(gatewayApi().pendingApprovals).toEqual([]);
+    expect(gatewayApi().pendingApprovalsState).toBe('unavailable');
+  });
+
   test('a live-served manifest is not fetched again after connect', async () => {
     const alpha = profile({ id: 'alpha', url: 'http://alpha.test:8642', kind: 'custom' });
     mockState.gateways = [alpha];
@@ -532,6 +540,8 @@ describe('the connected-time reads take their turn', () => {
   test('approvals land before the routine list, and neither lands first', async () => {
     const client = await connectAlpha();
     expect(approvalsReads(client)).toBe(1);
+    expect(gatewayApi().pendingApprovals).toEqual([]);
+    expect(gatewayApi().pendingApprovalsState).toBe('ready');
     expect(client.listCronJobsCalls).toBe(1);
   });
 

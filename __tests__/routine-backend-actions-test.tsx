@@ -343,6 +343,44 @@ describe('a Bot-owned routine uses its proven home even when ids collide', () =>
     expect(fields()).toHaveLength(0);
   });
 
+  test('Edit renders Hermes origin metadata as text and retains the full object in raw detail', async () => {
+    const sheet = feed([routine('hermes-a', 'nova')]);
+    const scope = { backendId: 'hermes-a', botId: 'nova' };
+    const origin = {
+      platform: 'telegram',
+      chat_id: 'chat-42',
+      source_ip: '192.0.2.8',
+      peer_ip: '192.0.2.9',
+      user_agent: 'Hermes/1.0',
+    };
+    mockGateway.activityFeed.readRoutines.mockResolvedValue(sheet);
+    mockGateway.botJobs.canUpdate.mockReturnValue(true);
+    mockGateway.cron.list.mockResolvedValueOnce([{
+      id: 'job-1',
+      title: 'Nightly digest',
+      name: '[bot:nova] Nightly digest',
+      botId: 'nova',
+      schedule: '0 9 * * *',
+      prompt: 'The existing prompt',
+      origin,
+      raw: { origin },
+    } as unknown as CronJob]);
+    await mountRoutines(sheet);
+    await openRoutine();
+
+    expect(button('Show prompt (not loaded)')).toBeDefined();
+    await press('Edit');
+
+    expect(textContent()).toContain('telegram · chat-chat-42');
+    expect(textContent().join('\n')).not.toContain('[object Object]');
+    await press('Show raw record');
+    const rawRecord = textContent().join('\n');
+    expect(rawRecord).toContain('"source_ip": "192.0.2.8"');
+    expect(rawRecord).toContain('"peer_ip": "192.0.2.9"');
+    expect(rawRecord).toContain('"user_agent": "Hermes/1.0"');
+    expect(mockGateway.cron.list).toHaveBeenCalledWith(scope);
+  });
+
   test('Edit does not invent empty fields when the exact job is absent from its home', async () => {
     const sheet = feed([routine('hermes-a', 'nova')]);
     mockGateway.activityFeed.readRoutines.mockResolvedValue(sheet);
