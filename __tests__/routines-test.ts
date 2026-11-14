@@ -145,12 +145,13 @@ const HERMES_INBOX = {
   last_status: 'ok',
 };
 
-test('a Hermes job keeps schedule, next run, and last status', () => {
+test('a Hermes job keeps its host schedule display, next run, and last status', () => {
   expect(routineJobFromUnknown(HERMES_INBOX)).toEqual({
     id: 'job_inbox',
     name: '[bot:echo] inbox',
     paused: false,
     schedule: '0 9 * * *',
+    scheduleDisplay: 'daily at 09:00',
     nextRunAt: '2026-08-25T09:06:00Z',
     lastStatus: 'ok',
   });
@@ -163,6 +164,7 @@ test('a camelCase job (already curated) parses the same fields', () => {
       name: '[bot:echo] inbox',
       paused: false,
       schedule: '0 9 * * *',
+      scheduleDisplay: 'daily at 09:00',
       nextRunAt: '2026-08-25T09:06:00Z',
       lastStatus: 'ok',
     }),
@@ -171,6 +173,7 @@ test('a camelCase job (already curated) parses the same fields', () => {
     name: '[bot:echo] inbox',
     paused: false,
     schedule: '0 9 * * *',
+    scheduleDisplay: 'daily at 09:00',
     nextRunAt: '2026-08-25T09:06:00Z',
     lastStatus: 'ok',
   });
@@ -197,6 +200,7 @@ test('routineJobsFromList keeps parseable jobs and drops junk', () => {
       name: '[bot:echo] inbox',
       paused: false,
       schedule: '0 9 * * *',
+      scheduleDisplay: 'daily at 09:00',
       nextRunAt: '2026-08-25T09:06:00Z',
       lastStatus: 'ok',
     },

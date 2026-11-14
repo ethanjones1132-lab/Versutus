@@ -11,79 +11,44 @@ function readSource(rel: string[]): string {
     .replace(/\r\n/g, '\n');
 }
 
-function readActivity(): string {
-  return readSource(['src', 'app', '(tabs)', 'activity.tsx']);
+function readSettings(): string {
+  return readSource(['src', 'app', 'gateway', 'settings.tsx']);
 }
 
-/** The Approval-decisions card, from its heading to the next sibling card. */
+/** The decision-history card and its bounded recent rows. */
 function readAuditCard(): string {
-  const src = readActivity();
-  const start = src.indexOf('<SectionHeader title="Your decisions" />');
+  const src = readSettings();
+  const start = src.indexOf('<Text variant="headline">Decision history</Text>');
   expect(start).toBeGreaterThanOrEqual(0);
-  const end = src.indexOf('<SpendEntryRow', start);
+  const end = src.indexOf('{activeGateway ? (', start);
   expect(end).toBeGreaterThan(start);
   return src.slice(start, end);
 }
 
-// loadApprovalAudit folds a storage refusal into [] (approval-policy.ts),
-// so the Activity tab's `.catch(() => undefined)` was dead: in-flight, failed,
-// and genuinely-empty all rendered the same "No approval decisions recorded"
-// tally. The tab needs its own state machine over a loader that can refuse.
-describe('activity approval-decisions card honesty', () => {
-  test('the tab tracks the audit read as loading, ready, or failed', () => {
-    const src = readActivity();
-    expect(src).toMatch(
-      /useState<'loading' \| 'ready' \| 'failed'>\('loading'\)/,
-    );
+// Decision history lives in Gateway Settings, not Activity's Today feed.
+// Settings keeps a loaded gate so its empty copy waits for the storage read.
+describe('approval decision history ownership', () => {
+  test('Activity stays focused on Today and Routines', () => {
+    const src = readSource(['src', 'app', '(tabs)', 'activity.tsx']);
+    expect(src).toContain('<TodaySection');
+    expect(src).toContain('<RoutinesSection');
+    expect(src).not.toContain('Your decisions');
+    expect(src).not.toContain('loadApprovalAudit');
   });
 
-  test('the mount read goes through the strict loader and records a refusal', () => {
-    const src = readActivity();
+  test('Gateway Settings keeps storage failure separate from a genuinely empty history', () => {
+    const src = readSettings();
     expect(src).toContain('loadApprovalAuditStrict');
-    expect(src).toMatch(/setAuditState\('failed'\)/);
-    expect(src).toMatch(/setAuditState\('ready'\)/);
-    // The lenient loader (which hides failures) no longer feeds the card.
-    expect(src).not.toMatch(/loadApprovalAudit\(\)\.then\(/);
+    expect(src).toMatch(/auditState === 'failed'/);
+    expect(src).toContain('affected="approval decisions saved on this device"');
+    expect(src).toContain('onRetry={retryAuditRead}');
+    expect(src).not.toContain('loadApprovalAudit,');
   });
 
-  test('while the read is in flight the card shows a Skeleton, never the tally copy', () => {
+  test('only the ready Settings branch renders the summary and five recent rows', () => {
     const card = readAuditCard();
-    const loadingAt = card.indexOf("auditState === 'loading'");
-    const skeletonAt = card.indexOf('<Skeleton');
-    const tallyAt = card.indexOf('approvalAuditTallyCopy');
-    expect(loadingAt).toBeGreaterThanOrEqual(0);
-    expect(skeletonAt).toBeGreaterThan(loadingAt);
-    // The tally is not reachable from the loading branch: it sits in the
-    // ready branch, after the loading guard.
-    const readyAt = card.indexOf("auditState === 'ready'");
-    expect(readyAt).toBeGreaterThan(loadingAt);
-    expect(tallyAt).toBeGreaterThan(readyAt);
-  });
-
-  test('a failed read renders an inline ErrorCard with a retry, not the empty tally', () => {
-    const card = readAuditCard();
-    const failedAt = card.indexOf("auditState === 'failed'");
-    const errorCardAt = card.indexOf('<ErrorCard');
-    expect(failedAt).toBeGreaterThanOrEqual(0);
-    expect(errorCardAt).toBeGreaterThan(failedAt);
-    expect(card).toMatch(/onRetry=\{[\s\S]*readAudit/);
-    // The genuinely-empty copy is the ready branch's answer only.
-    const tallyAt = card.indexOf('approvalAuditTallyCopy');
-    expect(tallyAt).toBeGreaterThan(failedAt);
-  });
-
-  test('the ready branch keeps the tally and the four-line recent list', () => {
-    const card = readAuditCard();
-    expect(card).toContain('approvalAuditTallyCopy(audit)');
-    expect(card).toMatch(/approvalAuditRecent\(audit, 4\)/);
-  });
-
-  test('pull-to-refresh re-reads the audit through the same state machine', () => {
-    const src = readActivity();
-    const refreshAt = src.indexOf('const onRefresh');
-    expect(refreshAt).toBeGreaterThanOrEqual(0);
-    const body = src.slice(refreshAt, src.indexOf('\n  };', refreshAt));
-    expect(body).toMatch(/readAudit/);
-    expect(body).not.toContain('loadApprovalAudit');
+    expect(card).toContain("auditState === 'ready'");
+    expect(card).toContain('approvalAuditSummaryCopy(audit.length)');
+    expect(card).toContain('audit.slice(0, 5).map(');
   });
 });

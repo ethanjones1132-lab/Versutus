@@ -75,10 +75,13 @@ afterEach(async () => {
 });
 
 /** Open the sheet and let the deferred first read go out. */
-async function open(runId = 'run-1'): Promise<ReactTestRenderer> {
+async function open(
+  runId = 'run-1',
+  scope?: { backendId: string; botId: string | null },
+): Promise<ReactTestRenderer> {
   let renderer!: ReactTestRenderer;
   await act(async () => {
-    renderer = create(createElement(CronRunSheet, { runId, onClose: () => undefined }));
+    renderer = create(createElement(CronRunSheet, { runId, scope, onClose: () => undefined }));
   });
   await act(async () => {
     await jest.advanceTimersByTimeAsync(0);
@@ -153,6 +156,17 @@ describe('the transcript poll is one read at a time', () => {
       await jest.advanceTimersByTimeAsync(10_000);
     });
     expect(mockTranscript).not.toHaveBeenCalled();
+  });
+
+  it('reads a transcript using the tapped routine home, not the current chat scope', async () => {
+    const scope = { backendId: 'hermes-a', botId: 'mira' };
+    const renderer = await open('cron_job-1_20261114_090000', scope);
+
+    expect(mockTranscript).toHaveBeenCalledWith('cron_job-1_20261114_090000', undefined, scope);
+
+    await act(async () => {
+      renderer.unmount();
+    });
   });
 });
 

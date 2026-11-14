@@ -15,13 +15,15 @@ import Animated, {
 import Svg, { Defs, Ellipse, LinearGradient, Path, RadialGradient, Stop } from 'react-native-svg';
 
 import { FontFamily } from '@/constants/tokens';
+import { useAppForeground } from '@/hooks/use-app-foreground';
 import { FORM_GEOMETRY } from '@/lib/avatar/forms';
 import { FACE_INK_DARK, FACE_INK_LIGHT, faceInkIsDark, type BotLook } from '@/lib/avatar/look';
+import { figureAnimationPlan, type FigureMood } from '@/lib/avatar/figure-motion';
+import { useFigureAnimationActive } from '@/lib/avatar/figure-motion-context';
 import { fnv1a } from '@/lib/bot-avatar';
 import { hexAlpha } from '@/lib/stage/composer-light';
 
-/** What the Bot is doing, as far as its face is concerned. */
-export type FigureMood = 'idle' | 'thinking';
+export type { FigureMood } from '@/lib/avatar/figure-motion';
 
 export type BotFigureProps = {
   look: BotLook;
@@ -32,6 +34,8 @@ export type BotFigureProps = {
   mood?: FigureMood;
   /** Off for figures drawn as swatches; the face then holds still. */
   animated?: boolean;
+  /** Optional explicit visibility override for surfaces that stay mounted while unfocused. */
+  animationActive?: boolean;
   /** The eyes open as the figure first appears — the Bot looking up as you arrive. */
   wake?: boolean;
   /** Bump to make the Bot light up at a touch: a smile of the eyes and a swell of light. */
@@ -43,8 +47,6 @@ export type BotFigureProps = {
   cutout?: string;
 };
 
-/** Below this size a face is drawn but kept still: a 26pt row is not a stage. */
-const ANIMATE_FROM = 30;
 /** Below this, the ink carries no glow; it would only blur a two-point eye. */
 const GLOW_FROM = 40;
 /** How far the cutout viewBox reaches past the silhouette, in units. */
@@ -94,55 +96,81 @@ export function BotFigure({
   seed,
   mood = 'idle',
   animated = true,
+  animationActive,
   wake = false,
   reaction = 0,
   cutout,
 }: BotFigureProps) {
   const reduced = useReducedMotion();
-  const live = animated && !reduced && size >= ANIMATE_FROM;
+  const inheritedActive = useFigureAnimationActive();
+  const foreground = useAppForeground();
+  const plan = figureAnimationPlan({
+    animated,
+    animationActive: (animationActive ?? inheritedActive) && foreground,
+    reducedMotion: reduced,
+    size,
+    mood,
+    face: look.face,
+  });
+  const live = plan.live;
 
-  const blink = useSharedValue(live && wake ? 0.06 : 1);
+  const blink = useSharedValue(plan.blink && wake ? 0.06 : 1);
   const gazeX = useSharedValue(0);
   const gazeY = useSharedValue(0);
-  const breath = useSharedValue(0);
   const think = useSharedValue(mood === 'thinking' ? 1 : 0);
   const joy = useSharedValue(0);
   const cycle = useSharedValue(0);
   const pulse = useSharedValue(0);
 
-  // The figure's own life: blinks, glances and breath, each on a rhythm drawn
-  // from the Bot's id so no two figures on a screen move together.
+  // Sparse blinks keep each face alive on the Bot's seeded rhythm. The stage's
+  // ambient lamp is shared; a figure does not add a per-row drift loop.
   useEffect(() => {
     if (!live) {
-      for (const value of [blink, gazeX, gazeY, breath, cycle, pulse]) cancelAnimation(value);
+      cancelAnimation(blink);
       blink.set(1);
-      gazeX.set(0);
-      gazeY.set(0);
-      breath.set(0);
-      cycle.set(0);
       return;
     }
     const rand = seeded(seed);
     const span = (lo: number, hi: number) => lo + (hi - lo) * rand();
-    const close = () =>
-      withSequence(
-        withTiming(0.06, { duration: 70, easing: Easing.in(Easing.quad) }),
-        withTiming(1, { duration: 140, easing: Easing.out(Easing.quad) }),
+    if (plan.blink) {
+      const close = () =>
+        withSequence(
+          withTiming(0.06, { duration: 70, easing: Easing.in(Easing.quad) }),
+          withTiming(1, { duration: 140, easing: Easing.out(Easing.quad) }),
+        );
+      const blinking = withRepeat(
+        withSequence(
+          withDelay(span(2600, 4200), close()),
+          withDelay(span(3400, 5600), close()),
+          // Now and then a double blink, the way a person resets.
+          withDelay(span(2800, 4800), withSequence(close(), withDelay(90, close()))),
+        ),
+        -1,
       );
-    const blinking = withRepeat(
-      withSequence(
-        withDelay(span(2600, 4200), close()),
-        withDelay(span(3400, 5600), close()),
-        // Now and then a double blink, the way a person resets.
-        withDelay(span(2800, 4800), withSequence(close(), withDelay(90, close()))),
-      ),
-      -1,
-    );
-    blink.set(
-      wake
-        ? withSequence(withDelay(380, withTiming(1, { duration: 280, easing: Easing.out(Easing.cubic) })), blinking)
-        : blinking,
-    );
+      blink.set(
+        wake
+          ? withSequence(withDelay(380, withTiming(1, { duration: 280, easing: Easing.out(Easing.cubic) })), blinking)
+          : blinking,
+      );
+    } else {
+      blink.set(1);
+    }
+    return () => cancelAnimation(blink);
+  }, [live, plan.blink, seed, wake, blink]);
+
+  // Gaze, signature face cycles, and the aura pulse have a purpose while the
+  // Bot is thinking. Ordinary idle rows schedule none of those worklets.
+  useEffect(() => {
+    if (!plan.gaze && !plan.cycle && !plan.pulse) {
+      for (const value of [gazeX, gazeY, cycle, pulse]) cancelAnimation(value);
+      gazeX.set(0);
+      gazeY.set(0);
+      cycle.set(0);
+      pulse.set(0);
+      return;
+    }
+    const rand = seeded(`${seed}:thinking`);
+    const span = (lo: number, hi: number) => lo + (hi - lo) * rand();
     const glance = (axis: number) =>
       withRepeat(
         withSequence(
@@ -152,15 +180,21 @@ export function BotFigure({
         ),
         -1,
       );
-    gazeX.set(glance(1));
-    gazeY.set(glance(0.6));
-    breath.set(withRepeat(withTiming(1, { duration: span(3800, 4600), easing: Easing.inOut(Easing.sin) }), -1, true));
-    cycle.set(withRepeat(withTiming(1, { duration: 2000, easing: Easing.linear }), -1));
-    pulse.set(withRepeat(withTiming(1, { duration: 1100, easing: Easing.inOut(Easing.sin) }), -1, true));
+    if (plan.gaze) {
+      gazeX.set(glance(1));
+      gazeY.set(glance(0.6));
+    } else {
+      gazeX.set(0);
+      gazeY.set(0);
+    }
+    if (plan.cycle) cycle.set(withRepeat(withTiming(1, { duration: 2000, easing: Easing.linear }), -1));
+    else cycle.set(0);
+    if (plan.pulse) pulse.set(withRepeat(withTiming(1, { duration: 1100, easing: Easing.inOut(Easing.sin) }), -1, true));
+    else pulse.set(0);
     return () => {
-      for (const value of [blink, gazeX, gazeY, breath, cycle, pulse]) cancelAnimation(value);
+      for (const value of [gazeX, gazeY, cycle, pulse]) cancelAnimation(value);
     };
-  }, [live, seed, wake, blink, gazeX, gazeY, breath, cycle, pulse]);
+  }, [plan.gaze, plan.cycle, plan.pulse, seed, gazeX, gazeY, cycle, pulse]);
 
   useEffect(() => {
     const target = mood === 'thinking' ? 1 : 0;
@@ -168,18 +202,23 @@ export function BotFigure({
   }, [mood, live, think]);
 
   useEffect(() => {
-    if (reaction === 0 || !live) return;
+    if (reaction === 0 || !live) {
+      cancelAnimation(joy);
+      joy.set(0);
+      return;
+    }
     joy.set(
       withSequence(
         withTiming(1, { duration: 160, easing: Easing.out(Easing.cubic) }),
         withDelay(720, withTiming(0, { duration: 360, easing: Easing.inOut(Easing.cubic) })),
       ),
     );
+    return () => cancelAnimation(joy);
   }, [reaction, live, joy]);
 
   const figureStyle = useAnimatedStyle(() => ({
-    // A breath, and a swell when touched — the stone grows by a hair, never bounces.
-    transform: [{ scale: 1 + 0.014 * breath.get() + 0.035 * joy.get() }],
+    // A touch makes the stone grow by a hair, never bounce.
+    transform: [{ scale: 1 + 0.035 * joy.get() }],
   }));
   const auraStyle = useAnimatedStyle(() => ({
     opacity: think.get() * (0.35 + 0.45 * pulse.get()) + joy.get() * 0.55,

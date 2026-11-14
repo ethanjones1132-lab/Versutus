@@ -1,27 +1,26 @@
 import { useRouter } from 'expo-router';
+import * as Clipboard from 'expo-clipboard';
+import * as Linking from 'expo-linking';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import Animated, {
-  Easing,
-  Layout,
-  useAnimatedStyle,
-  useSharedValue,
-  withRepeat,
-  withTiming,
-} from 'react-native-reanimated';
+import Animated, { Layout } from 'react-native-reanimated';
 
 import { VersutusLogotype } from '@/components/brand';
-import { ConnectionTimeline, CONNECTION_TIMELINE_STEPS_LONG } from '@/components/connection-timeline';
 import { Button, Card, ErrorCard, Screen, Text, TextField } from '@/components/ui';
 import { Motion, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
-import { phaseToTimelineStep } from '@/lib/connection/phase';
 import { entering } from '@/lib/motion/presets';
 import { onboardingKeyboardBehavior } from '@/lib/onboarding/keyboard-behavior';
 import { deriveWizardCta } from '@/lib/onboarding/wizard-cta';
 import { validatePcAddress } from '@/lib/onboarding/validate-pc-address';
 import { haptics } from '@/lib/haptics';
+
+const GATE_START_COMMAND = 'node gate/cli.mjs start --host 100.x.y.z';
+const GATE_SERVICE_COMMAND = 'node gate/cli.mjs service install --host 100.x.y.z';
+const GATE_LAN_COMMAND = 'node gate/cli.mjs start --host 0.0.0.0 --allow-plaintext';
+const GATE_DEPENDENCIES_COMMAND = 'npm install';
+const GATE_SETUP_URL = 'https://github.com/ethanjones1132-lab/Versutus#versutus-gate';
 
 export function OnboardingScreen() {
   const router = useRouter();
@@ -31,6 +30,10 @@ export function OnboardingScreen() {
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
+  const [manualAttempted, setManualAttempted] = useState(false);
+  const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const [showGateSetup, setShowGateSetup] = useState(false);
   const connectingRef = useRef(false);
   const [retrying, setRetrying] = useState(false);
   // The cycle in flight, in a ref rather than in the state above: two taps
@@ -58,20 +61,28 @@ export function OnboardingScreen() {
   }, []);
 
   const validation = useMemo(() => validatePcAddress(pcAddress), [pcAddress]);
-  // The manual Connect CTA must stay reachable while the background
-  // auto-connect ceremony parks the phase in 'searching' for 30–60 s probe
-  // rounds (retry ladder re-fires them), or the typed manual connect becomes
-  // unreachable for minutes on a machine where discovery only gets 403s.
-  // `locked` follows only this form's own submit; the scan theater keeps
-  // animating for any probe/connect in flight (matrix §G finding 2).
+  // The manual Connect CTA stays available during background probes. Only this
+  // form's own submit locks it, so a saved-address retry cannot block a new
+  // address from being entered.
   const cta = deriveWizardCta(working, connectionPhase);
-  const busy = cta.theaterBusy;
-  const activeTimelineStep = phaseToTimelineStep(connectionPhase);
+  const checking = working || retrying;
   const fieldState = !pcAddress.trim() ? 'default' : validation.valid ? 'valid' : 'invalid';
+
+  async function copyCommand(key: string, command: string) {
+    setCopyError(null);
+    try {
+      await Clipboard.setStringAsync(command);
+      setCopiedCommand(key);
+    } catch {
+      setCopiedCommand(null);
+      setCopyError('Couldn’t copy the command. Select it to copy it.');
+    }
+  }
 
   async function handleContinue() {
     if (!validation.valid || connectingRef.current) return;
     connectingRef.current = true;
+    setManualAttempted(true);
 
     try {
       await haptics.medium();
@@ -114,7 +125,7 @@ export function OnboardingScreen() {
     setRetrying(true);
     setAwaitingRetryPhase(false);
     // The last retry's verdict is about the last retry; leaving its card up
-    // over a fresh one would be the same lie the busy state is fixing.
+    // over a fresh one would be misleading.
     setError(null);
     try {
       await retryAutoConnect();
@@ -185,27 +196,21 @@ export function OnboardingScreen() {
               </Animated.View>
               <View style={[styles.rule, { backgroundColor: tokens.accentMuted }]} />
               <Text variant="eyebrow" color="tertiary" style={styles.eyebrow}>
-                {busy ? 'FINDING YOUR GATEWAY · 02' : 'CONNECT YOUR PC · 01'}
+                {checking ? 'CHECKING YOUR GATEWAY' : 'CONNECT YOUR PC'}
               </Text>
 
-              <View style={styles.scanSection}>
-                <ScanningStrip active={busy} color={tokens.accent} track={tokens.border} />
-                <ConnectionTimeline
-                  activeStep={activeTimelineStep}
-                  busy={busy}
-                  steps={CONNECTION_TIMELINE_STEPS_LONG}
-                />
-                {busy ? (
-                  <View style={styles.scanMessage}>
+              <View style={styles.introStatus}>
+                {checking ? (
+                  <View style={styles.statusMessage}>
                     <ActivityIndicator size="small" color={tokens.accent} />
-                    <Text variant="caption" color="secondary" numberOfLines={2} style={styles.scanText}>
-                      {probeMessage ?? 'Looking for your gateway…'}
+                    <Text variant="caption" color="secondary" numberOfLines={2} style={styles.statusText}>
+                      {probeMessage ?? 'Checking your gateway…'}
                     </Text>
                   </View>
                 ) : (
-                  <View style={styles.scanMessage}>
-                    <Text variant="caption" color="tertiary" numberOfLines={2} style={styles.scanText}>
-                      Enter your PC address below, or let Versutus find it.
+                  <View style={styles.statusMessage}>
+                    <Text variant="caption" color="secondary" style={styles.statusText}>
+                      Enter your PC&rsquo;s Tailscale name, IP, or local address below.
                     </Text>
                   </View>
                 )}
@@ -275,29 +280,26 @@ export function OnboardingScreen() {
               </Text>
             </Pressable>
 
-            {probeMessage && !busy ? (
+            {probeMessage && !checking ? (
               <Animated.View
                 layout={Layout.duration(Motion.duration.normal)}
                 entering={entering.fadeIn}
                 exiting={entering.fadeOut}
                 style={[styles.statusCard, { backgroundColor: tokens.backgroundInset, borderColor: tokens.borderSubtle }]}>
-                {busy ? <ActivityIndicator color={tokens.accent} /> : null}
+                {checking ? <ActivityIndicator color={tokens.accent} /> : null}
                 <Text color="secondary">{probeMessage}</Text>
               </Animated.View>
             ) : null}
 
-            {probeMessage && (retrying || (!busy && connectionPhase === 'failed')) ? (
-              // The failed auto-connect message says "Tap retry", and the
-              // Connect CTA above stays disabled until an address validates —
-              // on a discovery-only failure the field is empty and there was
-              // no tap anywhere. Retry re-runs the auto-connect cycle, the
+            {probeMessage && !manualAttempted && (retrying || (!checking && connectionPhase === 'failed')) ? (
+              // Retry re-runs the auto-connect cycle, the
               // same affordance Home's Try-again button fires, and says so
               // while it is running instead of sitting there looking dead.
-              // `retrying` deliberately outranks `busy`: the ladder parks the
-              // phase in 'searching' before its first await, so `busy` is true
-              // for the whole cycle and a busy-gated button would unmount the
+              // `retrying` carries the button through the whole cycle: the
+              // ladder parks the phase in 'searching' before its first await,
+              // and a phase-gated button would unmount the
               // instant it was tapped — taking its "Retrying…" label with it.
-              // Every other situation still hides on `busy` as before.
+              // Other states keep the retry out of the way.
               <Button
                 label={retrying ? 'Trying again…' : 'Try again'}
                 onPress={() => void handleRetry()}
@@ -322,41 +324,110 @@ export function OnboardingScreen() {
             />
           </Card>
 
-          <Text color="tertiary" variant="caption" style={styles.footnote}>
-            Versutus checks nearby networks and saved gateways. You approve this device only when your gateway asks.
-          </Text>
+          <Card variant="surface" padding={Spacing.three} style={styles.gateGuide}>
+            <Pressable
+              onPress={() => setShowGateSetup((visible) => !visible)}
+              accessibilityRole="button"
+              accessibilityLabel="Set up the Gate"
+              accessibilityState={{ expanded: showGateSetup }}
+              aria-expanded={showGateSetup}
+              style={styles.guideToggle}>
+              <View>
+                <Text variant="headline">Set up the Gate</Text>
+                <Text variant="caption" color="secondary">Need the Gate on your PC?</Text>
+              </View>
+              <Text variant="caption" color="accent">{showGateSetup ? 'Hide' : 'Show'}</Text>
+            </Pressable>
+            {showGateSetup ? (
+              <View style={styles.guideDetails}>
+                <Text variant="caption" color="secondary">
+                  On your PC, open the Versutus checkout. The README has the full Gate setup guide:
+                </Text>
+                <Pressable
+                  onPress={() =>
+                    void Linking.openURL(GATE_SETUP_URL).catch(() =>
+                      setCopyError('Couldn’t open the guide. Visit github.com/ethanjones1132-lab/Versutus.'),
+                    )
+                  }
+                  accessibilityRole="link"
+                  accessibilityLabel="Open the Versutus Gate setup guide">
+                  <Text variant="link" color="accent">Open the Gate setup guide</Text>
+                </Pressable>
+                <Text variant="caption" color="secondary">
+                  From the checkout root, install dependencies once, then start the Gate with your PC&rsquo;s Tailscale IP. Enter the same IP above.
+                </Text>
+                <CommandRow
+                  label="Install dependencies"
+                  command={GATE_DEPENDENCIES_COMMAND}
+                  copied={copiedCommand === 'dependencies'}
+                  borderColor={tokens.borderSubtle}
+                  onCopy={() => void copyCommand('dependencies', GATE_DEPENDENCIES_COMMAND)}
+                />
+                <CommandRow
+                  label="Start now"
+                  command={GATE_START_COMMAND}
+                  copied={copiedCommand === 'start'}
+                  borderColor={tokens.borderSubtle}
+                  onCopy={() => void copyCommand('start', GATE_START_COMMAND)}
+                />
+                <Text variant="micro" color="tertiary">
+                  Optional on Windows or macOS: install the Gate as a service so it starts after sign-in.
+                </Text>
+                <CommandRow
+                  label="Install as a service"
+                  command={GATE_SERVICE_COMMAND}
+                  copied={copiedCommand === 'service'}
+                  borderColor={tokens.borderSubtle}
+                  onCopy={() => void copyCommand('service', GATE_SERVICE_COMMAND)}
+                />
+                <Text variant="micro" color="tertiary">
+                  Optional LAN access: listens on every PC interface and sends gateway keys without encryption. Use only on a trusted network with a firewall:
+                </Text>
+                <CommandRow
+                  label="Copy LAN command"
+                  command={GATE_LAN_COMMAND}
+                  copied={copiedCommand === 'lan'}
+                  borderColor={tokens.borderSubtle}
+                  onCopy={() => void copyCommand('lan', GATE_LAN_COMMAND)}
+                />
+                {copyError ? <Text variant="caption" color="statusDisconnected">{copyError}</Text> : null}
+                <Text variant="micro" color="tertiary">
+                  After connecting, send a short message. If Chat has no model, open Gate setup to add a provider or connect a command-line tool.
+                </Text>
+              </View>
+            ) : null}
+          </Card>
         </ScrollView>
       </KeyboardAvoidingView>
     </Screen>
   );
 }
 
-/** Discovery-theater scan line: a violet pulse sweeping a thin track. */
-function ScanningStrip({ active, color, track }: { active: boolean; color: string; track: string }) {
-  const x = useSharedValue(-40);
-
-  useEffect(() => {
-    if (!active) {
-      x.value = withTiming(-40, { duration: 200 });
-      return;
-    }
-    x.value = withRepeat(
-      withTiming(280, { duration: 1500, easing: Easing.inOut(Easing.quad) }),
-      -1,
-      true,
-    );
-  }, [active, x]);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: x.value }],
-  }));
-
+function CommandRow({
+  label,
+  command,
+  copied,
+  borderColor,
+  onCopy,
+}: {
+  label: string;
+  command: string;
+  copied: boolean;
+  borderColor: string;
+  onCopy: () => void;
+}) {
   return (
-    <View style={[styles.scanTrack, { backgroundColor: track }]}>
-      <Animated.View
-        style={[styles.scanDot, { backgroundColor: color, opacity: active ? 0.9 : 0.35 }, animatedStyle]}
-      />
-    </View>
+    <Pressable
+      onPress={onCopy}
+      accessibilityRole="button"
+      accessibilityLabel={`${copied ? 'Copied' : 'Copy'} ${label.toLowerCase()}`}
+      style={[styles.commandRow, { borderColor }]}>
+      <View style={styles.commandTextWrap}>
+        <Text variant="micro" color="tertiary">{label}</Text>
+        <Text variant="mono" numberOfLines={2} style={styles.commandText}>{command}</Text>
+      </View>
+      <Text variant="caption" color={copied ? 'accent' : 'tertiary'}>{copied ? 'Copied' : 'Copy'}</Text>
+    </Pressable>
   );
 }
 
@@ -386,29 +457,50 @@ const styles = StyleSheet.create({
   eyebrow: {
     flexShrink: 1,
   },
-  scanSection: {
+  introStatus: {
     alignSelf: 'stretch',
-    gap: Spacing.three,
     paddingTop: Spacing.one,
   },
-  scanTrack: {
-    height: 2,
-    borderRadius: 1,
-    overflow: 'hidden',
-  },
-  scanDot: {
-    width: 56,
-    height: 2,
-    borderRadius: 1,
-  },
-  scanMessage: {
+  statusMessage: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
   },
-  scanText: {
+  statusText: {
     flex: 1,
     lineHeight: 16,
+  },
+  gateGuide: {
+    gap: Spacing.two,
+    borderRadius: Radius.lg,
+  },
+  guideToggle: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+  },
+  guideDetails: {
+    gap: Spacing.two,
+  },
+  commandRow: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.one,
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  commandTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  commandText: {
+    flexShrink: 1,
   },
   formDimmed: {
     opacity: 0.55,
@@ -430,9 +522,5 @@ const styles = StyleSheet.create({
     padding: Spacing.three,
     borderRadius: Radius.md,
     borderWidth: StyleSheet.hairlineWidth,
-  },
-  footnote: {
-    lineHeight: 20,
-    textAlign: 'center',
   },
 });

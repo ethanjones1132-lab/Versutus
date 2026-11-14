@@ -13,6 +13,7 @@ import {
   type ActivityCoverage,
   type RoutineEntry,
   type RoutineFeedState,
+  type RoutineScope,
 } from '@/lib/gateway/activity-feed';
 import type { CronJob } from '@/lib/gateway/cron';
 import { cronJobViewFromRoutine, routineJobSummary } from '@/lib/gateway/routines';
@@ -46,10 +47,9 @@ export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number })
   const failureKind = failure && failure.gatewayId === gatewayId ? failure.kind : undefined;
   const [backendFilter, setBackendFilter] = useState<string | undefined>();
   const [openJob, setOpenJob] = useState<CronJob | null>(null);
-  // The backend that owns the open routine, so every action lands there. A
-  // routine on the backend the Gate would resolve to anyway names none: its
-  // request stays exactly what it is today.
-  const [openJobBackendId, setOpenJobBackendId] = useState<string | undefined>();
+  // Activity rows always carry their exact home. Root is explicit so a Bot
+  // selected elsewhere cannot redirect a root job into that profile.
+  const [openJobScope, setOpenJobScope] = useState<RoutineScope | undefined>();
   const [openRunId, setOpenRunId] = useState<string | null>(null);
   const requestId = useRef(0);
   const inFlight = useRef<{ settled: boolean; promise: Promise<void>; gatewayId?: string } | null>(null);
@@ -70,7 +70,7 @@ export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number })
       setFailure(null);
       setBackendFilter(undefined);
       setOpenJob(null);
-      setOpenJobBackendId(undefined);
+      setOpenJobScope(undefined);
       setOpenRunId(null);
     }, 0);
     return () => clearTimeout(timer);
@@ -166,11 +166,6 @@ export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number })
   // refused or unreadable backend keeps the empty claim off the screen.
   const everyBackendAnswered =
     visibleBackends.length > 0 && visibleBackends.every((backend) => backend.status === 'complete');
-  // The Gate's unscoped job resolution walks its environments in this order and
-  // picks the first that serves jobs. A routine on that environment needs no
-  // explicit pin, so its calls stay exactly what they are today.
-  const defaultBackendId = feed?.backends.find((backend) => backend.status !== 'unavailable')?.id;
-
   return (
     <View style={styles.root}>
       {!state.loaded && state.failed && failureKind === 'unsupported' ? (
@@ -229,14 +224,12 @@ export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number })
               ) : null}
               {routines.map((routine) => (
                 <ListRow
-                  key={`${routine.backendId}:${routine.id}`}
+                  key={routineIdentity(routine)}
                   title={routine.name}
                   subtitle={routineJobSummary(routine)}
                   onPress={() => {
                     setOpenJob(routineJobView(routine));
-                    setOpenJobBackendId(
-                      routine.backendId === defaultBackendId ? undefined : routine.backendId,
-                    );
+                    setOpenJobScope({ backendId: routine.backendId, botId: routine.scopeBotId ?? null });
                   }}
                   trailing={
                     <Text variant="micro" color="secondary">
@@ -278,23 +271,28 @@ export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number })
       ) : null}
 
       <CronJobSheet
-        key={`${openJobBackendId ?? ''}:${openJob?.id ?? 'no-job'}`}
+        key={routineSelectionIdentity(openJob, openJobScope)}
         // Hide while a run transcript is open so two BaseSheets do not stack.
         job={openRunId ? null : openJob}
-        backendId={openJobBackendId}
+        scope={openJobScope}
         onClose={() => {
           setOpenJob(null);
-          setOpenJobBackendId(undefined);
+          setOpenJobScope(undefined);
         }}
         onOpenRun={(runId) => setOpenRunId(runId)}
         onRemoved={() => {
           setOpenJob(null);
-          setOpenJobBackendId(undefined);
+          setOpenJobScope(undefined);
           void read();
         }}
         onChanged={() => void read()}
       />
-      <CronRunSheet key={openRunId ?? 'no-run'} runId={openRunId} onClose={() => setOpenRunId(null)} />
+      <CronRunSheet
+        key={`run:${JSON.stringify([openJobScope?.backendId ?? null, openJob?.botId ?? null, openJobScope?.botId ?? null, openRunId])}`}
+        runId={openRunId}
+        scope={openJobScope}
+        onClose={() => setOpenRunId(null)}
+      />
     </View>
   );
 }
@@ -311,14 +309,25 @@ function groupRoutinesByBot(routines: readonly RoutineEntry[]): Map<string | nul
   return groups;
 }
 
+function routineIdentity(routine: RoutineEntry): string {
+  return JSON.stringify([routine.backendId, routine.botId ?? null, routine.scopeBotId ?? null, routine.id]);
+}
+
+function routineSelectionIdentity(job: CronJob | null, scope: RoutineScope | undefined): string {
+  return `job:${JSON.stringify([scope?.backendId ?? null, job?.botId ?? null, scope?.botId ?? null, job?.id ?? null])}`;
+}
+
 /** One routine in the sheet's CronJob shape, so editing stays where it was. */
 function routineJobView(routine: RoutineEntry): CronJob {
   return cronJobViewFromRoutine({
     id: routine.id,
     name: routine.name,
+    botId: routine.botId,
     paused: routine.paused,
     schedule: routine.schedule,
+    scheduleDisplay: routine.scheduleDisplay,
     lastStatus: routine.lastStatus,
+    lastRunAt: routine.lastRunAt,
     nextRunAt: routine.nextRunAt,
   });
 }

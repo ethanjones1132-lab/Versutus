@@ -103,10 +103,11 @@ describe('tab pull-to-refresh failure is surfaced', () => {
     }
   });
 
-  test('Activity still re-reads the audit and bumps the cron reload signal', () => {
+  test('Activity refreshes Today and Routines after the approvals inbox read', () => {
     const body = onRefreshBody(readActivity());
-    expect(body).toContain('await readAudit();');
-    expect(body).toContain('setCronReloadSignal((n) => n + 1);');
+    expect(body).toContain('await refreshPendingApprovals();');
+    expect(body).toContain('setTodayReloadSignal((n) => n + 1);');
+    expect(body).toContain('setRoutinesReloadSignal((n) => n + 1);');
   });
 
   test('Runs still bumps the runs reload signal', () => {

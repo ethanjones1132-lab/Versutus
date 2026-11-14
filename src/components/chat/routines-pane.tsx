@@ -21,6 +21,7 @@ import {
   type TextFieldProps,
 } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
+import type { RoutineScope } from '@/lib/gateway/activity-feed';
 import { ROUTINE_TEMPLATES, applyRoutineTemplate } from '@/lib/gateway/routine-templates';
 import {
   ROUTINES_PANE_MAX_HEIGHT,
@@ -81,6 +82,7 @@ function RoutinesPaneImpl({
   onTogglePause,
   onRetry,
   onChanged,
+  scope,
 }: {
   jobs: RoutineJob[];
   loaded: boolean;
@@ -90,11 +92,13 @@ function RoutinesPaneImpl({
    *  channel already owns the `error` state below. */
   readError?: string;
   onCreate: (input: { title: string; prompt: string; schedule: string }) => Promise<unknown>;
-  onTogglePause: (jobId: string, paused: boolean) => Promise<unknown>;
+  onTogglePause: (jobId: string, paused: boolean, scope?: RoutineScope) => Promise<unknown>;
   /** Re-run the same `botJobs.list` read the surface effect runs. */
   onRetry?: () => void;
   /** Re-read the routine list after the job sheet's Run now / Pause / Remove landed. */
   onChanged?: () => void;
+  /** Exact Bot home carried by this pane. */
+  scope?: RoutineScope;
 }) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState('');
@@ -156,7 +160,7 @@ function RoutinesPaneImpl({
     if (busy) return;
     setActing(true);
     setError(undefined);
-    void Promise.resolve(onTogglePause(jobId, paused))
+    void Promise.resolve(scope ? onTogglePause(jobId, paused, scope) : onTogglePause(jobId, paused))
       .catch((cause: unknown) => {
         setError(describeRoutineError(cause));
       })
@@ -259,8 +263,9 @@ function RoutinesPaneImpl({
        * one with the job still in state.
        */}
       <CronJobSheet
-        key={openJob?.id ?? 'no-job'}
+        key={`${scope?.backendId ?? ''}:${scope?.botId ?? 'root'}:${openJob?.id ?? 'no-job'}`}
         job={openJob ? cronJobViewFromRoutine(openJob) : null}
+        scope={scope}
         onClose={() => setOpenJobId(null)}
         onOpenRun={(runId) => setOpenRunId(runId)}
         onRemoved={() => {
@@ -275,7 +280,12 @@ function RoutinesPaneImpl({
           onChanged?.();
         }}
       />
-      <CronRunSheet key={openRunId ?? 'no-run'} runId={openRunId} onClose={() => setOpenRunId(null)} />
+      <CronRunSheet
+        key={`${scope?.backendId ?? ''}:${scope?.botId ?? 'root'}:${openRunId ?? 'no-run'}`}
+        runId={openRunId}
+        scope={scope}
+        onClose={() => setOpenRunId(null)}
+      />
     </View>
   );
 }

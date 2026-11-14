@@ -23,6 +23,8 @@ type BotAvatarProps = {
   reaction?: number;
   /** Hold the face still (swatches, dense lists). */
   animated?: boolean;
+  /** Override a containing screen's visibility gate for this figure. */
+  animationActive?: boolean;
 };
 
 /**
@@ -39,6 +41,7 @@ export function BotAvatar({
   wake,
   reaction,
   animated,
+  animationActive,
 }: BotAvatarProps) {
   // Subscribed so a figure drawn before the fleet or the stored looks were
   // known redraws in its assigned colour and chosen form.
@@ -47,7 +50,16 @@ export function BotAvatar({
 
   return (
     <View style={{ width: size, height: size }}>
-      <BotFigure look={look} size={size} seed={botId} mood={mood} wake={wake} reaction={reaction} animated={animated} />
+      <BotFigure
+        look={look}
+        size={size}
+        seed={botId}
+        mood={mood}
+        wake={wake}
+        reaction={reaction}
+        animated={animated}
+        animationActive={animationActive}
+      />
       {attention ? (
         <View
           style={[

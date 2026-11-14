@@ -31,11 +31,10 @@ describe('onboarding failed auto-connect retry', () => {
 
   test('a Retry button wired to the busy-aware handler renders in the failed phase and through the retry', () => {
     const src = readScreen();
-    // The ladder parks the phase in 'searching' before its first await, and
-    // that makes `busy` true — so the tap's own flag has to carry the button
-    // through the whole run, while every other case still hides on `busy`.
-    expect(src).toContain("probeMessage && (retrying || (!busy && connectionPhase === 'failed'))");
-    expect(src).not.toContain("probeMessage && !busy && connectionPhase === 'failed'");
+    // The ladder parks the phase in 'searching' before its first await, so the
+    // tap's own retry state carries the label through the whole run.
+    expect(src).toContain("probeMessage && !manualAttempted && (retrying || (!checking && connectionPhase === 'failed'))");
+    expect(src).not.toContain("probeMessage && (retrying || (!checking && connectionPhase === 'failed'))");
     // ONB-1: the button used to fire `void retryAutoConnect()` — a cycle with
     // no `catch` inside it, with no busy state and no result on screen. The
     // handler now says while it runs and what came of it.
@@ -61,7 +60,7 @@ describe('onboarding failed auto-connect retry', () => {
 
   test('the probe-message status card still renders the message as plain text', () => {
     const src = readScreen();
-    const start = src.indexOf('probeMessage && !busy');
+    const start = src.indexOf('probeMessage && !checking');
     expect(start).toBeGreaterThanOrEqual(0);
     const block = src.slice(start, start + 1200);
     expect(block).toContain('<Text color="secondary">{probeMessage}</Text>');

@@ -28,6 +28,8 @@ export type ActivityItem = {
   kind: 'run' | 'session';
   sessionId?: string;
   startedAt: string;
+  /** Last session activity used to include an older long-lived conversation in today's feed. */
+  lastActiveAt?: string;
   finishedAt?: string;
   status: string;
   title: string;
@@ -45,13 +47,24 @@ export type ActivityFeed = {
 export type RoutineEntry = {
   id: string;
   backendId: string;
+  /** Display/group owner; does not prove which Hermes home stores the job. */
   botId?: string;
+  /** The Bot home that answered the read; null means the backend root. */
+  scopeBotId?: string | null;
   name: string;
   schedule?: string;
+  /** Human schedule text returned by the scheduler, including its own timezone when known. */
+  scheduleDisplay?: string;
   paused: boolean;
   lastRunAt?: string;
   lastStatus?: string;
   nextRunAt?: string;
+};
+
+/** An exact routine owner. `botId: null` explicitly selects the backend root. */
+export type RoutineScope = {
+  backendId?: string;
+  botId?: string | null;
 };
 
 export type RoutineFeed = {
@@ -143,9 +156,11 @@ function parseActivityItem(value: unknown): ActivityItem | null {
   const botId = nonEmptyString(value.botId);
   const sessionId = nonEmptyString(value.sessionId);
   const finishedAt = nonEmptyString(value.finishedAt);
+  const lastActiveAt = nonEmptyString(value.lastActiveAt);
   if (botId) item.botId = botId;
   if (sessionId) item.sessionId = sessionId;
   if (finishedAt) item.finishedAt = finishedAt;
+  if (lastActiveAt) item.lastActiveAt = lastActiveAt;
   return item;
 }
 
@@ -157,12 +172,17 @@ function parseRoutine(value: unknown): RoutineEntry | null {
   if (!id || !backendId || !name) return null;
   const routine: RoutineEntry = { id, backendId, name, paused: value.paused === true };
   const botId = nonEmptyString(value.botId);
+  const scopeBotId = nonEmptyString(value.scopeBotId);
   const schedule = nonEmptyString(value.schedule);
+  const scheduleDisplay = nonEmptyString(value.scheduleDisplay);
   const lastRunAt = nonEmptyString(value.lastRunAt);
   const lastStatus = nonEmptyString(value.lastStatus);
   const nextRunAt = nonEmptyString(value.nextRunAt);
   if (botId) routine.botId = botId;
+  if (value.scopeBotId === null) routine.scopeBotId = null;
+  else if (scopeBotId) routine.scopeBotId = scopeBotId;
   if (schedule) routine.schedule = schedule;
+  if (scheduleDisplay) routine.scheduleDisplay = scheduleDisplay;
   if (lastRunAt) routine.lastRunAt = lastRunAt;
   if (lastStatus) routine.lastStatus = lastStatus;
   if (nextRunAt) routine.nextRunAt = nextRunAt;

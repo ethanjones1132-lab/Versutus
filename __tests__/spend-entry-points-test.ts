@@ -20,22 +20,21 @@ const settingsScreen = () => readSource('src', 'app', 'gateway', 'settings.tsx')
 const activityScreen = () => readSource('src', 'app', '(tabs)', 'activity.tsx');
 const spendScreen = () => readSource('src', 'app', 'gateway', 'spend.tsx');
 
-// P5's screen shipped on its own route (iter-029); nothing on the app opened
-// it. The spec names both entry points (`FUTURE-ITEMS.md:697`), so this pins
-// the two rows and the connection gate they sit behind: the screen's read
-// needs a live connection, and a row that opened a route which can only say
-// there is nothing to read would be a control that cannot finish.
-describe('the Spend screen opens from the two surfaces the spec names', () => {
+// Spend remains reachable from gateway settings, where its connection-gated
+// destination has meaningful gateway context.
+describe('the Spend screen opens from gateway settings', () => {
   test('gateway settings carries one way in', () => {
     const src = settingsScreen();
     expect(src).toContain("from '@/components/gateway/spend-entry-row'");
     expect(countOccurrences(src, '<SpendEntryRow />')).toBe(1);
   });
 
-  test('the Activity tab carries one way in', () => {
+  test('Activity keeps Today and Routines and leaves the spend entry in settings', () => {
     const src = activityScreen();
-    expect(src).toContain("from '@/components/gateway/spend-entry-row'");
-    expect(countOccurrences(src, '<SpendEntryRow />')).toBe(1);
+    expect(src).toContain('<TodaySection');
+    expect(src).toContain('<RoutinesSection');
+    expect(src).not.toContain('<SpendEntryRow');
+    expect(settingsScreen()).toContain('<SpendEntryRow />');
   });
 
   test('the row itself targets the Spend route, which is what makes both links that route', () => {
@@ -72,11 +71,12 @@ describe('what must keep working', () => {
     expect(src).toContain('<Link href="/gateway/diagnostics" asChild>');
   });
 
-  test('Activity keeps its Cron section and its gateway targets', () => {
+  test('Activity keeps its Today and Routines destinations without legacy sections', () => {
     const src = activityScreen();
-    expect(src).toContain('<CronSection');
-    expect(src).toContain('cronReloadSignal={cronReloadSignal}');
-    expect(src).toContain('<AgentTargets');
+    expect(src).toContain('<TodaySection');
+    expect(src).toContain('<RoutinesSection');
+    expect(src).not.toContain('<CronSection');
+    expect(src).not.toContain('<AgentTargets');
   });
 
   test('the Spend route keeps its own read and its own gate', () => {

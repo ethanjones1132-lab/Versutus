@@ -49,12 +49,12 @@ describe('runs list windowing', () => {
     expect(src).toContain('ListHeaderComponent=');
     expect(src).toContain('ListFooterComponent=');
     expect(src).toContain('startCard');
-    // Activity delegates its live feed and approval surface to TodaySection;
-    // scheduled work remains behind Routines.
+    // Activity delegates its current views to TodaySection and RoutinesSection.
     const tab = readCronTabSource();
     expect(tab).toContain('<TodaySection');
-    expect(tab).toContain('<CronSection');
-    expect(tab).toContain('cronReloadSignal={cronReloadSignal}');
-    expect(tab).toContain('showList={false}');
+    expect(tab).toContain('<RoutinesSection');
+    expect(tab).toContain('reloadSignal={todayReloadSignal}');
+    expect(tab).toContain('reloadSignal={routinesReloadSignal}');
+    expect(tab).not.toContain('<CronSection');
   });
 });

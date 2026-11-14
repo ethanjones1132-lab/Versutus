@@ -65,7 +65,7 @@ jest.mock('react-native-reanimated', () => {
   };
 });
 jest.mock('expo-router', () => ({ useRouter: () => ({ push: (...args: unknown[]) => mockEnv.push(...args) }) }));
-jest.mock('expo-router/drawer', () => ({ DrawerContentScrollView: 'DrawerContentScrollView' }));
+jest.mock('expo-router/drawer', () => ({ DrawerContentScrollView: 'DrawerContentScrollView', useDrawerStatus: () => 'closed' }));
 jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
 );

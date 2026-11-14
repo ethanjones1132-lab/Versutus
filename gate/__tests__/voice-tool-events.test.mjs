@@ -28,7 +28,7 @@ function fakeEngine() {
   return engine;
 }
 
-async function startCall(t, { sessionId, protocol, runTurn, log = () => {} }) {
+async function startCall(t, { sessionId, protocol, runTurn, log = () => {}, now }) {
   const registry = new VoiceSessionRegistry();
   registry.create({ voiceSessionId: sessionId, deviceId: 'device-1', engine: 'local' });
   const engine = fakeEngine();
@@ -40,6 +40,7 @@ async function startCall(t, { sessionId, protocol, runTurn, log = () => {} }) {
     createEngine: () => engine,
     runTurn,
     log,
+    ...(now ? { now } : {}),
     utteranceHoldMs: 0,
   });
   t.after(() => new Promise((resolve) => {
@@ -117,10 +118,12 @@ test('a v1 call keeps its old stream free of the new tool frames', async (t) => 
 
 test('a played control is consumed as the turn latency sample', async (t) => {
   const logs = [];
+  let clockMs = 1000;
   const { engine, frames, ws } = await startCall(t, {
     sessionId: 'vs-played',
     protocol: 2,
     log: (line) => logs.push(line),
+    now: () => clockMs,
     runTurn: async (_session, _text, handlers) => {
       handlers.onDelta('A sentence.');
       return { hasContent: true };
@@ -131,12 +134,17 @@ test('a played control is consumed as the turn latency sample', async (t) => {
   // W5: `start` now marks real playback, so it leaves with the first PCM chunk
   // rather than with the reply text. Feed audio, then read the frame.
   await until(() => typeof engine.gen === 'number');
+  clockMs += 15;
   engine.emit('speechAudio', { gen: engine.gen, pcm: Buffer.alloc(960, 5) });
   await until(() => frames.some((frame) => frame.t === 'speech' && frame.state === 'start'));
   const gen = frames.find((frame) => frame.t === 'speech' && frame.state === 'start').gen;
   ws.send(JSON.stringify({ v: 2, callId: 'vs-played', seq: 1, ts: 0, t: 'played', gen, atMs: 42 }));
 
-  await until(() => logs.some((line) => line.includes('voice.turn latency') && line.includes('playedMs=42')));
+  // The measured turn includes Gate time to first PCM plus phone playback
+  // delay. A real clock made this assertion depend on a zero-millisecond Gate
+  // delay, so it failed under the full suite despite logging the right sum.
+  await until(() => logs.some((line) => line.includes('voice.turn latency') && line.includes('playedMs=57')));
+  assert.ok(logs.some((line) => line.includes('commitToFirstPcmSentMs=15') && line.includes('playedMs=57')));
 });
 
 async function until(predicate, timeoutMs = 2000) {

@@ -5,6 +5,7 @@ import { BaseSheet, Divider, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { freshnessLabel, type CronTurn } from '@/lib/gateway/cron';
+import type { RoutineScope } from '@/lib/gateway/activity-feed';
 import { useNow } from '@/hooks/use-now';
 
 /** How often the open view asks the host for new turns. */
@@ -20,6 +21,8 @@ const POLL_BACKOFF_MS = [POLL_MS, 6_000, 12_000, 30_000] as const;
 export type CronRunSheetProps = {
   /** The run's id; null renders nothing (sheet dismissed). */
   runId: string | null;
+  /** The exact backend/Bot home the routine row proved; absent preserves older callers. */
+  scope?: RoutineScope;
   onClose: () => void;
 };
 
@@ -33,7 +36,7 @@ export type CronRunSheetProps = {
  * a failed poll leaves the last good transcript standing rather than blanking
  * the screen.
  */
-export function CronRunSheet({ runId, onClose }: CronRunSheetProps) {
+export function CronRunSheet({ runId, scope, onClose }: CronRunSheetProps) {
   const { cron } = useGateway();
   const [turns, setTurns] = useState<CronTurn[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +49,9 @@ export function CronRunSheet({ runId, onClose }: CronRunSheetProps) {
   const poll = useCallback(async () => {
     if (!runId || cancelled.current) return;
     try {
-      const next = await cron.transcript(runId);
+      const next = scope
+        ? await cron.transcript(runId, undefined, scope)
+        : await cron.transcript(runId);
       if (cancelled.current) return;
       refusals.current = 0;
       setTurns(next);
@@ -59,7 +64,7 @@ export function CronRunSheet({ runId, onClose }: CronRunSheetProps) {
       // not evidence that the run produced nothing.
       setError(caught instanceof Error ? caught.message : String(caught));
     }
-  }, [cron, runId]);
+  }, [cron, runId, scope]);
 
   // State resets by REMOUNT, not by writing it here: the parent keys this
   // sheet on the run id, so a different run arrives as a fresh component with

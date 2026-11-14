@@ -58,7 +58,13 @@ test.describe('showcase at 390 px', () => {
   test('first run: onboarding', async ({ page }) => {
     await openShowcase(page, '/onboarding');
     await expect(page.getByText('Connect your PC').first()).toBeVisible();
+    await expect(page.getByPlaceholder('my-pc.tailnet.ts.net')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Set up the Gate', exact: true })).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.getByRole('link', { name: 'Open the Versutus Gate setup guide' })).not.toBeVisible();
     await expect(page).toHaveScreenshot('first-run.png');
+    await page.getByRole('button', { name: 'Set up the Gate', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Set up the Gate', exact: true })).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.getByRole('link', { name: 'Open the Versutus Gate setup guide' })).toBeVisible();
   });
 
   test('tools: the pill is on the selected mode from its first frame', async ({ page }) => {
@@ -94,12 +100,14 @@ test.describe('showcase at 390 px', () => {
       .toBeLessThanOrEqual(2);
   });
 
-  test('activity: the day ribbon carries its ticks', async ({ page }) => {
+  test('activity: Today keeps decisions above scoped history', async ({ page }) => {
     await openShowcase(page, '/activity');
 
-    // Five runs in the showcase, and the perspective scale's two ticks.
-    await expect(page.getByText('6h', { exact: true })).toBeVisible();
-    await expect(page.getByText('1h', { exact: true })).toBeVisible();
+    await expect(page.getByText('Needs you', { exact: true })).toBeVisible();
+    await expect(page.getByText('In progress', { exact: true })).toBeVisible();
+    await expect(page.getByText(/Since midnight/).first()).toBeVisible();
+    await expect(page.getByText('Your decisions', { exact: true })).not.toBeVisible();
+    await expect(page.getByText('Gateways', { exact: true })).not.toBeVisible();
 
     await expect(page).toHaveScreenshot('activity.png');
   });

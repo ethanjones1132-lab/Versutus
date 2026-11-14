@@ -9,6 +9,7 @@ import { HermesGatewayClient, type GatewayClientCallbacks } from '@/lib/gateway/
 import type { PublicBot } from '@/lib/gateway/bots';
 import type { BotGroupRoom, GroupReply, GroupTranscriptEntry, GroupTurnError } from '@/lib/gateway/groups';
 import { ManifestClient } from '@/lib/gateway/manifest-client';
+import type { RoutineScope } from '@/lib/gateway/activity-feed';
 import { OpenClawAdapterClient } from '@/lib/portal/openclaw-adapter';
 import type { GatewayIdentity } from '@/lib/portal/identify';
 import type {
@@ -148,9 +149,9 @@ export interface PortalClient {
    * join a job to the runs it wrote — the surface then does not render at all,
    * rather than showing an empty list that looks like "no scheduled work".
    */
-  listCronJobs?(): Promise<import('@/lib/gateway/cron').CronJob[]>;
-  cronRuns?(jobId: string, backendId?: string): Promise<import('@/lib/gateway/cron').CronRun[]>;
-  cronTranscript?(runId: string, limit?: number): Promise<import('@/lib/gateway/cron').CronTurn[]>;
+  listCronJobs?(scope?: RoutineScope): Promise<import('@/lib/gateway/cron').CronJob[]>;
+  cronRuns?(jobId: string, backendId?: string | RoutineScope): Promise<import('@/lib/gateway/cron').CronRun[]>;
+  cronTranscript?(runId: string, limit?: number, scope?: RoutineScope): Promise<import('@/lib/gateway/cron').CronTurn[]>;
   /**
    * Activity's universal read. Optional: a direct host or an older Gate that
    * does not serve /v1/activity omits it, and the caller reports that honestly
@@ -160,9 +161,15 @@ export interface PortalClient {
   getRoutineFeed?(backendId?: string): Promise<import('@/lib/gateway/activity-feed').RoutineFeed>;
   listJobs?(): Promise<{ id: string; name?: string; paused?: boolean }[]>;
   createJob?(input: { name: string; prompt: string; schedule: string }): Promise<{ id: string; name?: string }>;
-  runJob?(jobId: string, backendId?: string): Promise<void>;
-  setJobPaused?(jobId: string, paused: boolean, backendId?: string): Promise<void>;
-  removeJob?(jobId: string, backendId?: string): Promise<void>;
+  runJob?(jobId: string, backendId?: string | RoutineScope): Promise<void>;
+  setJobPaused?(jobId: string, paused: boolean, backendId?: string | RoutineScope): Promise<void>;
+  removeJob?(jobId: string, backendId?: string | RoutineScope): Promise<void>;
+  canUpdateJob?(scope: RoutineScope): boolean;
+  updateJob?(
+    jobId: string,
+    input: { name: string; schedule: string; prompt: string },
+    scope: RoutineScope,
+  ): Promise<void>;
   /** Gate-owned group rooms. Omitted when the manifest advertises no botGroups endpoint. */
   listGroups?(): Promise<BotGroupRoom[]>;
   createGroup?(input: { name: string; memberIds: string[] }): Promise<BotGroupRoom>;

@@ -1,14 +1,3 @@
-// One pull-to-refresh on Activity used to fan out: `Promise.all` over the
-// capabilities refresh, the local gateway roster and the pending-approvals RPC,
-// all in flight at once, against a host the repo documents as serving one
-// request at a time. It then bumped the cron reload signal, which re-ran the
-// section's mount effect — an extra `cron.list()` on top of the read focus had
-// already issued. These pin the sequential order and one read of each thing.
-
-jest.mock('@react-native-async-storage/async-storage', () =>
-  require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
-);
-
 jest.mock('react-native-reanimated', () => ({
   Easing: {
     bezier: () => (value: number) => value,
@@ -17,106 +6,57 @@ jest.mock('react-native-reanimated', () => ({
 }));
 
 jest.mock('@/components/ui', () => ({
-  // CronSection is real here: the pull's cron reload goes through its own
-  // coalesced loader, which is half of what this test is about.
-  Badge: 'Badge',
-  Button: 'Button',
-  Card: 'Card',
-  EmptyState: 'EmptyState',
   ErrorCard: 'ErrorCard',
-  Icon: 'Icon',
-  ListRow: 'ListRow',
   PageTitle: 'PageTitle',
   Screen: 'Screen',
-  SectionHeader: 'SectionHeader',
   SegmentedControl: 'SegmentedControl',
-  Skeleton: 'Skeleton',
   Text: 'Text',
-  TextField: 'TextField',
 }));
-
-jest.mock('@/components/activity/cron-job-sheet', () => ({ CronJobSheet: 'CronJobSheet' }));
-jest.mock('@/components/activity/cron-run-sheet', () => ({ CronRunSheet: 'CronRunSheet' }));
-
+jest.mock('@/components/activity/today-section', () => ({ TodaySection: 'TodaySection' }));
+jest.mock('@/components/activity/routines-section', () => ({ RoutinesSection: 'RoutinesSection' }));
 jest.mock('@/components/nav/drawer-menu-button', () => ({ DrawerMenuButton: 'DrawerMenuButton' }));
 jest.mock('@/components/connection-badge', () => ({ PulsingDot: 'PulsingDot' }));
-jest.mock('@/components/activity/activity-glance', () => ({ ActivityGlance: 'ActivityGlance' }));
-jest.mock('@/components/activity/today-section', () => ({ TodaySection: 'TodaySection' }));
-jest.mock('@/components/activity/agent-targets', () => ({ AgentTargets: 'AgentTargets' }));
-jest.mock('@/components/activity/approval-decision-card', () => ({ ApprovalDecisionCard: 'ApprovalDecisionCard' }));
-jest.mock('@/components/activity/approval-inbox', () => ({ ApprovalInbox: 'ApprovalInbox' }));
-jest.mock('@/components/activity/recent-runs', () => ({ RecentRuns: 'RecentRuns' }));
-jest.mock('@/components/gateway/spend-entry-row', () => ({ SpendEntryRow: 'SpendEntryRow' }));
-
-jest.mock('expo-router', () => {
-  // Real semantics: the effect runs on the first focus, which is the cron
-  // read the pull is measured against.
-  const { useEffect } = jest.requireActual<typeof import('react')>('react');
-  return {
-    useRouter: () => ({ push: () => undefined }),
-    useFocusEffect: (effect: () => void | (() => void)) => {
-      useEffect(() => effect(), [effect]);
-    },
-  };
-});
-
+jest.mock('@/lib/motion/ambient-parallax', () => ({
+  useAmbientParallaxScroll: () => ({ parallaxY: 0, onScroll: () => undefined }),
+}));
+jest.mock('@/lib/motion/screen-edges', () => ({ screenEdgesFor: () => [] }));
+jest.mock('@/lib/motion/tab-insets', () => ({ tabContentPaddingBottom: () => 0 }));
+jest.mock('@/hooks/use-tokens', () => ({
+  useTokens: () => ({
+    accent: '#7353ba',
+    backgroundElevated: '#fff',
+    statusConnected: '#39855f',
+    textTertiary: '#888',
+  }),
+}));
+jest.mock('expo-router', () => ({ useRouter: () => ({ push: jest.fn() }) }));
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
 
-jest.mock('@/lib/motion/ambient-parallax', () => ({
-  useAmbientParallaxScroll: () => ({ parallaxY: 0, onScroll: () => undefined }),
-}));
-
-jest.mock('@/lib/notifications/routine-sync', () => ({
-  syncRoutineNotification: jest.fn(async () => undefined),
-  cancelRoutineNotification: jest.fn(async () => undefined),
-  rearmRoutineNotifications: jest.fn(async () => undefined),
-}));
-
-/** Every read the pull issued, as `name:start` / `name:end` markers. */
-const mockTrace: string[] = [];
-let mockCronReads = 0;
-
-function step<T>(name: string, answer: () => T): Promise<T> {
-  mockTrace.push(`${name}:start`);
-  return Promise.resolve().then(() => {
-    mockTrace.push(`${name}:end`);
-    return answer();
-  });
-}
-
+const mockRefreshPendingApprovals = jest.fn<Promise<void>, []>();
 const mockGateway = {
   activeGateway: { id: 'gw-1', name: 'Alpha', url: 'http://alpha.test:8642' },
-  activityRunsForActiveGateway: [],
-  gateways: [],
-  settings: { pcName: 'Alpha' },
   status: 'connected',
-  pendingRunApproval: null,
-  pendingApprovals: [],
-  requestRunFocus: () => undefined,
-  resolveRunApproval: () => undefined,
-  refreshPendingApprovals: () => step('approvals', () => undefined),
-  connectGateway: () => undefined,
-  refreshCapabilities: () => step('capabilities', () => undefined),
-  refreshGateways: () => step('gateways', () => undefined),
-  cron: {
-    available: true,
-    list: () => {
-      mockCronReads += 1;
-      return Promise.resolve([{ id: 'job-1', title: 'Job one' }]);
-    },
-  },
-  botJobs: { create: jest.fn(async () => ({ id: 'job-new' })) },
+  requestRunFocus: jest.fn(),
+  selectSession: jest.fn(),
+  refreshPendingApprovals: () => mockRefreshPendingApprovals(),
 };
-
 jest.mock('@/context/gateway-provider', () => ({ useGateway: () => mockGateway }));
 
-import { createElement } from 'react';
+import { createElement, type ElementType } from 'react';
 import { RefreshControl } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
 import ActivityScreen from '@/app/(tabs)/activity';
+
+type Deferred = { promise: Promise<void>; resolve: () => void };
+
+function deferred(): Deferred {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
 
 let renderer: ReactTestRenderer | null = null;
 
@@ -124,78 +64,65 @@ async function mount(): Promise<void> {
   await act(async () => {
     renderer = create(createElement(ActivityScreen));
   });
-  await act(async () => {
-    await jest.advanceTimersByTimeAsync(1);
-  });
 }
 
-async function pull(): Promise<void> {
+function node(type: string) {
+  return renderer?.root.findAllByType(type as ElementType)[0];
+}
+
+async function refresh(): Promise<void> {
   const control = renderer?.root.findByType(RefreshControl);
   expect(control).toBeDefined();
   await act(async () => {
-    await control?.props.onRefresh();
+    control?.props.onRefresh();
+    await jest.advanceTimersByTimeAsync(500);
   });
 }
 
 beforeEach(() => {
   jest.useFakeTimers();
-  mockTrace.length = 0;
-  mockCronReads = 0;
+  mockRefreshPendingApprovals.mockReset();
+  mockRefreshPendingApprovals.mockResolvedValue(undefined);
 });
 
 afterEach(async () => {
   if (renderer) {
     const doomed = renderer;
     renderer = null;
-    await act(async () => {
-      doomed.unmount();
-    });
+    await act(async () => doomed.unmount());
   }
   jest.clearAllTimers();
   jest.useRealTimers();
 });
 
-test('a pull reads the approvals, then the capabilities, then the roster — one at a time', async () => {
+test('Activity waits for approvals before reloading the selected Today or Routines view', async () => {
   await mount();
-  mockTrace.length = 0;
+  expect(node('TodaySection')?.props.reloadSignal).toBe(0);
+  expect(node('RoutinesSection')).toBeUndefined();
 
-  await pull();
-
-  // Sequential, in the order the tab is actually read: a fan-out here sent all
-  // three to a Gate that serves one request at a time.
-  expect(mockTrace).toEqual([
-    'approvals:start',
-    'approvals:end',
-    'capabilities:start',
-    'capabilities:end',
-    'gateways:start',
-    'gateways:end',
-  ]);
-});
-
-test('a pull does not read the routine roster while Today is shown', async () => {
-  await mount();
-  // Cron lives behind the Routines view; Today never mounts it, so the tab
-  // opening must not spend a Gate request on a list nobody is looking at.
-  expect(mockCronReads).toBe(0);
-
-  await pull();
+  const pending = deferred();
+  mockRefreshPendingApprovals.mockReturnValueOnce(pending.promise);
   await act(async () => {
-    await jest.advanceTimersByTimeAsync(1);
+    renderer?.root.findByType(RefreshControl).props.onRefresh();
+    await Promise.resolve();
   });
+  expect(mockRefreshPendingApprovals).toHaveBeenCalledTimes(1);
+  expect(node('TodaySection')?.props.reloadSignal).toBe(0);
 
-  expect(mockCronReads).toBe(0);
-  expect(mockTrace.filter((entry) => entry === 'approvals:start')).toHaveLength(1);
-});
-
-test('the spinner ends when the work ends', async () => {
-  await mount();
-
-  await pull();
   await act(async () => {
-    await jest.advanceTimersByTimeAsync(400);
+    pending.resolve();
+    await pending.promise;
+    await jest.advanceTimersByTimeAsync(500);
   });
+  expect(node('TodaySection')?.props.reloadSignal).toBe(1);
 
-  const control = renderer?.root.findByType(RefreshControl);
-  expect(control?.props.refreshing).toBe(false);
+  await act(async () => {
+    node('SegmentedControl')?.props.onSelect('routines');
+  });
+  expect(node('TodaySection')).toBeUndefined();
+  expect(node('RoutinesSection')?.props.reloadSignal).toBe(1);
+
+  await refresh();
+  expect(mockRefreshPendingApprovals).toHaveBeenCalledTimes(2);
+  expect(node('RoutinesSection')?.props.reloadSignal).toBe(2);
 });

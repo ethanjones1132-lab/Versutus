@@ -56,6 +56,22 @@ describe('activity feed parsing and folds', () => {
     expect(feed.items[1].metrics).toEqual({});
   });
 
+  it('keeps the session last-activity instant reported for Today rows', () => {
+    const feed = parseActivityFeed({
+      since: '2026-11-14T05:00:00.000Z',
+      generatedAt: '2026-11-14T18:00:00.000Z',
+      items: [{
+        ...validItem,
+        id: 'hermes:session:long-lived',
+        kind: 'session',
+        sessionId: 'long-lived',
+        startedAt: '2026-11-13T22:15:00.000Z',
+        lastActiveAt: '2026-11-14T14:27:00.000Z',
+      }],
+    });
+    expect(feed.items[0].lastActiveAt).toBe('2026-11-14T14:27:00.000Z');
+  });
+
   it('drops only malformed activity rows and unrecognised coverage statuses', () => {
     const feed = parseActivityFeed({
       since: '2026-11-10T00:00:00.000Z',
@@ -121,6 +137,32 @@ describe('activity feed parsing and folds', () => {
       ],
     });
     expect(feed.routines).toEqual([{ id: 'routine-1', backendId: 'backend-1', name: 'Morning', paused: false }]);
+  });
+
+  it('keeps display ownership separate from the owning Bot home and schedule display', () => {
+    const feed = parseRoutineFeed({
+      generatedAt: '2026-11-10T12:01:00.000Z',
+      routines: [{
+        id: 'same-job-id',
+        backendId: 'hermes-a',
+        botId: 'mira',
+        scopeBotId: null,
+        name: 'Nightly digest',
+        schedule: '0 9 * * *',
+        scheduleDisplay: 'Every day at 9:00 AM UTC',
+        lastRunAt: '2026-11-10T09:00:00.000Z',
+      }],
+    });
+
+    expect(feed.routines[0]).toMatchObject({
+      id: 'same-job-id',
+      backendId: 'hermes-a',
+      botId: 'mira',
+      scopeBotId: null,
+      schedule: '0 9 * * *',
+      scheduleDisplay: 'Every day at 9:00 AM UTC',
+      lastRunAt: '2026-11-10T09:00:00.000Z',
+    });
   });
 
   it('counts activity kinds', () => {

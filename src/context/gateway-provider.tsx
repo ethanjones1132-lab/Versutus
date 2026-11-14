@@ -104,6 +104,7 @@ import {
 } from '@/lib/gateway/compose-request';
 import { pendingSurface } from '@/lib/gateway/surface-request';
 import { onboardingCompletionForAddedGateway } from '@/lib/onboarding/completion-from-add';
+import { needsGatewayOnboarding } from '@/lib/onboarding/bootstrap';
 import {
   hasGroupRooms as probeGroupRooms,
   type BotGroupRoom,
@@ -166,7 +167,7 @@ import {
   type RunTranscriptPage,
 } from '@/lib/gateway/runs';
 import { routineJobsFromList } from '@/lib/gateway/routines';
-import type { ActivityFeed, RoutineFeed } from '@/lib/gateway/activity-feed';
+import type { ActivityFeed, RoutineFeed, RoutineScope } from '@/lib/gateway/activity-feed';
 import { beginFleetRoutineRead, fleetRoutineRead, type FleetRoutineRead } from '@/lib/fleet/routine-read';
 import {
   durableQueueRows,
@@ -507,9 +508,11 @@ type GatewayContextValue = {
     list: () => Promise<{ id: string; name?: string; paused?: boolean }[]>;
     /** Resolves to the created job's id so a caller can keep the phone-side notice in step. */
     create: (input: { name: string; prompt: string; schedule: string }) => Promise<{ id: string; name?: string }>;
-    run: (jobId: string, backendId?: string) => Promise<void>;
-    pause: (jobId: string, paused: boolean, backendId?: string) => Promise<void>;
-    remove: (jobId: string, backendId?: string) => Promise<void>;
+    run: (jobId: string, backendId?: string | RoutineScope) => Promise<void>;
+    pause: (jobId: string, paused: boolean, backendId?: string | RoutineScope) => Promise<void>;
+    remove: (jobId: string, backendId?: string | RoutineScope) => Promise<void>;
+    canUpdate: (scope: RoutineScope) => boolean;
+    update: (jobId: string, input: { name: string; schedule: string; prompt: string }, scope: RoutineScope) => Promise<void>;
   };
   /**
    * Cron transparency, read-only. `available` is false on a gateway whose
@@ -519,9 +522,9 @@ type GatewayContextValue = {
    */
   cron: {
     available: boolean;
-    list: () => Promise<import('@/lib/gateway/cron').CronJob[]>;
-    runs: (jobId: string, backendId?: string) => Promise<import('@/lib/gateway/cron').CronRun[]>;
-    transcript: (runId: string, limit?: number) => Promise<import('@/lib/gateway/cron').CronTurn[]>;
+    list: (scope?: RoutineScope) => Promise<import('@/lib/gateway/cron').CronJob[]>;
+    runs: (jobId: string, backendId?: string | RoutineScope) => Promise<import('@/lib/gateway/cron').CronRun[]>;
+    transcript: (runId: string, limit?: number, scope?: RoutineScope) => Promise<import('@/lib/gateway/cron').CronTurn[]>;
   };
   /**
    * Activity's universal read, per gateway. Separate from `cron` because it spans
@@ -1718,6 +1721,16 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const lastSubstitutionRef = useRef<import('@/lib/gateway/run-failures').ModelReport | null>(null);
   const bootstrapStartedRef = useRef(false);
   const autoConnectInFlightRef = useRef(false);
+  const connectionIntentRef = useRef(0);
+  const pendingActiveGatewayPinRef = useRef<{
+    connectionIntent: number;
+    gatewayId: string;
+    previousId: string | null;
+    previousGateway: GatewayProfile | null;
+  } | null>(null);
+  const explicitSetupAttemptRef = useRef(0);
+  const explicitSetupInFlightRef = useRef(false);
+  const explicitSetupPendingRef = useRef(false);
   const autoRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Mirrors any PENDING automatic retry so the UI can show what is waiting. */
   const [autoRetry, setAutoRetry] = useState<AutoRetryPulse | null>(null);
@@ -3669,6 +3682,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   const connectGateway = useCallback(
     async (gateway: GatewayProfile) => {
+      const connectionIntent = ++connectionIntentRef.current;
+      const explicitSetupAttempt = explicitSetupAttemptRef.current;
+      const ownsConnectionIntent = () =>
+        connectionIntentRef.current === connectionIntent &&
+        explicitSetupAttemptRef.current === explicitSetupAttempt;
+
       // A connect for the gateway that is already live is a re-entry — the
       // foreground heal, an auto-retry — and not the start of a new thread:
       // attachClient returns at once for a live client, so every reset below
@@ -3692,6 +3711,59 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         });
         return;
       }
+
+      // Read the pin before writing it, and do not begin the switch until this
+      // connect still owns the choice. A typed address can arrive while an
+      // automatic connect is waiting for storage; in that case the old attempt
+      // must not install its client after the operator has made a new choice.
+      const previouslyRenderedGateway = activeGatewayRef.current;
+      const previousId = await loadActiveGatewayId().catch(() => previouslyRenderedGateway?.id ?? null);
+      if (!ownsConnectionIntent()) return;
+      const previousGateway =
+        activeGatewayRef.current ??
+        (previouslyRenderedGateway?.id === previousId
+          ? previouslyRenderedGateway
+          : previousId === gateway.id
+            ? gateway
+            : null);
+      pendingActiveGatewayPinRef.current = {
+        connectionIntent,
+        gatewayId: gateway.id,
+        previousId,
+        previousGateway,
+      };
+
+      const restoreSupersededPin = async () => {
+        if (pendingActiveGatewayPinRef.current?.connectionIntent === connectionIntent) {
+          pendingActiveGatewayPinRef.current = null;
+        }
+        const savedId = await loadActiveGatewayId().catch(() => null);
+        if (savedId !== gateway.id) return;
+
+        const newerPin = pendingActiveGatewayPinRef.current;
+        const restoreId =
+          newerPin &&
+          newerPin.connectionIntent > connectionIntent
+            ? newerPin.gatewayId
+            : statusRef.current === 'connected'
+              ? activeGatewayRef.current?.id ?? previousId
+              : previousId;
+        await saveActiveGatewayId(restoreId).catch((error) => {
+          setLastError(`Could not restore the active gateway: ${error instanceof Error ? error.message : String(error)}`);
+        });
+        if (activeGatewayRef.current?.id === gateway.id && statusRef.current !== 'connected') {
+          setActiveGateway(previousGateway);
+        }
+      };
+
+      await saveActiveGatewayId(gateway.id).catch((error) => {
+        setLastError(`Could not save the active gateway: ${error instanceof Error ? error.message : String(error)}`);
+      });
+      if (!ownsConnectionIntent()) {
+        await restoreSupersededPin();
+        return;
+      }
+
       setActiveGateway(gateway);
       setActiveHello(null);
       setMessages([]);
@@ -3708,14 +3780,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // which resets the selector then puts this pin back so the first
       // history load still resumes.
       sessionIdRef.current = gateway.sessionId;
-      // The pin is written before attachClient so a cold start resumes this
-      // thread, but a store that refuses the write must not stop the attach:
-      // that would leave the header naming this gateway while every request
-      // still went through the previous client. Report it and connect anyway.
-      await saveActiveGatewayId(gateway.id).catch((error) => {
-        setLastError(`Could not save the active gateway: ${error instanceof Error ? error.message : String(error)}`);
-      });
       await attachClient(gateway);
+      if (!ownsConnectionIntent()) {
+        await restoreSupersededPin();
+        return;
+      }
+      if (
+        statusRef.current === 'connected' &&
+        pendingActiveGatewayPinRef.current?.connectionIntent === connectionIntent
+      ) {
+        pendingActiveGatewayPinRef.current = null;
+      }
     },
     [attachClient],
   );
@@ -3831,6 +3906,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const runAutoConnect = useCallback(
     async (appSettings: AppSettings, currentGateways: GatewayProfile[], activeId: string | null) => {
       if (autoConnectInFlightRef.current) return;
+      if (explicitSetupInFlightRef.current) return;
+      if (explicitSetupPendingRef.current) return;
+      const setupAttemptAtStart = explicitSetupAttemptRef.current;
+      const ownsConnectionChoice = () =>
+        !explicitSetupInFlightRef.current && explicitSetupAttemptRef.current === setupAttemptAtStart;
       if (autoRetryTimerRef.current) {
         clearTimeout(autoRetryTimerRef.current);
         autoRetryTimerRef.current = null;
@@ -3870,12 +3950,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               )
             : null;
         const discovered = await discoveryPromise;
+        if (!ownsConnectionChoice()) return;
 
         // Kind-flagged beacons (OpenClaw over WS) skip HTTP probing entirely.
         const wsBeacon = discovered.find(
           (gateway) => gateway.kind === 'openclaw' || gateway.txt.transport === 'ws',
         );
         if (wsBeacon) {
+          if (!ownsConnectionChoice()) return;
           setProbeMessage(`Connecting to ${wsBeacon.name}…`);
           const created = createGatewayProfile({
             name: wsBeacon.name,
@@ -3886,7 +3968,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           // A gateway already saved under this URL is updated, never duplicated (profile-dedupe.ts).
           const { profile, gateways: next } = await addGatewayProfile(created);
           setGateways(next);
+          if (!ownsConnectionChoice()) return;
           await saveAppSettings({ lastSuccessfulUrl: profile.url });
+          if (!ownsConnectionChoice()) return;
           setSettings((prev) => ({ ...prev, lastSuccessfulUrl: profile.url }));
           await connectGateway(profile);
           return;
@@ -3895,9 +3979,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         if (activeId) {
           const saved = currentGateways.find((item) => item.id === activeId);
           if (saved) {
+            if (!ownsConnectionChoice()) return;
             setProbeMessage(`Reconnecting to ${saved.name}…`);
             // OpenClaw gateways do not answer HTTP /health — connect directly.
             if (saved.kind === 'openclaw') {
+              if (!ownsConnectionChoice()) return;
               await connectGateway(saved);
               return;
             }
@@ -3905,6 +3991,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               earlyResult?.ok && sameGatewayUrl(earlyResult.url, saved.url)
                 ? earlyResult
                 : await probeGatewayUrl(saved.url, GATEWAY_PROBE_TIMEOUT_MS);
+            if (!ownsConnectionChoice()) return;
             if (savedProbe.ok) {
               if (autoRetryTimerRef.current) {
                 clearTimeout(autoRetryTimerRef.current);
@@ -3912,7 +3999,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
                 setAutoRetry(null);
               }
               await saveAppSettings({ lastSuccessfulUrl: saved.url });
+              if (!ownsConnectionChoice()) return;
               setSettings((prev) => ({ ...prev, lastSuccessfulUrl: saved.url }));
+              if (!ownsConnectionChoice()) return;
               await connectGateway(saved);
               return;
             }
@@ -3930,6 +4019,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             setProbeMessage,
             GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
           );
+          if (!ownsConnectionChoice()) return;
         }
 
         if (!probeResult?.ok) {
@@ -3954,8 +4044,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           }
 
           probeResult = await probeGatewayCandidates(candidates, setProbeMessage, GATEWAY_PROBE_TIMEOUT_MS);
+          if (!ownsConnectionChoice()) return;
         }
 
+        if (!ownsConnectionChoice()) return;
         if (!probeResult?.ok) {
           applyConnectionPhase('failed');
           const hint = categorizeProbeError(probeResult) || (probeResult?.error ? `${probeResult.error}. ` : '');
@@ -3964,6 +4056,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
+        if (!ownsConnectionChoice()) return;
         const gateway = await resolveGatewayForUrl(
           probeResult.url,
           appSettings,
@@ -3972,8 +4065,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           undefined,
           probeResult.hasManifest === false,
         );
+        if (!ownsConnectionChoice()) return;
         const nextSettings = await saveAppSettings({ lastSuccessfulUrl: probeResult.url });
+        if (!ownsConnectionChoice()) return;
         setSettings(nextSettings);
+        if (!ownsConnectionChoice()) return;
         await connectGateway(gateway);
       } finally {
         autoConnectInFlightRef.current = false;
@@ -3988,6 +4084,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     if (!activeId) return;
     const active = loaded.find((item) => item.id === activeId) ?? null;
     setActiveGateway(active);
+  }, []);
+
+  const markOnboardingComplete = useCallback(async () => {
+    const completedSettings = await saveAppSettings({ onboardingComplete: true, manualSetupPending: false });
+    settingsRef.current = completedSettings;
+    setSettings(completedSettings);
+    explicitSetupPendingRef.current = false;
+    setNeedsOnboarding(false);
   }, []);
 
   const bootstrap = useCallback(async () => {
@@ -4025,6 +4129,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const roster = healedRoster.gateways;
       const rosterActiveId = healedRoster.activeId;
 
+      explicitSetupPendingRef.current = loadedSettings.manualSetupPending === true;
       setSettings(loadedSettings);
       setGateways(roster);
       offlineQueueRef.current = restoredQueueLoad.items;
@@ -4044,8 +4149,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const active = rosterActiveId ? (roster.find((item) => item.id === rosterActiveId) ?? null) : null;
       setActiveGateway(active);
 
-      const onboardingNeeded =
-        !loadedSettings.onboardingComplete && roster.length === 0 && !loadedSettings.tailscaleHost;
+      const onboardingNeeded = needsGatewayOnboarding({
+        settings: loadedSettings,
+        savedGatewayCount: roster.length,
+      });
       setIsBootstrapped(true);
 
       if (!loadedSettings.autoConnect) {
@@ -4054,19 +4161,37 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      setNeedsOnboarding(false);
+      setNeedsOnboarding(onboardingNeeded);
 
-      void runAutoConnect(loadedSettings, roster, rosterActiveId).catch((error) => {
-        applyConnectionPhase('failed');
-        setNeedsOnboarding(onboardingNeeded);
-        setProbeMessage(
-          isGatewayAuthFailure(error)
-            ? 'Gateway rejected the API key. Update it from the gateway settings.'
-            : 'Auto-connect failed. Tap retry or check your gateway address.',
-        );
-        setLastError(error instanceof Error ? error.message : String(error));
-        if (!isGatewayAuthFailure(error)) scheduleAutoRetryRef.current(18000);
-      });
+      const bootstrapSetupAttempt = explicitSetupAttemptRef.current;
+      void runAutoConnect(loadedSettings, roster, rosterActiveId)
+        .then(async () => {
+          if (
+            onboardingNeeded &&
+            explicitSetupAttemptRef.current === bootstrapSetupAttempt &&
+            !explicitSetupInFlightRef.current &&
+            statusRef.current === 'connected'
+          ) {
+            await markOnboardingComplete();
+          }
+        })
+        .catch((error) => {
+          if (
+            explicitSetupAttemptRef.current !== bootstrapSetupAttempt ||
+            explicitSetupInFlightRef.current
+          ) {
+            return;
+          }
+          applyConnectionPhase('failed');
+          setNeedsOnboarding(onboardingNeeded);
+          setProbeMessage(
+            isGatewayAuthFailure(error)
+              ? 'Gateway rejected the API key. Update it from the gateway settings.'
+              : 'Auto-connect failed. Tap retry or check your gateway address.',
+          );
+          setLastError(error instanceof Error ? error.message : String(error));
+          if (!isGatewayAuthFailure(error)) scheduleAutoRetryRef.current(18000);
+        });
     } catch (error) {
       setIsBootstrapped(true);
       applyConnectionPhase('failed');
@@ -4074,7 +4199,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setLastError(error instanceof Error ? error.message : String(error));
       scheduleAutoRetryRef.current(30000);
     }
-  }, [runAutoConnect, applyConnectionPhase, readDeviceIdentity, applyDeviceIdentityRead]);
+  }, [runAutoConnect, applyConnectionPhase, readDeviceIdentity, applyDeviceIdentityRead, markOnboardingComplete]);
 
   useEffect(() => {
     if (bootstrapStartedRef.current) return;
@@ -4121,10 +4246,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // manual or deep-link add saved a profile yet left needsOnboarding set,
       // and AppBootstrap bounced the user from chat back to onboarding. The
       // derived tailnet host feeds future auto-connect candidate probing.
-      const completionPatch = onboardingCompletionForAddedGateway(input.url, settingsRef.current);
+      const completionPatch = {
+        ...onboardingCompletionForAddedGateway(input.url, settingsRef.current),
+        manualSetupPending: false,
+      };
       const nextSettings = await saveAppSettings(completionPatch);
       settingsRef.current = nextSettings;
       setSettings(nextSettings);
+      explicitSetupPendingRef.current = false;
       setNeedsOnboarding(false);
 
       return profile;
@@ -6188,6 +6317,38 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const host = normalizePcAddress(pcAddress);
       if (!host) throw new Error('Enter your gateway address');
 
+      const setupAttempt = ++explicitSetupAttemptRef.current;
+      connectionIntentRef.current += 1;
+      explicitSetupInFlightRef.current = true;
+      explicitSetupPendingRef.current = true;
+
+      // An explicit address supersedes a cold automatic attach that has not
+      // connected yet. Reuse attachClient's generation teardown so its late
+      // callbacks and reads cannot become the active client. A connected saved
+      // setup stays live while the manual address is checked.
+      const client = clientRef.current;
+      const hasLiveConnection = statusRef.current === 'connected' || client?.connectionStatus === 'connected';
+      if (!hasLiveConnection && (client || pendingActiveGatewayPinRef.current)) {
+        const pendingPin = pendingActiveGatewayPinRef.current;
+        clientGenerationRef.current += 1;
+        clientGenerationAbortRef.current.abort();
+        clientGenerationAbortRef.current = new AbortController();
+        cancelConnectedReads();
+        client?.disconnect();
+        if (clientRef.current === client) clientRef.current = null;
+        if (pendingPin && activeGatewayRef.current?.id === pendingPin.gatewayId) {
+          setActiveGateway(pendingPin.previousGateway);
+        }
+        applyStatus('disconnected');
+      }
+      if (autoRetryTimerRef.current) {
+        clearTimeout(autoRetryTimerRef.current);
+        autoRetryTimerRef.current = null;
+        setAutoRetry(null);
+      }
+
+      return (async (): Promise<PcAddressSetupResult> => {
+
       // This explicit attempt must report its own TLS decision, not a change
       // left over from a previous connection attempt — including a write that
       // is still in flight for the old one.
@@ -6199,17 +6360,15 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const nextSettings = await saveAppSettings({
         tailscaleHost: host,
         pcName,
-        onboardingComplete: true,
         autoConnect: true,
+        manualSetupPending: true,
       });
+      settingsRef.current = nextSettings;
       setSettings(nextSettings);
-      setNeedsOnboarding(false);
 
-      // The discovery window runs while the just-typed host is probed,
-      // instead of before it: the first byte goes out immediately and the
-      // beacons merge when the window lands. `discovered` still flows to
-      // every downstream use below.
-      const discoveryPromise = discoverForProbe(2500);
+      // Manual setup must stay on the address the operator entered. Discovery,
+      // saved profiles, and configured hosts are not fallback destinations for
+      // a key the operator supplied for this one host.
       const explicitCandidates = buildExplicitHostCandidates(host);
 
       applyConnectionPhase('searching');
@@ -6220,34 +6379,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
       );
 
-      const discovered = await discoveryPromise;
-
-      // Wave one tried the explicit host; the second wave tries this delta's
-      // head, so the serial tail below starts past that head.
-      let unwavedCandidates = explicitCandidates;
       if (!probeResult?.ok) {
-        const candidates = buildGatewayCandidates({
-          tailscaleHost: host,
-          configuredHosts: configuredGatewayHosts(),
-          savedUrls: gateways.map((item) => item.url),
-          discovered,
-          lastSuccessfulUrl: nextSettings.lastSuccessfulUrl,
-          platform: Platform.OS,
-        });
-
-        // The full list opens with the explicit host the first wave just
-        // missed, so wave only the unwaved delta instead of re-probing it.
-        unwavedCandidates = dropAlreadyWavedCandidates(candidates, explicitCandidates, []);
-        probeResult = await probeHighPriorityCandidates(
-          unwavedCandidates,
-          setProbeMessage,
-          GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
-        );
-      }
-
-      if (!probeResult?.ok) {
+        // The first wave tried every current explicit-host candidate; retain
+        // a serial tail for future candidate lists without retrying that wave.
         probeResult = await probeGatewayCandidates(
-          unwavedCandidates.slice(HIGH_PRIORITY_WAVE_SIZE),
+          explicitCandidates.slice(HIGH_PRIORITY_WAVE_SIZE),
           setProbeMessage,
           GATEWAY_PROBE_TIMEOUT_MS,
         );
@@ -6258,15 +6394,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         setProbeMessage(
           `${hint}Saved your address, but could not reach the gateway. Make sure it is running and exposed over Tailscale or local network.`,
         );
-        scheduleAutoRetryRef.current(20000);
         return { kind: 'unreachable' };
       }
 
+      // Reuse only a profile at the exact URL that answered the explicit
+      // probe. A hostname alias or cached-IP match must not redirect the
+      // entered key to a different saved URL.
+      const exactUrlGateways = gateways.filter((item) => item.url === probeResult.url);
       const gateway = await resolveGatewayForUrl(
         probeResult.url,
         nextSettings,
-        gateways,
-        discovered,
+        exactUrlGateways,
+        [],
         token,
         probeResult.hasManifest === false,
       );
@@ -6280,12 +6419,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       await connectGateway(gateway);
       const tlsChange = tlsFingerprintChangeRef.current;
       if (tlsChange) return { kind: 'tls-fingerprint-change', gatewayName: tlsChange.gateway.name };
-      if (statusRef.current === 'connected') return { kind: 'connected' };
+      if (statusRef.current === 'connected') {
+        await markOnboardingComplete();
+        return { kind: 'connected' };
+      }
 
       setProbeMessage('The gateway responded, but the connection did not complete. Check its API key and try again.');
       return { kind: 'not-connected' };
+      })().finally(() => {
+        if (explicitSetupAttemptRef.current === setupAttempt) explicitSetupInFlightRef.current = false;
+      });
     },
-    [connectGateway, gateways, resolveGatewayForUrl, applyConnectionPhase, updateTlsFingerprintChange],
+    [connectGateway, gateways, resolveGatewayForUrl, applyStatus, applyConnectionPhase, cancelConnectedReads, updateTlsFingerprintChange, markOnboardingComplete],
   );
 
   // The connect cycle the auto-retry timer and the foreground heal both ride.
@@ -6328,6 +6473,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   const scheduleAutoRetry = useCallback((floorMs = AUTO_RETRY_BASE_DELAY_MS) => {
     if (!settingsRef.current.autoConnect) return;
+    if (explicitSetupInFlightRef.current || explicitSetupPendingRef.current) return;
     // A ladder rung on a refused key promises retries that cannot succeed.
     if (authFailureRef.current) return;
     // Escalate per consecutive failure — 12s doubling up to a 5-minute cap —
@@ -7066,12 +7212,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // surface) can schedule the phone-side notice under the real job id.
       return client.createJob(input);
     },
-    run: async (jobId: string, backendId?: string) => {
+    run: async (jobId: string, backendId?: string | RoutineScope) => {
       const client = clientRef.current;
       if (!client?.runJob) throw new Error('This gateway does not run jobs.');
       await client.runJob(jobId, backendId);
     },
-    pause: async (jobId: string, paused: boolean, backendId?: string) => {
+    pause: async (jobId: string, paused: boolean, backendId?: string | RoutineScope) => {
       const client = clientRef.current;
       if (!client?.setJobPaused) throw new Error('This gateway does not pause jobs.');
       await client.setJobPaused(jobId, paused, backendId);
@@ -7081,10 +7227,19 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // resolved backend's `removeJob`; a backend without that method throws
     // and the caller surfaces the refusal through the same control-error
     // path the run/pause calls already use.
-    remove: async (jobId: string, backendId?: string) => {
+    remove: async (jobId: string, backendId?: string | RoutineScope) => {
       const client = clientRef.current;
       if (!client?.removeJob) throw new Error('This gateway does not remove jobs.');
       await client.removeJob(jobId, backendId);
+    },
+    canUpdate: (scope: RoutineScope) => {
+      const client = clientRef.current;
+      return client?.canUpdateJob?.(scope) ?? false;
+    },
+    update: async (jobId: string, input: { name: string; schedule: string; prompt: string }, scope: RoutineScope) => {
+      const client = clientRef.current;
+      if (!client?.updateJob) throw new Error('This gateway does not edit jobs.');
+      await client.updateJob(jobId, input, scope);
     },
   }), []);
 
@@ -7148,20 +7303,20 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     get available() {
       return typeof clientRef.current?.listCronJobs === 'function';
     },
-    list: async () => {
+    list: async (scope?: RoutineScope) => {
       const client = clientRef.current;
       if (!client?.listCronJobs) return [];
-      return client.listCronJobs();
+      return client.listCronJobs(scope);
     },
-    runs: async (jobId: string, backendId?: string) => {
+    runs: async (jobId: string, backendId?: string | RoutineScope) => {
       const client = clientRef.current;
       if (!client?.cronRuns) return [];
       return client.cronRuns(jobId, backendId);
     },
-    transcript: async (runId: string, limit?: number) => {
+    transcript: async (runId: string, limit?: number, scope?: RoutineScope) => {
       const client = clientRef.current;
       if (!client?.cronTranscript) return [];
-      return client.cronTranscript(runId, limit);
+      return client.cronTranscript(runId, limit, scope);
     },
   }), []);
 

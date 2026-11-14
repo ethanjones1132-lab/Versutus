@@ -16,7 +16,7 @@ function readSource(...parts: string[]): string {
 const pane = () =>
   readSource('src', 'components', 'chat', 'routines-pane.tsx');
 const section = () =>
-  readSource('src', 'components', 'activity', 'cron-section.tsx');
+  readSource('src', 'components', 'activity', 'routines-section.tsx');
 
 // Tapping a routine row used to fire the job at the gateway and leave its
 // run history buried on the Activity tab. The row now opens the same
@@ -32,12 +32,13 @@ describe('routines pane row opens the scheduled-job sheet', () => {
     expect(src).not.toMatch(/\bonRun\b/);
   });
 
-  test('the pane mounts the same CronJobSheet Activity renders, keyed on the job id', () => {
+  test('the pane mounts the same CronJobSheet Activity renders, keyed on its exact Bot home', () => {
     const src = pane();
     expect(src).toContain("from '@/components/activity/cron-job-sheet'");
     const mount = src.match(/<CronJobSheet[\s\S]*?\/>/)?.[0];
     expect(mount).toBeDefined();
-    expect(mount).toContain("key={openJob?.id ?? 'no-job'}");
+    expect(mount).toContain('scope={scope}');
+    expect(mount).toContain('scope?.backendId');
     expect(mount).toContain('job={openJob ? cronJobViewFromRoutine(openJob) : null}');
     expect(mount).toMatch(/onClose=\{\(\) => setOpenJobId\(null\)\}/);
     expect(mount).toMatch(/onOpenRun=\{\(runId\) => setOpenRunId\(runId\)\}/);
@@ -50,9 +51,9 @@ describe('routines pane row opens the scheduled-job sheet', () => {
     // the run restores the same keyed job sheet with its RUN HISTORY.
     const src = pane();
     expect(src).toContain("from '@/components/activity/cron-run-sheet'");
-    expect(src).toContain(
-      "<CronRunSheet key={openRunId ?? 'no-run'} runId={openRunId} onClose={() => setOpenRunId(null)} />",
-    );
+    expect(src).toContain('scope={scope}');
+    expect(src).toMatch(/key=\{`\$\{scope\?\.backendId/);
+    expect(src).toContain('openRunId ??');
     const runCloseIdx = src.indexOf('onClose={() => setOpenRunId(null)}');
     const jobCloseIdx = src.indexOf('onClose={() => setOpenJobId(null)}');
     expect(runCloseIdx).toBeGreaterThan(-1);
@@ -112,15 +113,17 @@ describe('routines pane row opens the scheduled-job sheet', () => {
     expect(src.match(/label="Retry"/g) ?? []).toHaveLength(0);
   });
 
-  test("Activity's CronJobSheet wiring is untouched", () => {
-    // Chat gains the sheet; Activity keeps owning its own mount, its run
-    // transcript hop, and its refresh contracts.
+  test("Activity's CronJobSheet carries explicit row ownership", () => {
     const src = section();
     expect(src).toContain('<CronJobSheet');
-    expect(src).toContain("key={openJob?.id ?? 'no-job'}");
-    expect(src).toMatch(/onOpenRun=\{\(runId\) => \{/);
+    expect(src).toContain('setOpenJobScope({ backendId: routine.backendId, botId: routine.scopeBotId ?? null });');
+    expect(src).toContain('routineIdentity(routine)');
+    expect(src).toContain('JSON.stringify([routine.backendId, routine.botId ?? null, routine.scopeBotId ?? null, routine.id])');
+    expect(src).toContain('routineSelectionIdentity(openJob, openJobScope)');
+    expect(src).toContain('scope={openJobScope}');
+    expect(src).toContain('onOpenRun={(runId) => setOpenRunId(runId)}');
     expect(src).toMatch(/onRemoved=\{\(\) => \{/);
-    expect(src).toMatch(/onChanged=\{\(\) => \{/);
+    expect(src).toContain('onChanged={() => void read()}');
   });
 });
 

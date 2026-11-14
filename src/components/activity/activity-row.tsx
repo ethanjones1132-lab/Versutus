@@ -32,7 +32,7 @@ export function ActivityRow({
   onOpenSession?: (target: ActivitySessionTarget) => void;
 }) {
   const tokens = useTokens();
-  const date = new Date(item.startedAt);
+  const date = new Date(item.kind === 'session' ? item.lastActiveAt ?? item.startedAt : item.startedAt);
   const time = Number.isFinite(date.getTime())
     ? `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
     : undefined;

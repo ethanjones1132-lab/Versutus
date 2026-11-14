@@ -47,15 +47,18 @@ describe('cron section refresh', () => {
     expect(src).toMatch(/}, \[load, cronReloadSignal\]\);/);
   });
 
-  test('Activity bumps the cron reload signal on pull-to-refresh and passes it down', () => {
+  test('Activity refresh bumps Today and Routines reload signals', () => {
     const src = readSource('src', 'app', '(tabs)', 'activity.tsx');
     expect(src).toMatch(
-      /const \[cronReloadSignal, setCronReloadSignal\] = useState\(0\);/,
+      /const \[todayReloadSignal, setTodayReloadSignal\] = useState\(0\);/,
     );
-    // onRefresh reaches the cron re-read...
-    expect(src).toMatch(/setCronReloadSignal\(\(n\) => n \+ 1\)/);
-    // ...and the section receives the signal, with the roster switched off
-    // because the cross-backend feed owns the list on this tab.
-    expect(src).toMatch(/<CronSection\s+cronReloadSignal=\{cronReloadSignal\}\s+showList=\{false\}/);
+    expect(src).toMatch(
+      /const \[routinesReloadSignal, setRoutinesReloadSignal\] = useState\(0\);/,
+    );
+    expect(src).toMatch(/setTodayReloadSignal\(\(n\) => n \+ 1\)/);
+    expect(src).toMatch(/setRoutinesReloadSignal\(\(n\) => n \+ 1\)/);
+    expect(src).toMatch(/<TodaySection\s+reloadSignal=\{todayReloadSignal\}/);
+    expect(src).toMatch(/<RoutinesSection reloadSignal=\{routinesReloadSignal\}/);
+    expect(src).not.toContain('<CronSection');
   });
 });

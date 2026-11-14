@@ -3,6 +3,7 @@ import { AppState, type AppStateStatus } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
 import { TodaySection } from '@/components/activity/today-section';
+import { sinceMidnightAnchor } from '@/lib/activity/today';
 import type { ActivityFeed } from '@/lib/gateway/activity-feed';
 
 jest.mock('react-native-reanimated', () => ({
@@ -104,6 +105,14 @@ function rowTitles(): string[] {
   return renderer.root
     .findAllByType('ActivityRow' as never)
     .map((node) => (node.props as { item: { title: string } }).item.title);
+}
+
+function visibleText(): string[] {
+  if (!renderer) return [];
+  return renderer.root.findAllByType('Text' as never).flatMap((node) => {
+    const value = (node.props as { children?: unknown }).children;
+    return typeof value === 'string' ? [value] : [];
+  });
 }
 
 beforeEach(() => {
@@ -230,5 +239,53 @@ describe('Today re-reads when the day or the foreground changes', () => {
     expect(mockGateway.activityFeed.readActivity.mock.calls[1][0].since).toBe(
       new Date(2026, 10, 10).toISOString(),
     );
+  });
+});
+
+describe('Today keeps its empty and stale copy honest', () => {
+  test('does not call a failed backend an empty day', async () => {
+    mockGateway.activityFeed.readActivity.mockResolvedValue({
+      since: new Date(2026, 10, 14).toISOString(),
+      generatedAt: '2026-11-14T12:00:00.000Z',
+      backends: [{ id: 'hermes', label: 'Hermes', status: 'failed', error: 'read timed out' }],
+      items: [],
+    } satisfies ActivityFeed);
+
+    mount();
+    await flush();
+
+    expect(visibleText()).not.toContain('Nothing since midnight.');
+    expect(visibleText().some((line) => line.startsWith('Since midnight ·'))).toBe(false);
+    expect(visibleText()).toContain("Hermes: This backend's activity could not be read");
+  });
+
+  test('renders the count and stale-read separators as real Unicode punctuation', async () => {
+    jest.setSystemTime(new Date(2026, 10, 14, 12));
+    const since = new Date(2026, 10, 14).toISOString();
+    mockGateway.activityFeed.readActivity
+      .mockResolvedValueOnce(feed(since, 'A session'))
+      .mockRejectedValueOnce(new Error('gateway read timed out'));
+
+    mount();
+    await flush();
+    expect(visibleText()).toContain('0 runs · 1 session');
+    expect(visibleText()).toContain(sinceMidnightAnchor(since));
+
+    act(() => {
+      renderer!.update(
+        <TodaySection reloadSignal={1} onOpenRun={() => undefined} onOpenSession={() => undefined} />,
+      );
+    });
+    await flush();
+    expect(visibleText()).toContain('Could not refresh — showing the last read.');
+
+    mockGateway.status = 'disconnected';
+    act(() => {
+      renderer!.update(
+        <TodaySection reloadSignal={1} onOpenRun={() => undefined} onOpenSession={() => undefined} />,
+      );
+    });
+    await flush();
+    expect(visibleText().some((line) => line.includes(' · Older than today'))).toBe(true);
   });
 });

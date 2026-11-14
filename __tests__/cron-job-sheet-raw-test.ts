@@ -16,7 +16,7 @@ describe('cron job sheet raw record is bounded so run history stays reachable', 
     expect(src).toContain('<ScrollView style={styles.rawScroll} nestedScrollEnabled>');
     // The record itself (JSON.stringify of the raw job) lives inside that scroll.
     const scrollIdx = src.indexOf('<ScrollView style={styles.rawScroll}');
-    const rawIdx = src.indexOf('JSON.stringify(job.raw ?? job, null, 2)');
+    const rawIdx = src.indexOf('JSON.stringify(displayedJob.raw ?? displayedJob, null, 2)');
     const closeIdx = src.indexOf('</ScrollView>');
     expect(scrollIdx).toBeGreaterThan(-1);
     expect(rawIdx).toBeGreaterThan(scrollIdx);

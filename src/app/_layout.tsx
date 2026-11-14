@@ -7,6 +7,7 @@ import * as Linking from 'expo-linking';
 import Head from 'expo-router/head';
 import { Stack, ThemeProvider, useRouter, type ErrorBoundaryProps } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { NavigationBar } from 'expo-navigation-bar';
 import { useEffect, useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
 
@@ -675,6 +676,7 @@ export default function RootLayout() {
                <meta name="theme-color" content="#0A0A0B" />
              </Head>
              <StatusBar style="light" />
+              <NavigationBar style="light" />
              <NotificationRouter />
              <GatewayDeepLinkRouter />
              <SharedTextRouter />

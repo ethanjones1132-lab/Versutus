@@ -55,12 +55,13 @@ describe('model catalog read is scoped to the Gateway that started it', () => {
     expect(reset).toContain('++modelReadSeqRef.current;');
   });
 
-  test('every Gateway replacement seam bumps the generation and resets model reads', () => {
-    // attachClient supersede, disconnectGateway, deleteGateway, teardownRetiredActiveGateway
+  test('replacement seams and unfinished manual setup invalidate model read generations', () => {
+    // Four replacement seams plus manual setup superseding an unfinished attach.
     const resets = provider.match(/clientGenerationRef\.current \+= 1;/g) ?? [];
-    expect(resets).toHaveLength(4);
+    expect(resets).toHaveLength(5);
     const modelResets = provider.match(/\+\+modelReadSeqRef\.current;/g) ?? [];
-    // resetSessionSelector is called at all 4 seams; it should increment modelReadSeqRef
+    // Replacement resets selectors; manual probing preserves them and invalidates
+    // the generation captured by the reads asserted above.
     expect(modelResets).toHaveLength(1); // only in resetSessionSelector
   });
 

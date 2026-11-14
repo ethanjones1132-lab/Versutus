@@ -23,8 +23,8 @@ const runsScreen = () => readSource('src', 'app', 'runs.tsx');
 const capabilitiesScreen = () => readSource('src', 'app', 'gateway', 'capabilities.tsx');
 const cronSection = () => readSource('src', 'components', 'activity', 'cron-section.tsx');
 const scorecardsSection = () => readSource('src', 'components', 'activity', 'scorecards-section.tsx');
-const approvalInbox = () => readSource('src', 'components', 'activity', 'approval-inbox.tsx');
-const agentTargets = () => readSource('src', 'components', 'activity', 'agent-targets.tsx');
+const todaySection = () => readSource('src', 'components', 'activity', 'today-section.tsx');
+const routinesSection = () => readSource('src', 'components', 'activity', 'routines-section.tsx');
 const toolsetsSection = () => readSource('src', 'components', 'gateway', 'toolsets-section.tsx');
 const rpcMethodsSection = () => readSource('src', 'components', 'gateway', 'rpc-methods-section.tsx');
 const healthChecksPane = () => readSource('src', 'components', 'gateway', 'health-checks-pane.tsx');
@@ -67,7 +67,7 @@ describe('named screens carry exactly one title-level heading in their own body'
 });
 
 describe('section headers sit at headline, never competing with the screen title', () => {
-  test('CronSection heading is a headline, not a second title on Activity', () => {
+  test('CronSection keeps its component heading at headline level', () => {
     const src = cronSection();
     expect(src).toContain('<Text variant="headline">Cron ({jobs.length})</Text>');
     expect(countTitles(src)).toBe(0);
@@ -98,20 +98,20 @@ describe('section headers sit at headline, never competing with the screen title
   });
 });
 
-describe('Activity section headers converge on one level', () => {
-  test('every Activity section is named by one section header at the same level', () => {
-    const src = activityScreen();
-    const today = readSource('src', 'components', 'activity', 'today-section.tsx');
-    // Approvals moved into Today's feed; the tab keeps the remaining sections.
-    expect(today).toMatch(/<SectionHeader title="Needs you"/);
-    for (const title of ['Your decisions', 'Gateways']) {
-      expect(src).toMatch(new RegExp(`<SectionHeader title="${title}"`));
-    }
-    // The groups under those headers carry no heading of their own.
-    expect(countTitles(approvalInbox())).toBe(0);
-    expect(approvalInbox()).not.toContain('<Text variant="headline">Approvals</Text>');
-    expect(countTitles(agentTargets())).toBe(0);
-    expect(agentTargets()).not.toContain('<Text variant="headline">Configured profiles</Text>');
+describe('Activity sections use one headline level beneath the page title', () => {
+  test('Today and Routines have their own headers, without the removed Activity sections', () => {
+    const screen = activityScreen();
+    const today = todaySection();
+    const routines = routinesSection();
+    expect(screen).toContain("options={[{ key: 'today', label: 'Today' }, { key: 'routines', label: 'Routines' }]}");
+    expect(today).toContain('<SectionHeader title="Needs you" />');
+    expect(today).toContain('<SectionHeader title="In progress" />');
+    expect(routines).toMatch(/<SectionHeader title=\{`Routines/);
+    expect(countTitles(today)).toBe(0);
+    expect(countTitles(routines)).toBe(0);
+    expect(screen).not.toContain('<CronSection');
+    expect(screen).not.toContain('<AgentTargets');
+    expect(screen).not.toContain('<SpendEntryRow');
   });
 });
 
@@ -173,12 +173,14 @@ describe('keep-working: copy, badges, and mounts under the demoted headings', ()
     expect(pairedDevicesPane()).toContain('pairedDevicesToggleLabel(shown, false)');
   });
 
-  test('the screens still mount every section that lost its title rank', () => {
+  test('the screens mount their current sections after the composition change', () => {
     const activity = activityScreen();
-    const today = readSource('src', 'components', 'activity', 'today-section.tsx');
+    const today = todaySection();
     expect(today).toContain('<ApprovalInbox />');
-    expect(activity).toContain('<CronSection');
-    expect(activity).toContain('<AgentTargets');
+    expect(activity).toContain('<TodaySection');
+    expect(activity).toContain('<RoutinesSection');
+    expect(activity).not.toContain('<CronSection');
+    expect(activity).not.toContain('<AgentTargets');
     const runs = runsScreen();
     expect(runs).toContain('<ScorecardsSection');
     const capabilities = capabilitiesScreen();

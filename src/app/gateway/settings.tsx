@@ -45,7 +45,7 @@ import { loadAppSettings, saveAppSettings } from '@/lib/settings/app-settings';
 import {
   approvalAuditCopy,
   approvalAuditSummaryCopy,
-  loadApprovalAudit,
+  loadApprovalAuditStrict,
   type ApprovalAuditEntry,
 } from '@/lib/gateway/approval-policy';
 import {
@@ -173,12 +173,34 @@ export default function GatewaySettingsScreen() {
   // left as a control claiming a value this phone does not hold.
   const [widgetPrivacyError, setWidgetPrivacyError] = useState<string | null>(null);
   const [voiceEngineError, setVoiceEngineError] = useState<string | null>(null);
-  // D1: this device's durable approval decisions (newest first). The loaded
-  // gate keeps first paint from asserting the empty claim before the deferred
-  // read lands (the lie Activity's card closed with auditState in iter-322).
+  // D1: this device's durable approval decisions (newest first). A strict
+  // read keeps storage failure distinct from a genuinely empty history.
   const [audit, setAudit] = useState<ApprovalAuditEntry[]>([]);
-  const [auditLoaded, setAuditLoaded] = useState(false);
+  const [auditState, setAuditState] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const auditRequestRef = useRef(0);
+  const auditMountedRef = useRef(false);
   const [hideWidgetResult, setHideWidgetResult] = useState(false);
+
+  const runAuditRead = useCallback(() => {
+    const request = ++auditRequestRef.current;
+    void loadApprovalAuditStrict()
+      .then((entries) => {
+        if (!auditMountedRef.current || request !== auditRequestRef.current) return;
+        setAudit(entries);
+        setAuditError(null);
+        setAuditState('ready');
+      })
+      .catch((caught: unknown) => {
+        if (!auditMountedRef.current || request !== auditRequestRef.current) return;
+        setAuditError(failureMessage(caught));
+        setAuditState('failed');
+      });
+  }, []);
+  const retryAuditRead = useCallback(() => {
+    setAuditState('loading');
+    runAuditRead();
+  }, [runAuditRead]);
 
   useEffect(() => {
     let cancelled = false;
@@ -296,16 +318,13 @@ export default function GatewaySettingsScreen() {
   }, [connected, readVoiceCapabilities, applyVoiceRead]);
 
   useEffect(() => {
-    let cancelled = false;
-    void loadApprovalAudit().then((entries) => {
-      if (cancelled) return;
-      setAudit(entries);
-      setAuditLoaded(true);
-    });
+    auditMountedRef.current = true;
+    runAuditRead();
     return () => {
-      cancelled = true;
+      auditMountedRef.current = false;
+      auditRequestRef.current += 1;
     };
-  }, []);
+  }, [runAuditRead]);
 
   // The unmount edge is the cancellation: the poll is phone work against a
   // relayed path, and a screen nobody is looking at has no reason to keep it.
@@ -849,7 +868,7 @@ export default function GatewaySettingsScreen() {
           <Card variant="stage" padding={Spacing.three} style={styles.card}>
             <View style={styles.cardTitleRow}>
               <Text variant="headline">Decision history</Text>
-              {auditLoaded ? (
+              {auditState === 'ready' ? (
                 <Badge
                   label={String(audit.length)}
                   tone={audit.length > 0 ? 'accent' : 'neutral'}
@@ -857,13 +876,22 @@ export default function GatewaySettingsScreen() {
                 />
               ) : null}
             </View>
-            {!auditLoaded ? (
+            {auditState === 'loading' ? (
               <>
                 <Skeleton width="72%" height={14} />
                 <Skeleton width="90%" height={12} />
                 <Skeleton width="64%" height={12} />
               </>
-            ) : (
+            ) : null}
+            {auditState === 'failed' ? (
+              <ErrorCard
+                cause={auditError ?? 'The approval decision history could not be read.'}
+                affected="approval decisions saved on this device"
+                next="Retry the read."
+                onRetry={retryAuditRead}
+              />
+            ) : null}
+            {auditState === 'ready' ? (
               <>
                 <Text variant="caption" color="secondary">
                   {approvalAuditSummaryCopy(audit.length)}
@@ -874,7 +902,7 @@ export default function GatewaySettingsScreen() {
                   </Text>
                 ))}
               </>
-            )}
+            ) : null}
           </Card>
         </View>
 

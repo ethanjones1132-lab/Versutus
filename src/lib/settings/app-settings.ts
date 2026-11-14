@@ -9,6 +9,8 @@ export type VoiceEngineSetting = (typeof VOICE_ENGINE_IDS)[number];
 export type AppSettings = {
   autoConnect: boolean;
   onboardingComplete: boolean;
+  /** A manually entered host is still authoritative until it connects or is replaced. */
+  manualSetupPending?: boolean;
   tailscaleHost?: string;
   pcName?: string;
   lastSuccessfulUrl?: string;

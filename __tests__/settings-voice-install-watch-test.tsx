@@ -71,7 +71,7 @@ jest.mock('@/lib/notifications/push-registration', () => ({
 jest.mock('@/lib/gateway/approval-policy', () => ({
   approvalAuditCopy: () => 'a decision',
   approvalAuditSummaryCopy: (count: number) => `${count} decisions`,
-  loadApprovalAudit: jest.fn(async () => []),
+  loadApprovalAuditStrict: jest.fn(async () => []),
 }));
 
 jest.mock('@/hooks/use-tokens', () => ({

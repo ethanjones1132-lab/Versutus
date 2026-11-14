@@ -121,10 +121,8 @@ export function buildGatewayCandidates(options: {
 
 /**
  * The URLs for exactly the host the user just typed — nothing discovered,
- * saved, or fallen back to. The add-gateway flow probes these while the
- * discovery window runs instead of after it, so a correct address answers
- * without paying the fixed wait first. Everything else is folded in later
- * through `buildGatewayCandidates` when the explicit host does not answer.
+ * saved, or fallen back to. Explicit setup must not redirect a key to a
+ * different machine when its typed address is unreachable.
  */
 export function buildExplicitHostCandidates(tailscaleHost: string): string[] {
   return buildGatewayCandidates({ tailscaleHost, includeLocalFallbacks: false });

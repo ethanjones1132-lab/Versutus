@@ -45,8 +45,11 @@ export function applyRoutineCreate(
 export type RoutineJob = {
   id: string;
   name?: string;
+  botId?: string | null;
   paused?: boolean;
   schedule?: string;
+  scheduleDisplay?: string;
+  lastRunAt?: string;
   nextRunAt?: string;
   lastStatus?: string;
   running?: boolean;
@@ -101,7 +104,13 @@ export function routineJobFromUnknown(raw: unknown): RoutineJob | null {
   const paused = parsePaused(raw);
   if (paused !== undefined) job.paused = paused;
   const schedule = optionalString(raw, 'schedule');
+  const scheduleDisplay = optionalString(raw, 'scheduleDisplay', 'schedule_display');
+  const lastRunAt = optionalString(raw, 'lastRunAt', 'last_run_at');
+  const botId = optionalString(raw, 'botId', 'bot_id');
   if (schedule) job.schedule = schedule;
+  if (scheduleDisplay) job.scheduleDisplay = scheduleDisplay;
+  if (lastRunAt) job.lastRunAt = lastRunAt;
+  if (botId) job.botId = botId;
   const nextRunAt = optionalString(raw, 'nextRunAt', 'next_run_at');
   if (nextRunAt) job.nextRunAt = nextRunAt;
   const lastStatus = optionalString(raw, 'lastStatus', 'last_status');
@@ -151,8 +160,10 @@ export function cronJobViewFromRoutine(job: RoutineJob): CronJob {
     id: job.id,
     title: parsed.title || job.id,
     name: job.name ?? null,
-    botId: parsed.botId ?? null,
+    botId: job.botId === undefined ? parsed.botId ?? null : job.botId,
     schedule: job.schedule ?? null,
+    ...(job.scheduleDisplay !== undefined ? { scheduleDisplay: job.scheduleDisplay } : {}),
+    ...(job.lastRunAt !== undefined ? { lastRunAt: job.lastRunAt } : {}),
     nextRunAt: job.nextRunAt ?? null,
     lastStatus: job.lastStatus ?? null,
     paused: job.paused,

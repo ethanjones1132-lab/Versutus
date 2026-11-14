@@ -10,6 +10,11 @@
  * `new URL` refuses, which the candidate builder then dropped silently on
  * every wave.
  */
+const mockSetClipboard = jest.fn<Promise<void>, [string]>(async () => undefined);
+const mockOpenURL = jest.fn<Promise<true>, [string]>(async () => true);
+
+jest.mock('expo-clipboard', () => ({ setStringAsync: (value: string) => mockSetClipboard(value) }));
+jest.mock('expo-linking', () => ({ openURL: (url: string) => mockOpenURL(url) }));
 jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
 );
@@ -160,6 +165,17 @@ async function typeAddress(value: string): Promise<void> {
   await settle();
 }
 
+async function typeGatewayKey(value: string): Promise<void> {
+  const field = renderer.root.findAllByType(TEXT_FIELD).find(
+    (node) => node.props?.placeholder === 'Paste your gateway key',
+  );
+  if (!field) throw new Error('the gateway key field is not on screen');
+  await act(async () => {
+    (field.props as { onChangeText: (next: string) => void }).onChangeText(value);
+  });
+  await settle();
+}
+
 beforeEach(() => {
   mockGateway.probeMessage = 'no gateway found';
   mockGateway.connectionPhase = 'failed';
@@ -167,6 +183,7 @@ beforeEach(() => {
   mockGateway.retryAutoConnect.mockClear();
   mockGateway.retryAutoConnect.mockImplementation(async () => undefined);
   mockGateway.setupFromPcAddress.mockClear();
+  mockSetClipboard.mockClear();
 });
 
 afterEach(async () => {
@@ -353,4 +370,86 @@ describe('ONB-2: a port no socket can be asked for never reads "ready"', () => {
       expect(button('Connect your PC')?.disabled).toBeFalsy();
     },
   );
+});
+
+describe('manual onboarding retains input after a failed connection', () => {
+  test('the address and gateway key stay in their fields after an unreachable result', async () => {
+    await mount();
+    await typeAddress('100.64.1.5');
+    await typeGatewayKey('kept-for-retry');
+
+    await act(async () => {
+      button('Connect your PC')?.onPress?.();
+    });
+    await settle();
+
+    expect(mockGateway.setupFromPcAddress).toHaveBeenCalledWith('100.64.1.5', 'kept-for-retry');
+    const fields = renderer.root.findAllByType(TEXT_FIELD);
+    expect(fields.find((node) => node.props?.placeholder?.endsWith('ts.net'))?.props.value).toBe('100.64.1.5');
+    expect(fields.find((node) => node.props?.placeholder === 'Paste your gateway key')?.props.value).toBe('kept-for-retry');
+    expect(renderer.root.findAllByType(ERROR_CARD)).toHaveLength(1);
+    expect(button('Try again')).toBeUndefined();
+
+    const errorCard = renderer.root.findByType(ERROR_CARD);
+    await act(async () => {
+      (errorCard.props as { onRetry: () => void }).onRetry();
+    });
+    await settle();
+
+    expect(mockGateway.setupFromPcAddress).toHaveBeenCalledTimes(2);
+    expect(mockGateway.retryAutoConnect).not.toHaveBeenCalled();
+  });
+});
+
+describe('Gate setup commands', () => {
+  test('keeps address and key fields visible before expanding the setup guide', async () => {
+    await mount();
+
+    expect(renderer.root.findAllByType(TEXT_FIELD)).toHaveLength(2);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Copy start now' })).toHaveLength(0);
+
+    const setup = renderer.root.findByProps({ accessibilityLabel: 'Set up the Gate' });
+    expect(setup.props.accessibilityState).toEqual({ expanded: false });
+    expect(setup.props['aria-expanded']).toBe(false);
+
+    await act(async () => {
+      (setup.props as { onPress: () => void }).onPress();
+    });
+
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Copy start now' })).toBeTruthy();
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Set up the Gate' }).props.accessibilityState).toEqual({ expanded: true });
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Set up the Gate' }).props['aria-expanded']).toBe(true);
+  });
+
+  test('the Tailscale start command can be copied from onboarding', async () => {
+    await mount();
+    const setup = renderer.root.findByProps({ accessibilityLabel: 'Set up the Gate' });
+    await act(async () => {
+      (setup.props as { onPress: () => void }).onPress();
+    });
+    const copy = renderer.root.findByProps({ accessibilityLabel: 'Copy start now' });
+
+    await act(async () => {
+      (copy.props as { onPress: () => void }).onPress();
+    });
+    await settle();
+
+    expect(mockSetClipboard).toHaveBeenCalledWith('node gate/cli.mjs start --host 100.x.y.z');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Copied start now' })).toBeTruthy();
+  });
+
+  test('the Gate guide links to the public repository README section', async () => {
+    await mount();
+    const setup = renderer.root.findByProps({ accessibilityLabel: 'Set up the Gate' });
+    await act(async () => {
+      (setup.props as { onPress: () => void }).onPress();
+    });
+    const guideLink = renderer.root.findByProps({ accessibilityLabel: 'Open the Versutus Gate setup guide' });
+
+    await act(async () => {
+      (guideLink.props as { onPress: () => void }).onPress();
+    });
+
+    expect(mockOpenURL).toHaveBeenCalledWith('https://github.com/ethanjones1132-lab/Versutus#versutus-gate');
+  });
 });

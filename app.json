@@ -116,6 +116,13 @@
         }
       ],
       [
+        "expo-navigation-bar",
+        {
+          "enforceContrast": false,
+          "style": "light"
+        }
+      ],
+      [
         "expo-share-intent",
         {
           "disableIOS": true,

@@ -131,9 +131,10 @@ describe('the stage every Screen mounts is one lamp, not busy art', () => {
   it('the air only moves while someone can see it', () => {
     // Native: the clock runs while focused, motion is allowed and someone is here.
     expect(native).toContain('useIsFocused()');
+    expect(native).toContain('useAppForeground()');
     expect(native).toContain('useReducedMotion()');
     // The air no longer sleeps after idle (Ethan, 2026-11-07); the governor is the safety valve.
-    expect(native).toMatch(/const running = focused && !reduced;/);
+    expect(native).toMatch(/const running = focused && foreground && !reduced;/);
     expect(native).not.toContain('idleAfterMs');
     expect(native).toContain('governorAdvance(');
     // Skia on Android draws into a TextureView so the scale and transforms (and later the Veil) composite; `opaque` would switch it to a SurfaceView, which ignores them.

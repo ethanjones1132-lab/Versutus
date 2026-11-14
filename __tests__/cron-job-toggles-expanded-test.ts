@@ -40,7 +40,7 @@ describe('cron job sheet toggles expanded state', () => {
 
   test('prompt toggle label is byte-identical', () => {
     expect(readSheet()).toContain(
-      "label={showPrompt ? 'Hide prompt' : `Show prompt (${job.promptLength ?? 0} chars)`}",
+      "label={showPrompt ? 'Hide prompt' : `Show prompt (${displayedJob.promptLength ?? 0} chars)`}",
     );
   });
 

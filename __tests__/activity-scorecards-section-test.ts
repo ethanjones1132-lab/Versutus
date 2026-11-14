@@ -1,4 +1,4 @@
-// D3's Scorecards section on the Activity tab (FUTURE-ITEMS.md §D3 Build 3):
+// D3's Scorecards section in the Runs screen (FUTURE-ITEMS.md §D3 Build 3):
 // one card per Bot, and tapping one filters the run list above to the runs it
 // counted. The fold and the copy live in `@/lib/fleet/scorecard` (pinned in
 // `fleet-scorecard-test.ts`); this suite pins the surface's wiring — that it
@@ -475,7 +475,7 @@ describe('a run notice’s tap drops a stale Bot filter', () => {
   });
 });
 
-describe('the section sits in the Runs footer, while Activity keeps the scheduled work', () => {
+describe('the section sits in the Runs footer, while Activity keeps its Today/Routines views', () => {
   test('the Runs footer carries the cards', () => {
     const src = runs();
     const footer = src.indexOf('const listFooter = (');
@@ -485,11 +485,15 @@ describe('the section sits in the Runs footer, while Activity keeps the schedule
     expect(cards).toBeGreaterThan(footer);
   });
 
-  test('Activity carries the scheduled work and never the cards', () => {
+  test('Activity carries Today and Routines without legacy sections or cards', () => {
     const src = tab();
 
-    expect(src).toContain('<CronSection');
-    expect(src).toContain('cronReloadSignal={cronReloadSignal}');
+    expect(src).toContain('<TodaySection');
+    expect(src).toContain('<RoutinesSection reloadSignal={routinesReloadSignal} />');
+    expect(src).not.toContain('<CronSection');
+    expect(src).not.toContain('<ActivityGlance');
+    expect(src).not.toContain('<AgentTargets');
+    expect(src).not.toContain('<SpendEntryRow />');
     expect(src).not.toContain('<ScorecardsSection');
   });
 });
@@ -579,12 +583,15 @@ describe('what must keep working', () => {
     expect(src).toContain('activityRunsForActiveGateway.length === 0');
   });
 
-  test('the Activity footer still carries the scheduled work and the spend entry', () => {
+  test('Activity keeps Today/Routines and leaves spend at Gateway settings', () => {
     const src = tab();
 
-    expect(src).toContain('<CronSection');
-    expect(src).toContain('cronReloadSignal={cronReloadSignal}');
-    expect(src).toContain('<SpendEntryRow />');
+    expect(src).toContain('<TodaySection');
+    expect(src).toContain('<RoutinesSection reloadSignal={routinesReloadSignal} />');
+    expect(src).not.toContain('<CronSection');
+    expect(src).not.toContain('<SpendEntryRow />');
+    const settings = readSource('src', 'app', 'gateway', 'settings.tsx');
+    expect(settings).toContain('<SpendEntryRow />');
   });
 });
 

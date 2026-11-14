@@ -111,6 +111,7 @@ describe('capability and manifest refresh is scoped to the Gateway that started 
   });
 
   test('every replacement seam bumps the generation a refresh observes', () => {
-    expect(provider.match(/clientGenerationRef\.current \+= 1;/g) ?? []).toHaveLength(4);
+    // Includes manual setup invalidating an unfinished automatic attach.
+    expect(provider.match(/clientGenerationRef\.current \+= 1;/g) ?? []).toHaveLength(5);
   });
 });

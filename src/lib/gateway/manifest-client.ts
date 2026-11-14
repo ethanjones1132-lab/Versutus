@@ -3,6 +3,7 @@ import {
   parseRoutineFeed,
   type ActivityFeed,
   type RoutineFeed,
+  type RoutineScope,
 } from '@/lib/gateway/activity-feed';
 import type { PublicBot } from '@/lib/gateway/bots';
 import type { ChatContentPart } from '@/lib/gateway/chat-parts';
@@ -749,6 +750,31 @@ export class ManifestClient implements PortalClient {
   }
 
   /**
+   * Activity rows carry the exact backend/Bot home that returned a routine.
+   * An object scope is authoritative, including `botId: null` for a root-home
+   * job; the legacy string form keeps the caller's current Bot behavior.
+   */
+  private withRoutineScope(path: string, backendId?: string | RoutineScope): string {
+    if (typeof backendId === 'string') return this.withNamedBackend(this.withBotOnly(path), backendId);
+    if (backendId) {
+      const botId = typeof backendId.botId === 'string' ? backendId.botId.trim() : '';
+      let scoped = path;
+      if (botId) {
+        scoped = `${scoped}${scoped.includes('?') ? '&' : '?'}bot=${encodeURIComponent(botId)}`;
+      }
+      return this.withNamedBackend(scoped, backendId.backendId);
+    }
+    return this.withBotOnly(path);
+  }
+
+  private routineScopeBody(backendId?: string | RoutineScope): Record<string, unknown> {
+    const botId = typeof backendId === 'object' && backendId !== null
+      ? (typeof backendId.botId === 'string' ? backendId.botId.trim() : '')
+      : this.botId;
+    return botId ? { bot: botId } : {};
+  }
+
+  /**
    * Scope a conversation or run route.
    *
    * A Bot names its own environment — it is a Hermes profile, and the Gate
@@ -857,28 +883,22 @@ export class ManifestClient implements PortalClient {
     });
   }
 
-  async runJob(jobId: string, backendId?: string): Promise<void> {
+  async runJob(jobId: string, backendId?: string | RoutineScope): Promise<void> {
     const path = this.requireEndpoint('jobs');
     await this.rootTransport.request(
       'POST',
-      this.withNamedBackend(
-        this.withBotOnly(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}/run`),
-        backendId,
-      ),
-      this.botId ? { bot: this.botId } : {},
+      this.withRoutineScope(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}/run`, backendId),
+      this.routineScopeBody(backendId),
     );
   }
 
-  async setJobPaused(jobId: string, paused: boolean, backendId?: string): Promise<void> {
+  async setJobPaused(jobId: string, paused: boolean, backendId?: string | RoutineScope): Promise<void> {
     const path = this.requireEndpoint('jobs');
     const action = paused ? 'pause' : 'resume';
     await this.rootTransport.request(
       'POST',
-      this.withNamedBackend(
-        this.withBotOnly(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}/${action}`),
-        backendId,
-      ),
-      this.botId ? { bot: this.botId } : {},
+      this.withRoutineScope(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}/${action}`, backendId),
+      this.routineScopeBody(backendId),
     );
   }
 
@@ -888,15 +908,12 @@ export class ManifestClient implements PortalClient {
    * Hermes backend answers it with `DELETE /api/jobs/{id}`. A refused
    * remove throws and the caller surfaces the failure.
    */
-  async removeJob(jobId: string, backendId?: string): Promise<void> {
+  async removeJob(jobId: string, backendId?: string | RoutineScope): Promise<void> {
     const path = this.requireEndpoint('jobs');
     await this.rootTransport.request(
       'DELETE',
-      this.withNamedBackend(
-        this.withBotOnly(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}`),
-        backendId,
-      ),
-      this.botId ? { bot: this.botId } : {},
+      this.withRoutineScope(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}`, backendId),
+      this.routineScopeBody(backendId),
     );
   }
 
@@ -906,27 +923,63 @@ export class ManifestClient implements PortalClient {
    * cron session id. A gateway with no cron backend answers with the RPC's own
    * refusal, which the caller surfaces rather than swallowing.
    */
-  async listCronJobs(): Promise<CronJob[]> {
-    const result = await this.rpcRequest<{ data?: CronJob[] }>('cron.jobs');
+  async listCronJobs(scope?: RoutineScope): Promise<CronJob[]> {
+    // Unlike ordinary cron reads, Activity owns each routine's exact backend
+    // and Bot home. An explicit root scope keeps a selected Bot from sticking.
+    const params = scope
+      ? {
+          ...(scope.backendId?.trim() ? { backendId: scope.backendId.trim() } : {}),
+          ...(typeof scope.botId === 'string' && scope.botId.trim() ? { bot: scope.botId.trim() } : {}),
+        }
+      : {};
+    const result = await this.rpcRequest<{ data?: CronJob[] }>('cron.jobs', params);
     return result?.data ?? [];
   }
 
-  async cronRuns(jobId: string, backendId?: string): Promise<CronRun[]> {
+  /** Only expose the editor when both the route and this exact home support it. */
+  canUpdateJob(scope: RoutineScope): boolean {
+    const backendId = scope.backendId?.trim();
+    if (!this.endpoints.jobUpdate || !backendId) return false;
+    return (this.identity.manifest?.backends ?? []).some(
+      (backend) => backend.id === backendId && (backend.capabilities ?? []).includes('cron-edit'),
+    );
+  }
+
+  async updateJob(
+    jobId: string,
+    input: { name: string; schedule: string; prompt: string },
+    scope: RoutineScope,
+  ): Promise<void> {
+    const template = this.requireEndpoint('jobUpdate');
+    const path = interpolatePath(template, { id: encodeURIComponent(jobId) });
+    await this.rootTransport.request(
+      'PATCH',
+      this.withRoutineScope(path, scope),
+      input,
+    );
+  }
+
+  async cronRuns(jobId: string, backendId?: string | RoutineScope): Promise<CronRun[]> {
     // The Gate's cron.runs RPC resolves `params.backendId` through the same
     // scope rules as the job routes, so a routine on a second environment reads
     // its own history instead of the first environment's.
-    const namedBackend = backendId?.trim();
+    const scope = typeof backendId === 'object' && backendId !== null ? backendId : undefined;
+    const namedBackend = typeof backendId === 'string' ? backendId.trim() : scope?.backendId?.trim();
+    const botId = typeof scope?.botId === 'string' ? scope.botId.trim() : undefined;
     const result = await this.rpcRequest<{ data?: CronRun[] }>('cron.runs', {
       jobId,
       ...(namedBackend ? { backendId: namedBackend } : {}),
+      ...(botId ? { bot: botId } : {}),
     });
     return result?.data ?? [];
   }
 
-  async cronTranscript(runId: string, limit?: number): Promise<CronTurn[]> {
+  async cronTranscript(runId: string, limit?: number, scope?: RoutineScope): Promise<CronTurn[]> {
     const result = await this.rpcRequest<{ data?: CronTurn[] }>('cron.transcript', {
       runId,
       ...(limit ? { limit } : {}),
+      ...(scope?.backendId ? { backendId: scope.backendId } : {}),
+      ...(typeof scope?.botId === 'string' && scope.botId.trim() ? { bot: scope.botId.trim() } : {}),
     });
     return result?.data ?? [];
   }

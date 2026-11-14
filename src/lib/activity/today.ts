@@ -11,6 +11,28 @@ export type TodayActivityGroup = { key: string; title: string; items: ActivityIt
 
 type NamedBot = { id: string; displayName: string };
 
+/** Local day boundary and the device's short timezone label, from the read's since instant. */
+export function sinceMidnightAnchor(since: string, locale?: string): string {
+  const date = new Date(since);
+  if (!Number.isFinite(date.getTime())) return 'Since midnight · local date · local time';
+  let localDate = 'local date';
+  let zone = 'local time';
+  try {
+    localDate = new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(date);
+  } catch {
+    // The read boundary is still known even if this device has no formatter.
+  }
+  try {
+    const zonePart = new Intl.DateTimeFormat(locale, { timeZoneName: 'short' })
+      .formatToParts(date)
+      .find((part) => part.type === 'timeZoneName')?.value;
+    zone = zonePart || new Intl.DateTimeFormat().resolvedOptions().timeZone || zone;
+  } catch {
+    // Keep the neutral local-time label on runtimes without timezone formatting.
+  }
+  return `Since midnight · ${localDate} · ${zone}`;
+}
+
 /** Narrow the feed to one backend; `undefined` is the All chip. */
 export function filterActivityByBackend(items: ActivityItem[], backendId: string | undefined): ActivityItem[] {
   return backendId ? items.filter((item) => item.backendId === backendId) : items;

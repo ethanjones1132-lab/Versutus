@@ -76,15 +76,12 @@ describe('runs connect-to-start-runs empty state', () => {
     expect(empty).not.toMatch(/No runs yet[\s\S]*actionLabel="[^"]+"/);
   });
 
-  test('AgentTargets still connects the tapped gateway profile independently', () => {
+  test('Activity leaves gateway selection on Fleet while keeping Today and Routines', () => {
     const src = readActivity();
-    expect(src).toContain('<AgentTargets');
-    // The tap still names the profile it was handed, and the refusal is handled:
-    // `connectGateway` rethrows an auth refusal by design, so this fire-and-forget
-    // used to leave an unhandled rejection with nothing on the screen.
-    expect(src).toMatch(
-      /onSelect=\{\(gateway\) => \{\n(?:\s*\/\/[^\n]*\n)*\s*void connectGateway\(gateway\)\.catch\(/,
-    );
+    expect(src).toContain('<TodaySection');
+    expect(src).toContain('<RoutinesSection');
+    expect(src).not.toContain('<AgentTargets');
+    expect(src).not.toContain('connectGateway(');
   });
 });
 

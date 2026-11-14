@@ -249,6 +249,10 @@ export function DemoGatewayProvider({ children }: { children: React.ReactNode })
         run: settle,
         pause: settle,
         remove: settle,
+        canUpdate: () => false,
+        update: async () => {
+          throw new Error('This demo does not edit routines.');
+        },
       },
       cron: {
         available: false,

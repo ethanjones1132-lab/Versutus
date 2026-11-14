@@ -17,6 +17,7 @@ import Animated, {
   type SharedValue,
 } from 'react-native-reanimated';
 
+import { useAppForeground } from '@/hooks/use-app-foreground';
 import {
   STAGE_GAIN,
   STAGE_TIMING,
@@ -116,11 +117,12 @@ function TiltSource({ tiltX, tiltY }: { tiltX: SharedValue<number>; tiltY: Share
  *
  * It renders at a fraction of the screen's resolution and is scaled back up,
  * redraws at the governor's field rate (24 a second by default), and never
- * sleeps while the screen is focused and motion is allowed: the governor
- * (src/lib/stage/governor.ts) steps it down if the phone cannot keep up.
+ * sleeps while the screen is focused, foregrounded, and motion is allowed: the
+ * governor (src/lib/stage/governor.ts) steps it down if the phone cannot keep up.
  */
 function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; lights: StageLights; parallaxY: number }) {
   const focused = useIsFocused();
+  const foreground = useAppForeground();
   const reduced = useReducedMotion();
   const pixelRatio = PixelRatio.get();
 
@@ -225,7 +227,7 @@ function LampCanvas({ effect, lights, parallaxY }: { effect: SkRuntimeEffect; li
 
   // The air's clock: advanced on the UI thread at the governor's field rate.
   // The same callback feeds the governor the frame gaps it judges.
-  const running = focused && !reduced;
+  const running = focused && foreground && !reduced;
   // The tool-work breath rides the shared clock, which runs only while something breathes.
   const breath = useBreath(working && running);
   // The flag follows `running` too: under Reduce Motion the breath clock never starts and sits at 0,

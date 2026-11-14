@@ -8,7 +8,7 @@ import { RecentRuns } from '@/components/activity/recent-runs';
 import { Card, Chip, ErrorCard, SectionHeader, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
-import { filterActivityByBackend, groupActivityForToday, liveRunsForToday } from '@/lib/activity/today';
+import { filterActivityByBackend, groupActivityForToday, liveRunsForToday, sinceMidnightAnchor } from '@/lib/activity/today';
 import {
   activityCounts,
   applyActivityRead,
@@ -180,6 +180,10 @@ export function TodaySection({
   }, [armDayTimer]);
 
   const feed = state.feed;
+  const visibleBackends = feed
+    ? (backendFilter ? feed.backends.filter((backend) => backend.id === backendFilter) : feed.backends)
+    : [];
+  const emptyReadComplete = visibleBackends.length > 0 && visibleBackends.every((backend) => backend.status === 'complete');
   useEffect(() => {
     if (backendFilter && feed && !feed.backends.some((backend) => backend.id === backendFilter)) setBackendFilter(undefined);
   }, [backendFilter, feed]);
@@ -254,8 +258,11 @@ export function TodaySection({
             </ScrollView>
           ) : null}
           <Text variant="caption" color="secondary">
-            {`${counts.runs} run${counts.runs === 1 ? '' : 's'} Â· ${counts.sessions} session${counts.sessions === 1 ? '' : 's'}${pendingApprovals.length ? ` Â· ${pendingApprovals.length} need you` : ''}`}
+            {`${counts.runs} run${counts.runs === 1 ? '' : 's'} · ${counts.sessions} session${counts.sessions === 1 ? '' : 's'}${pendingApprovals.length ? ` · ${pendingApprovals.length} need you` : ''}`}
           </Text>
+          {visibleItems.length > 0 ? (
+            <Text variant="micro" color="tertiary">{sinceMidnightAnchor(since)}</Text>
+          ) : null}
           {groups.map((group) => (
             <View key={group.key} style={styles.section}>
               <SectionHeader title={group.title} />
@@ -269,17 +276,17 @@ export function TodaySection({
               ))}
             </View>
           ))}
-          {state.loaded && !state.failed && visibleItems.length === 0 ? (
+          {state.loaded && !state.failed && emptyReadComplete && visibleItems.length === 0 ? (
             <Text variant="caption" color="tertiary">
               {backendFilter ? 'Nothing since midnight on this backend.' : 'Nothing since midnight.'}
             </Text>
           ) : null}
           {state.failed && state.loaded ? (
-            <Text variant="caption" color="tertiary">Could not refresh â€” showing the last read.</Text>
+            <Text variant="caption" color="tertiary">Could not refresh — showing the last read.</Text>
           ) : null}
           {status !== 'connected' && state.updatedAt ? (
             <Text variant="caption" color="tertiary">
-              {`Last updated ${time(state.updatedAt)}${state.updatedAt < Date.parse(since) ? ' Â· Older than today' : ''}`}
+              {`Last updated ${time(state.updatedAt)}${state.updatedAt < Date.parse(since) ? ' · Older than today' : ''}`}
             </Text>
           ) : null}
           {feed.truncated?.window ? <Text variant="caption" color="tertiary">Showing the last 7 days.</Text> : null}

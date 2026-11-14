@@ -2,8 +2,6 @@ import {
   buildExplicitHostCandidates,
   buildGatewayCandidates,
 } from '@/lib/gateway/candidates';
-import { dropAlreadyWavedCandidates } from '@/lib/gateway/auto-connect-candidates';
-import { HIGH_PRIORITY_WAVE_SIZE } from '@/lib/gateway/probe';
 
 declare const __dirname: string;
 
@@ -20,6 +18,13 @@ function readSource(rel: string[]): string {
 
 function readProviderSource(): string {
   return readSource(['src', 'context', 'gateway-provider.tsx']);
+}
+
+function readManualSetupSource(): string {
+  const src = readProviderSource();
+  const start = src.indexOf('const setupFromPcAddress = useCallback');
+  const end = src.indexOf('// The connect cycle the auto-retry timer and the foreground heal both ride.', start);
+  return src.slice(start, end);
 }
 
 test('a tailnet hostname expands to serve + gate + hermes with no local fallbacks', () => {
@@ -46,109 +51,43 @@ test('a blank host yields no early candidates so the flow falls through', () => 
   expect(buildExplicitHostCandidates('   ')).toEqual([]);
 });
 
-test('add-gateway probes the typed host while the discovery window runs', () => {
-  const src = readProviderSource();
-  const setup = src.slice(src.indexOf('const setupFromPcAddress = useCallback'));
-  // Discovery is kicked off as a promise without awaiting it first, so its
-  // fixed 2.5s window overlaps the synchronously-known explicit probe.
-  expect(setup).toContain('const discoveryPromise = discoverForProbe(2500);');
-  expect(setup).toContain('const discovered = await discoveryPromise;');
-  expect(setup.indexOf('const discoveryPromise = discoverForProbe(2500);')).toBeLessThan(
-    setup.indexOf('await probeHighPriorityCandidates'),
-  );
-  // The first wave carries only the typed host; the full candidate list
-  // (discovered, saved, local fallbacks) is built only on an early miss.
+test('manual setup probes only the typed host and does not wait on discovery', () => {
+  const setup = readManualSetupSource();
   expect(setup).toContain('buildExplicitHostCandidates(host)');
-  expect(setup).toContain('discovered,');
-  expect(setup).toContain('savedUrls: gateways.map((item) => item.url),');
-});
-
-test('an early miss still probes every candidate across both waves', () => {
   const src = readProviderSource();
-  const setup = src.slice(src.indexOf('const setupFromPcAddress = useCallback'));
-  // The serial tail starts past the second wave's head instead of re-probing
-  // it; the old full-list slice(3) overlap is gone.
-  expect(setup).toContain('unwavedCandidates.slice(HIGH_PRIORITY_WAVE_SIZE)');
-  expect(setup).not.toContain('candidates.slice(3)');
-  // The resolved gateway still sees the landed beacons for kind matching.
-  expect(setup).toContain('discovered,');
+  expect(setup).not.toContain('discoverForProbe');
+  expect(setup).not.toContain('buildGatewayCandidates');
+  expect(setup).not.toContain('configuredGatewayHosts()');
+  expect(setup).not.toContain('savedUrls:');
+  expect(setup).not.toContain('dropAlreadyWavedCandidates');
+  expect(setup).not.toContain('unwavedCandidates');
+  expect(setup).toContain('probeHighPriorityCandidates(\n        explicitCandidates,');
+  expect(setup).toContain('explicitCandidates.slice(HIGH_PRIORITY_WAVE_SIZE)');
+  expect(setup).toContain('const exactUrlGateways = gateways.filter((item) => item.url === probeResult.url);');
+  expect(setup).toMatch(/resolveGatewayForUrl\([\s\S]*?exactUrlGateways,\s*\[\],\s*token/);
+
+  const autoConnectStart = src.indexOf('const runAutoConnect = useCallback');
+  const autoConnectEnd = src.indexOf('const refreshGateways', autoConnectStart);
+  const autoConnect = src.slice(autoConnectStart, autoConnectEnd);
+  expect(autoConnect).toContain('buildGatewayCandidates({');
+  expect(autoConnect).toContain('if (explicitSetupPendingRef.current) return;');
+
+  const addGatewayStart = src.indexOf('const addGateway = useCallback');
+  const addGatewayEnd = src.indexOf('const gatewayRequest', addGatewayStart);
+  expect(src.slice(addGatewayStart, addGatewayEnd)).toContain('explicitSetupPendingRef.current = false;');
+
+  const retryStart = src.indexOf('const scheduleAutoRetry = useCallback');
+  const retryEnd = src.indexOf('scheduleAutoRetryRef.current = scheduleAutoRetry', retryStart);
+  expect(src.slice(retryStart, retryEnd)).toContain('explicitSetupPendingRef.current');
 });
 
-test('the full-list head is exactly the explicit host the first wave tried', () => {
-  const explicit = buildExplicitHostCandidates('my-pc.ts.net');
-  const full = buildGatewayCandidates({
-    tailscaleHost: 'my-pc.ts.net',
-    discovered: [
-      {
-        id: 'lan',
-        name: 'lan',
-        host: '192.168.1.20',
-        port: 8642,
-        url: 'http://192.168.1.20:8642',
-        source: 'local',
-        txt: {},
-        lastSeenAt: 0,
-      },
-    ],
-    platform: 'ios',
-  });
-  // Same strings through the same push path, so the first wave already
-  // missed every one of them when the second wave runs.
-  expect(full.slice(0, explicit.length)).toEqual(explicit);
-  // Dropping the waved head keeps every unwaved candidate in listed order,
-  // so earliest-healthy-wins is unchanged and nothing is probed twice.
-  const delta = dropAlreadyWavedCandidates(full, explicit, []);
-  expect(delta.length).toBe(full.length - explicit.length);
-  expect(delta).toEqual(full.slice(explicit.length));
-  for (const url of explicit) expect(delta).not.toContain(url);
-});
-
-test('add-gateway waves only the unwaved delta on an early miss', () => {
-  const src = readProviderSource();
-  const setup = src.slice(src.indexOf('const setupFromPcAddress = useCallback'));
-  expect(setup).toContain('dropAlreadyWavedCandidates(candidates, explicitCandidates, [])');
-  // The second wave probes the hoisted delta, so the tail below can start
-  // past the head it already tried.
-  expect(setup).toContain('unwavedCandidates,');
-});
-
-test('the three add-gateway waves cover every candidate exactly once', () => {
+test('automatic candidate generation still keeps the explicit host at the head', () => {
   const explicit = buildExplicitHostCandidates('my-pc.ts.net');
   const full = buildGatewayCandidates({
     tailscaleHost: 'my-pc.ts.net',
     configuredHosts: ['other-pc.ts.net'],
     savedUrls: ['http://192.168.1.9:8642'],
-    discovered: [
-      {
-        id: 'lan',
-        name: 'lan',
-        host: '192.168.1.20',
-        port: 8642,
-        url: 'http://192.168.1.20:8642',
-        source: 'local',
-        txt: {},
-        lastSeenAt: 0,
-      },
-    ],
-    lastSuccessfulUrl: 'http://192.168.1.21:8642',
     platform: 'ios',
   });
-  // Long enough that the serial tail is non-empty: explicit head plus a full
-  // second-wave head plus at least one tail entry.
-  expect(full.length).toBeGreaterThan(explicit.length + HIGH_PRIORITY_WAVE_SIZE);
-  const delta = dropAlreadyWavedCandidates(full, explicit, []);
-  expect(delta).toEqual(full.slice(explicit.length));
-  // Mirror the provider: wave one takes the explicit head, wave two the
-  // delta head, the tail starts past it.
-  const waveOne = explicit.slice(0, HIGH_PRIORITY_WAVE_SIZE);
-  const waveTwo = delta.slice(0, HIGH_PRIORITY_WAVE_SIZE);
-  const tail = delta.slice(HIGH_PRIORITY_WAVE_SIZE);
-  expect(tail.length).toBeGreaterThan(0);
-  // Every candidate is still probed at least once ...
-  for (const url of full) {
-    expect([...waveOne, ...waveTwo, ...tail]).toContain(url);
-  }
-  // ... and no URL is probed twice.
-  const probed = [...waveOne, ...waveTwo, ...tail];
-  expect(new Set(probed).size).toBe(probed.length);
+  expect(full.slice(0, explicit.length)).toEqual(explicit);
 });

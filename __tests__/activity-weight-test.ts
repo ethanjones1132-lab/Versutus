@@ -51,10 +51,16 @@ describe('Activity carries quieter violet weight than Chat', () => {
 
   test('secondary Activity cards sit on inset panels while their surfaces stay flat', () => {
     const screen = activity();
-    // Activity's universal feed owns Today rows and live runs now.
+    // The two Activity views own their loading panels; legacy Activity cards
+    // no longer sit on this screen.
     expect(screen).toContain('<TodaySection');
     expect(readSource('src', 'components', 'activity', 'today-section.tsx')).toContain('<RecentRuns runs={liveRuns}');
-    expect(screen).toContain('<Card variant="stage" padding={Spacing.three} style={styles.card}>');
+    expect(readSource('src', 'components', 'activity', 'today-section.tsx')).toContain(
+      '<Card variant="stage" padding={Spacing.three} style={styles.skeleton}>',
+    );
+    expect(readSource('src', 'components', 'activity', 'routines-section.tsx')).toContain(
+      '<Card variant="stage" padding={Spacing.three} style={styles.skeleton}>',
+    );
     expect(screen).not.toMatch(/tokens\.glass|tokens\.glassBorder|Palette\.gold/);
   });
 
@@ -62,10 +68,10 @@ describe('Activity carries quieter violet weight than Chat', () => {
     const screen = activity();
     expect(screen).toContain("router.push('/runs')");
     expect(readSource('src', 'components', 'activity', 'today-section.tsx')).toContain('<ApprovalInbox />');
-    expect(screen).toContain('<CronSection');
-    expect(screen).toContain('cronReloadSignal={cronReloadSignal}');
-    expect(screen).toContain('<SpendEntryRow />');
-    expect(screen).toContain('<AgentTargets');
+    expect(screen).toContain('<RoutinesSection');
+    expect(screen).not.toContain('<CronSection');
+    expect(screen).not.toContain('<SpendEntryRow');
+    expect(screen).not.toContain('<AgentTargets');
 
     const cron = cronSection();
     expect(cron).toContain('botJobs.create(gatewayJobInput(submitted))');

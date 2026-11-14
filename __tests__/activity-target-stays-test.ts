@@ -19,45 +19,29 @@ function readRuns(): string {
   return readSource(['src', 'app', 'runs.tsx']);
 }
 
-function readTargets(): string {
-  return readSource(['src', 'components', 'activity', 'agent-targets.tsx']);
-}
-
 function readDashboard(): string {
   return readSource(['src', 'components', 'gateway', 'gateway-home-dashboard.tsx']);
 }
 
-function readSelect(): string {
-  const src = readActivity();
-  const match = src.match(/onSelect=\{\(gateway\) => \{[\s\S]*?\n\s*\}\}/);
-  expect(match).not.toBeNull();
-  return match![0];
+function readFleet(): string {
+  return readSource(['src', 'app', 'fleet.tsx']);
 }
 
-// AgentTargets on Activity is the gateway-profile switcher. Connecting used
-// to hop to Chat, which left the tab's own surface off-screen until the
-// operator navigated back. Stay on Activity after the tap; the Runs
-// destination it links to then starts a run on the gateway just selected.
-describe('activity gateway target stays on Activity', () => {
-  test('tapping a gateway profile connects it without leaving Activity', () => {
-    const select = readSelect();
-    expect(select).toContain('void connectGateway(gateway)');
-    expect(select).not.toContain("router.push('/chat')");
+// Fleet owns saved gateway selection; Activity is the Today/Routines surface.
+describe('gateway selection stays on Fleet and Activity stays focused', () => {
+  test('Activity shows Today and Routines without a profile switcher', () => {
+    const activity = readActivity();
+    expect(activity).toContain('<TodaySection');
+    expect(activity).toContain('<RoutinesSection');
+    expect(activity).not.toContain('<AgentTargets');
+    expect(activity).not.toContain('connectGateway(');
   });
 
-  test('the tap still calls connectGateway with the tapped gateway profile', () => {
-    const select = readSelect();
-    expect(select).toContain('connectGateway(gateway)');
-    const targets = readTargets();
-    expect(targets).toContain('onPress={() => onSelect(gateway)}');
-  });
-
-  test('AgentTargets remains the Activity switcher', () => {
-    const src = readActivity();
-    expect(src).toContain('<AgentTargets');
-    expect(src).toContain('gateways={gateways}');
-    expect(src).toContain('activeGatewayId={activeGateway?.id}');
-    expect(src).toContain('status={status}');
+  test('Fleet connects the selected gateway and catches connection refusal', () => {
+    const fleet = readFleet();
+    expect(fleet).toContain('void connectGateway(gateway).catch((error: unknown) => setConnectFailure(error))');
+    expect(fleet).toContain('<ConstellationView');
+    expect(fleet).toContain('onPressNode={handlePressNode}');
   });
 
   test('Start-a-run lives on the Runs destination Activity links to', () => {
@@ -71,7 +55,7 @@ describe('activity gateway target stays on Activity', () => {
     const dashboard = readDashboard();
     expect(dashboard).toContain("onOpenChat={() => router.push('/chat')}");
     expect(dashboard).toContain("router.push('/chat')");
-    // Only Today's session rows open Chat; selecting a gateway still stays put.
-    expect(readSelect()).not.toContain("router.push('/chat')");
+    expect(readActivity()).toContain("router.push('/chat')");
+    expect(readActivity()).toContain('selectSession(sessionId, { backendId, botId })');
   });
 });

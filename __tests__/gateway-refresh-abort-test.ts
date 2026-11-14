@@ -89,8 +89,9 @@ describe('CAPS-1: the refresh wires the generation abort into every stage', () =
       .replace(/\r\n/g, '\n');
     const bumps = provider.match(/clientGenerationRef\.current \+= 1;/g) ?? [];
     const aborts = provider.match(/clientGenerationAbortRef\.current\.abort\(\);/g) ?? [];
-    expect(bumps).toHaveLength(4);
-    expect(aborts).toHaveLength(4);
+    // Manual setup also supersedes an automatic attach that has not connected.
+    expect(bumps).toHaveLength(5);
+    expect(aborts).toHaveLength(5);
   });
 
   function refreshBody(): string {

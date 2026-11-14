@@ -47,6 +47,7 @@ import { useHandsfreeVoice } from '@/context/handsfree-voice-provider';
 import { describeGatewayError, errorBannerButton, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import { modelLockFor, type ModelTurnLock } from '@/lib/gateway/run-failures';
 import { useTokens } from '@/hooks/use-tokens';
+import { BotFigureAnimationProvider } from '@/lib/avatar/figure-motion-context';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDividerCached } from '@/lib/format';
 import { INITIAL_AUTO_SCROLL, nextAutoScroll, type AutoScrollState } from '@/lib/chat/auto-scroll';
@@ -69,6 +70,7 @@ import { composerFocusApplies } from '@/lib/gateway/composer-focus';
 import { applyRosterRead, type RosterRead } from '@/lib/gateway/roster-read';
 import { handoffShareAvailable, shareBotHandoff } from '@/lib/gateway/handoff-share';
 import { shareRefusalCopy } from '@/lib/gateway/transcript-export';
+import type { RoutineScope } from '@/lib/gateway/activity-feed';
 import {
   applyBotSoulRead,
   botProfileFeatures,
@@ -931,6 +933,10 @@ export function ChatScreen() {
   // Claude Code, Codex — gets the reduced surface instead of panes that only
   // ever answer a refusal. Runtime absent stays Hermes, as it always was.
   const activeBotFeatures = botProfileFeatures(activeBotRow?.runtime);
+  const activeBotRoutineScope = useMemo<RoutineScope | undefined>(
+    () => botSurfaceId ? { backendId: activeBotRow?.backendId ?? undefined, botId: botSurfaceId } : undefined,
+    [activeBotRow?.backendId, botSurfaceId],
+  );
   // The speaker is one conversation's own opt-in (B2), held in this device's
   // store beside a Bot's voice, so the flag is read and written here and the
   // gateway is asked nothing. Whether this device has a voice to read a reply
@@ -2339,8 +2345,9 @@ export function ChatScreen() {
     [botSurfaceId, botJobs, foldRoutineRead, routineJobsFromList],
   );
   const handleRoutineTogglePause = useCallback(
-    async (jobId: string, paused: boolean) => {
-      await botJobs.pause(jobId, paused);
+    async (jobId: string, paused: boolean, scope?: RoutineScope) => {
+      if (scope) await botJobs.pause(jobId, paused, scope);
+      else await botJobs.pause(jobId, paused);
       // A pause retires the held notice up front (the sync below schedules
       // nothing for a paused job); a resume rebuilds it from the re-read.
       // Fire-and-forget: never read as a refused pause/resume.
@@ -2812,6 +2819,7 @@ export function ChatScreen() {
 
   return (
     <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })} parallaxY={parallaxY} room={stageRoom}>
+      <BotFigureAnimationProvider active={isFocused}>
       <ChatHeader
         scrolled={headerScrolled}
         gatewayName={settings.pcName ?? activeGateway.name}
@@ -3168,6 +3176,7 @@ export function ChatScreen() {
             onCreate={handleRoutineCreate}
             onTogglePause={handleRoutineTogglePause}
             onChanged={handleRoutinesRetry}
+            scope={activeBotRoutineScope}
           />
           ) : null}
         </BotChrome>
@@ -3618,6 +3627,7 @@ export function ChatScreen() {
         selectedBackendId={activeBackend?.id}
         onSelectBackend={selectBackend}
       />
+      </BotFigureAnimationProvider>
     </Screen>
   );
 }

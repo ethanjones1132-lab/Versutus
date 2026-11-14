@@ -14,6 +14,8 @@ function readSource(...parts: string[]): string {
 const activity = () => readSource('src', 'app', '(tabs)', 'activity.tsx');
 const runs = () => readSource('src', 'app', 'runs.tsx');
 const layout = () => readSource('src', 'app', '_layout.tsx');
+const home = () => readSource('src', 'app', '(tabs)', 'home.tsx');
+const gatewaySettings = () => readSource('src', 'app', 'gateway', 'settings.tsx');
 const jobSheet = () => readSource('src', 'components', 'activity', 'cron-job-sheet.tsx');
 const cronModel = () => readSource('src', 'lib', 'gateway', 'cron.ts');
 
@@ -27,24 +29,25 @@ describe('Activity defaults to Today and preserves Routines', () => {
     expect(src).not.toContain("label={starting ? 'Starting…' : 'Run task'}");
   });
 
-  test('scheduled work remains on Routines', () => {
+  test('scheduled work remains on Routines without the generic Activity create form', () => {
     expect(activity()).toContain("activityView === 'routines'");
-    // VS-089 d2: the cross-backend routine feed owns the list, and the cron
-    // section stays for the job form and its sheets.
     expect(activity()).toContain('<RoutinesSection reloadSignal={routinesReloadSignal} />');
-    expect(activity()).toContain('<CronSection');
-    expect(activity()).toContain('showList={false}');
+    expect(activity()).not.toContain('<CronSection');
+    expect(activity()).not.toContain('New scheduled job');
   });
 
   test('the tab links to the Runs destination', () => {
     expect(activity()).toContain("router.push('/runs')");
   });
 
-  test('the must-still-work surface is untouched: approvals, targets and spend', () => {
+  test('approval decisions, gateway switching and spend keep their existing destinations', () => {
     const src = activity();
     expect(src).toContain('<TodaySection');
-    expect(src).toContain('<AgentTargets');
-    expect(src).toContain('<SpendEntryRow />');
+    expect(src).not.toContain('<AgentTargets');
+    expect(src).not.toContain('<SpendEntryRow');
+    expect(gatewaySettings()).toContain('approvalAuditCopy');
+    expect(gatewaySettings()).toContain('<SpendEntryRow />');
+    expect(home()).toContain('refreshGateways');
   });
 
   test('the Runs destination carries the run surface', () => {

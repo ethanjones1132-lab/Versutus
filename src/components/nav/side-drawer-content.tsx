@@ -1,6 +1,7 @@
 import {
   DrawerContentScrollView,
   type DrawerContentComponentProps,
+  useDrawerStatus,
 } from 'expo-router/drawer';
 import { useRouter } from 'expo-router';
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
@@ -19,6 +20,7 @@ import { useTokens } from '@/hooks/use-tokens';
 import { readCached, writeCached } from '@/lib/cache/swr-store';
 import type { PublicBot } from '@/lib/gateway/bots';
 import { teamPresence, samePresence, type TeamPresence } from '@/lib/activity/presence';
+import { BotFigureAnimationProvider } from '@/lib/avatar/figure-motion-context';
 import { botReportedRoutable } from '@/lib/gateway/roster-tap';
 import type { ActivityRun } from '@/lib/gateway/runs';
 import type { ConnectionStatus } from '@/lib/gateway/types';
@@ -529,6 +531,7 @@ const DrawerFooter = memo(function DrawerFooter({
  */
 export function SideDrawerContent(props: DrawerContentComponentProps) {
   const router = useRouter();
+  const drawerOpen = useDrawerStatus() === 'open';
   const insets = useSafeAreaInsets();
   const {
     status,
@@ -757,7 +760,11 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
   );
 
   return (
-    <View style={[styles.root, { paddingTop: Math.max(insets.top, Spacing.two) + Spacing.three }]}>
+    <BotFigureAnimationProvider active={drawerOpen}>
+    <View
+      accessibilityElementsHidden={!drawerOpen}
+      importantForAccessibility={drawerOpen ? 'auto' : 'no-hide-descendants'}
+      style={[styles.root, { paddingTop: Math.max(insets.top, Spacing.two) + Spacing.three }]}>
       <DrawerLight />
       <BrandBlock />
 
@@ -796,6 +803,7 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
         presses={presses}
       />
     </View>
+    </BotFigureAnimationProvider>
   );
 }
 
