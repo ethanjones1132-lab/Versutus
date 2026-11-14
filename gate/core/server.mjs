@@ -1793,12 +1793,47 @@ export async function createGate(config = {}) {
     createServer: backendServerFactory,
   });
 
+  // OpenCode's CLI protocol probe can time out while its native HTTP backend
+  // is already usable. This fallback proves the actual chat path with a
+  // read-only model catalogue request, without rewriting the CLI probe state.
+  async function nativeBackendReady(environmentId, { signal } = {}) {
+    const record = await environmentStore.get(environmentId).catch(() => null);
+    if (signal?.aborted || !record?.enabled || record.adapterId !== 'opencode') return false;
+
+    let adapter;
+    try {
+      adapter = environmentRegistry.get(record.adapterId);
+    } catch {
+      return false;
+    }
+    // OpenCode's descriptor omits `transport` for its native HTTP server; an
+    // explicit stdio or per-turn transport must never qualify here.
+    if (adapter?.adapterId !== 'opencode' || !adapter.server || (adapter.server.transport ?? 'http') !== 'http') {
+      return false;
+    }
+
+    let backend;
+    try {
+      backend = await backendManager.get(environmentId);
+    } catch {
+      return false;
+    }
+    if (signal?.aborted || typeof backend?.listModels !== 'function') return false;
+    try {
+      const models = await backend.listModels();
+      return !signal?.aborted && Array.isArray(models);
+    } catch {
+      return false;
+    }
+  }
+
   // How a request or a spoken turn that names no backend picks one: the
   // configured default if usable, else the first ready environment. Shared by
   // the REST routes' `resolveBackend` and the voice path's `runVoiceTurn`.
   const defaultBackendSelection = {
     stateOf: (environmentId) => environmentService.environmentState.get(environmentId)?.state,
     probe: async (environmentId) => (await environmentService.check(environmentId)).state,
+    nativeReady: nativeBackendReady,
     defaultId: defaultBackendId,
   };
 

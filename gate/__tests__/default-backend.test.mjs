@@ -79,6 +79,65 @@ test('nothing ready is a 503 naming each candidate, its state and a probe failur
   assert.match(picked.body.error.message, /Pass backendId/);
 });
 
+test('a native proof is tried only after CLI-ready backends and prefers the configured default', async () => {
+  const tried = [];
+  const picked = await selectDefaultBackend({
+    entries: [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+    stateOf: () => 'degraded',
+    defaultId: 'b',
+    nativeReady: async (id) => { tried.push(id); return true; },
+  });
+  assert.deepEqual(picked, { id: 'b' });
+  assert.deepEqual(tried, ['b']);
+
+  tried.length = 0;
+  const registrationFallback = await selectDefaultBackend({
+    entries: [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+    stateOf: () => 'degraded',
+    defaultId: 'b',
+    nativeReady: async (id) => { tried.push(id); return id === 'a'; },
+  });
+  assert.deepEqual(registrationFallback, { id: 'a' });
+  assert.deepEqual(tried, ['b', 'a'], 'the configured default is followed by registration order');
+
+  tried.length = 0;
+  const cliReady = await selectDefaultBackend({
+    entries: [{ id: 'a' }, { id: 'b' }],
+    stateOf: (id) => id === 'b' ? 'ready' : 'degraded',
+    nativeReady: async (id) => { tried.push(id); return true; },
+  });
+  assert.deepEqual(cliReady, { id: 'b' });
+  assert.deepEqual(tried, [], 'a ready CLI backend keeps precedence over native fallback');
+});
+
+test('a failed native proof preserves the original 503 state summary', async () => {
+  const picked = await selectDefaultBackend({
+    entries: [{ id: 'opencode-local' }],
+    stateOf: () => 'degraded',
+    nativeReady: async () => { throw new Error('catalogue unavailable'); },
+  });
+  assert.equal(picked.status, 503);
+  assert.equal(picked.body.error.code, 'no_ready_backend');
+  assert.match(picked.body.error.message, /opencode-local: degraded/);
+});
+
+test('a timed-out native proof stays unavailable and ignores its late failure', async () => {
+  let signal;
+  const picked = await selectDefaultBackend({
+    entries: [{ id: 'opencode-local' }],
+    stateOf: () => 'degraded',
+    nativeReadyTimeoutMs: 10,
+    nativeReady: (_id, options) => {
+      signal = options.signal;
+      return new Promise((_resolve, reject) => setTimeout(() => reject(new Error('late failure')), 30));
+    },
+  });
+  assert.equal(picked.status, 503);
+  assert.match(picked.body.error.message, /opencode-local: degraded/);
+  assert.equal(signal.aborted, true);
+  await new Promise((resolve) => setTimeout(resolve, 35));
+});
+
 // ─── wired through the Gate ────────────────────────────────────────────────
 
 function registryWith(states) {
@@ -185,6 +244,71 @@ test('with nothing ready the Gate answers 503 no_ready_backend instead of failin
     assert.equal(status, 503);
     assert.equal(body.error.code, 'no_ready_backend');
     assert.match(body.error.message, /a-hermes: degraded, b-opencode: not_installed/);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('default routing accepts a working OpenCode native catalogue without rewriting CLI state', async () => {
+  let probeCalls = 0;
+  let modelReads = 0;
+  let sessionReads = 0;
+  const opencode = {
+    adapterId: 'opencode',
+    adapterRevision: '2',
+    supportedCliVersions: '2.x',
+    protocolVersions: { acp: '1' },
+    capabilities: ['sessions', 'models'],
+    server: { transport: 'http' },
+    async probe() {
+      probeCalls += 1;
+      return { state: 'degraded', cliVersion: '2.2.6', message: 'cli probe timed out' };
+    },
+    createBackend() {
+      return {
+        async listModels() {
+          modelReads += 1;
+          return [{ id: 'deepseek/free', providerId: 'deepseek', modelId: 'free' }];
+        },
+        async listSessions() {
+          sessionReads += 1;
+          return [{ id: 'opencode-session', title: 'OpenCode' }];
+        },
+      };
+    },
+  };
+  const registry = {
+    get(id) {
+      if (id !== 'opencode') throw new Error(`unknown adapter ${id}`);
+      return opencode;
+    },
+    list() { return [opencode]; },
+  };
+  const gate = await makeGate({ opencode: 'degraded' }, {
+    environmentRegistry: registry,
+    backendServerFactory: () => ({
+      ensureRunning: async () => ({ baseUrl: 'http://127.0.0.1:4096', attached: true }),
+      stop: async () => {},
+      isOwned: () => false,
+    }),
+  });
+  try {
+    const listed = await getSessions(gate);
+    assert.equal(listed.status, 200, JSON.stringify(listed.body));
+    assert.equal(listed.body.data[0].id, 'opencode-session');
+    assert.equal(probeCalls, 1);
+    assert.equal(modelReads, 1, 'only a real model catalogue array proves the native backend');
+    assert.equal(sessionReads, 1, 'the selected backend serves the actual read-only route');
+
+    const backendsResponse = await fetch(`http://127.0.0.1:${gate.port}/v1/backends`, {
+      headers: { Authorization: `Bearer ${gate.token}` },
+    });
+    const { backends } = await backendsResponse.json();
+    assert.equal(backends.find((backend) => backend.id === 'opencode').state, 'degraded', 'native success does not rewrite CLI status');
+
+    const explicitlyPinned = await getSessions(gate, '?backendId=opencode');
+    assert.equal(explicitlyPinned.status, 200);
+    assert.equal(modelReads, 1, 'an explicit backend scope bypasses default readiness selection');
   } finally {
     await gate.close();
   }

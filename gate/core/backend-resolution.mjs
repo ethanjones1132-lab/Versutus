@@ -55,16 +55,25 @@ export function unresolvedBackendResponse(method, failures = []) {
 
 const USABLE_STATES = new Set(['ready', 'busy']);
 const UNPROBED_STATES = new Set([undefined, null, 'stopped']);
+const NATIVE_READY_TIMEOUT_MS = 5_000;
 
 /**
  * @param {object} options
  * @param {Array<{id: string}>} options.entries backend-capable environments, in registration order
  * @param {(id: string) => string|undefined} options.stateOf current coarse state, if known
  * @param {(id: string) => Promise<string|undefined>} [options.probe] probes an unprobed environment, returns its state
+ * @param {(id: string, options: {signal: AbortSignal}) => Promise<boolean>} [options.nativeReady] proves a native backend usable without changing its CLI state
  * @param {string} [options.defaultId] configured default backend id
  * @returns {Promise<{id: string} | {status: number, body: object}>}
  */
-export async function selectDefaultBackend({ entries = [], stateOf, probe, defaultId } = {}) {
+export async function selectDefaultBackend({
+  entries = [],
+  stateOf,
+  probe,
+  nativeReady,
+  nativeReadyTimeoutMs = NATIVE_READY_TIMEOUT_MS,
+  defaultId,
+} = {}) {
   if (entries.length === 0) {
     return {
       status: 404,
@@ -91,6 +100,51 @@ export async function selectDefaultBackend({ entries = [], stateOf, probe, defau
 
   for (const entry of entries) {
     if (USABLE_STATES.has(await stateFor(entry.id))) return { id: entry.id };
+  }
+
+  if (typeof nativeReady === 'function') {
+    const checked = new Map();
+    const nativeBudgetMs = Math.max(
+      1,
+      Math.min(NATIVE_READY_TIMEOUT_MS, Number(nativeReadyTimeoutMs) || NATIVE_READY_TIMEOUT_MS),
+    );
+    const nativeDeadline = Date.now() + nativeBudgetMs;
+    const nativeIsReady = async (id) => {
+      if (checked.has(id)) return checked.get(id);
+      const remainingMs = nativeDeadline - Date.now();
+      if (remainingMs <= 0) {
+        checked.set(id, false);
+        return false;
+      }
+      const controller = new AbortController();
+      let timer;
+      const proof = Promise.resolve()
+        .then(() => nativeReady(id, { signal: controller.signal }))
+        .then((answer) => answer === true, () => false);
+      const timeout = new Promise((resolve) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          resolve(false);
+        }, remainingMs);
+      });
+      let ready;
+      try {
+        ready = await Promise.race([proof, timeout]);
+      } finally {
+        clearTimeout(timer);
+      }
+      checked.set(id, ready);
+      return ready;
+    };
+
+    const nativeOrder = [];
+    if (configured) nativeOrder.push(configured);
+    for (const entry of entries) {
+      if (entry.id !== configured?.id) nativeOrder.push(entry);
+    }
+    for (const entry of nativeOrder) {
+      if (await nativeIsReady(entry.id)) return { id: entry.id };
+    }
   }
 
   const summary = entries
