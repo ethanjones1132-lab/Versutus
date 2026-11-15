@@ -132,30 +132,49 @@ export function BotFigure({
     }
     const rand = seeded(seed);
     const span = (lo: number, hi: number) => lo + (hi - lo) * rand();
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     if (plan.blink) {
+      // Idle time belongs to the JS timer queue. Reanimated delays keep a UI
+      // worklet alive on every frame, even when the face has nothing to draw.
+      const waits = [span(2600, 4200), span(3400, 5600), span(2800, 4800)];
+      let phase = 0;
       const close = () =>
         withSequence(
           withTiming(0.06, { duration: 70, easing: Easing.in(Easing.quad) }),
           withTiming(1, { duration: 140, easing: Easing.out(Easing.quad) }),
         );
-      const blinking = withRepeat(
-        withSequence(
-          withDelay(span(2600, 4200), close()),
-          withDelay(span(3400, 5600), close()),
-          // Now and then a double blink, the way a person resets.
-          withDelay(span(2800, 4800), withSequence(close(), withDelay(90, close()))),
-        ),
-        -1,
-      );
-      blink.set(
-        wake
-          ? withSequence(withDelay(380, withTiming(1, { duration: 280, easing: Easing.out(Easing.cubic) })), blinking)
-          : blinking,
-      );
+      const schedule = (delay: number, callback: () => void) => {
+        timer = setTimeout(() => {
+          timer = undefined;
+          if (!cancelled) callback();
+        }, delay);
+      };
+      const scheduleNext = (delay: number) => {
+        schedule(delay, () => {
+          const double = phase === 2;
+          blink.set(double ? withSequence(close(), withDelay(90, close())) : close());
+          const duration = double ? 510 : 210;
+          phase = (phase + 1) % waits.length;
+          scheduleNext(duration + waits[phase]);
+        });
+      };
+      if (wake) {
+        schedule(380, () => {
+          blink.set(withTiming(1, { duration: 280, easing: Easing.out(Easing.cubic) }));
+          scheduleNext(280 + waits[0]);
+        });
+      } else {
+        scheduleNext(waits[0]);
+      }
     } else {
       blink.set(1);
     }
-    return () => cancelAnimation(blink);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      cancelAnimation(blink);
+    };
   }, [live, plan.blink, seed, wake, blink]);
 
   // Gaze, signature face cycles, and the aura pulse have a purpose while the
@@ -198,7 +217,12 @@ export function BotFigure({
 
   useEffect(() => {
     const target = mood === 'thinking' ? 1 : 0;
-    think.set(live ? withTiming(target, { duration: 420, easing: Easing.inOut(Easing.cubic) }) : target);
+    if (!live) {
+      think.set(target);
+      return;
+    }
+    if (think.get() === target) return;
+    think.set(withTiming(target, { duration: 420, easing: Easing.inOut(Easing.cubic) }));
   }, [mood, live, think]);
 
   useEffect(() => {

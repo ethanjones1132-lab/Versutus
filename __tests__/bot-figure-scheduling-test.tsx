@@ -4,6 +4,8 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { BotFigure } from '@/components/avatar/bot-figure';
 import type { BotLook } from '@/lib/avatar/look';
 
+const mockEnvironment = { reducedMotion: false };
+
 jest.mock('react-native-reanimated', () => {
   const react = jest.requireActual<typeof import('react')>('react');
   const identity = (value: number) => value;
@@ -20,7 +22,7 @@ jest.mock('react-native-reanimated', () => {
     Easing: easing,
     cancelAnimation: jest.fn(),
     useAnimatedStyle: () => ({}),
-    useReducedMotion: () => false,
+    useReducedMotion: () => mockEnvironment.reducedMotion,
     useSharedValue: (initial: number) => {
       const ref = react.useRef<{ current: unknown; get: () => unknown; set: (value: unknown) => void } | null>(null);
       if (!ref.current) {
@@ -98,26 +100,94 @@ function clearAnimationCalls() {
 
 afterEach(() => {
   unmount();
+  jest.clearAllTimers();
+  jest.useRealTimers();
+  mockEnvironment.reducedMotion = false;
   clearAnimationCalls();
 });
 
-test('idle schedules only a seeded blink; thinking starts only the tracks that face uses', () => {
+test('idle waits off the UI thread and schedules one finite blink when its seeded timer expires', () => {
+  jest.useFakeTimers();
   mount('bright');
-  expect(mockWithRepeat).toHaveBeenCalledTimes(1);
+  expect(mockWithRepeat).not.toHaveBeenCalled();
+  expect(mockWithDelay).not.toHaveBeenCalled();
+  expect(mockWithSequence).not.toHaveBeenCalled();
+  expect(mockWithTiming).not.toHaveBeenCalled();
+
+  jest.advanceTimersByTime(2599);
+  expect(mockWithSequence).not.toHaveBeenCalled();
+  expect(mockWithTiming).not.toHaveBeenCalled();
+  jest.advanceTimersByTime(1601);
+  expect(mockWithSequence).toHaveBeenCalledTimes(1);
+  expect(mockWithSequence.mock.calls[0]).toHaveLength(2);
+  expect(mockWithTiming).toHaveBeenCalledWith(0.06, expect.objectContaining({ duration: 70, easing: expect.any(Function) }));
+  expect(mockWithTiming).toHaveBeenCalledWith(1, expect.objectContaining({ duration: 140, easing: expect.any(Function) }));
+});
+
+test('idle blink timers cancel when the figure becomes inactive', () => {
+  jest.useFakeTimers();
+  mount('bright');
+  expect(jest.getTimerCount()).toBe(1);
+
+  act(() => {
+    renderer?.update(React.createElement(BotFigure, {
+      look: LOOK('bright'), size: 44, seed: 'aria', animationActive: false,
+    }));
+  });
+  expect(jest.getTimerCount()).toBe(0);
+  jest.advanceTimersByTime(10000);
+  expect(mockWithSequence).not.toHaveBeenCalled();
+});
+
+test('a double blink is finite and keeps its short reset gap', () => {
+  jest.useFakeTimers();
+  mount('bright');
+
+  jest.advanceTimersByTime(16000);
+  expect(mockWithRepeat).not.toHaveBeenCalled();
+  expect(mockWithDelay).toHaveBeenCalledWith(90, expect.anything());
+});
+
+test('wake opens after its short JS timer and leaves the seeded blink wait off the UI thread', () => {
+  jest.useFakeTimers();
+  mount('bright', { wake: true });
+  expect(mockWithTiming).not.toHaveBeenCalledWith(1, expect.objectContaining({ duration: 280 }));
+
+  jest.advanceTimersByTime(379);
+  expect(mockWithTiming).not.toHaveBeenCalledWith(1, expect.objectContaining({ duration: 280 }));
+  jest.advanceTimersByTime(1);
+  expect(mockWithTiming).toHaveBeenCalledWith(1, expect.objectContaining({ duration: 280 }));
+  expect(mockWithRepeat).not.toHaveBeenCalled();
+  expect(mockWithDelay).not.toHaveBeenCalled();
+});
+
+test('reduced motion schedules no idle blink timer', () => {
+  jest.useFakeTimers();
+  mockEnvironment.reducedMotion = true;
+  mount('bright');
+
+  expect(jest.getTimerCount()).toBe(0);
+  expect(mockWithRepeat).not.toHaveBeenCalled();
+  expect(mockWithDelay).not.toHaveBeenCalled();
+});
+
+test('thinking starts only the tracks that face uses', () => {
   unmount();
   clearAnimationCalls();
 
   mount('bright', { mood: 'thinking' });
-  expect(mockWithRepeat).toHaveBeenCalledTimes(4); // blink, gaze x/y, thinking pulse
+  expect(mockWithRepeat).toHaveBeenCalledTimes(3); // gaze x/y, thinking pulse
   unmount();
   clearAnimationCalls();
 
   mount('visor', { mood: 'thinking' });
-  expect(mockWithRepeat).toHaveBeenCalledTimes(3); // blink, scanner cycle, thinking pulse
+  expect(mockWithRepeat).toHaveBeenCalledTimes(2); // scanner cycle, thinking pulse
 });
 
 test('an inactive figure schedules no loops, while touch reactions keep their short timing', () => {
+  jest.useFakeTimers();
   mount('bright', { animationActive: false, reaction: 1 });
+  expect(jest.getTimerCount()).toBe(0);
   expect(mockWithRepeat).not.toHaveBeenCalled();
   expect(mockWithTiming).not.toHaveBeenCalled();
   unmount();
@@ -128,12 +198,18 @@ test('an inactive figure schedules no loops, while touch reactions keep their sh
   expect(mockWithDelay).toHaveBeenCalledWith(720, expect.anything());
 });
 
-test('the same Bot keeps its seeded blink intervals when mounted again', () => {
+test('the same Bot keeps its seeded first blink timer when mounted again', () => {
+  jest.useFakeTimers();
+  const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
   mount('bright');
-  const first = mockWithDelay.mock.calls.map(([delay]) => delay);
+  const first = setTimeoutSpy.mock.calls.map(([, delay]) => delay).find((delay) => Number(delay) >= 2600 && Number(delay) <= 4200);
+  expect(first).toBeGreaterThanOrEqual(2600);
   unmount();
+  setTimeoutSpy.mockClear();
   clearAnimationCalls();
 
   mount('bright');
-  expect(mockWithDelay.mock.calls.map(([delay]) => delay)).toEqual(first);
+  const again = setTimeoutSpy.mock.calls.map(([, delay]) => delay).find((delay) => Number(delay) >= 2600 && Number(delay) <= 4200);
+  expect(again).toBe(first);
+  setTimeoutSpy.mockRestore();
 });
