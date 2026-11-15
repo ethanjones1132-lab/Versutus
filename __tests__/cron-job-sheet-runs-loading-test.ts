@@ -30,16 +30,15 @@ describe('cron job sheet runs loading', () => {
     expect(loading).toMatch(/<Skeleton width="76%" height=\{44\}/);
   });
 
-  test('the no-runs line renders only after a successful empty read', () => {
-    // Once a read has landed (runsLoaded set) with zero runs, the sheet
-    // must say the routine recorded nothing — the skeletons belong to the
-    // pre-first-read window only.
+  test('the no-linked-transcripts line renders only after a successful empty read', () => {
+    // Once a read has landed (runsLoaded set) with zero linked conversations,
+    // the sheet names that transcript gap without claiming the routine never ran.
     const src = readSheetSource();
     const empty = src.match(
       /\{\!runsError && runsLoaded && runs\.length === 0 \? \([\s\S]*?\) : null\}/,
     )?.[0];
     expect(empty).toBeDefined();
-    expect(empty).toContain('No runs recorded yet.');
+    expect(empty).toContain('No linked transcripts are available.');
   });
 
   test('the first read marks loaded on success and on refusal', () => {

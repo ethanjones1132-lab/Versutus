@@ -29,12 +29,15 @@ describe('cron job sheet run/pause refresh', () => {
     )?.[0];
     expect(fn).toBeDefined();
     expect(fn).toContain('await botJobs.run(jobId)');
-    // The history re-read lands inside the success path, before the
-    // refusal branch — a refused run must not look like a fresh list.
+    // Both reads start only after acceptance. A slow transcript read must
+    // not delay the host detail or the action acknowledgement.
     const runIdx = (fn ?? '').indexOf('await botJobs.run(jobId)');
-    const reloadIdx = (fn ?? '').indexOf('await loadRuns()');
+    const reloadIdx = (fn ?? '').indexOf('void loadRuns()');
+    const detailIdx = (fn ?? '').indexOf('void readJobDetail()');
     const catchIdx = (fn ?? '').indexOf('catch');
     expect(reloadIdx).toBeGreaterThan(runIdx);
+    expect(detailIdx).toBeGreaterThan(runIdx);
+    expect(fn).not.toContain('await loadRuns()');
     expect(catchIdx).toBeGreaterThan(reloadIdx);
   });
 

@@ -22,6 +22,7 @@ jest.mock('@/components/ui', () => ({
   Button: 'Button',
   ConfirmSheet: 'ConfirmSheet',
   Divider: 'Divider',
+  ErrorCard: 'ErrorCard',
   ListRow: 'ListRow',
   Skeleton: 'Skeleton',
   Text: 'Text',
@@ -38,6 +39,7 @@ const mockBotJobs = {
 const mockCron = {
   available: true,
   runs: jest.fn(async () => []),
+  list: jest.fn<Promise<CronJob[]>, []>(async () => []),
 };
 
 jest.mock('@/context/gateway-provider', () => ({
@@ -84,6 +86,7 @@ async function open(job: CronJob): Promise<void> {
       createElement(CronJobSheet, { job, onClose: () => undefined, onOpenRun: () => undefined }),
     );
   });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 }
 
 async function pressPauseToggle(): Promise<void> {
@@ -95,6 +98,10 @@ async function pressPauseToggle(): Promise<void> {
     toggle?.props.onPress();
   });
 }
+
+beforeEach(() => {
+  mockCron.list.mockReset().mockResolvedValue([]);
+});
 
 afterEach(async () => {
   if (renderer) {
@@ -120,6 +127,7 @@ test('pausing a running routine retires its notice and never announces one', asy
 });
 
 test('resuming a paused routine rebuilds its notice from the host record', async () => {
+  mockCron.list.mockResolvedValueOnce([botRoutine(true)]).mockResolvedValueOnce([botRoutine(false)]);
   await open(botRoutine(true));
 
   await pressPauseToggle();

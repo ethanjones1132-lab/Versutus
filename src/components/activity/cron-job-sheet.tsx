@@ -1,8 +1,8 @@
 import * as Clipboard from 'expo-clipboard';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { BaseSheet, Button, ConfirmSheet, Divider, ListRow, Skeleton, Text, TextField } from '@/components/ui';
+import { BaseSheet, Button, ConfirmSheet, Divider, ErrorCard, ListRow, Skeleton, Text, TextField } from '@/components/ui';
 import { Palette, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import type { RoutineScope } from '@/lib/gateway/activity-feed';
@@ -62,6 +62,32 @@ function Row({ label, value }: { label: string; value?: string | null }) {
   );
 }
 
+function executionField(execution: CronJob['latestExecution'], ...keys: string[]): string | null {
+  if (!execution || typeof execution !== 'object' || Array.isArray(execution)) return null;
+  for (const key of keys) {
+    const value = execution[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return null;
+}
+
+function executionError(execution: CronJob['latestExecution']): string | null {
+  if (!isRecord(execution)) return null;
+  const error = execution.error;
+  if (error === null) return 'none recorded';
+  if (typeof error === 'string') return error.trim() || 'none recorded';
+  return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function executionKey(job: CronJob | null): string | null {
+  return executionField(job?.latestExecution, 'id', 'started_at', 'startedAt');
+}
+
 /**
  * Everything the host holds about one scheduled job.
  *
@@ -73,14 +99,30 @@ function Row({ label, value }: { label: string; value?: string | null }) {
  */
 export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemoved, onChanged }: CronJobSheetProps) {
   const { botJobs, cron } = useGateway();
+  const jobId = job?.id ?? null;
+  const detailIdentity = JSON.stringify([
+    jobId,
+    backendId?.trim() || null,
+    scope?.backendId?.trim() || null,
+    scope?.botId?.trim() || null,
+  ]);
+  const detailReadSequence = useRef(0);
   const [runs, setRuns] = useState<CronRun[]>([]);
   const [runsError, setRunsError] = useState<string | null>(null);
   // Whether the first run-history read has landed (success or refusal).
   // The sheet opens with runs=[] before the deferred first read, which is
   // indistinguishable from a genuinely empty history without this flag.
   const [runsLoaded, setRunsLoaded] = useState(false);
+  const [fullDetail, setFullDetail] = useState<{ identity: string; job: CronJob } | null>(null);
+  const [detailRead, setDetailRead] = useState<{
+    identity: string;
+    phase: 'loading' | 'ready' | 'failed' | 'unavailable';
+    error: string | null;
+  }>({ identity: detailIdentity, phase: 'loading', error: null });
   const [controlError, setControlError] = useState<string | null>(null);
   const [acting, setActing] = useState(false);
+  const actionBusy = useRef(false);
+  const [requestedRun, setRequestedRun] = useState<{ identity: string; previous: string | null } | null>(null);
   // The pause state the host last confirmed. A refused Pause/Resume keeps
   // this, so the label never flips to a state the host did not take.
   const [pausedOverride, setPausedOverride] = useState<boolean | null>(null);
@@ -100,14 +142,56 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
   // Confirm still removes the job the user confirmed, never the empty state.
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
 
-  const jobId = job?.id ?? null;
-  const paused = pausedOverride ?? job?.paused ?? false;
   // Activity names the environment that owns the routine it opened. A sheet
   // mounted from the default roster passes none, and every call below then
   // keeps today's exact shape (no second/third argument).
   const namedBackend = backendId?.trim() || undefined;
   const actionScope = scope ?? namedBackend;
   const canEdit = Boolean(job && scope?.backendId?.trim() && botJobs.canUpdate?.(scope) && cron.list);
+  const hasExplicitScope = scope !== undefined;
+  const scopeBackendId = scope?.backendId;
+  const scopeBotId = scope?.botId;
+  const detailScope = useMemo<RoutineScope | undefined>(
+    () => hasExplicitScope
+      ? { backendId: scopeBackendId, botId: scopeBotId }
+      : namedBackend
+        ? { backendId: namedBackend }
+        : undefined,
+    [hasExplicitScope, namedBackend, scopeBackendId, scopeBotId],
+  );
+
+  const readJobDetail = useCallback(async (): Promise<CronJob | null> => {
+    if (!jobId) return null;
+    if (typeof cron.list !== 'function') {
+      setDetailRead({ identity: detailIdentity, phase: 'unavailable', error: null });
+      return null;
+    }
+
+    const sequence = ++detailReadSequence.current;
+    setDetailRead({ identity: detailIdentity, phase: 'loading', error: null });
+    try {
+      const jobs = detailScope ? await cron.list(detailScope) : await cron.list();
+      if (sequence !== detailReadSequence.current) return null;
+      const detail = jobs.find((candidate) => candidate.id === jobId);
+      if (!detail) {
+        const error = 'The gateway did not return this routine’s full details.';
+        setDetailRead({ identity: detailIdentity, phase: 'failed', error });
+        return null;
+      }
+      setFullDetail({ identity: detailIdentity, job: detail });
+      setPausedOverride((current) => current === detail.paused ? null : current);
+      const latest = executionKey(detail);
+      setRequestedRun((current) => current?.identity === detailIdentity && latest && latest !== current.previous ? null : current);
+      setDetailRead({ identity: detailIdentity, phase: 'ready', error: null });
+      return detail;
+    } catch (caught) {
+      if (sequence !== detailReadSequence.current) return null;
+      const error = caught instanceof Error ? caught.message : String(caught);
+      setDetailRead({ identity: detailIdentity, phase: 'failed', error });
+      return null;
+    }
+  }, [cron, detailIdentity, detailScope, jobId]);
+
   const loadRuns = useCallback(async () => {
     if (!jobId) return;
     try {
@@ -121,8 +205,24 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
     }
   }, [actionScope, cron, jobId]);
 
+  useEffect(() => {
+    if (!jobId) return undefined;
+    const timer = setTimeout(() => { void readJobDetail(); }, 0);
+    return () => {
+      clearTimeout(timer);
+      detailReadSequence.current += 1;
+    };
+  }, [jobId, readJobDetail]);
+
+  const matchingFullDetail = fullDetail?.identity === detailIdentity ? fullDetail.job : null;
+  const paused = pausedOverride ?? matchingFullDetail?.paused ?? job?.paused ?? false;
+  const currentDetailRead = detailRead.identity === detailIdentity
+    ? detailRead
+    : { identity: detailIdentity, phase: 'loading' as const, error: null };
+
   const submitRun = useCallback(async () => {
-    if (!jobId || acting) return;
+    if (!jobId || actionBusy.current) return;
+    actionBusy.current = true;
     setActing(true);
     setControlError(null);
     try {
@@ -131,19 +231,24 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
       } else {
         await botJobs.run(jobId);
       }
-      // The run just started reads back through the same history the sheet
-      // renders; without this the new run is missing until a remount.
-      await loadRuns();
+      setPausedOverride(null);
+      setRequestedRun({ identity: detailIdentity, previous: executionKey(matchingFullDetail ?? job) });
+      // Acceptance queues a run; only a later host read can confirm a start.
+      // A large transcript catalogue must not delay that acknowledgement.
+      void readJobDetail();
+      void loadRuns();
       onChanged?.();
     } catch (caught) {
       setControlError(describeCronJobControlError(caught));
     } finally {
+      actionBusy.current = false;
       setActing(false);
     }
-  }, [acting, actionScope, botJobs, jobId, loadRuns, onChanged]);
+  }, [actionScope, botJobs, detailIdentity, job, jobId, loadRuns, matchingFullDetail, onChanged, readJobDetail]);
 
   const submitTogglePause = useCallback(async () => {
-    if (!jobId || acting) return;
+    if (!jobId || actionBusy.current) return;
+    actionBusy.current = true;
     setActing(true);
     setControlError(null);
     try {
@@ -153,29 +258,31 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
         await botJobs.pause(jobId, !paused);
       }
       setPausedOverride(!paused);
-      // `paused` is the state BEFORE the toggle above, so it reads true exactly
-      // when the host has just resumed this job. A resume rebuilds the held
-      // notice from the record the host reports; a pause retires it, because a
-      // routine that will not run must not ring the phone. Fire-and-forget — a
-      // locked scheduler must never read as a refused control call.
+      // Rebuild a reminder only from the schedule the host reads back.
+      // Read/notification failure cannot turn an accepted write into refusal.
       if (paused) {
-        void syncRoutineNotification({
-          id: jobId,
-          name: job?.name ?? undefined,
-          schedule: job?.schedule ?? undefined,
-          nextRunAt: job?.nextRunAt ?? undefined,
-          paused: false,
+        void readJobDetail().then((fresh) => {
+          if (!fresh || fresh.paused !== false) return;
+          void syncRoutineNotification({
+            id: jobId,
+            name: fresh.name ?? undefined,
+            schedule: fresh.schedule ?? undefined,
+            nextRunAt: fresh.nextRunAt ?? undefined,
+            paused: false,
+          });
         });
       } else {
         void cancelRoutineNotification(jobId);
+        void readJobDetail();
       }
       onChanged?.();
     } catch (caught) {
       setControlError(describeCronJobControlError(caught));
     } finally {
+      actionBusy.current = false;
       setActing(false);
     }
-  }, [acting, actionScope, botJobs, jobId, onChanged, paused]);
+  }, [actionScope, botJobs, jobId, onChanged, paused, readJobDetail]);
 
   // Destructive counterpart to submitRun / submitTogglePause. The Gate
   // dispatches the jobs.remove RPC to removeJob on the resolved backend;
@@ -219,8 +326,9 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
     setEditRefreshNote(null);
     setEditDetail(null);
     try {
-      const jobs = await cron.list(scope);
-      const detail = jobs.find((candidate) => candidate.id === jobId);
+      const detail = currentDetailRead.phase === 'ready' && matchingFullDetail
+        ? matchingFullDetail
+        : await readJobDetail();
       if (!detail) {
         setEditError('The gateway did not return this routine, so it cannot be edited safely. Retry the read.');
         return;
@@ -238,7 +346,7 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
     } finally {
       setEditLoading(false);
     }
-  }, [canEdit, cron, editLoading, editSaving, jobId, scope]);
+  }, [canEdit, currentDetailRead.phase, editLoading, editSaving, jobId, matchingFullDetail, readJobDetail, scope]);
 
   const submitEdit = useCallback(async () => {
     if (!jobId || !scope || !editDetail || editSaving) return;
@@ -272,6 +380,7 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
       nextRunAt: null,
       raw: undefined,
     };
+    setFullDetail({ identity: detailIdentity, job: savedDraft });
     setEditDetail(savedDraft);
     try {
       const jobs = await cron.list(scope);
@@ -281,6 +390,7 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
         refreshed.prompt === input.prompt &&
         refreshed.schedule === input.schedule
       ) {
+        setFullDetail({ identity: detailIdentity, job: refreshed });
         setEditDetail(refreshed);
       } else {
         setEditDetail(savedDraft);
@@ -294,7 +404,7 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
       setEditSaving(false);
       onChanged?.();
     }
-  }, [botJobs, cron, editDetail, editPrompt, editSaving, editSchedule, editTitle, jobId, onChanged, scope]);
+  }, [botJobs, cron, detailIdentity, editDetail, editPrompt, editSaving, editSchedule, editTitle, jobId, onChanged, scope]);
 
   // Keyed by job id upstream, so each job opens as a fresh component with
   // collapsed toggles and no stale run list — no setState in the effect body.
@@ -305,8 +415,19 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
   }, [jobId, loadRuns]);
 
   if (!job) return null;
-  const health = describeCronHealth(job);
-  const displayedJob = editDetail ?? job;
+  const displayedJobSource = editing && editDetail ? editDetail : matchingFullDetail ?? job;
+  // The feed row proves the owner from its Bot home even when Hermes' full
+  // record name is unprefixed. Use that proof for display only; editDetail
+  // itself stays raw so saving does not invent a `[bot:]` name prefix.
+  const displayOwnerBotId = [displayedJobSource.botId, job.botId, scope?.botId].find(
+    (botId): botId is string => typeof botId === 'string' && botId.trim().length > 0,
+  )?.trim();
+  const ownedJob =
+    displayOwnerBotId && !displayedJobSource.botId
+      ? { ...displayedJobSource, botId: displayOwnerBotId }
+      : displayedJobSource;
+  const displayedJob = pausedOverride === null ? ownedJob : { ...ownedJob, paused: pausedOverride };
+  const health = describeCronHealth(displayedJob);
   const promptLength =
     displayedJob.promptLength ?? (typeof displayedJob.prompt === 'string' ? displayedJob.prompt.length : null);
 
@@ -314,7 +435,7 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
     <BaseSheet visible onClose={onClose} title={displayedJob.title || displayedJob.id} eyebrow="SCHEDULED JOB">
       <ScrollView contentContainerStyle={styles.body}>
         <Text variant="caption" color={health.tone === 'error' ? 'statusDisconnected' : 'secondary'}>
-          {job.running ? 'Running now' : health.label}
+          {displayedJob.running ? 'Running now' : health.label}
           {health.detail ? ` — ${health.detail}` : ''}
         </Text>
 
@@ -353,11 +474,43 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
             />
           ) : null}
         </View>
+        <Button
+          label="Refresh details"
+          variant="ghost"
+          size="sm"
+          disabled={currentDetailRead.phase === 'loading'}
+          onPress={() => { void readJobDetail(); void loadRuns(); }}
+        />
+        {requestedRun?.identity === detailIdentity ? (
+          <Text variant="caption" color="secondary">
+            Run requested. Refresh details to check whether the gateway has started it.
+          </Text>
+        ) : null}
         {controlError ? (
           <Text variant="caption" color="statusDisconnected" selectable>{controlError}</Text>
         ) : null}
         {editRefreshNote ? (
           <Text variant="caption" color="tertiary" selectable>{editRefreshNote}</Text>
+        ) : null}
+
+        {currentDetailRead.phase === 'loading' ? (
+          <Text variant="caption" color="tertiary">
+            {matchingFullDetail ? 'Refreshing routine details…' : 'Loading routine details…'}
+          </Text>
+        ) : null}
+        {currentDetailRead.phase === 'failed' ? (
+          <ErrorCard
+            cause={currentDetailRead.error ?? 'Routine details could not be read.'}
+            affected="The routine details"
+            next="Try loading the details again."
+            retryLabel="Retry routine details"
+            onRetry={() => void readJobDetail()}
+          />
+        ) : null}
+        {currentDetailRead.phase === 'unavailable' ? (
+          <Text variant="caption" color="tertiary">
+            Full routine details are not available from this gateway.
+          </Text>
         ) : null}
 
         <ConfirmSheet
@@ -423,6 +576,26 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
 
         <Divider />
 
+        <Text variant="micro" color="tertiary">LATEST RUN</Text>
+        {currentDetailRead.phase === 'loading' && !matchingFullDetail ? (
+          <Text variant="caption" color="tertiary">Checking latest run…</Text>
+        ) : currentDetailRead.phase === 'failed' && !matchingFullDetail ? (
+          <Text variant="caption" color="tertiary">Latest run could not be checked.</Text>
+        ) : currentDetailRead.phase === 'unavailable' && !matchingFullDetail ? (
+          <Text variant="caption" color="tertiary">Latest run details are not available from this gateway.</Text>
+        ) : isRecord(displayedJob.latestExecution) ? (
+          <>
+            <Row label="Status" value={executionField(displayedJob.latestExecution, 'status')} />
+            <Row label="Started" value={executionField(displayedJob.latestExecution, 'started_at', 'startedAt')} />
+            <Row label="Finished" value={executionField(displayedJob.latestExecution, 'finished_at', 'finishedAt')} />
+            <Row label="Error" value={executionError(displayedJob.latestExecution)} />
+          </>
+        ) : (
+          <Text variant="caption" color="secondary">No latest run details were returned.</Text>
+        )}
+
+        <Divider />
+
         <Button
           label={showPrompt ? 'Hide prompt' : promptLength === null ? 'Show prompt (not loaded)' : `Show prompt (${promptLength} chars)`}
           variant="ghost"
@@ -467,7 +640,10 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
 
         <Divider />
 
-        <Text variant="micro" color="tertiary">RUN HISTORY ({runs.length})</Text>
+        <Text variant="micro" color="tertiary">{`CONVERSATION TRANSCRIPTS (${runs.length})`}</Text>
+        <Text variant="micro" color="tertiary">
+          Earlier transcripts may be unavailable on this gateway.
+        </Text>
         {runsError ? (
           <Text variant="caption" color="statusDisconnected" selectable>{runsError}</Text>
         ) : null}
@@ -481,7 +657,7 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
           </>
         ) : null}
         {!runsError && runsLoaded && runs.length === 0 ? (
-          <Text variant="caption" color="secondary">No runs recorded yet.</Text>
+          <Text variant="caption" color="secondary">No linked transcripts are available.</Text>
         ) : null}
         {runs.map((run) => (
           <ListRow

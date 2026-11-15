@@ -38,7 +38,7 @@ describe('routines pane row opens the scheduled-job sheet', () => {
     const mount = src.match(/<CronJobSheet[\s\S]*?\/>/)?.[0];
     expect(mount).toBeDefined();
     expect(mount).toContain('scope={scope}');
-    expect(mount).toContain('scope?.backendId');
+    expect(mount).toMatch(/key=\{JSON\.stringify\(\['job', scope\?\.backendId \?\? null, scope\?\.botId \?\? null, openJob\?\.id \?\? null\]\)\}/);
     expect(mount).toContain('job={openJob ? cronJobViewFromRoutine(openJob) : null}');
     expect(mount).toMatch(/onClose=\{\(\) => setOpenJobId\(null\)\}/);
     expect(mount).toMatch(/onOpenRun=\{\(runId\) => setOpenRunId\(runId\)\}/);
@@ -52,7 +52,7 @@ describe('routines pane row opens the scheduled-job sheet', () => {
     const src = pane();
     expect(src).toContain("from '@/components/activity/cron-run-sheet'");
     expect(src).toContain('scope={scope}');
-    expect(src).toMatch(/key=\{`\$\{scope\?\.backendId/);
+    expect(src).toMatch(/key=\{JSON\.stringify\(\['run', scope\?\.backendId \?\? null, scope\?\.botId \?\? null, openRunId \?\? null\]\)\}/);
     expect(src).toContain('openRunId ??');
     const runCloseIdx = src.indexOf('onClose={() => setOpenRunId(null)}');
     const jobCloseIdx = src.indexOf('onClose={() => setOpenJobId(null)}');
@@ -74,6 +74,14 @@ describe('routines pane row opens the scheduled-job sheet', () => {
     // re-read, already stable across chat-screen ticks.
     const screen = readSource('src', 'components', 'chat', 'chat-screen.tsx');
     expect(screen).toContain('onChanged={handleRoutinesRetry}');
+  });
+
+  test('the root job home cannot share a detail key with Bot root for the same job id', () => {
+    const src = pane();
+    expect(src).toMatch(/key=\{JSON\.stringify\(\['job', scope\?\.backendId \?\? null, scope\?\.botId \?\? null, openJob\?\.id \?\? null\]\)\}/);
+    const rootKey = JSON.stringify(['job', 'hermes-a', null, 'job-1']);
+    const botRootKey = JSON.stringify(['job', 'hermes-a', 'root', 'job-1']);
+    expect(rootKey).not.toBe(botRootKey);
   });
 
   test('Pause stays the trailing control on the row', () => {

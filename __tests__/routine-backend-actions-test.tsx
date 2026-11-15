@@ -382,7 +382,7 @@ describe('a Bot-owned routine uses its proven home even when ids collide', () =>
     await mountRoutines(sheet);
     await openRoutine();
 
-    expect(button('Show prompt (not loaded)')).toBeDefined();
+    expect(button('Show prompt (19 chars)')).toBeDefined();
     await press('Edit');
 
     expect(textContent()).toContain('telegram · chat-chat-42');
@@ -408,6 +408,39 @@ describe('a Bot-owned routine uses its proven home even when ids collide', () =>
     expect(button('Save changes')).toBeUndefined();
     expect(fields()).toHaveLength(0);
     expect(mockGateway.botJobs.update).not.toHaveBeenCalled();
+  });
+
+  test('a scoped full-detail read preserves the proven Bot owner when the raw name has no prefix', async () => {
+    const botId = 'finishline-qa-20261114';
+    const sheet = feed([routine('hermes-a', botId)]);
+    const detail = {
+      id: 'job-1',
+      title: 'Nightly digest',
+      name: 'Nightly digest',
+      schedule: '0 9 * * *',
+      prompt: 'The existing prompt',
+      botId: null,
+    } as CronJob;
+    mockGateway.activityFeed.readRoutines.mockResolvedValue(sheet);
+    mockGateway.botJobs.canUpdate.mockReturnValue(true);
+    mockGateway.cron.list.mockResolvedValueOnce([detail]).mockResolvedValueOnce([detail]);
+    mockGateway.botJobs.update.mockResolvedValueOnce(undefined);
+    await mountRoutines(sheet);
+    await openRoutine();
+
+    expect(textContent()).toContain(`Bot: ${botId}`);
+    await press('Edit');
+
+    expect(textContent()).toContain(`Bot: ${botId}`);
+    expect(textContent()).not.toContain('the gateway itself');
+
+    await press('Save changes');
+    expect(mockGateway.botJobs.update).toHaveBeenCalledWith('job-1', {
+      name: 'Nightly digest',
+      schedule: '0 9 * * *',
+      prompt: 'The existing prompt',
+    }, { backendId: 'hermes-a', botId });
+    expect(textContent()).toContain(`Bot: ${botId}`);
   });
 
   test('a stale post-save list cannot replace submitted fields or raw detail', async () => {
@@ -486,6 +519,217 @@ describe('Activity routine actions keep the row exact even on the default backen
     await press('Remove');
     await confirmRemove();
     expect(mockGateway.botJobs.remove).toHaveBeenCalledWith('job-1', scope);
+  });
+});
+
+describe('routine detail reports latest execution separately from linked transcripts', () => {
+  test('an accepted run refreshes its exact detail without waiting for transcript history', async () => {
+    const old = { id: 'job-1', title: 'Digest', paused: true,
+      latestExecution: { id: 'old-run', status: 'completed' } } as CronJob;
+    mockGateway.cron.list.mockResolvedValueOnce([old]).mockResolvedValueOnce([{ ...old, paused: false }]);
+    await mountRoutines(feed([{ ...routine('hermes-a', 'nova'), paused: true }]));
+    await openRoutine();
+    mockGateway.cron.runs.mockImplementationOnce(() => new Promise(() => undefined));
+    await press('Run now');
+    expect(mockGateway.cron.list).toHaveBeenLastCalledWith({ backendId: 'hermes-a', botId: 'nova' });
+    expect(button('Pause')).toBeDefined();
+    expect(button('Run now')).toBeDefined();
+    expect(textContent()).toContain('Run requested. Refresh details to check whether the gateway has started it.');
+    mockGateway.cron.list.mockResolvedValueOnce([{ ...old, paused: false,
+      latestExecution: { id: 'new-run', status: 'running' } }]);
+    await press('Refresh details');
+    expect(textContent()).toContain('running');
+    expect(textContent()).not.toContain('Run requested. Refresh details to check whether the gateway has started it.');
+  });
+
+  test('resume refreshes the host schedule before rebuilding its phone reminder', async () => {
+    const old = { id: 'job-1', title: 'Digest', name: 'Digest', paused: true,
+      schedule: '0 0 1 1 *', nextRunAt: '2027-01-01T00:00:00-05:00' } as CronJob;
+    const resumed = { ...old, paused: false, schedule: '30 9 * * 1', nextRunAt: '2026-11-16T09:30:00-05:00' };
+    mockGateway.cron.list.mockResolvedValueOnce([old]).mockResolvedValueOnce([resumed]);
+    await mountRoutines(feed([{ ...routine('hermes-a', 'nova'), paused: true }]));
+    await openRoutine();
+    await press('Resume');
+    expect(jest.requireMock('@/lib/notifications/routine-sync').syncRoutineNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ schedule: resumed.schedule, nextRunAt: resumed.nextRunAt, paused: false }),
+    );
+    expect(textContent()).toContain(resumed.nextRunAt);
+    expect(button('Pause')).toBeDefined();
+  });
+
+  test('opening a scoped routine reads its full detail and shows a completed execution', async () => {
+    const botId = 'finishline-qa-20261114';
+    const scope = { backendId: 'hermes-a', botId };
+    mockGateway.cron.list.mockResolvedValueOnce([{
+      id: 'job-1',
+      title: 'Finish-line live proof',
+      name: 'Finish-line live proof',
+      schedule: '0 0 1 1 *',
+      prompt: 'Reply exactly FINISHLINE_ROUTINE_OK.',
+      botId: null,
+      latestExecution: {
+        id: 'execution-qa',
+        status: 'completed',
+        started_at: '2026-11-14T18:26:21.548Z',
+        finished_at: '2026-11-14T18:26:34.840Z',
+        error: null,
+      },
+    } as CronJob]);
+    await mountRoutines(feed([routine('hermes-a', botId)]));
+    await openRoutine();
+
+    expect(mockGateway.cron.list).toHaveBeenCalledWith(scope);
+    expect(textContent()).toContain('LATEST RUN');
+    expect(textContent()).toContain('completed');
+    expect(textContent()).toContain('2026-11-14T18:26:21.548Z');
+    expect(textContent()).toContain('2026-11-14T18:26:34.840Z');
+    expect(textContent()).toContain('CONVERSATION TRANSCRIPTS (0)');
+    expect(textContent()).toContain('Earlier transcripts may be unavailable on this gateway.');
+    expect(textContent()).toContain('No linked transcripts are available.');
+  });
+
+  test('a failed latest execution shows its recorded error without calling it completed', async () => {
+    mockGateway.cron.list.mockResolvedValueOnce([{
+      id: 'job-1',
+      title: 'Nightly digest',
+      name: 'Nightly digest',
+      schedule: '0 9 * * *',
+      prompt: 'The prompt',
+      latestExecution: {
+        status: 'failed',
+        started_at: '2026-11-14T18:20:00.000Z',
+        finished_at: '2026-11-14T18:20:14.000Z',
+        error: 'The provider refused the model.',
+      },
+    } as CronJob]);
+    await mountRoutines(feed([routine('hermes-a')]));
+    await openRoutine();
+
+    expect(textContent()).toContain('failed');
+    expect(textContent()).toContain('The provider refused the model.');
+    expect(textContent()).not.toContain('completed');
+  });
+
+  test('unknown latest-execution field shapes render as unknown text safely', async () => {
+    mockGateway.cron.list.mockResolvedValueOnce([{
+      id: 'job-1',
+      title: 'Nightly digest',
+      name: 'Nightly digest',
+      latestExecution: {
+        status: { internal: 'future-status' },
+        started_at: ['not a timestamp'],
+        finished_at: { unknown: true },
+        error: { code: 'future-error' },
+      },
+    } as unknown as CronJob]);
+    await mountRoutines(feed([routine('hermes-a')]));
+    await openRoutine();
+
+    expect(textContent()).toContain('LATEST RUN');
+    expect(textContent().join('\n')).not.toContain('[object Object]');
+    expect(textContent().join('\n')).not.toContain('future-status');
+    expect(textContent().join('\n')).not.toContain('future-error');
+  });
+
+  test('a failed full-detail read retries, then edit refusal retains the recovered draft', async () => {
+    const detail = {
+      id: 'job-1',
+      title: 'Nightly digest',
+      name: '[bot:nova] Nightly digest',
+      botId: 'nova',
+      schedule: '0 9 * * *',
+      prompt: 'The existing prompt',
+      latestExecution: { status: 'completed' },
+    } as CronJob;
+    mockGateway.botJobs.canUpdate.mockReturnValue(true);
+    mockGateway.cron.list.mockRejectedValueOnce(new Error('detail read refused')).mockResolvedValueOnce([detail]);
+    mockGateway.botJobs.update.mockRejectedValueOnce(new Error('write refused'));
+    await mountRoutines(feed([routine('hermes-a', 'nova')]));
+    await openRoutine();
+
+    const readError = renderer?.root.findAllByType('ErrorCard' as never)
+      .find((node) => (node.props as { affected?: string }).affected === 'The routine details');
+    expect(readError?.props.cause).toBe('detail read refused');
+    const retryRead = readError?.props.onRetry as (() => void) | undefined;
+    expect(retryRead).toBeDefined();
+    await act(async () => { retryRead?.(); });
+    await flush();
+    expect(mockGateway.cron.list).toHaveBeenCalledTimes(2);
+
+    await press('Edit');
+    const [titleField, , promptField] = fields();
+    await act(async () => {
+      (titleField.props.onChangeText as (value: string) => void)('Draft title');
+      (promptField.props.onChangeText as (value: string) => void)('Draft prompt after retry');
+    });
+    await press('Save changes');
+
+    expect(fields().map((field) => field.props.value)).toEqual([
+      'Draft title', '0 9 * * *', 'Draft prompt after retry',
+    ]);
+    expect(textContent()).toContain('write refused');
+  });
+
+  test('a detail response from the previous Bot home cannot replace a newer selection', async () => {
+    let resolveOld: (jobs: CronJob[]) => void = () => undefined;
+    const oldRead = new Promise<CronJob[]>((resolve) => { resolveOld = resolve; });
+    const oldDetail = {
+      id: 'same-job', title: 'Old home detail', name: 'Old home detail', schedule: '0 8 * * *', prompt: 'old',
+    } as CronJob;
+    const newDetail = {
+      id: 'same-job', title: 'New home detail', name: 'New home detail', schedule: '0 9 * * *', prompt: 'new',
+    } as CronJob;
+    mockGateway.cron.list.mockImplementationOnce(() => oldRead).mockResolvedValueOnce([newDetail]);
+
+    await act(async () => {
+      renderer = create(createElement(CronJobSheet, {
+        job: { id: 'same-job', title: 'Routine' },
+        scope: { backendId: 'hermes-a', botId: 'nova' },
+        onClose: () => undefined,
+        onOpenRun: () => undefined,
+      }));
+    });
+    await flush();
+    await act(async () => {
+      renderer?.update(createElement(CronJobSheet, {
+        job: { id: 'same-job', title: 'Routine' },
+        scope: { backendId: 'hermes-b', botId: 'mira' },
+        onClose: () => undefined,
+        onOpenRun: () => undefined,
+      }));
+    });
+    await flush();
+
+    expect(mockGateway.cron.list).toHaveBeenNthCalledWith(1, { backendId: 'hermes-a', botId: 'nova' });
+    expect(mockGateway.cron.list).toHaveBeenNthCalledWith(2, { backendId: 'hermes-b', botId: 'mira' });
+    expect(textContent()).toContain('0 9 * * *');
+
+    await act(async () => { resolveOld([oldDetail]); });
+    await flush();
+    expect(textContent()).toContain('0 9 * * *');
+    expect(textContent()).not.toContain('0 8 * * *');
+  });
+
+  test('the legacy backendId-only sheet scopes its full-detail read to that backend', async () => {
+    mockGateway.cron.list.mockResolvedValueOnce([{
+      id: 'legacy-job',
+      title: 'Legacy routine detail',
+      name: 'Legacy routine detail',
+      schedule: '0 9 * * *',
+      prompt: 'the detail',
+    } as CronJob]);
+    await act(async () => {
+      renderer = create(createElement(CronJobSheet, {
+        job: { id: 'legacy-job', title: 'Legacy routine' },
+        backendId: 'hermes-b',
+        onClose: () => undefined,
+        onOpenRun: () => undefined,
+      }));
+    });
+    await flush();
+
+    expect(mockGateway.cron.list).toHaveBeenCalledWith({ backendId: 'hermes-b' });
+    expect(textContent()).toContain('0 9 * * *');
   });
 });
 

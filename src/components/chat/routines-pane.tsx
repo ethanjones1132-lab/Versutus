@@ -258,12 +258,12 @@ function RoutinesPaneImpl({
        * The same scheduled-job sheet Activity renders, fed by the slim
        * routine view: run history, Run now, Pause/Resume, and Remove live on
        * the row's tap instead of burying them on the Activity tab. Keyed by
-       * job id so each job opens fresh; the run transcript hides the job
+       * exact backend/Bot/job identity so each job opens fresh; the transcript hides the job
        * sheet (two BaseSheets must not stack) and closing it restores this
        * one with the job still in state.
        */}
       <CronJobSheet
-        key={`${scope?.backendId ?? ''}:${scope?.botId ?? 'root'}:${openJob?.id ?? 'no-job'}`}
+        key={JSON.stringify(['job', scope?.backendId ?? null, scope?.botId ?? null, openJob?.id ?? null])}
         job={openJob ? cronJobViewFromRoutine(openJob) : null}
         scope={scope}
         onClose={() => setOpenJobId(null)}
@@ -281,7 +281,7 @@ function RoutinesPaneImpl({
         }}
       />
       <CronRunSheet
-        key={`${scope?.backendId ?? ''}:${scope?.botId ?? 'root'}:${openRunId ?? 'no-run'}`}
+        key={JSON.stringify(['run', scope?.backendId ?? null, scope?.botId ?? null, openRunId ?? null])}
         runId={openRunId}
         scope={scope}
         onClose={() => setOpenRunId(null)}
