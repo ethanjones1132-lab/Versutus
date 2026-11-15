@@ -57,6 +57,75 @@ export function handsfreeElapsedCopy(startedAtMs: number | undefined, nowMs: num
   return hours > 0 ? `running ${hours}h ${minutes}m` : `running ${minutes}m`;
 }
 
+/**
+ * The same span as digits, for the eye: `0:07`, `12:40`, `1:02:05`. A call is
+ * read at a glance, and "running 0m" for its whole first minute said nothing.
+ * Null when the start is unknown, for the same reason as above.
+ */
+export function handsfreeCallClock(startedAtMs: number | undefined, nowMs: number): string | null {
+  if (startedAtMs === undefined) return null;
+  const totalSeconds = Math.floor(Math.max(0, nowMs - startedAtMs) / 1000);
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+  const padded = String(seconds).padStart(2, '0');
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, '0')}:${padded}`
+    : `${minutes}:${padded}`;
+}
+
+/**
+ * Where the call's voice is running, in the operator's words. The Gate names
+ * its engines `local` and `codex`; neither is a word for a call screen.
+ */
+export function handsfreeEngineLine(engine: string | undefined): string | null {
+  switch (engine) {
+    case 'local':
+      return 'voice on this PC';
+    case 'codex':
+      return 'voice through ChatGPT';
+    case 'phone':
+      return 'voice on this phone';
+    default:
+      return null;
+  }
+}
+
+/**
+ * A fallback is named, never silent: when the call is not on the engine that
+ * was asked for, this is the sentence that says where it is and why. Null when
+ * the call is on the engine it asked for.
+ */
+export function handsfreeEngineFallbackCopy(
+  engine: string | undefined,
+  reason: string | undefined,
+): string | null {
+  const where = handsfreeEngineLine(engine);
+  const why = reason?.trim().replace(/[.!?]+$/, '');
+  if (!where || !why) return null;
+  // "voice on this phone" becomes "Voice is on this phone".
+  return `Voice is ${where.replace(/^voice /, '')}: ${why}.`;
+}
+
+/** The banner's standing hint while a reply plays, as a line of its own. */
+export function handsfreePhaseHint(phase: HandsfreePhase): string | null {
+  if (phase === 'speaking') return 'Say something to interrupt.';
+  if (phase === 'confirming') return 'Finishing what you said…';
+  return null;
+}
+
+/** The banner's line for a tool that needs a decision, or one just given. */
+export function handsfreeApprovalCopy(
+  approval: { summary: string; state?: 'pending' | 'approved' | 'denied' | 'expired' } | null | undefined,
+): string | null {
+  const summary = approval?.summary?.trim();
+  if (!approval || !summary) return null;
+  if (approval.state === 'approved') return `Approved once: ${summary}`;
+  if (approval.state === 'denied') return `Denied: ${summary}`;
+  if (approval.state === 'expired') return `Not approved in time: ${summary}`;
+  return `Needs your approval: ${summary}`;
+}
+
 export const HANDSFREE_MUTE_LABEL = 'Mute hands-free call';
 export const HANDSFREE_UNMUTE_LABEL = 'Unmute hands-free call';
 export const HANDSFREE_SKIP_LABEL = 'Skip spoken reply';
@@ -94,16 +163,19 @@ export function handsfreePhaseLabel(phase: HandsfreePhase): string {
     case 'listening':
     case 'confirming':
       return 'Listening';
+    // Both halves of a turn in flight are one wait to the person on the call:
+    // they stopped talking and an answer is coming.
     case 'sending':
-      return 'Sending';
     case 'waiting':
-      return 'Waiting for reply';
+      return 'Thinking';
     case 'speaking':
       return 'Speaking';
     case 'muted':
       return 'Muted';
+    // Not "Listening" until the call can hear: the microphone, the link and
+    // the engine behind it all have to be up first.
     case 'starting':
-      return 'Starting';
+      return 'Connecting';
     case 'ending':
       return 'Ending';
     default:
@@ -144,8 +216,13 @@ export function handsfreeEndReasonCopy(reason: HandsfreeTerminalReason): string 
  * turn has failed, so the line appears and is folded away exactly once.
  */
 export function handsfreeTurnFailureCopy(reason: string | null | undefined): string | null {
-  if (!reason || !reason.trim()) return null;
-  return withDetail('That turn could not be completed', reason);
+  const said = reason?.trim();
+  if (!said) return null;
+  // The Gate names a failed turn in a whole sentence of its own ("OpenCode
+  // stopped before it answered."), and that sentence is the line. An older
+  // Gate sends a bare fragment, which still needs a sentence around it.
+  if (/[.!?]$/.test(said)) return said;
+  return `That turn could not be completed: ${said}.`;
 }
 
 function withDetail(base: string, detail: string | undefined): string {

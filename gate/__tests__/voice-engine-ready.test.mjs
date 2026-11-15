@@ -35,7 +35,7 @@ function makeEngine() {
   return engine;
 }
 
-async function startMedia({ engine, engineOpenTimeoutMs, resumeTimeoutMs = 20_000, log } = {}) {
+async function startMedia({ engine, engineOpenTimeoutMs, resumeTimeoutMs = 20_000, log, earlyAudioHoldMs } = {}) {
   const registry = new VoiceSessionRegistry();
   registry.create(SESSION);
   const deviceTokens = {
@@ -51,6 +51,7 @@ async function startMedia({ engine, engineOpenTimeoutMs, resumeTimeoutMs = 20_00
     registry,
     createEngine: () => engine,
     ...(engineOpenTimeoutMs === undefined ? {} : { engineOpenTimeoutMs }),
+    ...(earlyAudioHoldMs === undefined ? {} : { earlyAudioHoldMs }),
     resumeTimeoutMs,
     ...(log ? { log } : {}),
   });
@@ -112,7 +113,7 @@ test('the first attach says opening, and listening waits for the engine', async 
   await media.close();
 });
 
-test('audio sent before the engine is ready is dropped, counted, and delivered after', async () => {
+test('what is said while the engine opens is held, counted, and heard first', async () => {
   const lines = [];
   const engine = makeEngine();
   const media = await startMedia({ engine, log: (line) => lines.push(line) });
@@ -127,8 +128,14 @@ test('audio sent before the engine is ready is dropped, counted, and delivered a
   engine.finishOpen();
   await waitUntil(() => media.frames.some((frame) => frame.t === 'ready'));
   ws.send(Buffer.from([9, 0]));
-  await waitUntil(() => engine.audio.length === 1);
-  assert.deepEqual(engine.audio[0], Buffer.from([9, 0]), 'audio reaches the engine once it can hear');
+  await waitUntil(() => engine.audio.length === 4);
+  // People start talking when the call appears, not when its label changes:
+  // the opening words reach the engine, in the order they were said, ahead of
+  // what follows them.
+  assert.deepEqual(
+    engine.audio,
+    [Buffer.from([0, 0]), Buffer.from([1, 0]), Buffer.from([2, 0]), Buffer.from([9, 0])],
+  );
 
   // Attach before the end: the server answers an end control with the ended
   // frame and a close in one breath, and close can fire before a later once().
@@ -137,8 +144,31 @@ test('audio sent before the engine is ready is dropped, counted, and delivered a
   await waitUntil(() => lines.some((line) => /^voice\.end /.test(line)));
   await closed;
   const summary = lines.find((line) => /^voice\.end /.test(line));
-  assert.match(summary, /audioFramesEarly=3/, 'the frames that were thrown away are named');
+  assert.match(summary, /audioFramesEarly=3/, 'the frames that arrived early are still named');
   assert.match(summary, /audioFrames=4 audioBytes=8/);
+  await media.close();
+});
+
+test('only the newest stretch of early audio is kept for the engine', async () => {
+  const engine = makeEngine();
+  // 16 kHz PCM16 is 32 bytes a millisecond: room for two 20 ms frames.
+  const media = await startMedia({ engine, earlyAudioHoldMs: 40 });
+  const ws = media.openSocket();
+  await once(ws, 'open');
+  await waitUntil(() => media.frames.length > 0);
+
+  for (let index = 0; index < 5; index += 1) ws.send(Buffer.alloc(640, index));
+  await new Promise((done) => setTimeout(done, 60));
+  engine.finishOpen();
+  await waitUntil(() => media.frames.some((frame) => frame.t === 'ready'));
+
+  // A cold worker can take half a minute: the room before anyone was being
+  // addressed is not replayed into the call, only the last moments before it
+  // could hear.
+  assert.deepEqual(engine.audio.map((frame) => frame[0]), [3, 4]);
+
+  ws.close();
+  await once(ws, 'close');
   await media.close();
 });
 

@@ -47,6 +47,13 @@ export type OpenGateVoiceSessionInput = {
     surfaceKind: 'configurable' | 'bot';
     sessionId: string;
     botId?: string;
+    /**
+     * The environment the thread's typed turns go to, when the thread is not a
+     * Bot's. Without it the Gate has to work out where the session lives.
+     */
+    backendId?: string;
+    /** The model the thread's typed turns run on, as a typed turn names it. */
+    model?: string;
   };
   device: { deviceId: string };
   gatewayRequest: (method: string, params: Record<string, unknown>) => Promise<unknown>;
@@ -252,6 +259,11 @@ export async function openGateVoiceSession(
           kind: input.target.surfaceKind,
           sessionId: input.target.sessionId,
           botId: input.target.botId,
+          // A Bot names its own environment, exactly as a typed turn's `bot`
+          // does; naming the thread's backend too would pin a Bot's call to an
+          // environment that may hold no Bots.
+          ...(input.target.botId || !input.target.backendId ? {} : { backendId: input.target.backendId }),
+          ...(input.target.model ? { model: input.target.model } : {}),
         },
         disclosureAcceptedAt: (input.now ?? (() => new Date().toISOString()))(),
         ...input.device,

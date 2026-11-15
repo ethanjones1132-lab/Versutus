@@ -1772,6 +1772,10 @@ export function ChatScreen() {
         sessionId: draftThread.sessionId,
         surfaceKind: surface.kind,
         botId: surface.kind === 'bot' ? surface.botId : undefined,
+        // The call is answered where the thread's typed turns are: the same
+        // backend and the same model a send from the composer would name.
+        backendId: surface.kind === 'configurable' ? selectedBackendId : undefined,
+        model: resolveSendModel(activeGateway, selectedBackendId, selectedBotId).model,
         label: callTargetLabel,
         voice: botVoice ?? {},
         transport: decidedTransport,
@@ -1808,7 +1812,7 @@ export function ChatScreen() {
     } finally {
       setCallBusy(false);
     }
-  }, [activeGateway, botVoice, callTargetLabel, draftThread, handsfree, surface]);
+  }, [activeGateway, botVoice, callTargetLabel, draftThread, handsfree, selectedBackendId, selectedBotId, surface]);
 
   // Which open of the sheet a `voice.capabilities` answer belongs to. Opening the
   // sheet twice inside one request's latency left both reads live: the slower

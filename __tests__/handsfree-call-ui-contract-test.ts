@@ -34,13 +34,7 @@ const banner = readSource('src', 'components', 'voice', 'handsfree-call-banner.t
 const composer = readSource('src', 'components', 'chat', 'chat-composer.tsx');
 const screen = readSource('src', 'components', 'chat', 'chat-screen.tsx');
 const layout = readSource('src', 'app', '_layout.tsx');
-const fallback = readSource(
-  'src',
-  'components',
-  'voice',
-  'handsfree-call-indicator-fallback.tsx',
-);
-const native = readSource('src', 'components', 'voice', 'handsfree-call-indicator.native.tsx');
+const indicator = readSource('src', 'components', 'voice', 'handsfree-call-indicator.tsx');
 
 describe('the disclosure a call must show', () => {
   test('spells out continuous streaming, auto-send, interruption and background lifetime exactly', () => {
@@ -66,7 +60,7 @@ describe('the disclosure a call must show', () => {
   });
 
   test('never implies always-listening, a wake word, full-duplex or a named competitor', () => {
-    for (const source of [sheet, banner, composer, screen, fallback, native]) {
+    for (const source of [sheet, banner, composer, screen, indicator]) {
       expect(source).not.toMatch(/wake[\s-]?word/i);
       expect(source).not.toMatch(/always-listening/i);
       expect(source).not.toMatch(/full[\s-]?duplex/i);
@@ -82,16 +76,18 @@ describe('the ambient indicator', () => {
     // The sample arrives at the platform's own rate (~10/s). Holding it in
     // React state redraws the whole banner tree per sample for a shape that
     // only answers a number, so the provider holds it in a Reanimated shared
-    // value and the Skia circle reads it on the UI thread instead. Both engines
-    // (the phone's recognizer and the Gate call) feed the same shared value.
+    // value and the orb reads it on the UI thread instead. Both engines (the
+    // phone's recognizer and the Gate call) feed the same shared value.
     expect(provider).not.toContain('setLevel');
     expect(provider).toContain('const level = useSharedValue(0)');
     expect(provider.split('level.value = clampLevel(event.level)').length - 1).toBe(2);
-    // The native indicator derives its geometry from the shared value in a
-    // worklet, never from render-time JS state.
-    expect(native).toContain('useDerivedValue');
-    expect(native).toContain('level.value');
-    expect(native).not.toContain('const clamped = Math.max(0, Math.min(1, level));');
+    // The orb reads the sample in a worklet, once a frame, and moves towards
+    // it there; it never takes the number as a render-time prop, and never
+    // starts an animation per sample (which stalls when samples come fast).
+    expect(indicator).toContain('useFrameCallback(');
+    expect(indicator).toContain('callOrbGain(level.value)');
+    expect(indicator).not.toContain('useAnimatedReaction');
+    expect(indicator).toContain('level: SharedValue<number>');
   });
 
   test('is drawn from the level stream, never required by any logic', () => {
@@ -101,17 +97,28 @@ describe('the ambient indicator', () => {
     expect(banner).not.toMatch(/if \(.*level/);
   });
 
-  test('degrades to the same static shape when no level arrives', () => {
-    expect(fallback).toContain('level: number');
-    expect(fallback).toContain('const clamped = Math.max(0, Math.min(1, level));');
-    expect(fallback).toContain('active ? 0.55 + clamped * 0.45 : 0.55');
+  test('shows the state by its motion, so a silent microphone still reads as a live call', () => {
+    // The first indicator only answered the level, and the level of ordinary
+    // speech is a few hundredths: it looked like an animation that never
+    // played. The orb is driven by what the call is doing; the voice only adds
+    // to the listening state.
+    expect(banner).toContain('mode={callOrbMode(phase, muted)}');
+    expect(indicator).toContain('withRepeat(');
+    expect(indicator).toContain("mode === 'thinking'");
+    expect(indicator).toContain("mode === 'speaking'");
+    expect(indicator).toContain("mode === 'muted'");
   });
 
-  test('is Skia on native and a plain shape everywhere else', () => {
-    expect(native).toContain("from '@shopify/react-native-skia'");
-    expect(native).toContain('HandsfreeCallIndicatorFallback');
-    // A GPU-less mount falls back rather than taking the screen down.
-    expect(native).toContain('getDerivedStateFromError');
+  test('holds still, in the same shapes, when the system asks for reduced motion', () => {
+    expect(indicator).toContain('useReducedMotion()');
+    expect(indicator).toContain("if (reducedMotion || mode === 'muted') return;");
+  });
+
+  test('is plain views on every platform, with no GPU surface to fail', () => {
+    expect(indicator).not.toContain('react-native-skia');
+    expect(indicator).toContain("from 'react-native-reanimated'");
+    // A picture of what the label beside it says: hidden from screen readers.
+    expect(indicator).toContain('importantForAccessibility="no-hide-descendants"');
   });
 });
 
@@ -167,8 +174,9 @@ describe('the banner', () => {
   test('folds the internal confirming window into Listening', () => {
     expect(handsfreePhaseLabel('confirming')).toBe('Listening');
     expect(handsfreePhaseLabel('listening')).toBe('Listening');
-    expect(handsfreePhaseLabel('sending')).toBe('Sending');
-    expect(handsfreePhaseLabel('waiting')).toBe('Waiting for reply');
+    // Both halves of a turn in flight are one wait to the person on the call.
+    expect(handsfreePhaseLabel('sending')).toBe('Thinking');
+    expect(handsfreePhaseLabel('waiting')).toBe('Thinking');
     expect(handsfreePhaseLabel('speaking')).toBe('Speaking');
     expect(handsfreePhaseLabel('muted')).toBe('Muted');
   });

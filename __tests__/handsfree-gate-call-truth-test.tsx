@@ -32,6 +32,7 @@ import {
   type HandsfreeVoiceContextValue,
 } from '@/context/handsfree-voice-provider';
 import { recoveryStorageKey } from '@/lib/gateway/composer-draft';
+import { callCues } from '@/lib/voice/call-cues';
 import { handsfreeEndReasonCopy, handsfreeTurnFailureCopy } from '@/lib/voice/handsfree-call-copy';
 
 // One stable object, as the real hook is stable across renders: the provider's
@@ -44,6 +45,12 @@ jest.mock('react-native-reanimated', () => ({
 }));
 
 const mockBacking = new Map<string, string>();
+jest.mock('@/lib/voice/call-cues', () => ({
+  callCues: {
+    ready: jest.fn(async () => undefined),
+    sent: jest.fn(async () => undefined),
+  },
+}));
 jest.mock('@/lib/storage/key-value', () => ({
   keyValueStorage: {
     getItem: jest.fn(async (key: string) => mockBacking.get(key) ?? null),
@@ -220,6 +227,8 @@ beforeEach(async () => {
   }
   mockGateway.gatewayRequest.mockClear();
   mockGateway.sendChatInput.mockClear();
+  jest.mocked(callCues.ready).mockClear();
+  jest.mocked(callCues.sent).mockClear();
   AppState.currentState = 'active';
   await act(async () => {
     renderer = create(
@@ -577,7 +586,7 @@ describe('a Gate turn that failed is told to the operator', () => {
     // The "still waiting on the PC" line stops counting: nothing is pending.
     expect(latest().sendingSinceMs).toBeNull();
     expect(handsfreeTurnFailureCopy(latest().turnError)).toBe(
-      'That turn could not be completed the PC could not answer',
+      'That turn could not be completed: the PC could not answer.',
     );
 
     // The next turn folds it away, so the line is shown once.
@@ -848,18 +857,39 @@ describe('a Gate approval is visible on the call, not dropped', () => {
 });
 
 describe('a Gate commit cues the operator, and the dot follows the captured voice', () => {
-  test('the Gate committing an utterance plays the phone-local send earcon', async () => {
-    // Phone mode plays this cue when its turn leaves the phone. On a Gate call
-    // the turn leaves from the Gate, so the phone heard nothing at all while it
-    // waited for the answer (bar F2).
+  test('the Gate committing an utterance is felt, and no sound is played over the call', async () => {
+    // On a Gate call the turn leaves from the Gate, so without a cue the phone
+    // gave no sign at all while it waited for the answer (bar F2). The cue is a
+    // tick in the hand: the beep it replaced played at the one moment a call
+    // should be quiet.
     await startLiveCall();
-    expect(mockNative.playSendEarcon).not.toHaveBeenCalled();
+    expect(callCues.sent).not.toHaveBeenCalled();
 
     await call(async () => {
       gateFrame('{"t":"final","turnId":"t1","text":"book a table for two"}');
     });
 
-    expect(mockNative.playSendEarcon).toHaveBeenCalledTimes(1);
+    expect(callCues.sent).toHaveBeenCalledTimes(1);
+    expect(mockNative.playSendEarcon).not.toHaveBeenCalled();
+  });
+
+  test('the moment the call can first hear is marked once, not at every return to listening', async () => {
+    await startLiveCall();
+    const afterStart = jest.mocked(callCues.ready).mock.calls.length;
+    expect(afterStart).toBeLessThanOrEqual(1);
+
+    await call(async () => {
+      gateFrame('{"t":"phase","phase":"listening"}');
+    });
+    expect(callCues.ready).toHaveBeenCalledTimes(1);
+
+    // A reply ends and listening reopens; a reconnect replays the phase.
+    await call(async () => {
+      gateFrame(speaking);
+      gateFrame('{"t":"phase","phase":"listening"}');
+      gateFrame('{"t":"phase","phase":"listening"}');
+    });
+    expect(callCues.ready).toHaveBeenCalledTimes(1);
   });
 
   test('every committed utterance gets its own cue, and nothing else does', async () => {
@@ -871,13 +901,13 @@ describe('a Gate commit cues the operator, and the dot follows the captured voic
       gateFrame('{"t":"reply","turnId":"t1","delta":"Sure"}');
       gateFrame(speaking);
     });
-    expect(mockNative.playSendEarcon).not.toHaveBeenCalled();
+    expect(callCues.sent).not.toHaveBeenCalled();
 
     await call(async () => {
       gateFrame('{"t":"final","turnId":"t1","text":"book a table for two"}');
       gateFrame('{"t":"final","turnId":"t1","text":"and a taxi"}');
     });
-    expect(mockNative.playSendEarcon).toHaveBeenCalledTimes(2);
+    expect(callCues.sent).toHaveBeenCalledTimes(2);
   });
 
   test('the captured level moves the shared value the banner draws from', async () => {

@@ -39,6 +39,7 @@ import {
   type GateCallEffect,
   type HandsfreeCallTransport,
 } from '@/lib/voice/gate-call';
+import { callCues } from '@/lib/voice/call-cues';
 import { createGateLinkProbe, isGateSocketGone } from '@/lib/voice/gate-link';
 import { isDeviceIdentityError } from '@/lib/gateway/errors';
 import { recordFailure } from '@/lib/diagnostics/failure-log';
@@ -140,6 +141,10 @@ export type HandsfreeCallTarget = {
   sessionId: string;
   surfaceKind: 'configurable' | 'bot';
   botId?: string;
+  /** The backend the thread's typed turns go to; the call is answered by it. */
+  backendId?: string;
+  /** The model the thread's typed turns run on; the call runs on it too. */
+  model?: string;
   label: string;
   voice: { voiceIdentifier?: string; rate?: number; pitch?: number };
   /**
@@ -360,6 +365,8 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const sessionRef = useRef(session);
   const moduleRef = useRef<HandsfreeNativeModule | null>(null);
   const targetRef = useRef<HandsfreeCallTarget | null>(null);
+  // The call whose first `listening` has already been marked in the hand.
+  const readyCueCallRef = useRef<string | null>(null);
   const threadRef = useRef<ComposerDraftThread | undefined>(undefined);
   const availabilityRef = useRef<HandsfreeAvailability | null>(null);
   const subscriptionsRef = useRef<{ remove(): void }[]>([]);
@@ -785,12 +792,20 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
             setCallProjection(projected);
           }
           noteGateTurn(parsed);
-          // The Gate has committed this utterance. The phone engine cues the
-          // operator with its local send earcon at the moment its turn leaves;
-          // a Gate call gets the same cue at the same event instead of sitting
-          // silent until the reply starts (bar F2). `final` is emitted once per
-          // committed utterance, at commit.
-          if (parsed.t === 'final') void module.playSendEarcon();
+          // The Gate has committed this utterance: the operator is told at
+          // that moment, instead of sitting in silence until the reply starts
+          // (bar F2). `final` is emitted once per committed utterance, at
+          // commit. The cue is felt, not heard — a beep here played over the
+          // one moment a call should be quiet.
+          if (parsed.t === 'final') void callCues.sent();
+          // The first `listening` of a call is the moment it can hear. It is
+          // marked once per call, so a reconnect or the listening that follows
+          // every reply does not tap the hand again.
+          if (parsed.t === 'phase' && parsed.phase === 'listening' && callId
+            && readyCueCallRef.current !== callId) {
+            readyCueCallRef.current = callId;
+            void callCues.ready();
+          }
           // The Gate's own account of the phase settles an optimistic mute only
           // when it REFLECTS the request: a phase frame produced before the Gate
           // read the control proves nothing, and treating it as a confirmation
@@ -1183,7 +1198,8 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         void module?.setMuted(effect.muted);
         return;
       case 'play-earcon':
-        void module?.playSendEarcon();
+        // The reducer's name for "the turn has left": felt, not beeped.
+        void callCues.sent();
         return;
       case 'stop-speaking':
         void module?.stopSpeaking();
@@ -1499,6 +1515,8 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
           surfaceKind: target.surfaceKind,
           sessionId: target.sessionId,
           botId: target.botId,
+          backendId: target.backendId,
+          model: target.model,
         },
         device,
         // The same one-shot budget, so the identity read and the whole chain

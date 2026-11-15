@@ -89,10 +89,13 @@ describe('a failed Gate turn on the banner', () => {
   test('the failure line is drawn once, with the Gate’s own reason', async () => {
     const renderer = await render('the PC could not answer');
     const copy = handsfreeTurnFailureCopy('the PC could not answer');
-    expect(copy).toBe('That turn could not be completed the PC could not answer');
+    expect(copy).toBe('That turn could not be completed: the PC could not answer.');
     expect(drawn(renderer)).toContain(copy);
-    // No new element type: it rides the banner's existing micro line.
-    expect(JSON.stringify(renderer.toJSON())).toContain('micro');
+    // The Gate now names a failed turn in a whole sentence, and that sentence
+    // is the line: nothing is wrapped around it.
+    expect(handsfreeTurnFailureCopy('OpenCode stopped before it answered.')).toBe(
+      'OpenCode stopped before it answered.',
+    );
     await act(async () => {
       renderer.unmount();
     });

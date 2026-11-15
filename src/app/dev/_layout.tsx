@@ -16,6 +16,7 @@ export default function DevLayout() {
         contentStyle: { backgroundColor: VersutusDarkTheme.colors.background },
       }}>
       <Stack.Screen name="preview" options={{ title: 'UI Preview' }} />
+      <Stack.Screen name="call" options={{ title: 'Call banner' }} />
     </Stack>
   );
 }

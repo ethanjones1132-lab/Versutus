@@ -94,6 +94,15 @@ export const PLAYOUT_TAIL_MS = 250;
 // How long a closed reply may wait on synthesis that never reports back (a
 // worker that died mid-sentence) before the call stops calling it "speaking".
 export const PLAYOUT_STALL_MS = 10_000;
+// How much of what the phone sent before the engine could hear is kept for it.
+// People start talking the moment a call appears, not when its label changes:
+// the engine opens tens of milliseconds after the socket when the worker is
+// warm and seconds after when it is not, and the first words said into that gap
+// used to be counted and thrown away. The newest three seconds are held in
+// memory and handed to the engine first, in order, the moment it opens. Older
+// audio than that is a room nobody was addressing yet, and is still dropped.
+export const EARLY_AUDIO_HOLD_MS = 3_000;
+export const INPUT_SAMPLE_RATE = 16_000;
 // How long after a turn was committed a final heard while it is still thinking
 // counts as the same thought (so it merges into that turn) rather than a new one
 // (so it waits for its own turn).
@@ -186,6 +195,7 @@ export function attachVoiceMediaSocket({
   playoutLeadMs = PLAYOUT_LEAD_MS,
   playoutTailMs = PLAYOUT_TAIL_MS,
   playoutStallMs = PLAYOUT_STALL_MS,
+  earlyAudioHoldMs = EARLY_AUDIO_HOLD_MS,
 } = {}) {
   const wss = new WebSocketServer({ noServer: true });
   const calls = new Map();
@@ -307,6 +317,11 @@ export function attachVoiceMediaSocket({
     // Whether `engine.open` has resolved. Nothing is pushed into an engine that
     // is not open, and `ready`/`listening` is claimed only once it is.
     let engineReady = false;
+    // The newest audio the phone sent before that: held, never written
+    // anywhere, and handed to the engine first when it opens.
+    const earlyAudio = [];
+    let earlyAudioBytes = 0;
+    const earlyAudioMaxBytes = Math.max(0, (earlyAudioHoldMs / 1000) * INPUT_SAMPLE_RATE * 2);
     let turnCommittedAt = 0;
     let turnFirstReplyAt = 0;
     let turnFirstAudioAt = 0;
@@ -1162,6 +1177,11 @@ export function attachVoiceMediaSocket({
         // a pipe which is about to be read.
         if (!engineReady) {
           trace.audioFramesEarly += 1;
+          earlyAudio.push(frame);
+          earlyAudioBytes += frame.length;
+          while (earlyAudio.length && earlyAudioBytes > earlyAudioMaxBytes) {
+            earlyAudioBytes -= earlyAudio.shift().length;
+          }
           return;
         }
         engine.pushAudio(frame);
@@ -1378,6 +1398,8 @@ export function attachVoiceMediaSocket({
       clearTurnTimer();
       clearHoldTimer();
       stopPlayout();
+      earlyAudio.length = 0;
+      earlyAudioBytes = 0;
       if (speculative) {
         clearTimeout(speculative.timer);
         speculative = null;
@@ -1505,6 +1527,12 @@ export function attachVoiceMediaSocket({
       .then(() => {
         if (ended) return;
         engineReady = true;
+        // What was said while the engine was opening is heard first, in order.
+        // A call that was muted before it could hear keeps nothing: mute means
+        // the microphone was off, whatever arrived.
+        const held = earlyAudio.splice(0);
+        earlyAudioBytes = 0;
+        if (!call.muted) for (const frame of held) engine.pushAudio(frame);
         // The reducer owns the phase frames; `ready` says which engine answered.
         dispatch({
           type: 'ready',

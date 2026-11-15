@@ -1,3 +1,5 @@
+import { handsfreeEngineFallbackCopy, handsfreeEngineLine } from '@/lib/voice/handsfree-call-copy';
+
 declare const __dirname: string;
 
 const SEP = __dirname.includes('\\') ? '\\' : '/';
@@ -71,8 +73,10 @@ describe('the phase-to-native wiring table', () => {
     expect(runEffect).toContain('stopListening()');
     expect(runEffect).toContain("case 'set-muted':");
     expect(runEffect).toContain('setMuted(effect.muted)');
+    // The reducer still names the moment a turn leaves; it is felt, not beeped.
     expect(runEffect).toContain("case 'play-earcon':");
-    expect(runEffect).toContain('playSendEarcon()');
+    expect(runEffect).toContain('callCues.sent()');
+    expect(provider).not.toContain('playSendEarcon');
     expect(runEffect).toContain("case 'stop-speaking':");
     expect(runEffect).toContain('stopSpeaking()');
     expect(runEffect).toContain("case 'speak-reply':");
@@ -401,8 +405,19 @@ describe('a call names the engine it is using and never hides a fallback', () =>
   });
 
   test('the banner draws the engine and the fallback reason', () => {
-    expect(banner).toContain('engineReason');
-    expect(banner).toContain('Using {engine}');
+    expect(banner).toContain('handsfreeEngineLine(engine)');
+    expect(banner).toContain('handsfreeEngineFallbackCopy(engine, engineReason)');
+    // In the operator's words, never the Gate's engine id.
+    expect(handsfreeEngineLine('local')).toBe('voice on this PC');
+    expect(handsfreeEngineLine('phone')).toBe('voice on this phone');
+    expect(handsfreeEngineLine('codex')).toBe('voice through ChatGPT');
+    expect(handsfreeEngineLine(undefined)).toBeNull();
+    // A fallback gets a sentence of its own, where it cannot be truncated away.
+    expect(handsfreeEngineFallbackCopy('phone', 'the PC voice models are still loading.')).toBe(
+      'Voice is on this phone: the PC voice models are still loading.',
+    );
+    expect(handsfreeEngineFallbackCopy('local', undefined)).toBeNull();
+    expect(banner).not.toContain('Using {engine}');
   });
 });
 
