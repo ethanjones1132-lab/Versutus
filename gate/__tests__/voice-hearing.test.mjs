@@ -1,0 +1,219 @@
+// When is the person done talking? The call used to answer that with a clock: a
+// fixed 1.8 s after every final, in case more was coming. An engine that knows
+// whether more is coming says so (`hearing`), and the turn is sent a short
+// settle after it stops instead. These are the reducer's rules for that.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { INITIAL_VOICE_SESSION, reduceVoiceSession } from '../core/voice/voice-session.mjs';
+import { OPENING_CLAUSE_MIN_CHARS, openingClauseLength } from '../core/voice/sentences.mjs';
+
+function run(events, state = INITIAL_VOICE_SESSION) {
+  let current = state;
+  const effects = [];
+  for (const event of events) {
+    const out = reduceVoiceSession(current, event);
+    current = out.state;
+    effects.push(...out.effects);
+  }
+  return { state: current, effects };
+}
+
+const SETTLE_MS = 250;
+const listening = () => run([{ type: 'ready', utteranceHoldMs: SETTLE_MS, continuationMs: 5_000 }]).state;
+const holds = (effects) => effects.filter((effect) => effect.kind === 'hold.start').map((effect) => effect.ms);
+
+test('a final heard while the person is still talking does not start the clock', () => {
+  const out = run([
+    { type: 'hearing', active: true },
+    { type: 'final', text: 'First sentence.' },
+  ], listening());
+
+  assert.equal(out.state.phase, 'listening');
+  assert.equal(out.state.pendingText, 'First sentence.');
+  // A hold of 0 stops any running timer: nothing will fire until the engine
+  // says the person has stopped.
+  assert.deepEqual(holds(out.effects), [0]);
+  assert.equal(out.effects.some((effect) => effect.kind === 'turn.run'), false);
+});
+
+test('the gathered utterance is sent a settle after the person stops', () => {
+  const gathered = run([
+    { type: 'hearing', active: true },
+    { type: 'final', text: 'First sentence.' },
+    { type: 'final', text: 'Second sentence.' },
+  ], listening());
+  assert.equal(gathered.effects.some((effect) => effect.kind === 'turn.run'), false);
+
+  const stopped = run([{ type: 'hearing', active: false }], gathered.state);
+  assert.deepEqual(holds(stopped.effects), [SETTLE_MS]);
+
+  const sent = run([{ type: 'holdElapsed', nowMs: 1_000 }], stopped.state);
+  assert.equal(sent.state.phase, 'thinking');
+  const turn = sent.effects.find((effect) => effect.kind === 'turn.run');
+  assert.equal(turn.text, 'First sentence. Second sentence.');
+});
+
+test('a final with nothing more being heard waits only the settle', () => {
+  const out = run([{ type: 'final', text: 'Hello there.' }], listening());
+  assert.deepEqual(holds(out.effects), [SETTLE_MS]);
+});
+
+test('speech that resumes during the settle stops the clock again', () => {
+  const settling = run([{ type: 'final', text: 'Hello there.' }], listening());
+  const resumed = run([{ type: 'hearing', active: true }], settling.state);
+  assert.deepEqual(holds(resumed.effects), [0]);
+
+  // A timer that fired in the same instant is not a commit.
+  const raced = run([{ type: 'holdElapsed', nowMs: 1_000 }], resumed.state);
+  assert.equal(raced.state.phase, 'listening');
+  assert.equal(raced.effects.some((effect) => effect.kind === 'turn.run'), false);
+});
+
+test('a partial does not restart the clock while the engine says more is coming', () => {
+  const gathered = run([
+    { type: 'hearing', active: true },
+    { type: 'final', text: 'Hello there.' },
+  ], listening());
+  const out = run([{ type: 'partial', text: 'and another' }], gathered.state);
+  assert.deepEqual(holds(out.effects), [0]);
+});
+
+test('hearing with nothing gathered moves no phase and sends no frame', () => {
+  const out = run([{ type: 'hearing', active: true }, { type: 'hearing', active: false }], listening());
+  assert.equal(out.state.phase, 'listening');
+  assert.deepEqual(out.effects, []);
+});
+
+test('mute ends whatever was being heard, so an utterance gathered before it is not held for ever', () => {
+  const gathered = run([
+    { type: 'hearing', active: true },
+    { type: 'final', text: 'Hello there.' },
+  ], listening());
+  const muted = run([{ type: 'mute' }], gathered.state);
+  assert.equal(muted.state.hearing, false);
+
+  const unmuted = run([{ type: 'unmute' }], muted.state);
+  assert.deepEqual(holds(unmuted.effects), [SETTLE_MS]);
+});
+
+test('an engine that never reports hearing keeps the hold it was given', () => {
+  const legacy = run([{ type: 'ready', utteranceHoldMs: 1_800, continuationMs: 5_000 }]).state;
+  const out = run([{ type: 'final', text: 'Hello there.' }, { type: 'partial', text: 'more' }], legacy);
+  assert.deepEqual(holds(out.effects), [1_800, 1_800]);
+});
+
+// ─── A reply's speech ends when the reply does, not when a sentence does ───
+
+test('a finished reply closes its generation; the phase waits for the speech to be heard', () => {
+  const thinking = run([{ type: 'final', text: 'Hi.' }, { type: 'holdElapsed', nowMs: 0 }], listening());
+  const replying = run([
+    { type: 'replyDelta', text: 'One sentence. ' },
+    { type: 'replyDelta', text: 'And a second' },
+  ], thinking.state);
+  assert.equal(replying.state.phase, 'speaking');
+  assert.equal(replying.effects.some((effect) => effect.kind === 'speech.close'), false, 'more may still be said');
+
+  const done = run([{ type: 'replyDone' }], replying.state);
+  const gen = done.state.gen;
+  assert.equal(done.state.phase, 'speaking', 'the words are still being spoken');
+  const kinds = done.effects.map((effect) => effect.kind);
+  assert.ok(kinds.includes('engine.speak'));
+  assert.deepEqual(done.effects.find((effect) => effect.kind === 'speech.close'), { kind: 'speech.close', gen });
+
+  const heard = run([{ type: 'speechDone', gen }], done.state);
+  assert.equal(heard.state.phase, 'listening');
+});
+
+test('a reply that fails part-way keeps what it said and adds the failure line in the same generation', () => {
+  const thinking = run([{ type: 'final', text: 'Hi.' }, { type: 'holdElapsed', nowMs: 0 }], listening());
+  const replying = run([{ type: 'replyDelta', text: 'It started well. ' }], thinking.state);
+  const gen = replying.state.gen;
+
+  const failed = run([{ type: 'replyFailed', message: 'OpenCode stopped before it answered.' }], replying.state);
+  assert.equal(failed.state.gen, gen, 'no new generation cuts the sentence in half');
+  assert.equal(failed.effects.some((effect) => effect.kind === 'engine.cancelSpeech'), false);
+  const spoken = failed.effects.find((effect) => effect.kind === 'engine.speak');
+  assert.equal(spoken.gen, gen);
+  assert.deepEqual(failed.effects.at(-1), { kind: 'speech.close', gen });
+  const frame = failed.effects.find((effect) => effect.kind === 'send' && effect.frame.t === 'turn').frame;
+  assert.equal(frame.state, 'failed');
+  assert.equal(frame.error, 'OpenCode stopped before it answered.');
+});
+
+// ─── The opening clause: the one place a sentence is not waited for ────────
+
+test('the first clause of a reply is spoken before its sentence ends', () => {
+  const thinking = run([{ type: 'final', text: 'Hi.' }, { type: 'holdElapsed', nowMs: 0 }], listening());
+  const out = run([{ type: 'replyDelta', text: 'Yes, the call is working, and the rest of this sentence is still' }], thinking.state);
+  const spoken = out.effects.filter((effect) => effect.kind === 'engine.speak').map((effect) => effect.text);
+  assert.deepEqual(spoken, ['Yes, the call is working, ']);
+
+  // Only the opening: once something has been said, sentences are waited for.
+  const more = run([{ type: 'replyDelta', text: ' arriving, slowly, in pieces' }], out.state);
+  assert.equal(more.effects.some((effect) => effect.kind === 'engine.speak'), false);
+
+  const ended = run([{ type: 'replyDelta', text: '. Next.' }], more.state);
+  const rest = ended.effects.filter((effect) => effect.kind === 'engine.speak').map((effect) => effect.text);
+  assert.deepEqual(rest, ['and the rest of this sentence is still arriving, slowly, in pieces. Next.']);
+});
+
+test('an opening clause is found only where it is safe to cut', () => {
+  assert.equal(openingClauseLength('Sure, '), 0, 'too short to be worth a synthesis pass');
+  assert.ok('Sure'.length < OPENING_CLAUSE_MIN_CHARS);
+  assert.equal(openingClauseLength('It costs 1,000 dollars in total'), 0, 'a comma inside a number is not a clause');
+  assert.equal(openingClauseLength('The meeting is at 10:30 tomorrow'), 0, 'nor a colon inside a time');
+  assert.equal(openingClauseLength('That works for me,'), 0, 'the mark must be followed by whitespace');
+  assert.equal(openingClauseLength('That works for me, and'), 'That works for me, '.length);
+  assert.equal(openingClauseLength('Here is the code: then'), 'Here is the code: '.length);
+  assert.equal(openingClauseLength('```js\nconst a = 1, b = 2;\n```'), 0, 'never inside a fenced block');
+  assert.equal(openingClauseLength(`${'word '.repeat(40)}, tail`), 0, 'a late clause is no faster than its sentence');
+});
+
+// ─── Talking again while the turn is still being thought about ─────────────
+
+const committed = () => run([
+  { type: 'final', text: 'So I was thinking about the release plan.' },
+  { type: 'holdElapsed', nowMs: 1_000 },
+], listening());
+
+test('speech that resumes before any reply takes the turn back and joins it', () => {
+  const thinking = committed();
+  assert.equal(thinking.state.phase, 'thinking');
+
+  const resumed = run([{ type: 'userSpeaking', nowMs: 1_400 }], thinking.state);
+  assert.equal(resumed.state.phase, 'listening');
+  assert.equal(resumed.state.pendingText, 'So I was thinking about the release plan.');
+  const kinds = resumed.effects.map((effect) => effect.kind);
+  assert.ok(kinds.includes('turn.cancel'), 'the Bot is not left answering half a sentence');
+  assert.deepEqual(holds(resumed.effects), [0], 'and nothing is re-sent while the person is talking');
+
+  const finished = run([
+    { type: 'final', text: 'and I want to move the date to Friday.' },
+    { type: 'hearing', active: false },
+    { type: 'holdElapsed', nowMs: 4_000 },
+  ], resumed.state);
+  const turn = finished.effects.find((effect) => effect.kind === 'turn.run');
+  assert.equal(turn.text, 'So I was thinking about the release plan. and I want to move the date to Friday.');
+  const finals = finished.effects.filter((effect) => effect.kind === 'send' && effect.frame.t === 'final');
+  assert.equal(finals.length, 1, 'one utterance, one turn');
+});
+
+test('once the reply has begun, talking again is not a continuation', () => {
+  const replying = run([{ type: 'replyDelta', text: 'Sure. ' }], committed().state);
+  const out = run([{ type: 'userSpeaking', nowMs: 1_400 }], replying.state);
+  assert.equal(out.state.phase, 'speaking');
+  assert.deepEqual(out.effects, [], 'that is a barge-in, and the engine reports those itself');
+});
+
+test('talking long after the turn was sent does not take it back', () => {
+  const out = run([{ type: 'userSpeaking', nowMs: 1_000 + 5_000 }], committed().state);
+  assert.equal(out.state.phase, 'thinking');
+  assert.deepEqual(out.effects, []);
+});
+
+test('speech while merely listening changes nothing', () => {
+  const out = run([{ type: 'userSpeaking', nowMs: 10 }], listening());
+  assert.equal(out.state.phase, 'listening');
+  assert.deepEqual(out.effects, []);
+});

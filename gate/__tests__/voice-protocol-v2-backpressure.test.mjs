@@ -65,6 +65,9 @@ test('a paused v2 reader bounds queued PCM to two seconds plus one chunk', async
     deviceTokens: { verify: async () => ({ deviceId: 'dev-1' }) },
     registry,
     createEngine: (_session, socket) => { gateSocket = socket; return engine; },
+    // Unpaced, so the socket's own bound is what is exercised: paced audio
+    // never gets far enough ahead of the phone to reach it.
+    playoutLeadMs: Infinity,
   });
   t.after(() => closeResources({ registry, sessionId: 'vs-slow-live', wss, server }));
   server.listen(0);

@@ -105,6 +105,35 @@ export function completeSentenceLength(text) {
   return ends.length ? ends[ends.length - 1] : 0;
 }
 
+// A clause the opening of a reply may be spoken at, before its sentence ends.
+const CLAUSE_MARKS = ',;:—–';
+/** Too short to be worth a synthesis pass of its own ("Yes," / "So,"). */
+export const OPENING_CLAUSE_MIN_CHARS = 12;
+/** Past this the clause is no faster to speak than the sentence would be. */
+export const OPENING_CLAUSE_MAX_CHARS = 120;
+
+/**
+ * Where the first clause of `text` ends, or 0 when it has none worth speaking
+ * alone. A clause ends on a comma, semicolon, colon or dash followed by
+ * whitespace, so "1,000" and "10:30" are never cut, and never inside a fenced
+ * code block.
+ */
+export function openingClauseLength(text) {
+  const fenced = insideFenceMask(text);
+  const limit = Math.min(text.length, OPENING_CLAUSE_MAX_CHARS);
+  for (let index = 0; index < limit; index += 1) {
+    if (fenced[index]) return 0;
+    if (!CLAUSE_MARKS.includes(text[index])) continue;
+    const next = text[index + 1];
+    if (next === undefined || !isWhitespace(next)) continue;
+    if (text.slice(0, index).trim().length < OPENING_CLAUSE_MIN_CHARS) continue;
+    let boundary = index + 1;
+    while (boundary < text.length && isWhitespace(text[boundary])) boundary += 1;
+    return boundary;
+  }
+  return 0;
+}
+
 function sentencesOf(text) {
   const sentences = [];
   let start = 0;

@@ -67,9 +67,11 @@ def test_push_audio_ends_a_turn_and_speak_streams_in_order():
             }
         )
     )
-    assert events[0][0] == "voice.final"
-    assert events[0][1]["text"] == "hello there"
-    assert "eosMs" not in events[0][1]
+    # The utterance is announced as it opens; the first thing recognised is the final.
+    assert events[0][0] == "voice.utteranceOpen"
+    heard = [event for event in events if event[0] == "voice.final"]
+    assert heard[0][1]["text"] == "hello there"
+    assert "eosMs" not in heard[0][1]
 
     server.handle_message(
         json.dumps(

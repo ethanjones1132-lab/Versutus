@@ -67,6 +67,9 @@ export class LocalEngine extends EventEmitter {
   } = {}) {
     super();
     this.id = 'local';
+    // The worker announces `voice.hearing`, so the call does not have to guess
+    // with a long hold whether the person has finished.
+    this.reportsHearing = true;
     this._paths = paths;
     this._log = log;
     this._now = now;
@@ -134,6 +137,11 @@ export class LocalEngine extends EventEmitter {
 
   setMuted(muted) {
     this._command('setMuted', 'voice.setMuted', { muted: Boolean(muted) });
+  }
+
+  /** Whether the phone's loudspeaker is playing a reply right now. */
+  setPlayback(on) {
+    this._command('setPlayback', 'voice.setPlayback', { on: Boolean(on) });
   }
 
   async close() {
@@ -240,6 +248,9 @@ export class LocalEngine extends EventEmitter {
       if (this._closed || this._lease !== lease) return;
       this._open = true;
       this._log('voice.engine recovered');
+      // The new process starts quiet and will not announce it: whatever the
+      // old one was hearing died with it.
+      this.emit('hearing', { active: false });
       this._flushQueue();
     } catch (error) {
       // The replacement died too; the pool's restart budget decides what
@@ -267,6 +278,8 @@ export class LocalEngine extends EventEmitter {
       this.emit('speechAudio', { gen: params.gen, pcm: Buffer.from(chunk.data ?? '', 'base64') });
     } else if (method === 'voice.speechDone') this.emit('speechDone', { gen: params.gen });
     else if (method === 'voice.userSpeechStart') this.emit('userSpeechStart', { gen: params.gen });
+    else if (method === 'voice.hearing') this.emit('hearing', { active: Boolean(params.active) });
+    else if (method === 'voice.utteranceOpen') this.emit('utteranceOpen', {});
     else if (method === 'voice.noSpeechDrop') this.emit('noSpeechDrop', {});
     else if (method === 'voice.echoGated') this.emit('echoGated', { gen: params.gen, count: params.count });
     else if (method === 'voice.error') {

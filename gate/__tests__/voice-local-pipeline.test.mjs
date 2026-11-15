@@ -316,7 +316,9 @@ test('a turn runner that throws fails the turn instead of hanging it', async () 
 
   ws.send(Buffer.from([0, 0]));
   const failed = await waitUntil(() => frames.find((frame) => frame.t === 'turn' && frame.state === 'failed'));
-  assert.equal(failed.error, 'backend exploded');
+  // Named by the Gate, never in the backend's own words (they can quote the
+  // prompt the turn failed on).
+  assert.equal(failed.error, 'The backend failed before it answered.');
 
   ws.close();
   await once(ws, 'close');

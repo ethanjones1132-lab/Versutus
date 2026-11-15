@@ -296,6 +296,9 @@ test('a replay log past its bound drops the oldest audio, keeps every control fr
   await advanceClock(t, 5_000);
   turn.release({ hasContent: true });
   await new Promise((done) => setImmediate(done));
+  // The engine answers each sentence it was asked for, as the worker does: the
+  // reply's speech is over once both are in and what was sent has been heard.
+  engine.emit('speechDone', { gen });
   engine.emit('speechDone', { gen });
   await advanceClock(t, 5_000);
 

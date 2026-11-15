@@ -12,7 +12,7 @@
 // is never dropped: it merges into that turn while the turn has not answered yet,
 // and waits (`queued`) once it has.
 
-import { completeSentenceLength } from './sentences.mjs';
+import { completeSentenceLength, openingClauseLength } from './sentences.mjs';
 
 export const VOICE_PHASES = Object.freeze([
   'opening',
@@ -48,6 +48,12 @@ export const INITIAL_VOICE_SESSION = Object.freeze({
   // one-final-one-turn behaviour, which is what a hold of 0 means.
   utteranceHoldMs: 0,
   continuationMs: 0,
+  // Whether the engine says the person is mid-utterance right now: speech is
+  // open, a pause is still being judged, or a final is still being decoded. An
+  // engine that reports it lets the hold be a short settle instead of a guess
+  // long enough to cover a thinking pause; one that never does leaves this
+  // false, and the hold alone decides as it always has.
+  hearing: false,
 });
 
 /** The line a failed turn speaks before the loop reopens. */
@@ -88,10 +94,18 @@ function replyOwed(state) {
   return state.phase === 'muted' && state.resumePhase === 'speaking';
 }
 
-/** Speak the reply's newly completed sentences, in order. */
+/**
+ * Speak the reply's newly completed sentences, in order.
+ *
+ * The opening of a reply is the one place a sentence is not waited for: nothing
+ * has been said yet, the person is listening to silence, and synthesis costs
+ * about a third of a second per second of speech, so a long first sentence is
+ * seconds of dead air. Its first clause is spoken as soon as it is whole.
+ */
 function speakCompleted(state, effects) {
   const remaining = state.reply.slice(state.spoken.length);
-  const boundary = completeSentenceLength(remaining);
+  const boundary = completeSentenceLength(remaining)
+    || (state.spoken === '' ? openingClauseLength(remaining) : 0);
   if (boundary <= 0) return state;
   const text = remaining.slice(0, boundary);
   effects.push({ kind: 'engine.speak', text, gen: state.gen, final: false });
@@ -152,9 +166,16 @@ function hearFinal(state, event) {
   if (state.pendingText) effects.push({ kind: 'turn.cancel' });
   effects.push(
     frameSend({ t: 'partial', text: merged }),
-    { kind: 'hold.start', ms: state.utteranceHoldMs },
+    // While the engine says more is being heard, the clock does not run: the
+    // utterance is sent when the person stops, not a guess after they paused.
+    holdEffect(state),
   );
   return stay({ ...state, pendingText: merged, pendingFinals: state.pendingFinals + 1 }, effects);
+}
+
+/** Run the hold only while nothing more is being heard; otherwise stop it. */
+function holdEffect(state) {
+  return { kind: 'hold.start', ms: state.hearing ? 0 : state.utteranceHoldMs };
 }
 
 /**
@@ -184,7 +205,7 @@ function hearDuringTurn(state, event) {
         { kind: 'turn.cancel' },
         phaseEffect('listening'),
         frameSend({ t: 'partial', text: merged }),
-        { kind: 'hold.start', ms: state.utteranceHoldMs },
+        holdEffect(gathered),
       ]);
     }
     return commitUtterance(gathered, merged, { finals: 1, before: [merging] });
@@ -270,11 +291,23 @@ export function reduceVoiceSession(state, event) {
       // those words into the turn twice.
       if (state.pendingText) {
         return stay(state, [
-          { kind: 'hold.start', ms: state.utteranceHoldMs },
+          holdEffect(state),
           frameSend({ t: 'partial', text: `${state.pendingText} ${event.text}`.trim() }),
         ]);
       }
       return stay(state, [frameSend({ t: 'partial', text: event.text })]);
+    }
+
+    // The engine's own word on whether the person is mid-utterance. It moves no
+    // phase and sends no frame; it only decides whether the hold may run. A
+    // gathered utterance waits while more is being heard and is sent a short
+    // settle after it is not.
+    case 'hearing': {
+      const hearing = Boolean(event.active);
+      if (hearing === state.hearing) return stay(state);
+      const next = { ...state, hearing };
+      if (state.phase === 'listening' && state.pendingText) return stay(next, [holdEffect(next)]);
+      return stay(next);
     }
 
     case 'final':
@@ -286,10 +319,42 @@ export function reduceVoiceSession(state, event) {
       return stay(state);
     }
 
+    // The person started talking again while their turn was still being thought
+    // about. Nothing has been said back yet, so the turn is theirs to extend:
+    // it is taken back, and what they are saying now joins it as one utterance.
+    // Waiting for the final to decide this (as `hearDuringTurn` does) is too
+    // late — by the time a sentence has been spoken and decoded the reply has
+    // usually begun, and the call then answered the first half, played all of
+    // it, and answered the second half on its own (a live trace, 2026-11-15).
+    case 'userSpeaking': {
+      if (!isContinuation(state, event)) return stay(state);
+      const withdrawn = {
+        ...state,
+        phase: 'listening',
+        pendingText: state.committedText,
+        pendingFinals: 1,
+        committedText: '',
+        committedAtMs: null,
+        // The engine's `hearing` usually says so first; the withdrawn turn must
+        // not be re-sent by a hold that was armed before it did.
+        hearing: true,
+      };
+      return stay(withdrawn, [
+        { kind: 'utterance.withdraw', chars: state.committedText.length },
+        { kind: 'turn.cancel' },
+        phaseEffect('listening'),
+        frameSend({ t: 'partial', text: state.committedText }),
+        holdEffect(withdrawn),
+      ]);
+    }
+
     // The hold armed by the last segment elapsed. Nothing pending means there is
     // no utterance to send, which is what a timer that outlived its phase says.
     case 'holdElapsed': {
       if (state.phase !== 'listening') return stay(state);
+      // A timer that fired in the same instant the person started again: the
+      // utterance is still growing, and it is sent when the engine says it is not.
+      if (state.hearing) return stay(state);
       const text = state.pendingText.trim();
       if (!text) return stay(state);
       return commitUtterance(state, text, { finals: state.pendingFinals, nowMs: event.nowMs });
@@ -303,7 +368,7 @@ export function reduceVoiceSession(state, event) {
       // While an utterance is gathered the person is simply still talking, so
       // the hold restarts. Nothing is sent and nothing is dropped.
       if (state.phase === 'listening' && state.pendingText) {
-        return stay(state, [{ kind: 'hold.start', ms: state.utteranceHoldMs }]);
+        return stay(state, [holdEffect(state)]);
       }
       // While the turn is still thinking it only says the words are coming: the
       // turn is not cancelled (nothing is being spoken yet), so the reply is
@@ -317,7 +382,10 @@ export function reduceVoiceSession(state, event) {
       if (state.phase !== 'listening' && state.phase !== 'speaking') return stay(state);
       // Mute turns the microphone off; it never cuts the Bot off. A reply that is
       // playing keeps playing (VS-023), so no speech cancel is sent here.
-      return stay({ ...state, phase: 'muted', resumePhase: state.phase, muted: true }, [
+      // Mute also ends whatever was being heard: the microphone is off, so an
+      // open utterance can never close, and a call left "hearing" would hold a
+      // gathered turn for ever after unmute.
+      return stay({ ...state, phase: 'muted', resumePhase: state.phase, muted: true, hearing: false }, [
         { kind: 'engine.setMuted', muted: true },
         phaseEffect('muted'),
       ]);
@@ -331,7 +399,7 @@ export function reduceVoiceSession(state, event) {
       // while the mic was shut could not send, so listening restarts it rather
       // than stranding words the person has already said.
       if (back === 'listening' && state.pendingText) {
-        effects.push({ kind: 'hold.start', ms: state.utteranceHoldMs });
+        effects.push(holdEffect(state));
       }
       return stay({ ...state, phase: back, resumePhase: null, muted: false }, effects);
     }
@@ -374,6 +442,7 @@ export function reduceVoiceSession(state, event) {
       if (state.phase === 'muted') {
         return stay({ ...state, reply: '', spoken: '', resumePhase: 'listening' }, [
           frameSend({ t: 'turn', turnId: state.turnId, state: 'done' }),
+          { kind: 'speech.close', gen: state.gen },
         ]);
       }
       if (state.phase === 'thinking') {
@@ -383,14 +452,21 @@ export function reduceVoiceSession(state, event) {
           frameSend({ t: 'speech', gen, state: 'start' }),
           frameSend({ t: 'turn', turnId: state.turnId, state: 'failed', error: 'empty turn' }),
           { kind: 'engine.speak', text: FAILED_TURN_LINE, gen, final: true },
+          { kind: 'speech.close', gen },
         ]);
       }
+      // The reply's text is complete. Its speech is not: sentences are still
+      // being synthesised and played, so the reply is only closed here — no
+      // more will be asked of this generation — and the socket reports
+      // `speechDone` when the last of it has actually been heard.
       const remaining = state.reply.slice(state.spoken.length);
       const doneFrame = frameSend({ t: 'turn', turnId: state.turnId, state: 'done' });
-      if (!remaining.trim()) return stay(state, [doneFrame]);
+      const closed = { kind: 'speech.close', gen: state.gen };
+      if (!remaining.trim()) return stay(state, [doneFrame, closed]);
       return stay({ ...state, spoken: state.reply }, [
         { kind: 'engine.speak', text: remaining, gen: state.gen, final: true },
         doneFrame,
+        closed,
       ]);
     }
 
@@ -401,6 +477,17 @@ export function reduceVoiceSession(state, event) {
       if (state.phase === 'muted') {
         return stay({ ...state, reply: '', spoken: '', resumePhase: 'listening' }, [
           frameSend({ t: 'turn', turnId: state.turnId, state: 'failed', error: event.message }),
+          { kind: 'speech.close', gen: state.gen },
+        ]);
+      }
+      // A reply that failed part-way has already said something true. What was
+      // queued of it plays out and the failure line follows in the same
+      // generation, rather than a new generation cutting a sentence in half.
+      if (state.phase === 'speaking') {
+        return stay({ ...state, reply: `${state.reply} ${FAILED_TURN_LINE}`, spoken: `${state.reply} ${FAILED_TURN_LINE}` }, [
+          frameSend({ t: 'turn', turnId: state.turnId, state: 'failed', error: event.message }),
+          { kind: 'engine.speak', text: FAILED_TURN_LINE, gen: state.gen, final: true },
+          { kind: 'speech.close', gen: state.gen },
         ]);
       }
       const gen = state.gen + 1;
@@ -409,6 +496,7 @@ export function reduceVoiceSession(state, event) {
         frameSend({ t: 'speech', gen, state: 'start' }),
         frameSend({ t: 'turn', turnId: state.turnId, state: 'failed', error: event.message }),
         { kind: 'engine.speak', text: FAILED_TURN_LINE, gen, final: true },
+        { kind: 'speech.close', gen },
       ]);
     }
 

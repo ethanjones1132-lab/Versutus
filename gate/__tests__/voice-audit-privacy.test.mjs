@@ -300,14 +300,19 @@ test('a backend failure is logged by size, never by the words it failed on', asy
 
   engine.emit('final', { text: 'what is the weather' });
   const failure = await waitUntil(() => lines.find((line) => /^voice\.turn fail /.test(line)));
-  assert.match(failure, /reason=redacted chars=\d+/);
-  assert.ok(failure.includes(`chars=${secret.length}`), 'the size is what a log may keep');
+  // The log names the kind of failure and the size of the sentence the Gate
+  // wrote about it. The backend's own words are not measured, kept or sent.
+  assert.match(failure, /code=backend_error reason=redacted chars=\d+/);
+  assert.equal(failure.includes(`chars=${secret.length}`), false, 'not even the size of what the backend said');
   assert.equal(failure.includes('4417'), false);
   assert.equal(failure.includes('postcode'), false);
 
-  // The phone still learns the turn failed; the dropped words are the
-  // backend's account of why, not anything the operator said.
-  await waitUntil(() => frames.some((frame) => frame.t === 'turn' && frame.state === 'failed'));
+  // The phone still learns the turn failed, in the Gate's sentence: the
+  // backend's account of why can quote what the operator said, so none of it
+  // crosses the wire.
+  const failed = await waitUntil(() => frames.find((frame) => frame.t === 'turn' && frame.state === 'failed'));
+  assert.equal(failed.error, 'The backend failed before it answered.');
+  assert.equal(JSON.stringify(failed).includes('4417'), false);
 
   const closed = once(ws, 'close');
   ws.send(JSON.stringify({ t: 'end' }));

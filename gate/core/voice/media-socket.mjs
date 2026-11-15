@@ -29,6 +29,7 @@ import { performance } from 'node:perf_hooks';
 
 import { redactedLogText } from './audit.mjs';
 import { parsePhoneFrame, serializeFrame } from './protocol.mjs';
+import { describeTurnFailure } from './turn-failure.mjs';
 import { INITIAL_VOICE_SESSION, reduceVoiceSession } from './voice-session.mjs';
 
 export const VOICE_STREAM_PATH = '/v1/voice/stream';
@@ -71,6 +72,28 @@ export const SPECULATION_WINDOW_MS = 600;
 // apart); the recognizer's own turn judge already sits in front of this, so the
 // hold only has to cover what it judged complete too early.
 export const UTTERANCE_HOLD_MS = 1_800;
+// The hold for an engine that says when the person is mid-utterance
+// (`engine.reportsHearing`). Such an engine has already judged the pause — the
+// local worker weighs it with Smart Turn and holds an unsure one itself for up
+// to 2.8 s — so the Gate does not wait for a thinking pause a second time. It
+// only lets a final that arrived in the same instant as resumed speech be
+// overtaken by the engine's `hearing`, and sends the turn once nothing is.
+// Measured on a live call (2026-11-15): end of speech to commit was 4.1 s, 1.9 s
+// of it this hold stacked on the worker's own judgment.
+export const UTTERANCE_SETTLE_MS = 200;
+// How far ahead of real time reply audio is sent. Kokoro generates a sentence
+// about three times faster than it is spoken, so unpaced audio reaches the phone
+// in a burst: a long sentence overran the phone's two-second playback queue, the
+// call said "listening" while the reply still had seconds left to play, and a
+// barge-in had seconds of queued audio to throw away. Paced, the phone never
+// holds more than this, and the Gate knows when the last of it has been heard.
+export const PLAYOUT_LEAD_MS = 400;
+// What the phone still has to play after the Gate's own clock says the reply
+// is over: its jitter target plus the audio device's output latency.
+export const PLAYOUT_TAIL_MS = 250;
+// How long a closed reply may wait on synthesis that never reports back (a
+// worker that died mid-sentence) before the call stops calling it "speaking".
+export const PLAYOUT_STALL_MS = 10_000;
 // How long after a turn was committed a final heard while it is still thinking
 // counts as the same thought (so it merges into that turn) rather than a new one
 // (so it waits for its own turn).
@@ -154,8 +177,15 @@ export function attachVoiceMediaSocket({
   engineOpenTimeoutMs = ENGINE_OPEN_TIMEOUT_MS,
   speculationWindowMs = SPECULATION_WINDOW_MS,
   utteranceHoldMs = UTTERANCE_HOLD_MS,
+  utteranceSettleMs = UTTERANCE_SETTLE_MS,
   continuationMs = CONTINUATION_MS,
   supersededGraceMs = SUPERSEDED_SOCKET_GRACE_MS,
+  // `Infinity` sends reply audio as fast as it is synthesised and reports the
+  // speech done the moment synthesis is: the behaviour before pacing, kept for
+  // harnesses that measure the Gate without a loudspeaker on the other end.
+  playoutLeadMs = PLAYOUT_LEAD_MS,
+  playoutTailMs = PLAYOUT_TAIL_MS,
+  playoutStallMs = PLAYOUT_STALL_MS,
 } = {}) {
   const wss = new WebSocketServer({ noServer: true });
   const calls = new Map();
@@ -322,6 +352,153 @@ export function attachVoiceMediaSocket({
     const speechStartSeq = new Map();
     const speechLifecycle = new Map();
     let v2ProbeFrame = null;
+
+    // ─── Playout: reply audio leaves at the pace it is heard ──────────────
+    // The engine hands over a sentence of PCM as soon as it is synthesised. It
+    // is queued here and sent no more than `playoutLeadMs` ahead of the phone's
+    // loudspeaker, so the Gate's clock is the playback clock: `speaking` lasts
+    // as long as the reply is audible, the echo gate stays up for exactly that
+    // long, and a barge-in has at most the lead to discard.
+    const paced = Number.isFinite(playoutLeadMs);
+    const playout = {
+      queue: [],
+      // When everything sent so far will have been played, on the monotonic clock.
+      headAt: 0,
+      // Per generation: sentences asked of the engine and not yet answered.
+      owed: new Map(),
+      // Generations no more will be asked of, and ones already reported done.
+      closed: new Set(),
+      finished: new Set(),
+      // Generations that put at least one chunk on the wire.
+      audible: new Set(),
+      pumpTimer: null,
+      finishTimers: new Map(),
+      // Whether the engine has been told the loudspeaker is live.
+      live: false,
+    };
+    const clock = () => performance.now();
+
+    const setLoudspeaker = (on) => {
+      if (playout.live === on) return;
+      playout.live = on;
+      engine.setPlayback?.(on);
+    };
+
+    const clearFinishTimer = (gen) => {
+      const timer = playout.finishTimers.get(gen);
+      if (timer) clearTimeout(timer);
+      playout.finishTimers.delete(gen);
+    };
+
+    /** Report a reply's speech done once it has been asked for, made and heard. */
+    const settlePlayout = (gen) => {
+      if (ended || playout.finished.has(gen) || !playout.closed.has(gen)) return;
+      clearFinishTimer(gen);
+      // Still being sent: the pump settles again when the queue has drained.
+      if (playout.queue.some((chunk) => chunk.gen === gen)) return;
+      const waitingOnEngine = (playout.owed.get(gen) ?? 0) > 0;
+      const finish = () => {
+        playout.finishTimers.delete(gen);
+        if (ended || playout.finished.has(gen)) return;
+        playout.finished.add(gen);
+        playout.owed.delete(gen);
+        playout.closed.delete(gen);
+        if (!playout.queue.length) setLoudspeaker(false);
+        dispatch({ type: 'speechDone', gen });
+      };
+      let wait;
+      if (waitingOnEngine) {
+        // Sentences are still being synthesised. This is only the bound on an
+        // engine that never answers: every chunk and every answer for this
+        // generation clears it, and it starts again once the queue is empty.
+        wait = playoutStallMs;
+      } else {
+        const heard = paced ? Math.max(0, playout.headAt - clock()) : 0;
+        wait = heard + (paced && playout.audible.has(gen) ? playoutTailMs : 0);
+      }
+      // Always a timer, even at zero: this is reached from inside a reducer
+      // step's effects, and the phase change must not land in the middle of one.
+      const timer = setTimeout(() => {
+        if (waitingOnEngine) {
+          log(`voice.speech stalled session=${session.voiceSessionId} gen=${gen} afterMs=${playoutStallMs}`);
+        }
+        finish();
+      }, wait);
+      timer.unref?.();
+      playout.finishTimers.set(gen, timer);
+    };
+
+    const pumpPlayout = () => {
+      if (playout.pumpTimer) {
+        clearTimeout(playout.pumpTimer);
+        playout.pumpTimer = null;
+      }
+      while (playout.queue.length && !ended) {
+        const head = playout.queue[0];
+        // A barge-in or a skip has moved the call on: what was queued for the
+        // reply it cancelled is never sent.
+        if (head.gen !== call.gen) {
+          playout.queue.shift();
+          continue;
+        }
+        const at = clock();
+        const ahead = playout.headAt - at;
+        if (paced && ahead >= playoutLeadMs) {
+          playout.pumpTimer = setTimeout(pumpPlayout, Math.max(5, ahead - playoutLeadMs + 5));
+          playout.pumpTimer.unref?.();
+          return;
+        }
+        playout.queue.shift();
+        playout.headAt = Math.max(playout.headAt, at) + head.ms;
+        playout.audible.add(head.gen);
+        setLoudspeaker(true);
+        dispatch({ type: 'speechAudio', pcm: head.pcm, gen: head.gen });
+      }
+      for (const gen of playout.closed) settlePlayout(gen);
+    };
+
+    const queuePlayout = (pcm, gen) => {
+      if (ended || !pcm?.length) return;
+      const bytesPerMs = (OUTPUT_SAMPLE_RATE * OUTPUT_CHANNELS * 2) / 1000;
+      const maxBytes = bytesPerMs * MAX_SPEECH_CHUNK_MS;
+      for (let offset = 0; offset < pcm.length; offset += maxBytes) {
+        // PCM16 samples must not be split between chunks.
+        const stop = Math.min(offset + maxBytes, pcm.length) & ~1;
+        if (stop <= offset) continue;
+        const chunk = pcm.subarray(offset, stop);
+        playout.queue.push({ pcm: chunk, gen, ms: chunk.length / bytesPerMs });
+      }
+      // The engine is alive and working on this generation.
+      clearFinishTimer(gen);
+      pumpPlayout();
+    };
+
+    /** The engine answered one sentence it was asked for. */
+    const synthesisedPlayout = (gen) => {
+      const owed = playout.owed.get(gen) ?? 0;
+      if (owed > 0) playout.owed.set(gen, owed - 1);
+      settlePlayout(gen);
+    };
+
+    const cancelPlayout = (gen) => {
+      playout.queue = playout.queue.filter((chunk) => chunk.gen !== gen);
+      playout.owed.delete(gen);
+      playout.closed.delete(gen);
+      // A cancelled reply is over without being finished: nothing reports it.
+      playout.finished.add(gen);
+      clearFinishTimer(gen);
+      // The phone flushes what it holds, so nothing sent is still to be heard.
+      playout.headAt = clock();
+      if (!playout.queue.length) setLoudspeaker(false);
+    };
+
+    const stopPlayout = () => {
+      if (playout.pumpTimer) clearTimeout(playout.pumpTimer);
+      playout.pumpTimer = null;
+      for (const timer of playout.finishTimers.values()) clearTimeout(timer);
+      playout.finishTimers.clear();
+      playout.queue.length = 0;
+    };
 
     const api = { attach, end, get ended() { return ended; } };
 
@@ -577,10 +754,20 @@ export function attachVoiceMediaSocket({
             turnSentenceAt = now();
             turnGen = effect.gen;
           }
+          // Counted before the engine is asked: a scripted engine answers
+          // inside the call, and its answer must find the sentence owed.
+          playout.owed.set(effect.gen, (playout.owed.get(effect.gen) ?? 0) + 1);
           engine.speak?.(effect.text, { gen: effect.gen, final: effect.final });
           break;
         case 'engine.cancelSpeech':
+          cancelPlayout(effect.gen);
           engine.cancelSpeech?.(effect.gen);
+          break;
+        // No more will be asked of this generation: its speech is done once
+        // what was asked has been synthesised, sent and heard.
+        case 'speech.close':
+          playout.closed.add(effect.gen);
+          settlePlayout(effect.gen);
           break;
         case 'engine.setMuted':
           engine.setMuted?.(effect.muted);
@@ -663,6 +850,10 @@ export function attachVoiceMediaSocket({
           trace.continued += 1;
           log(`voice.final merged session=${session.voiceSessionId} chars=${effect.chars}`);
           break;
+        case 'utterance.withdraw':
+          trace.continued += 1;
+          log(`voice.turn withdrawn session=${session.voiceSessionId} chars=${effect.chars} reason=speech-resumed`);
+          break;
         case 'utterance.queue':
           trace.queued += 1;
           log(`voice.final queued session=${session.voiceSessionId} chars=${effect.chars}`);
@@ -714,8 +905,12 @@ export function attachVoiceMediaSocket({
       // flaky model without the backend's words reaching disk (S3).
       if (event.type === 'replyFailed') {
         // The backend's own words can quote the prompt or transcript it failed
-        // on, so the log names the failure and its size, never the text.
-        log(`voice.turn fail session=${session.voiceSessionId} reason=${redactedLogText(event.message)}`);
+        // on, so the log names the failure by its code and its size, never the
+        // text. The message here is already the Gate's own sentence.
+        log(
+          `voice.turn fail session=${session.voiceSessionId}`
+          + `${event.code ? ` code=${event.code}` : ''} reason=${redactedLogText(event.message)}`,
+        );
       }
       // One line per step a call takes, so "it never answered" can be placed:
       // no audio, no transcript, a transcript but no turn, or a turn with no
@@ -813,6 +1008,13 @@ export function attachVoiceMediaSocket({
       // turn is failed and listening reopens, exactly as the phone engine's
       // reply watchdog does. Aborting also discharges a late resolution.
       let timedOut = false;
+      // Which backend ran the turn, once the resolve names it: a failure is
+      // told to the phone by who failed, never in the backend's own words.
+      let turnBackend;
+      const failed = (error) => {
+        const failure = describeTurnFailure(error, { backend: turnBackend });
+        return { type: 'replyFailed', message: failure.message, code: failure.code };
+      };
       // What the turn has said so far. A parked turn has no socket to deliver
       // the deltas to, so this is the only place its reply survives.
       let said = '';
@@ -829,7 +1031,7 @@ export function attachVoiceMediaSocket({
       const timer = setTimeout(() => {
         timedOut = true;
         if (turnAbort === controller) {
-          deliver({ type: 'replyFailed', message: 'The turn timed out.' });
+          deliver(failed({ code: 'turn_timeout' }));
         }
         controller.abort();
       }, turnTimeoutMs);
@@ -889,19 +1091,22 @@ export function attachVoiceMediaSocket({
           // activity arrive, and if it stalled, which step it was waiting on.
           // Elapsed is from this turn's own start, not from after resolution,
           // and the attempt id tells a replacement turn from the one it replaced.
-          onStage: (detail) => log(
-            `voice.turn stage session=${session.voiceSessionId} attempt=${attempt}`
-            + ` stage=${detail?.stage} afterMs=${now() - turnStartedAt}`
-            + `${detail?.backend ? ` backend=${detail.backend}` : ''}`
-            + `${detail?.path ? ` path=${detail.path}` : ''}`
-            + `${detail?.blockedOn ? ` blockedOn=${detail.blockedOn}` : ''}`
-            + `${detail?.cause ? ` cause=${detail.cause}` : ''}`,
-          ),
+          onStage: (detail) => {
+            if (typeof detail?.backend === 'string') turnBackend = detail.backend;
+            log(
+              `voice.turn stage session=${session.voiceSessionId} attempt=${attempt}`
+              + ` stage=${detail?.stage} afterMs=${now() - turnStartedAt}`
+              + `${detail?.backend ? ` backend=${detail.backend}` : ''}`
+              + `${detail?.path ? ` path=${detail.path}` : ''}`
+              + `${detail?.blockedOn ? ` blockedOn=${detail.blockedOn}` : ''}`
+              + `${detail?.cause ? ` cause=${detail.cause}` : ''}`,
+            );
+          },
         });
         if (controller.signal.aborted) return;
         if (timedOut) return;
         if (result && result.hasContent === false) {
-          deliver({ type: 'replyFailed', message: 'The turn produced no reply.' });
+          deliver(failed({ code: 'empty_turn' }));
         } else {
           deliver({ type: 'replyDone' });
         }
@@ -920,7 +1125,7 @@ export function attachVoiceMediaSocket({
         }
       } catch (error) {
         if (!controller.signal.aborted) {
-          deliver({ type: 'replyFailed', message: error.message });
+          deliver(failed(error));
         }
       } finally {
         // A changed final may have started a replacement while this aborted
@@ -1172,6 +1377,7 @@ export function attachVoiceMediaSocket({
       clearAudioTimer();
       clearTurnTimer();
       clearHoldTimer();
+      stopPlayout();
       if (speculative) {
         clearTimeout(speculative.timer);
         speculative = null;
@@ -1231,10 +1437,18 @@ export function attachVoiceMediaSocket({
       // Outbound speech is traffic too: a call the phone is listening to has not
       // gone silent, so its reservation lease must not lapse mid-reply.
       registry.markActivity(session.voiceSessionId);
-      dispatch({ type: 'speechAudio', pcm: event.pcm, gen: event.gen });
+      queuePlayout(event.pcm, event.gen);
     });
-    engine.on?.('speechDone', (event) => dispatch({ type: 'speechDone', gen: event.gen }));
+    // The engine finished synthesising one sentence. That is not the reply
+    // being over: more sentences may follow, and the phone is still playing.
+    engine.on?.('speechDone', (event) => synthesisedPlayout(event.gen));
+    engine.on?.('hearing', (event) => dispatch({ type: 'hearing', active: Boolean(event?.active) }));
+    engine.on?.('utteranceOpen', () => dispatch({ type: 'userSpeaking' }));
     engine.on?.('earlyEnd', (event) => {
+      // An engine that says when the person has stopped needs no head start:
+      // the turn is committed a short settle after the final, and a turn sent
+      // early and then withdrawn leaves a half-said prompt in the Bot's thread.
+      if (engine.reportsHearing) return;
       if (call.phase !== 'listening' || turnAbort || speculative) return;
       void startTurn(event.text, { speculative: true });
     });
@@ -1295,7 +1509,7 @@ export function attachVoiceMediaSocket({
         dispatch({
           type: 'ready',
           turnId: session.voiceSessionId,
-          utteranceHoldMs,
+          utteranceHoldMs: engine.reportsHearing ? utteranceSettleMs : utteranceHoldMs,
           continuationMs,
         });
         sendFrame({ t: 'ready', engine: session.engine, resumeWindowMs: resumeTimeoutMs });

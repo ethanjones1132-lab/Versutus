@@ -21,7 +21,7 @@ from .audio import (
     encode_chunk,
 )
 
-_METHODS = ("open", "pushAudio", "speak", "cancelSpeech", "setMuted", "close")
+_METHODS = ("open", "pushAudio", "speak", "cancelSpeech", "setMuted", "setPlayback", "close")
 _PARTIAL_WINDOW_MS = 600
 # How often an undecodable chunk is named on the wire; a bad stream sends
 # hundreds of chunks a minute and stdout is the Gate's only channel.
@@ -124,9 +124,22 @@ class VoicePipeline:
         # is a barge-in rather than a new turn (§4.6 step 5).
         self._synth_speaking = False
         self._speech_gen = None
+        # Whether the phone is still playing a reply, as the Gate's pacer says.
+        # Synthesis runs about three times faster than speech, so "the PC has
+        # finished generating" is seconds earlier than "the loudspeaker is
+        # quiet": the echo gate and the barge-in window follow the loudspeaker.
+        self._playout = False
+        # Whether synthesis itself wants the VAD's playback gate up.
+        self._synth_gate = False
         # A pause the turn judge was not sure about. Held rather than sent, so
         # it can be re-judged / forced / merged with resumed speech (§4.6 step 3).
         self._pending = None
+        # "The operator is mid-utterance": speech is open, a pause is being
+        # judged, or a final is still being decoded. The Gate commits a turn
+        # only once this is false, instead of waiting out a fixed hold.
+        self._finals_in_flight = 0
+        self._hearing = False
+        self._hearing_lock = threading.Lock()
         # What voice.ready names: the device Whisper really ran on, so a silent
         # CUDA→CPU fallback is visible to the Gate and not only on stderr.
         self.whisper_device = "cpu"
@@ -167,11 +180,49 @@ class VoicePipeline:
         self._utterance = 0
         self._synth_speaking = False
         self._speech_gen = None
+        self._playout = False
+        self._synth_gate = False
         self._pending = None
+        with self._hearing_lock:
+            # A new call starts quiet; nothing is announced for the old one.
+            self._finals_in_flight = 0
+            self._hearing = False
         self._buffer.clear()
         self._preroll = bytearray()
         self._synth.reset()
         self._vad.reset()
+
+    def _set_playback_gate(self):
+        """Raise the VAD's echo gate while the PC is generating or the phone is
+        still playing a reply; lower it only when both have stopped."""
+        set_playback = getattr(self._vad, "set_playback", None)
+        if callable(set_playback):
+            set_playback(self._synth_gate or self._playout)
+
+    def _sync_hearing(self):
+        """Tell the Gate when "the operator is mid-utterance" changes.
+
+        Called after anything that can change it. The lock makes the announced
+        value the state at the time of the announcement, so the last word the
+        Gate hears is the true one whichever thread spoke last.
+        """
+        with self._hearing_lock:
+            # An onset the VAD is still counting is included: it takes 250 ms
+            # of speech to open an utterance, and a turn committed inside that
+            # quarter second is the first half of a sentence. Not while the
+            # phone is playing a reply — what the VAD is weighing then is
+            # mostly the loudspeaker, and nothing is waiting to be committed.
+            starting = not self._playout and (getattr(self._vad, "onset_ms", 0) or 0) > 0
+            active = bool(
+                self._speaking
+                or self._pending is not None
+                or self._finals_in_flight > 0
+                or starting
+            )
+            if active == self._hearing:
+                return
+            self._hearing = active
+            self._emit("voice.hearing", {"active": active})
 
     def pushAudio(self, params):
         chunk = (params or {}).get("chunk") or {}
@@ -229,16 +280,21 @@ class VoicePipeline:
 
         if self._pending is not None and not self._speaking:
             pending = self._pending
-            if pending["silence_ms"] >= pending["next_judge_ms"]:
+            # Speech the VAD is in the middle of opening is the person carrying
+            # on: it takes 250 ms to count as an onset, and a pause judged over
+            # in that window would send the first half of one sentence.
+            resuming = (getattr(self._vad, "onset_ms", 0) or 0) > 0
+            if pending["silence_ms"] >= pending["next_judge_ms"] and not resuming:
                 if self._turn.decide(pending["pcm"], pending["silence_ms"]) == "complete":
                     held = pending["pcm"]
                     self._pending = None
                     self._finalize(held, pending["eos_ms"])
                 else:
-                    # Re-judge a window later, but never past the force point —
+                    # Look again a step later, but never past the force point —
                     # decide() forces completion once silence passes it.
+                    step = getattr(self._turn, "rejudge_step_ms", None) or self._turn.rejudge_ms
                     pending["next_judge_ms"] = min(
-                        pending["silence_ms"] + self._turn.rejudge_ms,
+                        pending["silence_ms"] + step,
                         self._turn.force_ms,
                     )
 
@@ -247,6 +303,7 @@ class VoicePipeline:
             if len(self._buffer) - self._last_partial >= window_bytes:
                 self._last_partial = len(self._buffer)
                 self._queue_recognition(("partial", self._utterance, self._partial_pcm(), False, None))
+        self._sync_hearing()
         return {"ok": True}
 
     def _report_bad_chunk(self, message):
@@ -267,7 +324,7 @@ class VoicePipeline:
         )
 
     def _start_speech(self, pcm, before):
-        if self._synth_speaking:
+        if self._synth_speaking or self._playout:
             # Starting to talk interrupts the PC's speech and returns
             # to listening; the generation stops at the next chunk.
             self._emit("voice.userSpeechStart", {"gen": self._speech_gen})
@@ -283,6 +340,11 @@ class VoicePipeline:
         self._utterance += 1
         self._buffer = bytearray(held) + (b"" if held else before) + pcm
         self._preroll = bytearray()
+        # The person is talking, whatever the PC is doing. While a reply is
+        # audible that is the barge-in above; while a turn is still being
+        # thought about, it is the Gate's cue to take that turn back and wait
+        # for the rest of the sentence.
+        self._emit("voice.utteranceOpen", {})
 
     def _end_speech(self, eos_ms, force=False):
         """Close the open utterance: the VAD's speech_end, or the length cap.
@@ -354,9 +416,8 @@ class VoicePipeline:
         with self._synth_lock:
             self._synth_speaking = True
             self._speech_gen = gen
-            set_playback = getattr(self._vad, "set_playback", None)
-            if callable(set_playback):
-                set_playback(True)
+            self._synth_gate = True
+            self._set_playback_gate()
             self._synth_jobs.append((gen, text))
             idle = self._synth_worker is None
         # Only spawned when nobody is serving the queue: the sentences of one
@@ -445,9 +506,8 @@ class VoicePipeline:
         if self._speech_gen == gen:
             self._synth_speaking = False
             self._speech_gen = None
-        set_playback = getattr(self._vad, "set_playback", None)
-        if callable(set_playback):
-            set_playback(False)
+        self._synth_gate = False
+        self._set_playback_gate()
 
     def _cancel_speech_jobs(self):
         """Stop every sentence still owed: queued ones are dropped, the running
@@ -474,13 +534,32 @@ class VoicePipeline:
             # protect from its own loudspeaker: the drain that would have lowered
             # the gate finds an empty queue and returns without doing it.
             if not self._synth_jobs and self._running_gen is None:
-                set_playback = getattr(self._vad, "set_playback", None)
-                if callable(set_playback):
-                    set_playback(False)
+                self._synth_gate = False
+                self._set_playback_gate()
         return {"ok": True}
 
     def setMuted(self, params):
-        self._muted = bool((params or {}).get("muted"))
+        muted = bool((params or {}).get("muted"))
+        if muted and not self._muted:
+            # Mute ends what was being heard: the phone stops sending, so an
+            # utterance left open here would never close, and its first half
+            # would be glued onto whatever is said after unmute.
+            self._speaking = False
+            self._pending = None
+            self._buffer.clear()
+            self._preroll = bytearray()
+            self._last_partial = 0
+            self._vad.reset()
+            self._set_playback_gate()
+        self._muted = muted
+        self._sync_hearing()
+        return {"ok": True}
+
+    def setPlayback(self, params):
+        """The Gate's word on whether the phone is playing a reply right now."""
+        self._playout = bool((params or {}).get("on"))
+        with self._synth_lock:
+            self._set_playback_gate()
         return {"ok": True}
 
     def _queue_recognition(self, job):
@@ -495,6 +574,13 @@ class VoicePipeline:
             if job[0] == "partial" and tail is not None and tail[:2] == job[:2]:
                 self._stt_jobs[-1] = job
             else:
+                if job[0] == "final":
+                    # A partial still queued is an older read of audio the final
+                    # is about to decode in full: decoding it first only delays
+                    # the turn by one more Whisper pass.
+                    self._stt_jobs = [queued for queued in self._stt_jobs if queued[0] != "partial"]
+                    with self._hearing_lock:
+                        self._finals_in_flight += 1
                 self._stt_jobs.append(job)
             idle = self._stt_worker is None
         if idle:
@@ -529,6 +615,18 @@ class VoicePipeline:
                     self._stt_worker = None
 
     def _recognise(self, job):
+        epoch = self._epoch
+        try:
+            self._recognise_job(job)
+        finally:
+            if job[0] == "final" and epoch == self._epoch:
+                with self._hearing_lock:
+                    self._finals_in_flight = max(0, self._finals_in_flight - 1)
+                # After the final itself, so the Gate hears the words before it
+                # hears that the operator has stopped.
+                self._sync_hearing()
+
+    def _recognise_job(self, job):
         kind, _utterance, pcm, early_end, eos_ms = job
         epoch = self._epoch
         decode_started = time.perf_counter()
@@ -936,7 +1034,29 @@ def build_default_pipeline(emit, models_dir, cpu=False):
         min_utterance_ms=MIN_UTTERANCE_MS,
     )
     pipeline.whisper_device = whisper_device()
+    _warm_models(transcribe, kokoro)
     return pipeline
+
+
+def _warm_models(transcribe, kokoro):
+    """Pay each model's first-inference cost before a call can.
+
+    A model's first run allocates and compiles: measured on this host the
+    first Whisper decode took about a second longer than the ones after it and
+    the first Kokoro sentence twice as long, and both landed on the first turn
+    of the first call after the worker loaded. The worker is not announced
+    ready until this is done, so nobody is listening to that delay. A warm-up
+    that fails is not a reason not to start: the call would have paid the same
+    cost, and a model that is really broken says so on its first real use.
+    """
+    try:
+        transcribe(b"\x00\x00" * INPUT_SAMPLE_RATE, 1)
+    except Exception as error:  # noqa: BLE001 - warm-up is best effort
+        print(f"[versutus-voice] whisper warm-up skipped ({error})", file=sys.stderr)
+    try:
+        kokoro.create("Ready.", voice="af_sarah", speed=1.0, lang="en-us")
+    except Exception as error:  # noqa: BLE001 - warm-up is best effort
+        print(f"[versutus-voice] kokoro warm-up skipped ({error})", file=sys.stderr)
 
 
 def main(argv=None):

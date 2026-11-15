@@ -86,3 +86,38 @@ def test_a_scorer_that_throws_reads_as_incomplete():
     judge = TurnJudge(is_complete=boom)
     assert judge.decide(b"", silence_ms=900) == "incomplete"
     assert judge.confident(b"") is False
+
+
+# --- Round 5: a marginal verdict waits; a sure one does not -----------------
+
+
+def test_a_sure_score_ends_the_turn_at_the_first_pause():
+    judge = TurnJudge(is_complete=lambda window: 0.93)
+    assert judge.confident(b"", silence_ms=200) is True
+
+
+def test_a_marginal_score_is_not_trusted_at_the_first_pause():
+    # Measured on the installed model: a clause that could be the end
+    # ("...about the release plan,") scores 0.53 where finished sentences
+    # score 0.90 and above.
+    judge = TurnJudge(is_complete=lambda window: 0.53)
+    assert judge.confident(b"", silence_ms=200) is False
+
+
+def test_a_marginal_score_needs_a_second_and_a_half_of_silence_behind_it():
+    judge = TurnJudge(is_complete=lambda window: 0.6)
+    assert judge.decide(b"", silence_ms=800) == "incomplete"
+    assert judge.decide(b"", silence_ms=1499) == "incomplete"
+    assert judge.decide(b"", silence_ms=1500) == "complete"
+
+
+def test_a_sure_score_at_a_later_look_completes_without_the_longer_wait():
+    judge = TurnJudge(is_complete=lambda window: 0.9)
+    assert judge.decide(b"", silence_ms=800) == "complete"
+
+
+def test_a_score_under_the_threshold_is_only_ever_forced():
+    judge = TurnJudge(is_complete=lambda window: 0.3)
+    assert judge.decide(b"", silence_ms=1500) == "incomplete"
+    assert judge.decide(b"", silence_ms=2799) == "incomplete"
+    assert judge.decide(b"", silence_ms=2800) == "complete"

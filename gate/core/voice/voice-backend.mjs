@@ -18,6 +18,15 @@ import { selectDefaultBackend } from '../backend-resolution.mjs';
 // usable, else the first ready environment, else an error naming each
 // candidate's state. Streaming-capable environments go first among the ready
 // ones, which keeps a Hermes thread's turns off Claude Code.
+//
+// "Unscoped" has to be true before that rule is used. A phone that does not
+// name the thread's backend is not a thread without one: the session it names
+// was created in exactly one environment, and answering it from the default
+// sends an OpenCode conversation to Claude Code, which exits at once (a live
+// call, 2026-11-15: "claude-code exited with code 1" half a second after the
+// operator stopped talking). So a call's thread is located first (`locate`):
+// the caller says which environment holds the session, and only a session no
+// environment claims falls through to the default.
 
 /**
  * How long a resolved backend stays memoised for a standalone caller. A lease,
@@ -116,17 +125,32 @@ export async function resolveVoiceBackend(backendManager, thread = {}, options =
  *
  * @param {{ list(): Promise<{ id: string }[]>, get(id: string): Promise<object> }} backendManager
  * @param {{ sessionId?: string, botId?: string, backendId?: string }} thread
- * @param {{ now?: () => number, ttlMs?: number, selection?: VoiceBackendSelection }} [options]
+ * `locate` names the environment (and Bot) that holds the thread's session when
+ * the phone did not: `(thread) => Promise<thread>`. It runs before every
+ * resolve, a throw or an unchanged thread leaves the thread as the phone sent
+ * it, and `onResolved` is told what answered and how it was found.
+ *
+ * @param {{ now?: () => number, ttlMs?: number, selection?: VoiceBackendSelection,
+ *   locate?: (thread: object) => Promise<object>,
+ *   onResolved?: (detail: { backend: object, backendId?: string, via: string }) => void }} [options]
  * @returns {{ backend(): Promise<object | null> }}
  */
 export function startVoiceBackendLease(backendManager, thread = {}, options = {}) {
-  const { now = Date.now, ttlMs = VOICE_BACKEND_CALL_LEASE_MS, selection } = options;
+  const {
+    now = Date.now, ttlMs = VOICE_BACKEND_CALL_LEASE_MS, selection, locate = null, onResolved = null,
+  } = options;
   let resolved = null;
   let pending = null;
   const resolveOnce = async () => {
+    const located = await locateVoiceThread(thread, locate);
     // A throw is a failure to remember, never to cache.
-    const found = await resolveVoiceBackend(backendManager, thread, { now, ttlMs, selection }).catch(() => null);
+    const found = await resolveVoiceBackend(backendManager, located.thread, { now, ttlMs, selection }).catch(() => null);
     if (found) {
+      try {
+        onResolved?.({ backend: found, backendId: located.thread?.backendId, via: located.via });
+      } catch {
+        // Telemetry is a witness, never a failure mode.
+      }
       resolved = found;
       // A backend that has to create the session the turn runs in (Hermes does,
       // against a state.db that is cold after any restart) is asked to prepare it
@@ -160,6 +184,23 @@ export function startVoiceBackendLease(backendManager, thread = {}, options = {}
       return inFlight();
     },
   };
+}
+
+/**
+ * The thread a call resolves with, and how its environment was found:
+ * `thread` when the phone named a backend or a Bot, `session` when the Gate
+ * located the session's own environment, `default` when nobody claims it.
+ */
+export async function locateVoiceThread(thread, locate) {
+  if (thread?.backendId || thread?.botId) return { thread, via: 'thread' };
+  if (typeof locate !== 'function') return { thread, via: 'default' };
+  try {
+    const located = await locate(thread);
+    if (located?.backendId || located?.botId) return { thread: located, via: 'session' };
+  } catch {
+    // A lookup that failed leaves the thread as the phone sent it.
+  }
+  return { thread, via: 'default' };
 }
 
 /**

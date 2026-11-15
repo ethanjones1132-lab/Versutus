@@ -128,6 +128,15 @@ def _slow_synth(seen, entered, release):
     return synth
 
 
+_BOOKKEEPING = ("voice.hearing", "voice.utteranceOpen")
+
+
+def _heard(events):
+    """The events of a call without the turn-taking bookkeeping, for tests
+    whose subject is what was recognised or spoken."""
+    return [(method, params) for method, params in events if method not in _BOOKKEEPING]
+
+
 def _spoken(events):
     return [base64.b64decode(params["chunk"]["data"]) for method, params in events if method == "voice.speechAudio"]
 
@@ -153,8 +162,8 @@ def test_synthetic_speech_becomes_a_final_then_spoken_sentences():
 
     pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
     pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
-    assert [method for method, _params in events] == ["voice.final"]
-    assert events[0][1]["text"] == "hello there"
+    assert [method for method, _params in _heard(events)] == ["voice.final"]
+    assert _heard(events)[0][1]["text"] == "hello there"
 
     pipeline.speak({"gen": 1, "text": "One. Two.", "final": True})
     methods = [method for method, _params in events]
@@ -730,11 +739,13 @@ def test_a_queued_partial_is_replaced_and_a_final_never_is():
     release.set()
     _join_all(threads)
 
-    # Five more partials were asked for and one was left: every partial is
-    # another read of the same growing utterance, so only the newest is worth
-    # decoding. The final behind it is never dropped.
-    assert decoded == [1, 1, 5]
-    assert [method for method, _params in events][-1] == "voice.final"
+    # Five more partials were asked for and none was decoded: every partial is
+    # another read of the same growing utterance, and the one still queued when
+    # the utterance ended is an older read of audio the final decodes in full,
+    # so it is dropped rather than making the turn wait a Whisper pass. The
+    # final is never dropped.
+    assert decoded == [1, 5]
+    assert [method for method, _params in _heard(events)][-1] == "voice.final"
 
 
 def test_utterances_are_finalised_in_the_order_they_ended():
@@ -836,7 +847,7 @@ def test_a_capped_utterance_is_forced_and_loses_no_audio():
     # segment is forced: held, it was sent behind the segments that followed it
     # (reordered turns) or overwritten by them and never transcribed at all.
     # It is not a pause, so it is not an early end either.
-    assert [method for method, _params in events] == ["voice.final", "voice.final"]
+    assert [method for method, _params in _heard(events)] == ["voice.final", "voice.final"]
     # In time order: the first cut is the one the preroll opened, so the later
     # one is the longer.
     assert finals[0] < finals[1]
@@ -894,7 +905,7 @@ def test_a_failed_decode_is_reported_and_the_call_keeps_hearing():
     pipeline.open({"voiceSessionId": "vs-1"})
     pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
     pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
-    assert events == [
+    assert _heard(events) == [
         (
             "voice.error",
             {"code": "stt_failed", "message": "onnx decode failed", "fatal": False, "gen": None},
@@ -905,8 +916,8 @@ def test_a_failed_decode_is_reported_and_the_call_keeps_hearing():
     events.clear()
     pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
     pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
-    final = events[0][1]
-    assert events[0][0] == "voice.final"
+    final = _heard(events)[0][1]
+    assert _heard(events)[0][0] == "voice.final"
     assert final["text"] == "hello there"
     assert isinstance(final["eosMs"], float)
     assert final["eosMs"] > 0
@@ -945,7 +956,7 @@ def test_a_cancelled_generation_does_not_silence_the_next_call():
     _join_all(threads)
 
     assert _spoken(events) == [b"Goodbye. "]
-    assert [method for method, _params in events] == [
+    assert [method for method, _params in _heard(events)] == [
         "voice.final",
         "voice.speechAudio",
         "voice.speechDone",
@@ -1073,3 +1084,284 @@ def test_a_sentence_cancelled_before_a_worker_claims_it_still_lowers_the_echo_ga
         fn()
 
     assert vad.playback is False
+
+
+# --- "The operator is mid-utterance", as the Gate hears it -------------------
+# The Gate used to wait a fixed 1.8 s after every final in case more was coming.
+# The worker knows whether more is coming, so it says so, and the Gate commits
+# the moment it is not.
+
+
+def _hearing(events):
+    return [params["active"] for method, params in events if method == "voice.hearing"]
+
+
+def test_hearing_opens_with_speech_and_closes_after_the_final():
+    events = []
+    pipeline = _pipeline(events)
+    pipeline.open({"voiceSessionId": "vs-1"})
+
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
+    assert _hearing(events) == [True]
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
+
+    methods = [method for method, _params in events]
+    assert _hearing(events) == [True, False]
+    # The words reach the Gate before it is told the operator has stopped, so it
+    # never commits a turn the final was about to extend.
+    last_hearing = len(methods) - 1 - methods[::-1].index("voice.hearing")
+    assert methods.index("voice.final") < last_hearing
+
+
+def test_hearing_stays_open_across_a_pause_the_judge_is_unsure_about():
+    events = []
+    verdicts = {"confident": False}
+    pipeline = VoicePipeline(
+        vad=VadSegmenter(is_speech=_energy, warmup_ms=0, start_ms=250),
+        transcriber=PartialTranscriber(lambda pcm, beam_size: "let me think"),
+        turn_judge=TurnJudge(is_complete=lambda _window: 1.0 if verdicts["confident"] else 0.0),
+        synthesizer=SpeechSynthesizer(lambda text: [text.encode("ascii")]),
+        emit=lambda method, params: events.append((method, params)),
+        min_utterance_ms=400,
+        spawn=lambda fn: fn(),
+    )
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(800), 16000)})
+    # A thinking pause: the speech has stopped, the judge is not sure, and no
+    # final has been sent. The Gate must not read that as "done talking".
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(600), 16000)})
+    assert _hearing(events) == [True]
+    assert "voice.final" not in [method for method, _params in events]
+
+    # The operator carries on: it is the same utterance, still being heard.
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(800), 16000)})
+    assert _hearing(events) == [True]
+    verdicts["confident"] = True
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
+    assert _hearing(events) == [True, False]
+    assert [method for method, _params in events].count("voice.final") == 1
+
+
+def test_a_blip_too_short_to_be_a_turn_still_closes_hearing():
+    events = []
+    pipeline = VoicePipeline(
+        vad=VadSegmenter(is_speech=_energy, warmup_ms=0, start_ms=96),
+        transcriber=PartialTranscriber(lambda pcm, beam_size: "uh"),
+        turn_judge=TurnJudge(is_complete=lambda _window: 1.0),
+        synthesizer=SpeechSynthesizer(lambda text: [text.encode("ascii")]),
+        emit=lambda method, params: events.append((method, params)),
+        min_utterance_ms=2000,
+        spawn=lambda fn: fn(),
+    )
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(200), 16000)})
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
+    # Nothing was sent for it, and the Gate is not left waiting on it for ever.
+    assert "voice.final" not in [method for method, _params in events]
+    assert _hearing(events) == [True, False]
+
+
+def test_a_new_call_starts_quiet_without_announcing_the_last_one():
+    events = []
+    pipeline = _pipeline(events)
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
+    assert _hearing(events) == [True]
+    pipeline.close({})
+    events.clear()
+
+    pipeline.open({"voiceSessionId": "vs-2"})
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
+    assert _hearing(events) == []
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
+    assert _hearing(events) == [True]
+
+
+def test_mute_drops_the_open_utterance_and_closes_hearing():
+    events = []
+    pipeline = _pipeline(events)
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
+    assert _hearing(events) == [True]
+
+    pipeline.setMuted({"muted": True})
+    assert _hearing(events) == [True, False]
+
+    pipeline.setMuted({"muted": False})
+    # What is said after unmute is its own utterance: the half-sentence from
+    # before the mute is not glued onto it and is never sent.
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
+    assert [method for method, _params in events].count("voice.final") == 1
+    assert _hearing(events) == [True, False, True, False]
+
+
+# --- The loudspeaker, not the synthesizer, decides what a barge-in is --------
+# Kokoro generates a sentence about three times faster than it is spoken, so
+# the reply is still coming out of the phone long after synthesis has ended.
+
+
+def _gated_pipeline(events):
+    vad = GatedVad(is_speech=_energy, warmup_ms=0, start_ms=250)
+    pipeline = VoicePipeline(
+        vad=vad,
+        transcriber=PartialTranscriber(lambda pcm, beam_size: "hello there"),
+        turn_judge=None,
+        synthesizer=SpeechSynthesizer(lambda text: [text.encode("ascii")]),
+        emit=lambda method, params: events.append((method, params)),
+        spawn=lambda fn: fn(),
+    )
+    return pipeline, vad
+
+
+def test_the_echo_gate_stays_up_while_the_phone_is_still_playing():
+    events = []
+    pipeline, vad = _gated_pipeline(events)
+    pipeline.open({"voiceSessionId": "vs-1"})
+
+    pipeline.setPlayback({"on": True})
+    pipeline.speak({"gen": 1, "text": "Hello.", "final": True})
+    # Synthesis is over (the fake is instant) and the phone has seconds of it
+    # left to play: the gate must not drop yet.
+    assert "voice.speechDone" in [method for method, _params in events]
+    assert vad.playback is True
+
+    pipeline.setPlayback({"on": False})
+    assert vad.playback is False
+
+
+def test_speech_during_playout_is_a_barge_in_after_synthesis_has_ended():
+    events = []
+    pipeline, _vad = _gated_pipeline(events)
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.setPlayback({"on": True})
+    pipeline.speak({"gen": 3, "text": "A long answer.", "final": True})
+    assert "voice.speechDone" in [method for method, _params in events]
+
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(600), 16000)})
+    assert "voice.userSpeechStart" in [method for method, _params in events]
+
+
+def test_speech_after_playout_ended_is_not_a_barge_in():
+    events = []
+    pipeline, _vad = _gated_pipeline(events)
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.setPlayback({"on": True})
+    pipeline.speak({"gen": 3, "text": "A long answer.", "final": True})
+    pipeline.setPlayback({"on": False})
+
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(600), 16000)})
+    assert "voice.userSpeechStart" not in [method for method, _params in events]
+
+
+def test_a_new_call_does_not_inherit_the_last_calls_playout():
+    events = []
+    pipeline, vad = _gated_pipeline(events)
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.setPlayback({"on": True})
+    pipeline.close({})
+
+    pipeline.open({"voiceSessionId": "vs-2"})
+    assert vad.playback is False
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(600), 16000)})
+    assert "voice.userSpeechStart" not in [method for method, _params in events]
+
+
+# --- A marginal pause: held long enough that carrying on is one turn ---------
+
+
+def _marginal_pipeline(events):
+    return VoicePipeline(
+        vad=VadSegmenter(is_speech=_energy, warmup_ms=0, start_ms=250),
+        transcriber=PartialTranscriber(lambda pcm, beam_size: "one thought"),
+        # Over the line, but not sure: a clause that could have been the end.
+        turn_judge=TurnJudge(is_complete=lambda _window: 0.6),
+        synthesizer=SpeechSynthesizer(lambda text: [text.encode("ascii")]),
+        emit=lambda method, params: events.append((method, params)),
+        min_utterance_ms=400,
+        spawn=lambda fn: fn(),
+    )
+
+
+def _push(pipeline, pcm_for, total_ms, step_ms=100):
+    for _ in range(total_ms // step_ms):
+        pipeline.pushAudio({"chunk": encode_chunk(pcm_for(step_ms), 16000)})
+
+
+def _finals(events):
+    return [params for method, params in events if method == "voice.final"]
+
+
+def test_a_marginal_pause_of_over_a_second_stays_one_turn():
+    events = []
+    pipeline = _marginal_pipeline(events)
+    pipeline.open({"voiceSessionId": "vs-1"})
+
+    _push(pipeline, _tone, 800)
+    _push(pipeline, _silence, 1200)
+    assert _finals(events) == []
+    assert _hearing(events) == [True]
+
+    _push(pipeline, _tone, 800)
+    _push(pipeline, _silence, 1400)
+    assert _finals(events) == []
+    _push(pipeline, _silence, 300)
+    assert len(_finals(events)) == 1
+    assert _hearing(events) == [True, False]
+
+
+def test_a_pause_is_not_judged_over_while_speech_is_starting_again():
+    events = []
+    pipeline = _marginal_pipeline(events)
+    pipeline.open({"voiceSessionId": "vs-1"})
+
+    _push(pipeline, _tone, 800)
+    _push(pipeline, _silence, 1400)
+    # The person starts again 100 ms before the pause would have been called.
+    # The VAD needs 250 ms to count it as speech; the judge must not use that
+    # gap to send the first half of the sentence.
+    _push(pipeline, _tone, 200)
+    assert _finals(events) == []
+    _push(pipeline, _tone, 600)
+    assert _finals(events) == []
+
+    _push(pipeline, _silence, 1700)
+    assert len(_finals(events)) == 1
+
+
+def test_speech_that_is_starting_counts_as_hearing_before_it_opens():
+    events = []
+    pipeline = _pipeline(events)
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(200), 16000)})
+    assert _hearing(events) == []
+
+    # 100 ms of speech: not yet an utterance (that takes 250 ms), but the Gate
+    # must already stop the clock on a turn it was about to send.
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(100), 16000)})
+    assert _hearing(events) == [True]
+    assert pipeline._speaking is False
+
+    # It came to nothing: a click, not a sentence. The clock may run again.
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(100), 16000)})
+    assert _hearing(events) == [True, False]
+    assert _finals(events) == []
+
+
+def test_every_utterance_that_opens_is_announced_once():
+    events = []
+    pipeline = _pipeline(events)
+    pipeline.open({"voiceSessionId": "vs-1"})
+    opened = lambda: [method for method, _params in events].count("voice.utteranceOpen")  # noqa: E731
+
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(200), 16000)})
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(100), 16000)})
+    assert opened() == 0, "an onset still being counted is not an utterance"
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(400), 16000)})
+    assert opened() == 1
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(400), 16000)})
+    assert opened() == 1
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
+    assert opened() == 2

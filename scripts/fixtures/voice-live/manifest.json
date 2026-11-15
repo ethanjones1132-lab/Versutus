@@ -1,0 +1,41 @@
+{
+  "voice": "am_michael",
+  "reply": "Sure, here is what I found for you, and it should cover what you asked. This second sentence is here so the reply has more than one sentence to speak.",
+  "utterances": [
+    {
+      "id": "short-question",
+      "kind": "turn",
+      "segments": [{ "text": "What is the weather like today?" }]
+    },
+    {
+      "id": "long-request",
+      "kind": "turn",
+      "segments": [{ "text": "Can you summarize what we talked about yesterday and tell me what I should do next?" }]
+    },
+    {
+      "id": "two-sentences",
+      "kind": "turn",
+      "segments": [{ "text": "I just got back from the store. Remind me to put the receipts in the folder tonight." }]
+    },
+    {
+      "id": "thinking-pause",
+      "kind": "turn",
+      "note": "A pause mid-thought: one turn, not two.",
+      "segments": [
+        { "text": "So I was thinking about the release plan," },
+        { "text": "and I want to move the date to Friday.", "gapMs": 1200 }
+      ]
+    },
+    {
+      "id": "greeting",
+      "kind": "turn",
+      "segments": [{ "text": "Hello there, can you hear me?" }]
+    },
+    {
+      "id": "barge-in",
+      "kind": "barge",
+      "note": "Spoken over the reply while it is playing.",
+      "segments": [{ "text": "Wait, stop, I have another question for you." }]
+    }
+  ]
+}

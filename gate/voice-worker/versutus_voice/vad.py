@@ -107,6 +107,15 @@ class VadSegmenter:
         """Gate harder while the PC speaks, so leaked echo cannot open speech."""
         self._playback = bool(on)
 
+    @property
+    def onset_ms(self):
+        """Speech heard so far towards an utterance that has not opened yet.
+
+        Above zero while outside speech means the last windows cleared the gate
+        and an onset is being counted: someone has probably started talking.
+        """
+        return 0.0 if self.in_speech else self._speech_ms
+
     def _gate(self):
         cap = self.playback_gate_max if self._playback else self.gate_max
         return max(self.threshold, min(cap, self._floor + self.gate_margin))

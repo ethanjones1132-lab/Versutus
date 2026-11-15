@@ -417,7 +417,7 @@ test('a changed final aborts the speculative turn and keeps the replacement time
   const failed = await waitUntil(() =>
     call.frames.find((frame) => frame.t === 'turn' && frame.state === 'failed'),
   );
-  assert.match(failed.error, /timed out/);
+  assert.match(failed.error, /took too long to answer/);
   assert.deepEqual(turns, ['draft', 'corrected']);
   call.first.close();
   await once(call.first, 'close');
@@ -800,7 +800,7 @@ test('a turn that never answers is failed and listening reopens', async () => {
   const failed = await waitUntil(() =>
     call.frames.find((frame) => frame.t === 'turn' && frame.state === 'failed'),
   );
-  assert.match(failed.error, /timed out/);
+  assert.match(failed.error, /took too long to answer/);
   await waitUntil(() => call.frames.some((frame) => frame.t === 'phase' && frame.phase === 'listening'));
   call.first.close();
   await once(call.first, 'close');

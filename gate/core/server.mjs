@@ -48,7 +48,7 @@ import { LocalEngine, spawnVoiceWorker } from './voice/engines/local-engine.mjs'
 import { createVoiceWorkerPool } from './voice/engines/worker-pool.mjs';
 import { voicePaths, voiceStatus, installVoice, uvRunner } from './voice/runtime.mjs';
 import { runBackendTurn, modelReport } from './voice/turn-runner.mjs';
-import { resolveVoiceBackend, startVoiceBackendLease } from './voice/voice-backend.mjs';
+import { locateVoiceThread, resolveVoiceBackend, startVoiceBackendLease } from './voice/voice-backend.mjs';
 import { ScriptedEngine, scriptedEngineEnabled } from './voice/engines/scripted-engine.mjs';
 import { verifySignedAccessRequest, ReplayCache } from './signature.mjs';
 import { handlePublicRoute } from './routes/public.mjs';
@@ -1436,7 +1436,13 @@ const VOICE_TURN_ABORTED = Object.freeze({ hasContent: false, aborted: true });
 
 function voiceBackendDescriptor(backend) {
   if (!backend || typeof backend !== 'object') return 'backend';
-  return String(backend.id ?? backend.name ?? backend.adapterId ?? backend.constructor?.name ?? 'backend');
+  // `kind` is what every environment backend carries; the others are fakes
+  // and older adapters. A plain object's constructor name is "Object", which is
+  // what the log said for every live call before this named the kind.
+  const named = backend.kind ?? backend.id ?? backend.name ?? backend.adapterId;
+  if (typeof named === 'string' && named) return named;
+  const ctor = backend.constructor?.name;
+  return ctor && ctor !== 'Object' ? ctor : 'backend';
 }
 
 function raceVoiceAbort(promise, signal) {
@@ -1469,6 +1475,7 @@ export async function resolveVoiceTurnBackend(backendManager, thread, {
   lease = null,
   onStage = () => {},
   selection,
+  locate = null,
 } = {}) {
   const startedAt = Date.now();
   const meta = attempt === undefined ? {} : { attempt };
@@ -1484,7 +1491,10 @@ export async function resolveVoiceTurnBackend(backendManager, thread, {
   let backend;
   try {
     backend = await raceVoiceAbort(
-      lease ? lease.backend() : resolveVoiceBackend(backendManager, thread, { selection }),
+      lease
+        ? lease.backend()
+        : locateVoiceThread(thread, locate)
+          .then((located) => resolveVoiceBackend(backendManager, located.thread, { selection })),
       signal,
     );
   } catch (error) {
@@ -1511,7 +1521,7 @@ export async function resolveVoiceTurnBackend(backendManager, thread, {
  * with it an unscoped thread picks its backend the way a typed request with no
  * backendId does.
  */
-export async function runVoiceTurn(backendManager, session, text, handlers = {}, { selection } = {}) {
+export async function runVoiceTurn(backendManager, session, text, handlers = {}, { selection, locate } = {}) {
   const resolved = await resolveVoiceTurnBackend(backendManager, session?.thread, {
     signal: handlers?.signal,
     attempt: handlers?.attempt,
@@ -1520,12 +1530,24 @@ export async function runVoiceTurn(backendManager, session, text, handlers = {},
     lease: session?.backendLease ?? null,
     onStage: handlers?.onStage,
     selection,
+    locate,
   });
   if (resolved.aborted) return VOICE_TURN_ABORTED;
-  return runBackendTurn(resolved.backend, session?.thread?.sessionId, { text }, {
+  // A spoken turn runs on the model the thread's typed turns run on. Without
+  // it the backend answers on its own default, so a call in a thread pinned to
+  // one model was answered by another.
+  const model = voiceThreadModel(session?.thread);
+  return runBackendTurn(resolved.backend, session?.thread?.sessionId, { text, ...(model ? { model } : {}) }, {
     ...handlers,
     backendId: resolved.descriptor,
   });
+}
+
+/** The model a call's thread names, in the shape a typed turn carries it. */
+export function voiceThreadModel(thread) {
+  const named = typeof thread?.model === 'string' ? thread.model.trim() : '';
+  if (!named || named.length > 256) return undefined;
+  return parseQualifiedModel(named);
 }
 
 /**
@@ -2079,10 +2101,37 @@ export async function createGate(config = {}) {
     // One resolve per call: the backend that will answer is chosen when the
     // phone asks for the session, not when it first speaks, and every turn of
     // the call takes that one answer.
-    prepareCallBackend: ({ thread }) => startVoiceBackendLease(backendManager, thread, {
+    prepareCallBackend: ({ voiceSessionId, thread }) => startVoiceBackendLease(backendManager, thread, {
       selection: defaultBackendSelection,
+      locate: locateCallThread,
+      // One line per call saying who will answer it and how that was decided:
+      // the phone named it, the session's own environment was found, or the
+      // Gate fell back to its default.
+      onResolved: ({ backend, backendId, via }) => console.log(
+        `voice.call backend session=${voiceSessionId} backend=${voiceBackendDescriptor(backend)}`
+        + `${backendId ? ` environment=${backendId}` : ''} via=${via}`,
+      ),
     }),
   });
+
+  /**
+   * Which environment holds a call's session, when the phone did not say.
+   *
+   * The Gate keeps its own copy of every environment's session list, keyed by
+   * environment and Bot, so a session id names where it lives. The newest list
+   * that holds it wins (`keysWithSession` orders them); a session in no list
+   * leaves the thread as it came, and the default rule applies.
+   */
+  async function locateCallThread(thread) {
+    const sessionId = typeof thread?.sessionId === 'string' ? thread.sessionId : '';
+    if (!sessionId) return thread;
+    for (const key of await sessionListIndex.keysWithSession(sessionId)) {
+      const scope = parseSessionIndexKey(key);
+      if (!scope.backendId) continue;
+      return { ...thread, backendId: scope.backendId, ...(scope.botId ? { botId: scope.botId } : {}) };
+    }
+    return thread;
+  }
 
   /**
    * A refusal that names itself.
@@ -5036,6 +5085,7 @@ export async function createGate(config = {}) {
     ),
     runTurn: (session, text, handlers) => runVoiceTurn(backendManager, session, text, handlers, {
       selection: defaultBackendSelection,
+      locate: locateCallThread,
     }),
     // A turn whose phone went away runs to the end and its reply is pushed, the
     // same notice a completed chat turn gets: the words are already in the
