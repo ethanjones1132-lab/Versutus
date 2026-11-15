@@ -198,6 +198,30 @@ function hearDuringTurn(state, event) {
   const text = String(event.text ?? '').trim();
   if (!text) return stay(state);
   const heard = frameSend({ t: 'partial', text });
+  // The held turn finished answering while the person was still talking. Its
+  // answer is already in the thread, so taking the turn back would only send
+  // the first half a second time behind a reply nobody heard. What was held is
+  // not spoken (it answers half a thought), the phone is told the turn is done
+  // so the thread shows it, and what was just said goes as the next turn: the
+  // Bot has the first half and its own answer in front of it.
+  if (state.deferring && state.deferred.some((held) => held.type === 'replyDone')) {
+    const next = {
+      ...state,
+      phase: 'listening',
+      pendingText: text,
+      pendingFinals: 1,
+      committedText: '',
+      committedAtMs: null,
+      deferring: false,
+      deferred: [],
+    };
+    return stay(next, [
+      frameSend({ t: 'turn', turnId: state.turnId, state: 'done' }),
+      phaseEffect('listening'),
+      heard,
+      holdEffect(next),
+    ]);
+  }
   if (isContinuation(state, event)) {
     const merged = joinSpeech(state.committedText, text);
     const merging = { kind: 'utterance.merge', chars: text.length };

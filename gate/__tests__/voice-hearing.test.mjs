@@ -267,3 +267,27 @@ test('speech while merely listening changes nothing', () => {
   assert.equal(out.state.phase, 'listening');
   assert.deepEqual(out.effects, []);
 });
+
+test('a turn that finished answering while they talked is not sent a second time', () => {
+  const held = run([
+    { type: 'replyDelta', text: 'Good idea. ' },
+    { type: 'replyDone' },
+  ], resumed().state);
+
+  const more = run([{ type: 'final', text: 'and I want to move the date to Friday.', nowMs: 4_000 }], held.state);
+  assert.equal(more.state.phase, 'listening');
+  // The answer to the first half is in the thread already: the phone is told
+  // the turn is done, nothing of it is spoken, and the Bot is not cancelled or
+  // asked the first half again.
+  assert.equal(more.effects.some((effect) => effect.kind === 'engine.speak'), false);
+  assert.equal(more.effects.some((effect) => effect.kind === 'turn.cancel'), false);
+  const done = more.effects.find((effect) => effect.kind === 'send' && effect.frame.t === 'turn');
+  assert.equal(done.frame.state, 'done');
+
+  const sent = run([
+    { type: 'hearing', active: false },
+    { type: 'holdElapsed', nowMs: 4_300 },
+  ], more.state);
+  const turns = sent.effects.filter((effect) => effect.kind === 'turn.run');
+  assert.deepEqual(turns.map((turn) => turn.text), ['and I want to move the date to Friday.']);
+});
