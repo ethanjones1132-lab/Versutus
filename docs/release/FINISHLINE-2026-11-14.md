@@ -1,33 +1,60 @@
-# Versutus app finish-line evidence — 2026-11-14
+# Android preview — 2026-11-14
 
-Status: native acceptance in progress. Local changes integrated through `baab934`; an additional measured drawer experiment is being evaluated. No publication or store release.
+The final software candidate is built and verified. Physical acceptance of this exact revision remains blocked by the A54 disappearing from USB. No publication was performed.
 
-| Path | Observed result |
-|---|---|
-| Clean Android onboarding | Separate QA package and Gate home. Unreachable address stays editable and survives restart; rejected key stays in setup; corrected key reaches connected roster. |
-| First real response | Free DeepSeek via isolated OpenCode: `Ready — café 🌙 你好.` rendered intact on A54; restart reconnects without setup. |
-| Existing installation | Matching certificate upgrade retained saved Gate/Bots/data. Enabling phone Tailscale restored Home PC automatically. |
-| Activity | Today/Routines composition; exact storage-home actions; partial Bot read warnings retained. Offline approval false-empty found physically and fixed with regression. |
-| Routine execution | Dedicated QA Bot only. One unavailable free-model execution recorded failure; a currently zero-priced model produced `FINISHLINE_ROUTINE_OK` with completed durable execution. Native edit exposed structured-origin rendering crash; fixed and regression proved. Final packaged save/reopen/history acceptance pending. |
-| Text | Demonstrated source mojibake fixed, AST guard; existing split UTF-8 transport regressions preserved. Real punctuation/emoji/Chinese reply rendered correctly. No historical text recovery claim. |
-| Native shell | Dark three-button strip observed; system buttons retained. Long model/usage overflow found at font1.1 and fixed; final native 1.1/1.5 check pending. |
+## Build
 
-A54 SM-A546U1, Android16, arm64 release preview, main package `com.versutus.app`. Installed baseline was November12 `4e82510`, distinct from campaign source `6c899d7`. Paired cooled roster runs:
+- Source: `b35ffd9031ce82e29848b21aacbd4a788672ca84` on `codex/app-finish-line`, integrated locally into main.
+- APK: `C:/Projects/Versutus/output/versutus-finishline-b35ffd9-arm64-2026-11-14.apk`
+- SHA-256: `589b25a450370753ff3dd74cc075b85816d5c4a4e7a0398a10a4ba947d0c00f9`
+- Size: 64,524,098 bytes. Package `com.versutus.app`, version 1.0.0/code 1, arm64-v8a, target SDK 36.
+- Signature verified and certificate matches the existing installed app. This is a local preview. The last revision installed during this campaign was `b53de70`; the final APK awaits installation.
 
-| Scenario | Baseline p95 ms (3 runs) | 805 p95 ms (3 runs) | 805 frames >=34ms | Existing budget |
+## Changes
+
+- Guided PC address/key setup and a copy-ready host guide. Failed attempts retain drafts and their explicit destination. Setup completes only after connection; retries cannot silently select another saved Gate.
+- Activity uses Today/Routines, retaining live approvals and runs. Every Routine action, edit and transcript read carries its backend and Bot storage home. Partial reads remain visible, and offline approvals show a connection prompt.
+- Routine editing accepts real Hermes schedule/origin shapes, preserves owners and refused drafts, and protects confirmed saves from stale rereads. Paused routines stay listed and show “Paused” instead of a stale next-run date.
+- Details read the full scoped host record and show its authoritative latest run. Accepted requests are distinguished from confirmed starts. Refreshes run independently, and resumed reminders use the refreshed host schedule.
+- Demonstrated source mojibake is fixed and guarded. No historical persisted-text repair is claimed.
+- Idle figures keep seeded finite blinking, wake, thinking and reaction behavior. Idle waits now use cancellable timers; foreground and route gates suspend retained animation. The lamp remains intact. An unsuccessful lamp-pause experiment was measured and reverted.
+- The Android three-button strip stays dark, with buttons and insets retained. Long model/usage header overflow was fixed and checked at the phone’s normal 1.1 text scale.
+
+## Evidence
+
+Clean Android QA reached a real free-model reply: `Ready — café 🌙 你好.` and reconnected after restart. Wrong address and rejected key stayed in setup. A later free-service quota error remained visible.
+
+A dedicated Hermes Routine produced `FINISHLINE_ROUTINE_OK` with a completed durable execution. Provider failure was also observed. Actual phone Edit/save persisted a new name and cron expression; host pause/resume/reopen checks passed, including recalculation to 09:30 with the host’s `-05:00` offset.
+
+A54 SM-A546U1, Android 16, arm64 preview. The installed baseline was November 12 `4e82510`, distinct from initial source `6c899d7`.
+
+| Scenario | Cooled baseline p95 ms | Integrated `805249c` p95 ms | Frames >=34 ms | Budget |
 |---|---|---|---|---|
-| Roster idle |36/32/32|16/15/14|0/0/0|PASS 3/3|
-| Roster slow scroll |44/42/40|19/20/18|1/0/2|FAIL 3/3|
-| Drawer cycles |36/38/36|23/24/26|3/4/10|FAIL 3/3|
+| Roster idle | 36 / 32 / 32 | 16 / 15 / 14 | 0 / 0 / 0 | Pass 3/3 |
+| Slow roster scroll | 44 / 42 / 40 | 19 / 20 / 18 | 1 / 0 / 2 | Fail 3/3 |
+| Drawer | 36 / 38 / 36 | 23 / 24 / 26 | 3 / 4 / 10 | Fail 3/3 |
 
-Budget is unchanged: >=95% frames <=16ms, p95<16.7ms, zero>=34ms. gfxinfo's 120Hz janky percentage is not this 60fps budget. Native idle figure work was the measured major contributor; lamp identity retained. No comparative parity claim.
+The unchanged budget requires at least 95% of frames <=16 ms, p95 <16.7 ms, and zero frames >=34 ms. These results precede the final idle-timer change; its A54 benefit remains unmeasured. No comparative parity is claimed.
 
-Additional bounded observations: one QA long-markdown scroll capture p9516ms,96.1%<=16ms,zero>=34ms; broad keyboard/send/response capture p9519ms with18>=34ms, so no general pass. Cold Android activity launch old2796/2251/1595ms vs8051530/1238/1121ms; these are not full time-to-interactive. Idle PSS snapshot689MB->393MB (different runtime/cache state, not sole-cause attribution). Eight background seconds added zero frames.
+One long-markdown scroll capture met the budget; the broader keyboard/send/response capture did not. Cold activity-launch samples improved from 2796/2251/1595 to 1530/1238/1121 ms; these are not full time-to-interactive. Eight background seconds added zero frames.
 
-Verification at baab934: `npm run verify` exit0 (914 app suites,8,923tests;2,582 Gate pass,1existing skip). Portal/visual at805: ALL PASS /7 of7. Main live Gate smoke after restart and Tailscale recovery: ALL PASS. Native-found fixes have focused red/green regressions and driver reruns. Independent small-fix review: no blocking findings. Final candidate verify passes915suites/8,928tests and unchangedGate2,582pass/1skip; all7visualjourneyspass.
+Final `npm run verify` passed: 914 app suites, 8,939 tests; 2,582 Gate tests passed with one existing skip. Coverage held without lowering thresholds. Portal and all seven visual journeys passed. Final independent review found no blocking issues. Live Gate smoke passed on the warm rerun; the preceding cold model-catalog read exceeded its eight-second timeout.
 
-Raw frame files: `docs/perf/raw/finishline-installed-cooled-roster-2026-11-14/` and `docs/perf/raw/finishline-805-roster-2026-11-14/`; verdict JSON siblings. Private screenshots/video/traces and host proof remain local under the original checkout `temp/finish-line/`; do not publish them blindly. Campaign ownership/resumption detail: `docs/plans/2026-11-14-app-finish-line.md`.
+## Open checks and cleanup
 
-Routing: bounded Luna workers handled onboarding, Activity, figures/native bridge, and independent review; driver reproduced/checked/integrated and owns device acceptance. One text-only Grok review attempt truncated and hit its single-turn limit; it is not approval and was not repeated. Further Luna review found two initial race/stale-save bugs that were fixed with regressions. Full delegation ledger is local `~/.agent-router/ledger.jsonl`.
+- Reconnect/unlock the A54, install the final APK, and measure idle/scroll/drawer after the timer change. Check latest-run refresh on the final sheet, 1.5 text scale, and OS reduced motion. No configured emulator was available.
+- Existing 1.1 text scale, absent animator-duration override and stay-awake value 15 were preserved. The 1.5 attempt failed before its first setting write. No network ADB mode was enabled. Remove the isolated `com.versutus.app.finishline` package when the device returns.
+- Hermes 0.23’s HTTP session records do not expose Routine correlation for canonical session IDs. The app shows the host’s latest run and explicitly marks earlier conversation-transcript coverage as incomplete; it does not invent links.
+- QA Gate 8761 is no longer running and its distinct bootstrap token was removed. Automatic approval review blocked recursive removal of the unused cache, reporting “blocked by policy”; that cache remains local.
+- Supported deletion marked the dedicated `finishline-qa-20261114` profile deleted, but its live Hermes multiplexer still holds the directory. Filesystem/identity cleanup remains pending. Retry the supported profile-delete command after that gateway releases the home; do not stop unrelated live work to force removal. Test jobs were paused or terminal at their last confirmed read.
+- Main Gate/Hermes listeners remain on 8760/8642. Existing keys, default model pins, jobs and app data were not reset.
 
-Final APK identity, final source SHA, final device checks, cleanup and remaining limitations will be filled after the last build; the805 APK is a pre-acceptance artifact.
+Raw frame verdicts and dumps are in `docs/perf/finishline-*.json` and `docs/perf/raw/`. Private screenshots, recordings, traces and host proof remain in the original checkout’s `temp/finish-line/`. Resumption details are in `docs/plans/2026-11-14-app-finish-line.md`.
+
+## Routing log
+
+- Luna, xhigh — bounded onboarding, Activity, avatar/native-bridge slices — accepted after focused regressions; driver completed final integration.
+- Luna, xhigh — independent targeted reviews — race, stale-save and stale-detail findings fixed; final review found no blocking issues.
+- Grok, medium — one text-only review of the initial consequential diff — truncated/turn limit, not approval; not repeated.
+
+The full local delegation ledger is `C:/Users/ethan/.agent-router/ledger.jsonl`.
