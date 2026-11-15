@@ -9,7 +9,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { runVoiceTurn, voiceThreadModel } from '../core/server.mjs';
-import { locateVoiceThread, startVoiceBackendLease } from '../core/voice/voice-backend.mjs';
+import {
+  findSessionEnvironment,
+  locateVoiceThread,
+  startVoiceBackendLease,
+} from '../core/voice/voice-backend.mjs';
 import { describeTurnFailure } from '../core/voice/turn-failure.mjs';
 
 function backendNamed(kind, sent = []) {
@@ -143,6 +147,73 @@ test('a thread model is read only when it is a plausible model id', () => {
   assert.equal(voiceThreadModel({ model: 42 }), undefined);
   assert.equal(voiceThreadModel({ model: 'm'.repeat(300) }), undefined);
   assert.equal(voiceThreadModel(undefined), undefined);
+});
+
+// ─── Asking the environments themselves ────────────────────────────────────
+// The Gate's own session index only covers the environments it indexes. The
+// session of the call that failed on 2026-11-15 was an OpenCode one, in no list
+// the Gate keeps, so the environments have to be asked.
+
+function environments(map, methods = {}) {
+  const started = [];
+  return {
+    started,
+    list: async () => Object.keys(map).map((id) => ({ id })),
+    get: async (id) => {
+      started.push(id);
+      if (map[id] instanceof Error) throw map[id];
+      return map[id];
+    },
+    methodsOf: async (id) => (methods[id] ? new Set(methods[id]) : null),
+  };
+}
+
+test('the environment that lists a session is the one that holds it', async () => {
+  const manager = environments({
+    'claude-code': { listSessions: async () => [{ id: 'abc' }] },
+    'opencode-local': { listSessions: async () => [{ id: 'ses_other' }, { id: 'ses_e223' }] },
+  });
+  assert.equal(await findSessionEnvironment(manager, 'ses_e223'), 'opencode-local');
+  assert.equal(await findSessionEnvironment(manager, 'ses_nobody_has'), null);
+  assert.equal(await findSessionEnvironment(manager, ''), null);
+});
+
+test('an environment that can read a session by id is asked that way', async () => {
+  const asked = [];
+  const manager = environments({
+    'hermes-local': {
+      getSession: async (id) => {
+        asked.push(id);
+        if (id !== 'h-1') throw Object.assign(new Error('not found'), { code: 'unknown_session', status: 404 });
+        return { id };
+      },
+      listSessions: async () => {
+        throw new Error('the list is the slow read and must not be needed');
+      },
+    },
+  });
+  assert.equal(await findSessionEnvironment(manager, 'h-1'), 'hermes-local');
+  assert.equal(await findSessionEnvironment(manager, 'h-2'), null);
+  assert.deepEqual(asked, ['h-1', 'h-2']);
+});
+
+test('an environment that is down, slow or has no sessions does not hold up the answer', async () => {
+  const manager = environments(
+    {
+      broken: new Error('the credential vault is locked'),
+      hanging: { listSessions: () => new Promise(() => {}) },
+      'no-sessions': { sendMessage: async () => ({}) },
+      'opencode-local': { listSessions: async () => [{ id: 'ses_1' }] },
+    },
+    { 'no-sessions': ['sendMessage'] },
+  );
+  const startedAt = Date.now();
+  assert.equal(await findSessionEnvironment(manager, 'ses_1', { boundMs: 2_000 }), 'opencode-local');
+  assert.ok(Date.now() - startedAt < 1_000, 'the first environment that has it wins');
+  assert.equal(manager.started.includes('no-sessions'), false, 'one that cannot list sessions is never started');
+
+  // Nobody has it: the answer waits for the bound, not for ever.
+  assert.equal(await findSessionEnvironment(manager, 'ses_missing', { boundMs: 80 }), null);
 });
 
 // ─── The sentence a failure is told in ─────────────────────────────────────

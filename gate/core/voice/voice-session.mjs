@@ -54,7 +54,15 @@ export const INITIAL_VOICE_SESSION = Object.freeze({
   // long enough to cover a thinking pause; one that never does leaves this
   // false, and the hold alone decides as it always has.
   hearing: false,
+  // The person started talking while their turn was still being thought about.
+  // Until it is known whether that was words or a cough, the turn keeps running
+  // and what it says is held here, unspoken and unsent, in the order it came.
+  deferring: false,
+  deferred: [],
 });
+
+/** What a running turn produces; the events held while the person is talking. */
+const TURN_OUTPUT = new Set(['replyDelta', 'replyDone', 'replyFailed', 'toolUpdate', 'approvalRequired']);
 
 /** The line a failed turn speaks before the loop reopens. */
 export const FAILED_TURN_LINE = 'Sorry, that turn could not be completed.';
@@ -142,6 +150,8 @@ function commitUtterance(state, text, { finals = 1, nowMs = null, before = [] } 
       pendingFinals: 0,
       committedText: text,
       committedAtMs: nowMs,
+      deferring: false,
+      deferred: [],
     },
     effects: [
       ...before,
@@ -198,6 +208,9 @@ function hearDuringTurn(state, event) {
       pendingFinals: 1,
       committedText: '',
       committedAtMs: null,
+      // The turn is withdrawn, so whatever it had said while held goes with it.
+      deferring: false,
+      deferred: [],
     };
     if (state.utteranceHoldMs > 0) {
       return stay(gathered, [
@@ -216,10 +229,25 @@ function hearDuringTurn(state, event) {
   ]);
 }
 
+/** Let a held turn speak: fold what it said while held back in, in order. */
+function releaseDeferred(state) {
+  let current = { ...state, deferring: false, deferred: [] };
+  const effects = [];
+  for (const event of state.deferred) {
+    const out = reduceVoiceSession(current, event);
+    current = out.state;
+    effects.push(...out.effects);
+  }
+  return stay(current, effects);
+}
+
 /** Is this final the thought the running turn is still answering? */
 function isContinuation(state, event) {
   if (state.phase !== 'thinking' || state.reply !== '') return false;
   if (!(state.continuationMs > 0)) return false;
+  // A turn already being held for this speech is its continuation however long
+  // the sentence took to say: the window was judged when the speech began.
+  if (state.deferring) return true;
   const elapsed = event.nowMs - state.committedAtMs;
   return Number.isFinite(elapsed) && elapsed >= 0 && elapsed < state.continuationMs;
 }
@@ -259,6 +287,13 @@ export function reduceVoiceSession(state, event) {
         fatal: false,
       }),
     ]);
+  }
+
+  // While the person is talking over a turn that has not answered yet, what the
+  // turn produces is held: nothing is spoken over them and nothing is shown,
+  // and the turn itself is left running until it is known what they said.
+  if (state.deferring && TURN_OUTPUT.has(event.type)) {
+    return stay({ ...state, deferred: [...state.deferred, event] });
   }
 
   switch (event.type) {
@@ -306,6 +341,11 @@ export function reduceVoiceSession(state, event) {
       const hearing = Boolean(event.active);
       if (hearing === state.hearing) return stay(state);
       const next = { ...state, hearing };
+      // The sound that held the turn's reply back has stopped and no words came
+      // of it (a final arrives before this, and takes the turn back): it was a
+      // cough or a door. The turn was never touched, and what it said while
+      // held is released now, in order.
+      if (!hearing && state.deferring) return releaseDeferred(next);
       if (state.phase === 'listening' && state.pendingText) return stay(next, [holdEffect(next)]);
       return stay(next);
     }
@@ -320,32 +360,18 @@ export function reduceVoiceSession(state, event) {
     }
 
     // The person started talking again while their turn was still being thought
-    // about. Nothing has been said back yet, so the turn is theirs to extend:
-    // it is taken back, and what they are saying now joins it as one utterance.
-    // Waiting for the final to decide this (as `hearDuringTurn` does) is too
-    // late — by the time a sentence has been spoken and decoded the reply has
-    // usually begun, and the call then answered the first half, played all of
-    // it, and answered the second half on its own (a live trace, 2026-11-15).
+    // about, and nothing has been said back yet. If these are words, the turn is
+    // theirs to extend: the final that follows takes it back and sends both
+    // halves as one. Waiting for that final with the reply free to start (as the
+    // call used to) was too late — by the time a sentence has been spoken and
+    // decoded the reply had usually begun, and the call answered the first half,
+    // played all of it, and then answered the second half on its own (a live
+    // trace, 2026-11-15). So from here the turn's output is held. The turn is
+    // not cancelled yet: a cough is not a sentence, and re-sending a prompt for
+    // one would run it twice.
     case 'userSpeaking': {
-      if (!isContinuation(state, event)) return stay(state);
-      const withdrawn = {
-        ...state,
-        phase: 'listening',
-        pendingText: state.committedText,
-        pendingFinals: 1,
-        committedText: '',
-        committedAtMs: null,
-        // The engine's `hearing` usually says so first; the withdrawn turn must
-        // not be re-sent by a hold that was armed before it did.
-        hearing: true,
-      };
-      return stay(withdrawn, [
-        { kind: 'utterance.withdraw', chars: state.committedText.length },
-        { kind: 'turn.cancel' },
-        phaseEffect('listening'),
-        frameSend({ t: 'partial', text: state.committedText }),
-        holdEffect(withdrawn),
-      ]);
+      if (state.deferring || !isContinuation(state, event)) return stay(state);
+      return stay({ ...state, deferring: true, deferred: [], hearing: true });
     }
 
     // The hold armed by the last segment elapsed. Nothing pending means there is
@@ -407,7 +433,7 @@ export function reduceVoiceSession(state, event) {
     case 'skip': {
       if (state.phase !== 'speaking' && state.phase !== 'thinking') return stay(state);
       const cancelled = state.gen;
-      return stay({ ...state, phase: 'listening', gen: state.gen + 1 }, [
+      return stay({ ...state, phase: 'listening', gen: state.gen + 1, deferring: false, deferred: [] }, [
         frameSend({ t: 'speech', gen: cancelled, state: 'cancelled' }),
         { kind: 'turn.cancel' },
         { kind: 'engine.cancelSpeech', gen: cancelled },

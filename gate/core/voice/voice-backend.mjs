@@ -203,6 +203,78 @@ export async function locateVoiceThread(thread, locate) {
   return { thread, via: 'default' };
 }
 
+/** How long one environment may take to say whether it holds a session. */
+export const SESSION_ENVIRONMENT_BOUND_MS = 4_000;
+
+/**
+ * Which attached environment holds a session, asked of the environments
+ * themselves: the id of the first one that has it, or null.
+ *
+ * The Gate's own session index answers this for the environments it indexes
+ * (Hermes), and nothing else: an OpenCode or Codex session is in no list the
+ * Gate keeps, so a call on one was still "unscoped" and still went to the
+ * default backend. Every environment is asked at once and the first that has
+ * the session wins; one that errors, cannot be attached or runs out of time is
+ * "not here" for this lookup, so a slow host never holds a call's start.
+ *
+ * @param {{ list(): Promise<{ id: string }[]>, get(id: string): Promise<object>,
+ *   methodsOf?(id: string): Promise<Set<string> | null> }} backendManager
+ * @param {string} sessionId
+ * @param {{ boundMs?: number }} [options]
+ * @returns {Promise<string | null>}
+ */
+export async function findSessionEnvironment(backendManager, sessionId, { boundMs = SESSION_ENVIRONMENT_BOUND_MS } = {}) {
+  if (typeof sessionId !== 'string' || !sessionId) return null;
+  const entries = await backendManager.list().catch(() => []);
+  if (!entries.length) return null;
+  return new Promise((resolve) => {
+    let open = entries.length;
+    let settled = false;
+    const answer = (id) => {
+      if (settled) return;
+      open -= 1;
+      if (id) {
+        settled = true;
+        resolve(id);
+      } else if (open === 0) {
+        settled = true;
+        resolve(null);
+      }
+    };
+    for (const entry of entries) {
+      const timer = setTimeout(() => answer(null), boundMs);
+      timer.unref?.();
+      environmentHoldsSession(backendManager, entry.id, sessionId).then(
+        (holds) => { clearTimeout(timer); answer(holds ? entry.id : null); },
+        () => { clearTimeout(timer); answer(null); },
+      );
+    }
+  });
+}
+
+/** Whether one environment has a session: by id where it can, else by its list. */
+async function environmentHoldsSession(backendManager, id, sessionId) {
+  // Learned without starting the environment where the manager can say: one
+  // that can do neither read is not started just to be told so.
+  const methods = typeof backendManager.methodsOf === 'function'
+    ? await backendManager.methodsOf(id).catch(() => null)
+    : null;
+  if (methods && !methods.has('getSession') && !methods.has('listSessions')) return false;
+  const backend = await backendManager.get(id);
+  if (typeof backend?.getSession === 'function') {
+    try {
+      const session = await backend.getSession(sessionId);
+      if (session?.id === sessionId) return true;
+    } catch (error) {
+      // A named miss is an answer; anything else falls through to the list.
+      if (error?.code === 'unknown_session' || error?.status === 404) return false;
+    }
+  }
+  if (typeof backend?.listSessions !== 'function') return false;
+  const sessions = await backend.listSessions();
+  return Array.isArray(sessions) && sessions.some((session) => session?.id === sessionId);
+}
+
 /**
  * @typedef {object} VoiceBackendSelection
  * @property {(id: string) => string | undefined} stateOf current coarse state, if known

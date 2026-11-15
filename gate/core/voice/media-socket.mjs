@@ -363,6 +363,10 @@ export function attachVoiceMediaSocket({
     let bufferedAudioBytes = 0;
     let audioDropped = false;
     let replayBytes = 0;
+    // What the log holds that no socket has been handed: the frames produced
+    // while the phone was away. Only these count against the replay budget.
+    let undeliveredFrames = 0;
+    let undeliveredBytes = 0;
     let resumeExpected = false;
     const speechStartSeq = new Map();
     const speechLifecycle = new Map();
@@ -436,6 +440,10 @@ export function attachVoiceMediaSocket({
       const timer = setTimeout(() => {
         if (waitingOnEngine) {
           log(`voice.speech stalled session=${session.voiceSessionId} gen=${gen} afterMs=${playoutStallMs}`);
+          // The rest of this reply is given up on, so the engine is told to
+          // stop making it: a worker that was only slow would otherwise finish
+          // the sentence later and hand it over after the call had moved on.
+          engine.cancelSpeech?.(gen);
         }
         finish();
       }, wait);
@@ -474,6 +482,10 @@ export function attachVoiceMediaSocket({
 
     const queuePlayout = (pcm, gen) => {
       if (ended || !pcm?.length) return;
+      // A reply that is over stays over: audio that turns up for it afterwards
+      // (a sentence finished after its reply was cancelled or given up on) is
+      // never played into whatever the call is doing now.
+      if (playout.finished.has(gen)) return;
       const bytesPerMs = (OUTPUT_SAMPLE_RATE * OUTPUT_CHANNELS * 2) / 1000;
       const maxBytes = bytesPerMs * MAX_SPEECH_CHUNK_MS;
       for (let offset = 0; offset < pcm.length; offset += maxBytes) {
@@ -573,10 +585,29 @@ export function attachVoiceMediaSocket({
       replay.push(entry);
       if (entry.frame) replayBytes += Buffer.byteLength(entry.frame);
       if (entry.pcm) bufferedAudioBytes += entry.pcm.length;
-      if (protocolVersion === 2 && (replay.length > maxBufferedFrames || replayBytes > V2_MAX_REPLAY_BYTES)) {
-        // Reliable controls are never silently evicted: an exhausted replay
-        // budget is an explicit terminal backpressure failure.
-        if (!endingNow) setImmediate(() => end('backpressure'));
+      if (protocolVersion === 2) {
+        // The log is two things. While a phone is attached it is a window of
+        // what was last written to its socket, kept in case that socket turns
+        // out to have been dead: it slides, oldest out, and never ends a call
+        // (it used to — every control frame of a live call was kept for ever,
+        // so any call ended itself with `backpressure` at the thousandth frame,
+        // about twenty turns in). While no phone is attached it is the frames
+        // that phone is owed, and those are never silently evicted: running
+        // out of room for them is an explicit terminal backpressure failure.
+        if (ws) {
+          while (replay.length > maxBufferedFrames || replayBytes > V2_MAX_REPLAY_BYTES) {
+            const dropped = replay.shift();
+            if (dropped.frame) replayBytes -= Buffer.byteLength(dropped.frame);
+          }
+          return;
+        }
+        if (entry.frame) {
+          undeliveredFrames += 1;
+          undeliveredBytes += Buffer.byteLength(entry.frame);
+        }
+        if (undeliveredFrames > maxBufferedFrames || undeliveredBytes > V2_MAX_REPLAY_BYTES) {
+          if (!endingNow) setImmediate(() => end('backpressure'));
+        }
         return;
       }
       while (replay.length > maxBufferedFrames || bufferedAudioBytes > maxBufferedAudioBytes) {
@@ -695,7 +726,10 @@ export function attachVoiceMediaSocket({
         if (frame.t === 'call' && frame.state === 'opening') v2ProbeFrame = data;
         if (frame.t === 'speech' && frame.state === 'start') speechStartSeq.set(frame.gen, wireFrame.seq);
         if (coalescedPartial) {
-          replayBytes += Buffer.byteLength(data) - Buffer.byteLength(coalescedPartial.frame);
+          const grew = Buffer.byteLength(data) - Buffer.byteLength(coalescedPartial.frame);
+          replayBytes += grew;
+          // Only ever coalesced while detached: it replaces an undelivered frame.
+          undeliveredBytes += grew;
           coalescedPartial.frame = data;
         } else append({ frame: data, seq: wireFrame.seq });
       }
@@ -864,10 +898,6 @@ export function attachVoiceMediaSocket({
         case 'utterance.merge':
           trace.continued += 1;
           log(`voice.final merged session=${session.voiceSessionId} chars=${effect.chars}`);
-          break;
-        case 'utterance.withdraw':
-          trace.continued += 1;
-          log(`voice.turn withdrawn session=${session.voiceSessionId} chars=${effect.chars} reason=speech-resumed`);
           break;
         case 'utterance.queue':
           trace.queued += 1;
@@ -1208,6 +1238,18 @@ export function attachVoiceMediaSocket({
             const removed = replay.shift();
             replayBytes -= Buffer.byteLength(removed.frame);
           }
+          // The window slid past what this phone last saw: it was away, or its
+          // socket was dead, for longer than the window holds. What is left is
+          // still replayed in order; the hole is named so it is not a mystery.
+          const oldest = replay.find((entry) => entry.seq !== undefined)?.seq;
+          if (oldest !== undefined && oldest > control.lastSeq + 1) {
+            log(
+              `voice.stream resume gap session=${session.voiceSessionId}`
+              + ` missing=${oldest - control.lastSeq - 1}`,
+            );
+          }
+          undeliveredFrames = 0;
+          undeliveredBytes = 0;
           resumeExpected = false;
           // Controls replay in their original sequence order. Audio is never
           // replayed; its gap marker is sequenced after the retained controls.

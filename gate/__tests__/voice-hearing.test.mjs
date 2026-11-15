@@ -171,45 +171,95 @@ test('an opening clause is found only where it is safe to cut', () => {
 });
 
 // ─── Talking again while the turn is still being thought about ─────────────
+// The turn is not cancelled the moment a sound is heard: what it says is held
+// until it is known whether the sound was words. Words take the turn back and
+// both halves go as one; a cough leaves the turn exactly as it was.
 
 const committed = () => run([
   { type: 'final', text: 'So I was thinking about the release plan.' },
   { type: 'holdElapsed', nowMs: 1_000 },
 ], listening());
 
-test('speech that resumes before any reply takes the turn back and joins it', () => {
-  const thinking = committed();
-  assert.equal(thinking.state.phase, 'thinking');
+const resumed = () => run([
+  { type: 'hearing', active: true },
+  { type: 'userSpeaking', nowMs: 1_400 },
+], committed().state);
 
-  const resumed = run([{ type: 'userSpeaking', nowMs: 1_400 }], thinking.state);
-  assert.equal(resumed.state.phase, 'listening');
-  assert.equal(resumed.state.pendingText, 'So I was thinking about the release plan.');
-  const kinds = resumed.effects.map((effect) => effect.kind);
-  assert.ok(kinds.includes('turn.cancel'), 'the Bot is not left answering half a sentence');
-  assert.deepEqual(holds(resumed.effects), [0], 'and nothing is re-sent while the person is talking');
+test('a reply that starts while the person is talking again is held, not spoken over them', () => {
+  const talking = resumed();
+  assert.equal(talking.state.phase, 'thinking');
+  assert.equal(talking.effects.some((effect) => effect.kind === 'turn.cancel'), false, 'the turn is left running');
 
-  const finished = run([
-    { type: 'final', text: 'and I want to move the date to Friday.' },
+  const held = run([
+    { type: 'replyDelta', text: 'Sure. ' },
+    { type: 'toolUpdate', toolId: 't1', name: 'read', status: 'running', summary: 'read running' },
+  ], talking.state);
+  assert.equal(held.state.phase, 'thinking');
+  assert.deepEqual(held.effects, [], 'nothing is spoken, shown or sent while they talk');
+});
+
+test('words that follow take the turn back and both halves go as one', () => {
+  const held = run([{ type: 'replyDelta', text: 'Sure. ' }], resumed().state);
+
+  // The sentence took longer to say than the continuation window: it is still
+  // the same thought, judged when the speech began.
+  const merged = run([{ type: 'final', text: 'and I want to move the date to Friday.', nowMs: 9_000 }], held.state);
+  assert.equal(merged.state.phase, 'listening');
+  assert.ok(merged.effects.some((effect) => effect.kind === 'turn.cancel'), 'now the half-answered turn is withdrawn');
+  assert.equal(merged.effects.some((effect) => effect.kind === 'engine.speak'), false, 'and what it had said is never spoken');
+  assert.deepEqual(merged.state.deferred, []);
+
+  const sent = run([
     { type: 'hearing', active: false },
-    { type: 'holdElapsed', nowMs: 4_000 },
-  ], resumed.state);
-  const turn = finished.effects.find((effect) => effect.kind === 'turn.run');
-  assert.equal(turn.text, 'So I was thinking about the release plan. and I want to move the date to Friday.');
-  const finals = finished.effects.filter((effect) => effect.kind === 'send' && effect.frame.t === 'final');
-  assert.equal(finals.length, 1, 'one utterance, one turn');
+    { type: 'holdElapsed', nowMs: 9_300 },
+  ], merged.state);
+  const turns = sent.effects.filter((effect) => effect.kind === 'turn.run');
+  assert.deepEqual(turns.map((turn) => turn.text), [
+    'So I was thinking about the release plan. and I want to move the date to Friday.',
+  ]);
+});
+
+test('a cough leaves the turn alone, and what it said while held is released in order', () => {
+  const held = run([
+    { type: 'replyDelta', text: 'Sure, here it is. ' },
+    { type: 'replyDelta', text: 'And more.' },
+    { type: 'replyDone' },
+  ], resumed().state);
+  assert.deepEqual(held.effects, []);
+
+  // No final came of the sound: the engine simply stops hearing.
+  const released = run([{ type: 'hearing', active: false }], held.state);
+  assert.equal(released.effects.some((effect) => effect.kind === 'turn.cancel'), false, 'the prompt is never sent twice');
+  assert.equal(released.state.phase, 'speaking');
+  assert.equal(released.state.deferring, false);
+  const spoken = released.effects.filter((effect) => effect.kind === 'engine.speak').map((effect) => effect.text);
+  assert.deepEqual(spoken, ['Sure, here it is. ', 'And more.']);
+  const replies = released.effects.filter((effect) => effect.kind === 'send' && effect.frame.t === 'reply');
+  assert.deepEqual(replies.map((effect) => effect.frame.delta), ['Sure, here it is. ', 'And more.']);
+  assert.ok(released.effects.some((effect) => effect.kind === 'speech.close'));
 });
 
 test('once the reply has begun, talking again is not a continuation', () => {
   const replying = run([{ type: 'replyDelta', text: 'Sure. ' }], committed().state);
   const out = run([{ type: 'userSpeaking', nowMs: 1_400 }], replying.state);
   assert.equal(out.state.phase, 'speaking');
+  assert.equal(out.state.deferring, false);
   assert.deepEqual(out.effects, [], 'that is a barge-in, and the engine reports those itself');
 });
 
-test('talking long after the turn was sent does not take it back', () => {
+test('talking long after the turn was sent does not hold its reply', () => {
   const out = run([{ type: 'userSpeaking', nowMs: 1_000 + 5_000 }], committed().state);
-  assert.equal(out.state.phase, 'thinking');
-  assert.deepEqual(out.effects, []);
+  assert.equal(out.state.deferring, false);
+  const replying = run([{ type: 'replyDelta', text: 'Sure. ' }], out.state);
+  assert.equal(replying.state.phase, 'speaking');
+});
+
+test('skip while a reply is held drops what was held with the turn', () => {
+  const held = run([{ type: 'replyDelta', text: 'Sure. ' }], resumed().state);
+  const skipped = run([{ type: 'skip' }], held.state);
+  assert.equal(skipped.state.phase, 'listening');
+  assert.equal(skipped.state.deferring, false);
+  assert.deepEqual(skipped.state.deferred, []);
 });
 
 test('speech while merely listening changes nothing', () => {

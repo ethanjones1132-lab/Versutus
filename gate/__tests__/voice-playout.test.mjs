@@ -253,6 +253,16 @@ test('a reply whose synthesis never reports back stops being "speaking" at the s
   await waitFor(() => call.phases().includes('speaking'));
   await waitFor(() => call.phases().at(-1) === 'listening', 2_000);
   assert.ok(call.lines.some((line) => /^voice\.speech stalled /.test(line)), 'and the log says why');
+
+  // It was only slow, not dead: the engine is told to stop, and the sentence it
+  // finishes anyway is not played into a call that has moved on.
+  const gen = engine.spoken[0].gen;
+  assert.deepEqual(engine.cancelled, [gen]);
+  engine.emit('speechAudio', { gen, pcm: pcm(400) });
+  engine.emit('speechDone', { gen });
+  await sleep(150);
+  assert.equal(call.heardMs(), 0, 'nothing of the abandoned reply reaches the phone');
+  assert.equal(call.phases().at(-1), 'listening');
 });
 
 // ─── Turn-taking with an engine that says when the person has stopped ──────

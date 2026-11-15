@@ -48,7 +48,12 @@ import { LocalEngine, spawnVoiceWorker } from './voice/engines/local-engine.mjs'
 import { createVoiceWorkerPool } from './voice/engines/worker-pool.mjs';
 import { voicePaths, voiceStatus, installVoice, uvRunner } from './voice/runtime.mjs';
 import { runBackendTurn, modelReport } from './voice/turn-runner.mjs';
-import { locateVoiceThread, resolveVoiceBackend, startVoiceBackendLease } from './voice/voice-backend.mjs';
+import {
+  findSessionEnvironment,
+  locateVoiceThread,
+  resolveVoiceBackend,
+  startVoiceBackendLease,
+} from './voice/voice-backend.mjs';
 import { ScriptedEngine, scriptedEngineEnabled } from './voice/engines/scripted-engine.mjs';
 import { verifySignedAccessRequest, ReplayCache } from './signature.mjs';
 import { handlePublicRoute } from './routes/public.mjs';
@@ -2117,10 +2122,13 @@ export async function createGate(config = {}) {
   /**
    * Which environment holds a call's session, when the phone did not say.
    *
-   * The Gate keeps its own copy of every environment's session list, keyed by
-   * environment and Bot, so a session id names where it lives. The newest list
-   * that holds it wins (`keysWithSession` orders them); a session in no list
-   * leaves the thread as it came, and the default rule applies.
+   * The Gate keeps its own copy of the session lists it indexes, keyed by
+   * environment and Bot, so for those a session id names where it lives and
+   * the newest list that holds it wins (`keysWithSession` orders them). That
+   * copy only covers Hermes: an OpenCode or Codex session is in no list the
+   * Gate keeps, so the environments themselves are asked next, all at once.
+   * A session nobody claims leaves the thread as it came, and the default rule
+   * applies.
    */
   async function locateCallThread(thread) {
     const sessionId = typeof thread?.sessionId === 'string' ? thread.sessionId : '';
@@ -2130,7 +2138,8 @@ export async function createGate(config = {}) {
       if (!scope.backendId) continue;
       return { ...thread, backendId: scope.backendId, ...(scope.botId ? { botId: scope.botId } : {}) };
     }
-    return thread;
+    const environmentId = await findSessionEnvironment(backendManager, sessionId);
+    return environmentId ? { ...thread, backendId: environmentId } : thread;
   }
 
   /**

@@ -198,9 +198,21 @@ class PhoneSim {
     for (;;) {
       const found = this.since(at, predicate);
       if (found) return found;
+      // A call that ended is not a slow one: say so, and why.
+      const over = this.ended();
+      if (over) throw new Error(`the call ended (${over}) while waiting for ${what}`);
       if (performance.now() > deadline) throw new Error(`timed out waiting for ${what}`);
       await sleep(10);
     }
+  }
+
+  /** Why the Gate ended the call, or null while it is up. */
+  ended() {
+    const frame = this.events.find((event) => event.t === 'ended'
+      || (event.t === 'call' && event.state === 'ended')
+      || (event.t === 'error' && event.fatal));
+    if (!frame) return null;
+    return frame.reason ?? frame.code ?? 'ended';
   }
 
   close() {
@@ -388,6 +400,7 @@ export async function main(argv = process.argv.slice(2)) {
   const turns = [];
   const barges = [];
   const failures = [];
+  let endedEarly = null;
   const spokenTurns = utterances.filter((utterance) => utterance.kind === 'turn'
     && (!options.only || utterance.id === options.only));
   const interruption = options.only ? null : utterances.find((utterance) => utterance.kind === 'barge');
@@ -398,9 +411,11 @@ export async function main(argv = process.argv.slice(2)) {
           turns.push(await runTurn(phone, utterance, options));
         } catch (error) {
           failures.push({ id: utterance.id, round, error: error.message });
+          if (phone.ended()) break;
           await sleep(3_000);
         }
       }
+      if (phone.ended()) break;
       if (interruption) {
         try {
           barges.push(await runBargeIn(phone, spokenTurns[0], interruption, options));
@@ -411,6 +426,7 @@ export async function main(argv = process.argv.slice(2)) {
       }
     }
   } finally {
+    endedEarly = phone.ended();
     phone.close();
     registry.end(CALL_ID, 'user');
     for (const client of wss.clients) client.terminate();
@@ -427,6 +443,9 @@ export async function main(argv = process.argv.slice(2)) {
     turns,
     barges,
     failures,
+    // Null when the call was still up at the end, which is the only pass.
+    callEndedEarly: endedEarly,
+    controlFrames: phone.events.length,
     backendTurns: backendTurns.length,
     abortedBackendTurns: backendTurns.filter((turn) => turn.aborted).length,
     summary: {
@@ -444,6 +463,7 @@ export async function main(argv = process.argv.slice(2)) {
   else {
     console.log(`gate ${report.gate}`);
     console.log(`open → listening ${report.openToListeningMs} ms; ${turns.length} turns, ${barges.length} barge-ins, ${failures.length} failures`);
+    console.log(`call ${report.callEndedEarly ? `ENDED EARLY (${report.callEndedEarly})` : 'still up at the end'} after ${report.controlFrames} control frames`);
     for (const [key, value] of Object.entries(report.summary)) {
       if (typeof value === 'number') console.log(`${key.padEnd(26)} ${value}`);
       else console.log(`${key.padEnd(26)} n=${value.n} p50=${value.p50} p90=${value.p90} max=${value.max}`);
