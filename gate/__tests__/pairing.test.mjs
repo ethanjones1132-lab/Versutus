@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { PairingStore } from '../core/pairing.mjs';
+import { handlePublicRoute } from '../core/routes/public.mjs';
 
 async function store() {
   const dir = await mkdtemp(join(tmpdir(), 'gate-pairing-'));
@@ -75,6 +76,47 @@ test('takePending removes and returns the request', async () => {
 test('takePending returns null for an unknown id', async () => {
   const pairing = await store();
   assert.equal(await pairing.takePending('nope'), null);
+});
+
+test('pairing status reports pending request id without exposing request credentials', async () => {
+  const pairing = await store();
+  const requestId = await pairing.addPending({
+    deviceId: 'device-1',
+    publicKeyB64Url: 'private-public-key',
+    clientId: 'mobile',
+    role: 'operator',
+    scopes: ['chat:read'],
+  });
+
+  assert.deepEqual(await pairing.statusForDevice('device-1'), { status: 'pending', requestId });
+  assert.deepEqual(await pairing.statusForDevice('other-device'), { status: 'not-pending' });
+});
+
+test('the public pairing-status route reports pending without returning a token', async () => {
+  const pairing = await store();
+  const requestId = await pairing.addPending({
+    deviceId: 'device-1',
+    publicKeyB64Url: 'private-public-key',
+    clientId: 'mobile',
+    role: 'operator',
+    scopes: ['chat:read'],
+  });
+  let status;
+  let body;
+  const handled = await handlePublicRoute({
+    req: { url: '/.well-known/gateway/access/status?deviceId=device-1' },
+    res: {
+      writeHead(value) { status = value; },
+      end(value) { body = value; },
+    },
+    pathname: '/.well-known/gateway/access/status',
+    method: 'GET',
+    pairing,
+  });
+
+  assert.equal(handled, true);
+  assert.equal(status, 200);
+  assert.deepEqual(JSON.parse(body), { status: 'pending', requestId });
 });
 
 test('the pending list is capped at 50 entries, oldest dropped', async () => {

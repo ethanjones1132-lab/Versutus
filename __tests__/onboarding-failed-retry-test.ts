@@ -25,7 +25,7 @@ describe('onboarding failed auto-connect retry', () => {
   test('retryAutoConnect comes from useGateway alongside the onboarding state', () => {
     const src = readScreen();
     expect(src).toContain(
-      'const { setupFromPcAddress, probeMessage, connectionPhase, settings, retryAutoConnect } = useGateway();',
+      'const {\n    setupFromPcAddress,\n    probeMessage,\n    connectionPhase,\n    settings,\n    retryAutoConnect,\n    deviceId,\n    pairingDetails,\n    pendingGatewayAddressUpdate,\n    acceptGatewayAddressUpdate,\n  } = useGateway();',
     );
   });
 

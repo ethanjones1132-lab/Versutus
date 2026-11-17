@@ -43,7 +43,7 @@ describe('onboarding custom gateway URL affordance', () => {
     const src = readScreen();
     const linkAt = src.indexOf("router.push('/gateway/add')");
     expect(linkAt).toBeGreaterThanOrEqual(0);
-    const apiKeyFieldAt = src.indexOf('Leave blank if your gateway');
+    const apiKeyFieldAt = src.indexOf('Gateway key');
     const statusCardAt = src.indexOf('probeMessage && !checking');
     expect(apiKeyFieldAt).toBeGreaterThanOrEqual(0);
     expect(statusCardAt).toBeGreaterThanOrEqual(0);

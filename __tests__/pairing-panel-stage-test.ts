@@ -54,6 +54,7 @@ describe('the pairing panel keeps its copy and pairing behaviour', () => {
     const src = pairing();
     for (const needle of [
       'openclaw devices list',
+      "gatePairing ? 'node gate/cli.mjs pair list' : 'openclaw devices list'",
       'openclaw devices approve ',
       '<DeviceIdRow deviceId={deviceId} copied={copied} onCopy={copyText} />',
       "color={copied === kind ? 'accent' : 'tertiary'}",

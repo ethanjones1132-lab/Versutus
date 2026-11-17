@@ -92,6 +92,26 @@ test('a verified request is granted during the pairing window and queued otherwi
   assert.deepEqual(JSON.parse(pending.body), { status: 'pending', requestId: 'request-1' });
 });
 
+test('a fresh signed access read returns the grant after pending pairing is approved', async () => {
+  const body = { device: { id: 'device-1', publicKey: 'key', clientId: 'mobile' }, signature: 'fresh-sig', signedAtMs: 2, scopes: ['chat:read'] };
+  const response = await postAccess({
+    req: request(body),
+    deviceTokens: {
+      async list() {
+        return [{ deviceId: 'device-1', token: 'newly-issued', role: 'operator', scopes: ['chat:read'], revoked: false }];
+      },
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(JSON.parse(response.body), {
+    status: 'granted',
+    token: 'newly-issued',
+    role: 'operator',
+    scopes: ['chat:read'],
+  });
+});
+
 test('replayed requests never reissue a grant and remain idempotently pending', async () => {
   const body = { device: { id: 'device-1', publicKey: 'key' }, signature: 'sig', signedAtMs: 1 };
   const replayVerification = () => ({ ok: false, replay: true, reason: 'signature already used (replay)' });

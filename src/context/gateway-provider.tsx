@@ -258,6 +258,7 @@ import {
   type AttachManifestSource,
 } from '@/lib/portal/attach-manifest';
 import { identifyGateway, type GatewayIdentity } from '@/lib/portal/identify';
+import { requestGatewayAccess } from '@/lib/portal/access';
 import { loadAppSettings, saveAppSettings, type AppSettings } from '@/lib/settings/app-settings';
 import {
   appendTranscript,
@@ -357,7 +358,9 @@ function queuedRowIsSent(outcome: SendChatInputOutcome): boolean {
 
 type PcAddressSetupResult =
   | { kind: 'connected' }
-  | { kind: 'unreachable' }
+  | { kind: 'pending-approval' }
+  | { kind: 'new-address'; gatewayName: string; address: string }
+  | { kind: 'unreachable'; message?: string }
   | { kind: 'not-connected' }
   | { kind: 'tls-fingerprint-change'; gatewayName: string };
 
@@ -593,6 +596,8 @@ type GatewayContextValue = {
   stopStreaming: () => Promise<void>;
   reloadHistory: () => Promise<void>;
   setupFromPcAddress: (pcAddress: string, token?: string) => Promise<PcAddressSetupResult>;
+  pendingGatewayAddressUpdate?: { gatewayName: string; address: string } | null;
+  acceptGatewayAddressUpdate?: () => Promise<void>;
   retryAutoConnect: () => Promise<void>;
   /** A pending automatic cool-down retry, or null when none is scheduled. */
   autoRetry: AutoRetryPulse | null;
@@ -1386,6 +1391,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     canReadBotSessionsRef.current = canReadBotSessions;
   }, [canReadBotSessions]);
   const [pairingDetails, setPairingDetails] = useState<PairingDetails | null>(null);
+  const [pairingRecovery, setPairingRecovery] = useState<{
+    gateway: GatewayProfile;
+    identity: GatewayIdentity;
+  } | null>(null);
+  const [pendingGatewayAddressUpdate, setPendingGatewayAddressUpdate] = useState<{
+    gateway: GatewayProfile;
+    address: string;
+  } | null>(null);
   const [liveCapabilities, setLiveCapabilities] = useState<GatewayCapabilities | null>(null);
   const [activeManifest, setActiveManifest] = useState<GatewayManifest | null>(null);
   const [settings, setSettings] = useState<AppSettings>({ autoConnect: true, onboardingComplete: false, voiceEngine: 'auto' });
@@ -3721,8 +3734,50 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             // refusal, cancel anything already pending, and remember the key
             // so the next attach can tell an edit from a repeat.
             authRejectedTokenRef.current = gateway.token;
-            setLastError(detail ?? null);
-            setProbeMessage('Gateway rejected the API key. Update it from the gateway settings.');
+            const canRepairGatePairing =
+              gateway.kind === 'custom' &&
+              identityForClient?.kind === 'custom' &&
+              Boolean(identityForClient.manifest?.auth?.grantPath);
+            setLastError(
+              canRepairGatePairing
+                ? "This phone's access was reset."
+                : detail ?? null,
+            );
+            setProbeMessage(
+              canRepairGatePairing
+                ? "This phone's access was reset. Pair it again with this PC."
+                : 'Gateway rejected the API key. Update it from the gateway settings.',
+            );
+            if (canRepairGatePairing && identityForClient) {
+              // The Gate distinguishes a revoked device grant from a bad
+              // provider key at its signed access endpoint. Keep the saved
+              // profile (and all profile-keyed local data) while requesting a
+              // fresh pairing for this same Gate.
+              void requestGatewayAccess({
+                baseUrl: gateway.url,
+                identity: identityForClient,
+              }).then((result) => {
+                if (!isCurrent()) return;
+                if (result.status === 'pending-approval') {
+                  setPairingDetails({
+                    reason: 'not-paired',
+                    requestId: result.requestId,
+                    remediationHint: 'Approve this phone on your PC. Run node gate/cli.mjs pair list on the Gate machine.',
+                  });
+                  setPairingRecovery({ gateway, identity: identityForClient });
+                  applyConnectionPhase('pairing');
+                } else if (result.status === 'granted' && result.token) {
+                  const repaired = { ...gateway, token: result.token };
+                  void persistGateway(repaired);
+                  setPairingDetails(null);
+                  setPairingRecovery(null);
+                  void connectGatewayRef.current(repaired);
+                }
+              }).catch(() => {
+                // A failed access request is not evidence that the saved
+                // profile or its local threads/settings should be removed.
+              });
+            }
             if (autoRetryTimerRef.current) {
               clearTimeout(autoRetryTimerRef.current);
               autoRetryTimerRef.current = null;
@@ -6517,6 +6572,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (!host) throw new Error('Enter your gateway address');
 
       const setupAttempt = ++explicitSetupAttemptRef.current;
+      setPendingGatewayAddressUpdate(null);
       connectionIntentRef.current += 1;
       explicitSetupInFlightRef.current = true;
       explicitSetupPendingRef.current = true;
@@ -6589,6 +6645,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
       if (!probeResult?.ok) {
         applyConnectionPhase('failed');
+        const diagnostic = explicitCandidates.length > 0
+          ? await probeGatewayUrl(explicitCandidates[0], 1800)
+          : null;
+        const refused =
+          diagnostic && !diagnostic.ok &&
+          /econnrefused|connection refused|actively refused/i.test(diagnostic.error);
+        if (refused) {
+          const message = `Versutus isn't running on ${pcName}. Start the Gate on your PC, then retry.`;
+          setProbeMessage(message);
+          return { kind: 'unreachable', message };
+        }
         const hint = categorizeProbeError(probeResult) || (probeResult?.error ? `${probeResult.error}. ` : '');
         setProbeMessage(
           `${hint}Saved your address, but could not reach the gateway. Make sure it is running and exposed over Tailscale or local network.`,
@@ -6600,6 +6667,62 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // probe. A hostname alias or cached-IP match must not redirect the
       // entered key to a different saved URL.
       const exactUrlGateways = gateways.filter((item) => item.url === probeResult.url);
+      const addressMatch = matchSavedGateway(probeResult.url, gateways, {
+        tailscaleHost: nextSettings.tailscaleHost,
+        cachedIpv4ByProfileId: await cachedManifestIpv4ByProfileId(gateways),
+        activeId: activeGatewayRef.current?.id ?? null,
+      });
+      if (
+        addressMatch &&
+        addressMatch.url !== probeResult.url &&
+        /\.ts\.net(?:[:/]|$)/i.test(addressMatch.url)
+      ) {
+        // A saved MagicDNS profile is an explicit same-PC anchor. Offer the
+        // reachable address without rewriting its URL until the operator taps.
+        setPendingGatewayAddressUpdate({ gateway: addressMatch, address: probeResult.url });
+        return {
+          kind: 'new-address',
+          gatewayName: addressMatch.name,
+          address: probeResult.url,
+        };
+      }
+      // Pairing is only for a phone with no key: a typed key goes straight to
+      // the connect, and no anonymous identity read may run ahead of it.
+      const wantsPairing = !(token ?? '').trim();
+      const discoveredIdentity = wantsPairing
+        ? await identifyGateway({
+            baseUrl: probeResult.url,
+            timeoutMs: 10_000,
+          })
+        : null;
+      if (
+        discoveredIdentity &&
+        discoveredIdentity.kind === 'custom' &&
+        discoveredIdentity.manifest?.auth?.grantPath &&
+        !(token ?? '').trim()
+      ) {
+        const access = await requestGatewayAccess({
+          baseUrl: probeResult.url,
+          identity: discoveredIdentity,
+        });
+        if (access.status === 'pending-approval') {
+          const pendingGateway = await addGateway({
+            name: pcName,
+            url: probeResult.url,
+            kind: 'custom',
+            discoverySource: host.toLowerCase().endsWith('.ts.net') ? 'tailscale' : 'manual',
+          });
+          setPairingDetails({
+            reason: 'not-paired',
+            requestId: access.requestId,
+            remediationHint: 'Approve this phone on your PC. Run node gate/cli.mjs pair list on the Gate machine.',
+          });
+          setPairingRecovery({ gateway: pendingGateway, identity: discoveredIdentity });
+          applyConnectionPhase('pairing');
+          return { kind: 'pending-approval' };
+        }
+        if (access.status === 'granted') token = access.token;
+      }
       const gateway = await resolveGatewayForUrl(
         probeResult.url,
         nextSettings,
@@ -6629,8 +6752,86 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         if (explicitSetupAttemptRef.current === setupAttempt) explicitSetupInFlightRef.current = false;
       });
     },
-    [connectGateway, gateways, resolveGatewayForUrl, applyStatus, applyConnectionPhase, cancelConnectedReads, updateTlsFingerprintChange, markOnboardingComplete],
+    [addGateway, connectGateway, gateways, resolveGatewayForUrl, applyStatus, applyConnectionPhase, cancelConnectedReads, updateTlsFingerprintChange, markOnboardingComplete],
   );
+
+  const acceptGatewayAddressUpdate = useCallback(async () => {
+    const pending = pendingGatewayAddressUpdate;
+    if (!pending) return;
+    const updated = { ...pending.gateway, url: pending.address };
+    const next = await upsertGateway(updated);
+    setGateways(next);
+    setPendingGatewayAddressUpdate(null);
+    await persistGateway(updated);
+    const nextSettings = await saveAppSettings({ lastSuccessfulUrl: pending.address });
+    settingsRef.current = nextSettings;
+    setSettings(nextSettings);
+    await connectGateway(updated);
+  }, [connectGateway, pendingGatewayAddressUpdate, persistGateway]);
+
+  // A signed access request is also the Gate's pairing-status read: while the
+  // device is pending it returns 202; once approved it returns the newly issued
+  // device token. Re-signing on each read is required (a signed body is
+  // intentionally single-use), and means approval finishes without asking the
+  // operator to save again or restart the app.
+  useEffect(() => {
+    if (!pairingRecovery) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const pairingStatus = deviceId
+          ? await fetch(
+              `${pairingRecovery.gateway.url.replace(/\/+$/, '')}/.well-known/gateway/access/status?deviceId=${encodeURIComponent(deviceId)}`,
+            ).then(async (response) => {
+              if (!response.ok) return null;
+              return await response.json() as { status?: unknown; requestId?: unknown };
+            })
+          : null;
+        if (cancelled) return;
+        if (pairingStatus?.status === 'pending') {
+          if (typeof pairingStatus.requestId === 'string') {
+            setPairingDetails((current) => current
+              ? { ...current, requestId: pairingStatus.requestId as string }
+              : current);
+          }
+          timer = setTimeout(() => void poll(), 3000);
+          return;
+        }
+        const result = await requestGatewayAccess({
+          baseUrl: pairingRecovery.gateway.url,
+          identity: pairingRecovery.identity,
+        });
+        if (cancelled) return;
+        if (result.status === 'granted' && result.token) {
+          const repaired = { ...pairingRecovery.gateway, token: result.token };
+          await persistGateway(repaired);
+          if (cancelled) return;
+          setPairingDetails(null);
+          setPairingRecovery(null);
+          applyConnectionPhase('connecting');
+          await connectGatewayRef.current(repaired);
+          return;
+        }
+        if (result.status !== 'pending-approval') {
+          setPairingDetails({
+            reason: 'not-paired',
+            remediationHint: result.status === 'denied'
+              ? `node gate/cli.mjs pair list — ${result.reason}`
+              : 'Approve this phone on your PC. Run node gate/cli.mjs pair list on the Gate machine. The Gate reconnects automatically after approval.',
+          });
+        }
+      } catch {
+        // A transient offline interval leaves the pending pairing in place.
+      }
+      if (!cancelled) timer = setTimeout(() => void poll(), 3000);
+    };
+    timer = setTimeout(() => void poll(), 3000);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [pairingRecovery, persistGateway, applyConnectionPhase, deviceId]);
 
   // The connect cycle the auto-retry timer and the foreground heal both ride.
   // Deliberately does NOT forgive the failure streak — only a connected phase
@@ -7955,6 +8156,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     const client = clientRef.current;
     const isCurrent = () =>
       requestId === botOpenRequestRef.current && clientRef.current === client;
+    // An offline client says nothing about whether this gateway supports Bots.
+    // Keep the offline state as the only answer; the capability refusal below
+    // is reserved for a live gateway that has no Bot session surface.
+    if (!client || statusRef.current !== 'connected') return false;
     if (!client?.setBotId || !client.createSession) {
       setLastError('This gateway does not expose bots.');
       // Nothing opened, and nothing is going to: this client cannot scope a
@@ -8542,6 +8747,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       runAgentCommand,
       dynamicCommands,
       setupFromPcAddress,
+      pendingGatewayAddressUpdate: pendingGatewayAddressUpdate
+        ? { gatewayName: pendingGatewayAddressUpdate.gateway.name, address: pendingGatewayAddressUpdate.address }
+        : null,
+      acceptGatewayAddressUpdate,
       retryAutoConnect,
       autoRetry,
       setAutoConnect,
@@ -8612,10 +8821,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     [
       gateways, activeGateway, activeHello, status, statusDetail, connectionPhase, probeMessage,
       lastError, clearLastError, deviceId, deviceIdState, deviceIdError, reloadDeviceId,
-      pairingDetails,
+      pairingDetails, pendingGatewayAddressUpdate,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      cron, activityFeed, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, canReadBotSessions, readBotSessions, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, requestedComposerFocus, requestComposerFocus, clearRequestedComposerFocus, requestedComposeRequest, requestComposeRequest, clearRequestedComposeRequest, requestedRunFocus, requestRunFocus, clearRequestedRunFocus, botJobs, routineJobs, routineRead, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
+      cron, activityFeed, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, canReadBotSessions, readBotSessions, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, requestedComposerFocus, requestComposerFocus, clearRequestedComposerFocus, requestedComposeRequest, requestComposeRequest, clearRequestedComposeRequest, requestedRunFocus, requestRunFocus, clearRequestedRunFocus, botJobs, routineJobs, routineRead, botGroups, runAgentCommand, setupFromPcAddress, acceptGatewayAddressUpdate, pendingGatewayAddressUpdate, retryAutoConnect, autoRetry,
       setAutoConnect, recentCommands, commandTranscripts, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,

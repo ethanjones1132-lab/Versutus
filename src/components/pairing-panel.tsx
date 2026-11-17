@@ -49,9 +49,14 @@ export function PairingPanel({
 }) {
   const tokens = useTokens();
   const [copied, setCopied] = useState<CopyKind | null>(null);
+  const gatePairing = pairingDetails?.remediationHint?.includes('node gate/cli.mjs') ?? false;
   const approveCommand = pairingDetails?.requestId && /^[A-Za-z0-9_-]+$/.test(pairingDetails.requestId)
-    ? `openclaw devices approve ${pairingDetails.requestId}`
-    : 'openclaw devices approve <requestId>';
+    ? gatePairing
+      ? `node gate/cli.mjs pair approve ${pairingDetails.requestId}`
+      : `openclaw devices approve ${pairingDetails.requestId}`
+    : gatePairing
+      ? 'node gate/cli.mjs pair approve <requestId>'
+      : 'openclaw devices approve <requestId>';
 
   const copyText = useCallback(async (text: string, kind: CopyKind) => {
     await Clipboard.setStringAsync(text);
@@ -88,7 +93,7 @@ export function PairingPanel({
           </Text>
           <CopyRow
             label="List pending devices"
-            value="openclaw devices list"
+            value={gatePairing ? 'node gate/cli.mjs pair list' : 'openclaw devices list'}
             copied={copied}
             kind="cmd"
             onCopy={copyText}

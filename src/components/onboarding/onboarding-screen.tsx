@@ -6,6 +6,7 @@ import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollVie
 import Animated, { Layout } from 'react-native-reanimated';
 
 import { VersutusLogotype } from '@/components/brand';
+import { PairingPanel } from '@/components/pairing-panel';
 import { Button, Card, ErrorCard, Screen, Text, TextField } from '@/components/ui';
 import { Motion, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
@@ -22,10 +23,27 @@ const GATE_LAN_COMMAND = 'node gate/cli.mjs start --host 0.0.0.0 --allow-plainte
 const GATE_DEPENDENCIES_COMMAND = 'npm install';
 const GATE_SETUP_URL = 'https://github.com/ethanjones1132-lab/Versutus#versutus-gate';
 
+function isTailscaleAddress(value: string): boolean {
+  const host = value.trim().replace(/^[a-z]+:\/\//i, '').split(/[/:]/, 1)[0].toLowerCase();
+  if (host.endsWith('.ts.net')) return true;
+  const octets = host.split('.').map(Number);
+  return octets.length === 4 && octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127;
+}
+
 export function OnboardingScreen() {
   const router = useRouter();
   const tokens = useTokens();
-  const { setupFromPcAddress, probeMessage, connectionPhase, settings, retryAutoConnect } = useGateway();
+  const {
+    setupFromPcAddress,
+    probeMessage,
+    connectionPhase,
+    settings,
+    retryAutoConnect,
+    deviceId,
+    pairingDetails,
+    pendingGatewayAddressUpdate,
+    acceptGatewayAddressUpdate,
+  } = useGateway();
   const [pcAddress, setPcAddress] = useState(settings.tailscaleHost ?? '');
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +52,8 @@ export function OnboardingScreen() {
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
   const [showGateSetup, setShowGateSetup] = useState(false);
+  const [pairingPending, setPairingPending] = useState(false);
+  const [tailscaleOffline, setTailscaleOffline] = useState(false);
   const connectingRef = useRef(false);
   const [retrying, setRetrying] = useState(false);
   // The cycle in flight, in a ref rather than in the state above: two taps
@@ -85,26 +105,34 @@ export function OnboardingScreen() {
     setManualAttempted(true);
 
     try {
-      await haptics.medium();
+      void Promise.resolve().then(() => haptics.medium()).catch(() => undefined);
       setError(null);
       setWorking(true);
       const result = await setupFromPcAddress(pcAddress, token);
       if (result.kind === 'connected') {
-        await haptics.success();
+        void Promise.resolve().then(() => haptics.success()).catch(() => undefined);
         router.replace('/(tabs)/chat');
+      } else if (result.kind === 'pending-approval') {
+        setPairingPending(true);
+      } else if (result.kind === 'new-address') {
+        setError(null);
       } else if (result.kind === 'tls-fingerprint-change') {
         setError(
           `TLS fingerprint changed for ${result.gatewayName}. Review the new fingerprint before continuing.`,
         );
       } else if (result.kind === 'unreachable') {
-        setError('Could not reach the gateway. Check its address and network, then try again.');
+        const tailnet = !result.message && isTailscaleAddress(pcAddress);
+        setTailscaleOffline(tailnet);
+        setError(result.message ?? (tailnet
+          ? 'Turn on Tailscale on this phone, then try again.'
+          : 'Could not reach the gateway. Check its address and network, then try again.'));
       } else {
         setError(
           'The gateway responded, but the connection did not complete. Check its API key and try again.',
         );
       }
     } catch (err) {
-      await haptics.error();
+      void Promise.resolve().then(() => haptics.error()).catch(() => undefined);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       connectingRef.current = false;
@@ -126,7 +154,8 @@ export function OnboardingScreen() {
     setAwaitingRetryPhase(false);
     // The last retry's verdict is about the last retry; leaving its card up
     // over a fresh one would be misleading.
-    setError(null);
+      setError(null);
+      setTailscaleOffline(false);
     try {
       await retryAutoConnect();
     } catch (err) {
@@ -177,6 +206,13 @@ export function OnboardingScreen() {
     );
   }, [awaitingRetryPhase, connectionPhase, probeMessage, router]);
 
+  useEffect(() => {
+    if (pairingPending && connectionPhase === 'connected') {
+      setPairingPending(false);
+      router.replace('/(tabs)/chat');
+    }
+  }, [connectionPhase, pairingPending, router]);
+
   return (
     <Screen>
       <KeyboardAvoidingView style={styles.keyboard} behavior={onboardingKeyboardBehavior(Platform.OS)}>
@@ -219,9 +255,9 @@ export function OnboardingScreen() {
           </Animated.View>
 
           <Card variant="surface" padding={Spacing.four} style={[styles.formCard, cta.locked && styles.formDimmed]}>
-            <Text variant="title">Connect your PC</Text>
+            <Text variant="title">Connect to your PC</Text>
             <Text color="secondary" style={styles.lead}>
-              Enter your PC&rsquo;s address and gateway key. Your key stays in secure storage on this device.
+              Enter your PC&rsquo;s address. Paste its gateway key, or leave it blank and approve this phone on the PC.
             </Text>
 
             <View style={styles.field}>
@@ -262,7 +298,7 @@ export function OnboardingScreen() {
                 secureTextEntry
               />
               <Text variant="micro" color="tertiary">
-                Leave blank if your gateway doesn&rsquo;t use a key.
+                Leave blank to pair instead: you&rsquo;ll approve this phone on your PC.
               </Text>
             </View>
 
@@ -316,12 +352,36 @@ export function OnboardingScreen() {
                 retryLabel="Try again"
               />
             ) : null}
+            {error && tailscaleOffline ? (
+              <Pressable
+                onPress={() => void Linking.openURL('tailscale://').catch(() => undefined)}
+                accessibilityRole="link"
+                accessibilityLabel="Open Tailscale">
+                <Text variant="link" color="accent">Open Tailscale</Text>
+              </Pressable>
+            ) : null}
 
-            <Button
-              label={cta.label}
-              onPress={() => void handleContinue()}
-              disabled={cta.locked || !validation.valid}
-            />
+            {pendingGatewayAddressUpdate ? (
+              <Button
+                label="Use the new address"
+                accessibilityHint={`Update ${pendingGatewayAddressUpdate.gatewayName} to ${pendingGatewayAddressUpdate.address}`}
+                onPress={() => void acceptGatewayAddressUpdate?.()}
+                disabled={!acceptGatewayAddressUpdate}
+              />
+            ) : (
+                <Button
+                  label={cta.label}
+                  onPress={() => void handleContinue()}
+                  disabled={cta.locked || !validation.valid}
+                />
+            )}
+            {pairingPending ? (
+              deviceId ? (
+                <PairingPanel deviceId={deviceId} pairingDetails={pairingDetails} />
+              ) : (
+                <Text variant="headline">Approve this phone on your PC</Text>
+              )
+            ) : null}
           </Card>
 
           <Card variant="surface" padding={Spacing.three} style={styles.gateGuide}>
@@ -513,6 +573,9 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   field: {
+    gap: Spacing.two,
+  },
+  tailnetHelp: {
     gap: Spacing.two,
   },
   statusCard: {

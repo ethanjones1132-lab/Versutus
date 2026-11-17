@@ -137,6 +137,15 @@ export class PairingStore {
     return (await this.#read()).pending;
   }
 
+  /** Public, non-secret pairing state for a device id; the signed access
+   * endpoint remains the only path that can deliver an issued device token. */
+  async statusForDevice(deviceId) {
+    const entry = (await this.#read()).pending.find((item) => item.deviceId === deviceId);
+    return entry
+      ? { status: 'pending', requestId: entry.requestId }
+      : { status: 'not-pending' };
+  }
+
   /** Remove and return a pending request by id, or null if it isn't there. */
   takePending(requestId) {
     return this.#serialize(async () => {

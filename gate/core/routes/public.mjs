@@ -120,5 +120,18 @@ export async function handlePublicRoute({
     return true;
   }
 
+  if (pathname === '/.well-known/gateway/access/status' && method === 'GET') {
+    const deviceId = new URL(req.url, 'http://gate.local').searchParams.get('deviceId');
+    if (!deviceId) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ status: 'invalid', reason: 'deviceId is required.' }));
+      return true;
+    }
+    const result = await pairing.statusForDevice(deviceId);
+    res.writeHead(200);
+    res.end(JSON.stringify(result));
+    return true;
+  }
+
   return false;
 }
