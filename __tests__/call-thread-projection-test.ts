@@ -57,6 +57,23 @@ describe('call thread projection', () => {
     expect(projectCallFrame(state, { ...frame('phase', 3, { phase: 'thinking' }), callId: 'other' } as never)).toBe(state);
   });
 
+  test('projects the frame after a missed Gate frame instead of freezing for the rest of the call', () => {
+    let state = emptyCallThreadProjection('thread-a', 'call-1');
+    // One dropped frame: seq 2 never arrives, seq 3 carries the next reply.
+    state = projectCallFrame(state, frame('final', 1, { turnId: 'turn-1', text: 'Hello' }) as never);
+    state = projectCallFrame(state, frame('reply', 3, { turnId: 'turn-1', offset: 0, delta: 'After the gap' }) as never);
+    expect(state.messages).toHaveLength(2);
+    expect(state.messages[1]).toMatchObject({ role: 'assistant', text: 'After the gap' });
+    expect(state.lastSeq).toBe(3);
+    // Later frames still project after the hole.
+    state = projectCallFrame(state, frame('reply', 4, { turnId: 'turn-1', offset: 13, delta: ' and more' }) as never);
+    expect(state.messages[1].text).toBe('After the gap and more');
+    expect(state.lastSeq).toBe(4);
+    // A retransmitted frame from inside the hole is still rejected.
+    expect(projectCallFrame(state, frame('reply', 2, { turnId: 'turn-1', offset: 0, delta: 'stale' }) as never)).toBe(state);
+    expect(state.lastSeq).toBe(4);
+  });
+
   test('reconciles canonical rows by turn id while retaining unmatched live rows', () => {
     let state = emptyCallThreadProjection('thread-a', 'call-1');
     state = projectCallFrame(state, frame('final', 1, { turnId: 'turn-1', text: 'Hello' }) as never);

@@ -58,7 +58,12 @@ export function projectCallFrame(
 ): CallThreadProjection {
   if ('callId' in frame && frame.callId && frame.callId !== projection.callId) return projection;
   if ('v' in frame && frame.v === 2 && 'seq' in frame && typeof frame.seq === 'number') {
-    if (frame.seq <= projection.lastSeq || frame.seq !== projection.lastSeq + 1) return projection;
+    // A missed Gate frame — one dropped frame, or a reconnect whose replay
+    // window slid — must not freeze the thread for the rest of the call: the
+    // hole is accepted and folding continues from the Gate's own account, the
+    // same way the banner cursor does. Duplicates and old frames are still
+    // rejected.
+    if (frame.seq <= projection.lastSeq) return projection;
   }
 
   let next: CallThreadProjection = {
