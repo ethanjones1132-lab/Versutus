@@ -68,10 +68,15 @@ import { liveSessionId, pinLiveSession, resolveResumeSession } from '@/lib/gatew
 import {
   adoptTurnSession,
   clearThreadSessionPin,
+  loadBotChatPins,
   loadThreadSessionPins,
+  readBotChatPin,
   readThreadSessionPin,
+  saveBotChatPins,
   saveThreadSessionPins,
+  writeBotChatPin,
   writeThreadSessionPin,
+  type BotChatPins,
   type ThreadSessionPins,
   type TurnThread,
 } from '@/lib/gateway/thread-session-pins';
@@ -99,6 +104,7 @@ import {
   hasBotSessionScoping as probeBotSessionScoping,
   loadBotChat,
   publishBotInventoryAvailable,
+  botChatReadSession,
   type ChatSurface,
   type PublicBot,
 } from '@/lib/gateway/bots';
@@ -1559,6 +1565,15 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * surface would be a repaint nobody asked for.
    */
   const threadSessionPinsRef = useRef<ThreadSessionPins>({});
+  /**
+   * The chat each Bot reopens (`bot-chat-pins`), keyed by (gateway, Bot). A CLI
+   * backend retitles a session from its first prompt, so the Bot Chat title is
+   * not an identity that outlives the conversation; the id is (VS-129). A ref
+   * for the same reason as the pins above: it is read at open time.
+   */
+  const botChatPinsRef = useRef<BotChatPins>({});
+  /** The one storage read of those chats, so a first open can wait for it. */
+  const botChatPinsReadyRef = useRef<Promise<void> | null>(null);
   /** The call-session resolution in flight, so two taps open one chat, not two. */
   const callSessionRef = useRef<Promise<string | undefined> | null>(null);
   const [loadingEarlierHistory, setLoadingEarlierHistory] = useState(false);
@@ -2061,6 +2076,21 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   /**
+   * Remember which chat a Bot reopens. A Bot surface has one chat, so the
+   * (gateway, Bot) key names it; the id is written whenever an open settles on
+   * a chat and whenever one is adopted into the Bot's surface, and a
+   * deliberate New session replaces it. Not spent on read, unlike the pins
+   * above: a reopened Bot must find the same conversation again.
+   */
+  const rememberBotChat = useCallback((thread: TurnThread, sessionId: string) => {
+    if (!thread.botId) return;
+    const next = writeBotChatPin(botChatPinsRef.current, thread, sessionId);
+    if (next === botChatPinsRef.current) return;
+    botChatPinsRef.current = next;
+    void saveBotChatPins(next);
+  }, []);
+
+  /**
    * Adopt a session as the live thread. Same write as `createNewSession`, minus
    * the cleared transcript: a call adopted mid-conversation must not wipe the
    * messages already on screen.
@@ -2077,12 +2107,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     });
     sessionIdRef.current = wanted;
     setCurrentSessionId(wanted);
+    // A session adopted into a Bot's surface is that Bot's chat from now on:
+    // reopening the Bot must land in the conversation it is currently showing,
+    // not the one it showed before (VS-129).
+    const thread = currentThread();
+    if (thread?.botId) rememberBotChat(thread, wanted);
     if (pinned && pinned !== activeGatewayRef.current) {
       activeGatewayRef.current = pinned;
       setActiveGateway(pinned);
       persistGateway(pinned);
     }
-  }, [persistGateway]);
+  }, [currentThread, persistGateway, rememberBotChat]);
 
   /** A pin is spent once it is read: a second read would resurrect a thread left behind. */
   const takeThreadSessionPin = useCallback((thread: TurnThread): string | undefined => {
@@ -2167,6 +2202,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (cancelled) return;
       // A pin written while the read was in flight is newer than the store.
       threadSessionPinsRef.current = { ...stored, ...threadSessionPinsRef.current };
+    });
+    // The remembered Bot chats come back the same way: a pin written while the
+    // read was in flight is newer than what storage answered.
+    botChatPinsReadyRef.current = loadBotChatPins().then((stored) => {
+      if (cancelled) return;
+      botChatPinsRef.current = { ...stored, ...botChatPinsRef.current };
     });
     return () => {
       cancelled = true;
@@ -8172,20 +8213,53 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // that broke, which is a different thing to say to the operator.
       return false;
     }
+    // A launch can open a Bot before the remembered chats have been read back.
+    // Wait for that one read rather than falling back to a title the backend
+    // may already have renamed (VS-129).
+    await botChatPinsReadyRef.current;
+    if (!isCurrent()) return false;
     resetSessionSelector();
     client.setBotId(botId);
     selectedBotIdRef.current = botId;
     setSelectedBotId(botId);
     // A Bot is a Hermes profile of this gateway's Gate, so the scope it opens
     // belongs to this gateway.
-    rememberScopeGateway(activeGatewayRef.current ?? activeGateway);
+    const scopeGateway = activeGatewayRef.current ?? activeGateway;
+    rememberScopeGateway(scopeGateway);
+    // The chat this device last opened for THIS Bot. A CLI backend retitles a
+    // session from its first prompt, so the title a Bot Chat was created with
+    // is not an identity that survives a restart (VS-129); the remembered id
+    // is, and it is keyed by the Bot so one Bot can never answer for another.
+    const gatewayId = scopeGateway?.id;
+    const remembered = gatewayId
+      ? readBotChatPin(botChatPinsRef.current, { gatewayId, botId })
+      : undefined;
     try {
       const chat = await loadBotChat(
         () => client.getSessions(200),
         (title) => client.createSession!(title),
         isCurrent,
+        {
+          id: remembered,
+          // The list is a window (200 rows), and a list that failed proves
+          // nothing either: read the remembered id itself, scoped to this Bot,
+          // before falling back to the title match and a fresh create.
+          read: async (sessionId) => {
+            try {
+              const raw = await client.rpcRequest('session.get', { sessionId, bot: botId });
+              return botChatReadSession<HermesSession>(raw, sessionId);
+            } catch {
+              // An unanswerable read is not evidence of absence; the fallbacks
+              // below still get their chance.
+              return undefined;
+            }
+          },
+        },
       );
       if (!chat || !isCurrent()) return false;
+      // Whatever its backend now calls it, this is the chat this Bot reopens.
+      // A deliberate New session replaces the id from createNewSession.
+      if (gatewayId) rememberBotChat({ gatewayId, botId }, chat.id);
       // Pinning the client is not enough: connect copies stored onto live
       // before disconnect can rewrite it. Same persist as selectSession.
       const pinned = pinLiveSession({
@@ -8231,7 +8305,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setLastError(error instanceof Error ? error.message : String(error));
       throw error;
     }
-  }, [activeGateway, clearInterruptedRecovery, persistGateway, reloadHistoryFor, resetSessionSelector, rememberScopeGateway]);
+  }, [activeGateway, clearInterruptedRecovery, persistGateway, reloadHistoryFor, rememberBotChat, resetSessionSelector, rememberScopeGateway]);
 
   useEffect(() => {
     repairStalePinRef.current = async (client, isCurrent, fallbackGateway) => {
@@ -8589,8 +8663,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // A deliberately new thread is not the chat a first reply's pin belongs
       // to: the old conversation must not be adopted back onto it.
       const threadScope = activeGatewayRef.current?.id;
+      const threadBot = selectedBotIdRef.current;
       if (threadScope) {
-        forgetThreadSession({ gatewayId: threadScope, botId: selectedBotIdRef.current ?? undefined });
+        forgetThreadSession({ gatewayId: threadScope, botId: threadBot ?? undefined });
+        // ...and it REPLACES the chat a Bot reopens from now on: only a
+        // deliberate New session moves a Bot off its conversation (VS-129).
+        if (threadBot) rememberBotChat({ gatewayId: threadScope, botId: threadBot }, created.id);
       }
       setMessages((prev) => {
         // A reply still streaming belongs to the thread being left; carrying
@@ -8620,6 +8698,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     closeSessionSelector,
     forgetThreadSession,
     persistGateway,
+    rememberBotChat,
     selectedBackendId,
     selectedBotIdRef,
   ]);

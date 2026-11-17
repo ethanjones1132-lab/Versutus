@@ -409,37 +409,143 @@ export function findBotChat<T extends { title?: string | null }>(sessions: T[]):
   return sessions.find((session) => isBotChat(session));
 }
 
-export async function ensureBotChat<T extends { title?: string | null }>(
+/** The little a Bot's chat row must carry to be found by the id a device remembers. */
+export type BotChatRow = { id: string; title?: string | null };
+
+/**
+ * This device's memory of one Bot's chat, offered to an open.
+ *
+ * The remembered id is the identity; the canonical title is only a fallback.
+ * A CLI backend retitles a session from its first prompt (Claude Code at
+ * least), so a chat created as `Bot Chat` stops answering to that name after
+ * its first turn, and matching on the title alone made every launch create a
+ * fresh chat (VS-129).
+ */
+export type BotChatMemory<T extends BotChatRow> = {
+  /** The session id this device last opened for the Bot. */
+  id?: string | null;
+  /**
+   * Read that id directly. Asked only when the session list cannot prove the
+   * session is still there — a partial window, or a list that failed entirely.
+   * Scoped to the Bot by the caller, so another Bot's session cannot answer.
+   */
+  read?: (sessionId: string) => Promise<T | undefined>;
+};
+
+/** The listed row named by the id this device remembered, when the list carries it. */
+export function findBotChatById<T extends BotChatRow>(
   sessions: T[],
-  create: (title: string) => Promise<T>,
-): Promise<T> {
-  return findBotChat(sessions) ?? create(BOT_CHAT_TITLE);
+  sessionId?: string | null,
+): T | undefined {
+  const wanted = sessionId?.trim();
+  if (!wanted) return undefined;
+  return sessions.find((session) => session.id === wanted);
 }
 
-export function loadBotChat<T extends { title?: string | null }>(
+/**
+ * The chat this device remembers for a Bot: the listed row while the list still
+ * carries it, else a direct read of the id. A read that fails, answers for some
+ * other id, or says nothing proves nothing, so the caller keeps its title match
+ * and its create.
+ */
+export async function findRememberedBotChat<T extends BotChatRow>(
+  sessions: T[],
+  memory?: BotChatMemory<T>,
+): Promise<T | undefined> {
+  const listed = findBotChatById(sessions, memory?.id);
+  if (listed) return listed;
+  const remembered = memory?.id?.trim();
+  if (!remembered || !memory?.read) return undefined;
+  try {
+    const direct = await memory.read(remembered);
+    return direct?.id === remembered ? direct : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The session a direct `session.get` read answered with, when it is the one
+ * that was asked for. The Gate and a native Hermes host answer with the session
+ * itself or wrapped in `{ session }`; a read of another id is not this Bot's
+ * chat and is refused here rather than adopted.
+ */
+export function botChatReadSession<T extends BotChatRow>(
+  raw: unknown,
+  sessionId: string,
+): T | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const record = raw as Record<string, unknown>;
+  const candidate =
+    record.session && typeof record.session === 'object'
+      ? (record.session as Record<string, unknown>)
+      : record;
+  const id = typeof candidate.id === 'string' ? candidate.id.trim() : '';
+  if (id !== sessionId) return undefined;
+  return candidate as unknown as T;
+}
+
+export async function ensureBotChat<T extends BotChatRow>(
+  sessions: T[],
+  create: (title: string) => Promise<T>,
+  memory?: BotChatMemory<T>,
+): Promise<T> {
+  const remembered = memory?.id?.trim()
+    ? await findRememberedBotChat(sessions, memory)
+    : undefined;
+  return remembered ?? findBotChat(sessions) ?? create(BOT_CHAT_TITLE);
+}
+
+export function loadBotChat<T extends BotChatRow>(
   list: () => Promise<T[]>,
   create: (title: string) => Promise<T>,
 ): Promise<T>;
-export function loadBotChat<T extends { title?: string | null }>(
+export function loadBotChat<T extends BotChatRow>(
   list: () => Promise<T[]>,
   create: (title: string) => Promise<T>,
   isCurrent: () => boolean,
+  memory?: BotChatMemory<T>,
 ): Promise<T | undefined>;
-export async function loadBotChat<T extends { title?: string | null }>(
+export async function loadBotChat<T extends BotChatRow>(
   list: () => Promise<T[]>,
   create: (title: string) => Promise<T>,
   isCurrent: () => boolean = () => true,
+  memory?: BotChatMemory<T>,
 ): Promise<T | undefined> {
+  const remember = memory?.id?.trim() ? memory : undefined;
+  let sessions: T[];
   try {
-    const sessions = await list();
-    // The client scope can change while listing: do not create on the next Bot.
-    if (!isCurrent()) return undefined;
-    const chat = await ensureBotChat(sessions, create);
-    return isCurrent() ? chat : undefined;
+    sessions = await list();
   } catch (error) {
+    if (!isCurrent()) return undefined;
+    // A failed list is not proof the remembered chat is gone: a Gate whose
+    // session catalogue is momentarily unreadable still holds the thread, so
+    // ask for the id itself before falling back to the old refusal.
+    const remembered = remember ? await findRememberedBotChat([], remember) : undefined;
+    if (remembered) return isCurrent() ? remembered : undefined;
+    // A read that landed after the scope moved is not this open's refusal.
     if (!isCurrent()) return undefined;
     throw error;
   }
+  // The client scope can change while listing: do not create on the next Bot.
+  if (!isCurrent()) return undefined;
+  // The remembered id outranks the title: a backend may have renamed the chat
+  // since this device last opened it. The read is one more await, so the guard
+  // is repeated before anything is created under whatever Bot is current now.
+  const remembered = remember ? await findRememberedBotChat(sessions, remember) : undefined;
+  if (!isCurrent()) return undefined;
+  const chat = remembered ?? findBotChat(sessions);
+  if (chat) return chat;
+  let created: T;
+  try {
+    created = await create(BOT_CHAT_TITLE);
+  } catch (error) {
+    // A create that failed after the scope moved belongs to the Bot that was
+    // left: it must not surface as the winning open's refusal.
+    if (!isCurrent()) return undefined;
+    throw error;
+  }
+  return isCurrent() ? created : undefined;
 }
 
 /**

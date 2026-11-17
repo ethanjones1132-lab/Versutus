@@ -2,11 +2,13 @@ import {
   BOT_CHAT_TITLE,
   botChipModelPin,
   botChipRoutingTag,
+  botChatReadSession,
   botRowSubtitle,
   buildRoster,
   ensureBotChat,
   filterRosterRows,
   findBotChat,
+  findBotChatById,
   isBotChat,
   loadBotChat,
   sessionBotChatBadge,
@@ -56,6 +58,146 @@ test('ensureBotChat reuses the canonical session and does not create a second', 
   });
   expect(session.id).toBe('s2');
   expect(created).toEqual([]);
+});
+
+test('a remembered Bot chat is reopened after its backend renamed it', async () => {
+  // Claude Code retitles a session from its first prompt: the chat this device
+  // created as "Bot Chat" is now named after the prompt (VS-129, A54). Matching
+  // on the title alone made every launch open a fresh chat.
+  const created: string[] = [];
+  const session = await ensureBotChat(
+    [{ id: '6ea7f382-chat', title: 'So... We’ll be right back.' }],
+    async (title) => {
+      created.push(title);
+      return { id: 'fresh', title };
+    },
+    { id: '6ea7f382-chat' },
+  );
+  expect(session.id).toBe('6ea7f382-chat');
+  expect(created).toEqual([]);
+});
+
+test('loadBotChat reopens the remembered chat after a rename, and never creates', async () => {
+  const create = jest.fn(async (title: string) => ({ id: 'fresh', title }));
+  const chat = await loadBotChat(
+    async () => [{ id: '6ea7f382-chat', title: 'So... We’ll be right back.' }],
+    create,
+    () => true,
+    { id: '6ea7f382-chat' },
+  );
+  expect(chat?.id).toBe('6ea7f382-chat');
+  expect(create).not.toHaveBeenCalled();
+});
+
+test('the remembered chat outranks a title match and never crosses a Bot', async () => {
+  const sessions = [
+    { id: 'old-bot-chat', title: BOT_CHAT_TITLE },
+    { id: 'renamed-chat', title: 'So... We’ll be right back.' },
+  ];
+  const session = await ensureBotChat(sessions, async (title) => ({ id: 'fresh', title }), {
+    id: 'renamed-chat',
+  });
+  expect(session.id).toBe('renamed-chat');
+  // The list is already the Bot's own scope; the memory names the id inside it
+  // and an id that is not in this Bot's list is not adopted from elsewhere.
+  expect(findBotChatById(sessions, 'renamed-chat')?.id).toBe('renamed-chat');
+  expect(findBotChatById(sessions, 'another-bots-chat')).toBeUndefined();
+});
+
+test('a remembered id that is gone falls back to the title, then to a create', async () => {
+  const created: string[] = [];
+  const create = async (title: string) => {
+    created.push(title);
+    return { id: 'fresh', title };
+  };
+  // The chat still carries the canonical title: reuse it.
+  const titled = await ensureBotChat(
+    [{ id: 'kept-chat', title: BOT_CHAT_TITLE }],
+    create,
+    { id: 'deleted-chat' },
+  );
+  expect(titled.id).toBe('kept-chat');
+  expect(created).toEqual([]);
+  // Nothing answers for the id or the title: a fresh Bot Chat is the only
+  // honest outcome, exactly as before.
+  const fresh = await ensureBotChat(
+    [{ id: 'other', title: 'notes' }],
+    create,
+    { id: 'deleted-chat' },
+  );
+  expect(fresh.id).toBe('fresh');
+  expect(created).toEqual([BOT_CHAT_TITLE]);
+});
+
+test('a remembered id outside a partial list is reopened when its direct read answers', async () => {
+  const created: string[] = [];
+  const read = jest.fn(async (sessionId: string) =>
+    sessionId === 'outside-window' ? { id: sessionId, title: 'renamed by the backend' } : undefined,
+  );
+  const session = await loadBotChat(
+    async () => [{ id: 'notes', title: 'notes' }],
+    async (title) => {
+      created.push(title);
+      return { id: 'fresh', title };
+    },
+    () => true,
+    { id: 'outside-window', read },
+  );
+  expect(session?.id).toBe('outside-window');
+  expect(read).toHaveBeenCalledWith('outside-window');
+  expect(created).toEqual([]);
+});
+
+test('a failed session list still reopens the remembered chat when its read answers', async () => {
+  const created: string[] = [];
+  const session = await loadBotChat(
+    async () => {
+      throw new Error('session catalogue unavailable');
+    },
+    async (title) => {
+      created.push(title);
+      return { id: 'fresh', title };
+    },
+    () => true,
+    { id: '6ea7f382-chat', read: async (sessionId) => ({ id: sessionId, title: 'renamed' }) },
+  );
+  expect(session?.id).toBe('6ea7f382-chat');
+  expect(created).toEqual([]);
+});
+
+test('a direct read that lands after a Bot switch cannot reopen its chat', async () => {
+  let current = true;
+  let finishRead!: (row: { id: string; title: string }) => void;
+  let readStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    readStarted = resolve;
+  });
+  const read = (sessionId: string) => {
+    readStarted();
+    return new Promise<{ id: string; title: string }>((resolve) => {
+      finishRead = resolve;
+    });
+  };
+  const create = jest.fn(async (title: string) => ({ id: 'wrong-bot', title }));
+  const older = loadBotChat(async () => [], create, () => current, { id: '6ea7f382-chat', read });
+  await started;
+  current = false;
+  finishRead({ id: '6ea7f382-chat', title: 'renamed' });
+  expect(await older).toBeUndefined();
+  expect(create).not.toHaveBeenCalled();
+});
+
+test('a direct read answers the session it was asked for, and only that one', () => {
+  expect(botChatReadSession({ id: 'ses-a', title: 'renamed' }, 'ses-a')).toEqual({
+    id: 'ses-a',
+    title: 'renamed',
+  });
+  // A Gate wrapper is unwrapped the same way.
+  expect(botChatReadSession({ session: { id: 'ses-a', title: null } }, 'ses-a')?.id).toBe('ses-a');
+  // Some other session is not this Bot's chat.
+  expect(botChatReadSession({ id: 'ses-b', title: 'x' }, 'ses-a')).toBeUndefined();
+  expect(botChatReadSession(null, 'ses-a')).toBeUndefined();
+  expect(botChatReadSession({ title: 'no id' }, 'ses-a')).toBeUndefined();
 });
 
 test('a superseded Bot list cannot create a session under the winning Bot', async () => {

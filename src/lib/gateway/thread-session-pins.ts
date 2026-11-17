@@ -103,6 +103,85 @@ export function adoptTurnSession(input: {
   return 'adopt';
 }
 
+// ─── The chat a Bot itself reopens ────────────────────────────────────────
+// A Bot's chat is the conversation the Bot keeps, but its title is not an
+// identity: a CLI backend retitles a session from its first prompt, so the
+// canonical `Bot Chat` title a session is created with is gone after the first
+// turn (VS-129). Opening a Bot then could not find its chat and made a fresh
+// one on every launch. The id the device last opened is remembered instead,
+// under the same per-thread key the composer gives a sessionless Bot surface —
+// that key is exactly (gateway id, Bot id). Unlike the pins above this one is
+// NOT spent when read: it is the Bot's chat until a deliberate New session
+// replaces it.
+
+/** Where the remembered Bot chats are persisted. */
+export const BOT_CHAT_PINS_KEY = 'versutus:bot-chat-pins';
+
+/** A Bot's thread key → the session its chat was last opened as. */
+export type BotChatPins = Record<string, string>;
+
+/**
+ * The key a Bot's own chat is remembered under. Undefined off a Bot surface:
+ * the configurable chat is not a Bot and has no chat to remember.
+ */
+export function botChatPinKey(thread: TurnThread): string | undefined {
+  if (!thread.botId?.trim()) return undefined;
+  return sessionlessThreadKey(thread);
+}
+
+/** The session this Bot's chat was last opened as, or undefined before its first open. */
+export function readBotChatPin(pins: BotChatPins, thread: TurnThread): string | undefined {
+  const key = botChatPinKey(thread);
+  if (!key) return undefined;
+  const sessionId = pins[key]?.trim();
+  return sessionId ? sessionId : undefined;
+}
+
+/**
+ * Remember this Bot's chat, leaving every other Bot alone. One Bot never
+ * answers for another: the key names the Bot.
+ */
+export function writeBotChatPin(
+  pins: BotChatPins,
+  thread: TurnThread,
+  sessionId: string,
+): BotChatPins {
+  const key = botChatPinKey(thread);
+  const value = sessionId.trim();
+  if (!key || !value || pins[key] === value) return pins;
+  return { ...pins, [key]: value };
+}
+
+/** Anything that is not a non-empty string is not a remembered chat. */
+export function botChatPinsFromUnknown(value: unknown): BotChatPins {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const pins: BotChatPins = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof entry === 'string' && entry.trim()) pins[key] = entry.trim();
+  }
+  return pins;
+}
+
+/** Read the remembered Bot chats; a storage refusal is an empty store, never a throw. */
+export async function loadBotChatPins(): Promise<BotChatPins> {
+  try {
+    const raw = await keyValueStorage.getItem(BOT_CHAT_PINS_KEY);
+    if (!raw) return {};
+    return botChatPinsFromUnknown(JSON.parse(raw));
+  } catch {
+    return {};
+  }
+}
+
+/** Write the remembered Bot chats; best-effort, because losing one costs a Bot its chat. */
+export async function saveBotChatPins(pins: BotChatPins): Promise<void> {
+  try {
+    await keyValueStorage.setItem(BOT_CHAT_PINS_KEY, JSON.stringify(pins));
+  } catch {
+    // A refused write costs the Bot its chat on the next launch, nothing more.
+  }
+}
+
 /** Read the stored pins; a storage refusal is an empty store, never a throw. */
 export async function loadThreadSessionPins(): Promise<ThreadSessionPins> {
   try {
