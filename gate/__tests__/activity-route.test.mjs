@@ -9,7 +9,13 @@ import { createGate } from '../core/server.mjs';
 
 const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
 const roots = [];
-const since = '2026-11-09T00:00:00.000Z';
+// The activity read caps `since` at `now - 7 days`, so every fixture instant is
+// expressed relative to one clock reading taken when the suite loads. Fixed
+// calendar dates silently dropped out of the window as time passed.
+const NOW = Date.now();
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const since = new Date(NOW - 90 * MINUTE).toISOString();
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -83,10 +89,10 @@ const url = (gate, query = `since=${encodeURIComponent(since)}`) => `http://127.
 test('GET /v1/activity merges backends newest first and filters by since', async () => {
   const gate = await makeGate({ sessions: {
     'backend-a': [
-      session('old', Date.parse('2026-11-08T23:59:00Z')),
-      session('newer', Date.parse('2026-11-09T12:00:00Z'), { message_count: 4, tool_call_count: 2 }),
+      session('old', NOW - 2 * HOUR),
+      session('newer', NOW - 30 * MINUTE, { message_count: 4, tool_call_count: 2 }),
     ],
-    'backend-b': [session('newest', Date.parse('2026-11-09T18:00:00Z'))],
+    'backend-b': [session('newest', NOW - 5 * MINUTE)],
   } });
   try {
     const response = await fetch(url(gate), { headers: auth(gate) });
@@ -103,7 +109,7 @@ test('GET /v1/activity merges backends newest first and filters by since', async
 
 test('a failed backend is reported without hiding healthy backend items', async () => {
   const gate = await makeGate({ sessions: {
-    'backend-a': [session('healthy', Date.parse('2026-11-09T12:00:00Z'))],
+    'backend-a': [session('healthy', NOW - 30 * MINUTE)],
   } });
   try {
     const response = await fetch(url(gate), { headers: auth(gate) });
@@ -119,8 +125,8 @@ test('a failed backend is reported without hiding healthy backend items', async 
 
 test('unknown session metrics are omitted and backendId narrows coverage and items', async () => {
   const gate = await makeGate({ sessions: {
-    'backend-a': [session('without-metrics', Date.parse('2026-11-09T12:00:00Z'))],
-    'backend-b': [session('other', Date.parse('2026-11-09T13:00:00Z'))],
+    'backend-a': [session('without-metrics', NOW - 30 * MINUTE)],
+    'backend-b': [session('other', NOW - 15 * MINUTE)],
   } });
   try {
     const response = await fetch(url(gate, `since=${encodeURIComponent(since)}&backendId=backend-a`), { headers: auth(gate) });
@@ -136,7 +142,7 @@ test('unknown session metrics are omitted and backendId narrows coverage and ite
 
 test('a session from a Bot-capable backend keeps its Bot on the wire', async () => {
   const gate = await makeGate({ sessions: {
-    'backend-a': [session('opencode-thread', Date.parse('2026-11-09T12:00:00Z'), { bot: 'build' })],
+    'backend-a': [session('opencode-thread', NOW - 30 * MINUTE, { bot: 'build' })],
   } });
   try {
     const response = await fetch(url(gate, `since=${encodeURIComponent(since)}&backendId=backend-a`), { headers: auth(gate) });
