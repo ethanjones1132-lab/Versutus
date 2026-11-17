@@ -31,6 +31,7 @@ const EVENTS = [
   'bargeIn',
   'level',
   'gate',
+  'muteRequest',
 ] as const;
 
 const METHODS = [
@@ -108,6 +109,24 @@ describe('hands-free native contract', () => {
     for (const event of EVENTS) {
       expect(kotlin).toContain(`"${event}"`);
       expect(swift).toContain(`"${event}"`);
+    }
+  });
+
+  // A2054 2026-11-17: the call service emitted `muteRequest` (the notification's
+  // Mute/Unmute) while the module's Events(...) block did not declare it, and
+  // Expo threw "Unsupported event: muteRequest" from onStartCommand: the app
+  // crashed on the first notification tap. Every name any Android source passes
+  // to emit("...") must be declared in the module's Events block.
+  it('declares natively every event an Android source emits', () => {
+    const dir = ['modules', 'handsfree-voice', 'android', 'src', 'main', 'java', 'com', 'versutus', 'handsfreevoice'];
+    const sources = ['HandsfreeCallService.kt', 'HandsfreeVoiceModule.kt', 'HandsfreeGateMedia.kt']
+      .map((file) => readSource(...dir, file))
+      .join('\n');
+    const block = /Events\(([\s\S]*?)\)/.exec(kotlin)?.[1] ?? '';
+    const emitted = [...sources.matchAll(/\bemit\("([A-Za-z]+)"/g)].map((match) => match[1]);
+    expect(emitted.length).toBeGreaterThan(0);
+    for (const event of new Set(emitted)) {
+      expect(block).toContain(`"${event}"`);
     }
   });
 

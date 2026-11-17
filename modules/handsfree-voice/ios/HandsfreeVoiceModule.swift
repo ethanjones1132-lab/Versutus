@@ -86,7 +86,10 @@ public class HandsfreeVoiceModule: Module {
       "fatalError",
       "bargeIn",
       "level",
-      "gate"
+      "gate",
+      // Android's notification Mute/Unmute. iOS never emits it; declared so a
+      // JS listener for it is a known event on both platforms.
+      "muteRequest"
     )
 
     OnCreate {

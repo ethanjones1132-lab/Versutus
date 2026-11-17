@@ -26,6 +26,10 @@ class HandsfreeVoiceModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("HandsfreeVoice")
 
+    // `muteRequest` is the notification's Mute/Unmute, routed to JS so the
+    // banner and the Gate follow it. Undeclared, Expo threw "Unsupported event"
+    // from the service and the app crashed on the first notification tap
+    // on the A54, 2026-11-17.
     Events(
       "partial",
       "final",
@@ -37,6 +41,7 @@ class HandsfreeVoiceModule : Module() {
       "bargeIn",
       "level",
       "gate",
+      "muteRequest",
     )
 
     OnCreate {
