@@ -78,13 +78,11 @@ export function PairingPanel({
       ]}>
       <Text variant="headline">Approve this phone on your PC</Text>
       <Text color="secondary">
-        One-time setup. On your PC terminal, approve the pending request for this device.
+        On your PC, open http://localhost:8760/pair and click Approve.
       </Text>
-      {pairingDetails?.remediationHint ? (
-        <Text color="tertiary" variant="caption">
-          {pairingDetails.remediationHint}
-        </Text>
-      ) : null}
+      <Text color="tertiary" variant="caption">
+        Or run: node gate/cli.mjs pair list
+      </Text>
 
       <View style={styles.steps}>
         <View style={styles.step}>

@@ -18,6 +18,8 @@ test('(a) fresh install: one form connects with a key or pairs without one', () 
 test('(b) pending Gate pairing tells where to approve and polls to completion', () => {
   expect(onboarding).toMatch(/pairingPending\s*\?\s*\([\s\S]*?<PairingPanel deviceId=\{deviceId\} pairingDetails=\{pairingDetails\} \/>/);
   expect(pairing).toContain('Approve this phone on your PC');
+  expect(pairing).toContain('On your PC, open http://localhost:8760/pair and click Approve.');
+  expect(onboarding).toContain('On your PC, open http://localhost:8760/pair and click Approve.');
   expect(pairing).toContain('node gate/cli.mjs pair list');
   expect(provider).toMatch(/timer\s*=\s*setTimeout\(\(\)\s*=>\s*void poll\(\),\s*3000\)/);
   expect(provider).toMatch(/result\.status\s*===\s*'granted'\s*&&\s*result\.token/);

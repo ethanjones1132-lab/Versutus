@@ -65,11 +65,12 @@ describe('the pairing panel keeps its copy and pairing behaviour', () => {
     }
   });
 
-  it('still carries the headline, remediation hint and auto-resume copy', () => {
+  it('leads with the local approval page, keeps the CLI alternative and auto-resume copy', () => {
     const src = pairing();
     for (const needle of [
       'Approve this phone on your PC',
-      '{pairingDetails?.remediationHint ? (',
+      'On your PC, open http://localhost:8760/pair and click Approve.',
+      'Or run: node gate/cli.mjs pair list',
       'Connection will resume automatically after approval.',
       'Use the request id shown by the list command.',
     ]) {

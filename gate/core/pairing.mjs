@@ -110,13 +110,15 @@ export class PairingStore {
    * fields in place and keeps the requestId the operator may already have
    * copied from `pair list`.
    */
-  addPending({ deviceId, publicKeyB64Url, clientId, role, scopes }) {
+  addPending({ deviceId, publicKeyB64Url, clientId, role, scopes, name, model }) {
     return this.#serialize(async () => {
       const state = await this.#readForMutation();
       const existing = state.pending.find((entry) => entry.deviceId === deviceId);
       if (existing) {
         existing.publicKeyB64Url = publicKeyB64Url;
         existing.clientId = clientId;
+        if (typeof name === 'string') existing.name = name;
+        if (typeof model === 'string') existing.model = model;
         existing.role = role;
         existing.scopes = scopes;
         existing.requestedAtMs = Date.now();
@@ -124,7 +126,17 @@ export class PairingStore {
         return existing.requestId;
       }
       const requestId = randomUUID();
-      state.pending.push({ requestId, deviceId, publicKeyB64Url, clientId, role, scopes, requestedAtMs: Date.now() });
+      state.pending.push({
+        requestId,
+        deviceId,
+        publicKeyB64Url,
+        clientId,
+        role,
+        scopes,
+        ...(typeof name === 'string' ? { name } : {}),
+        ...(typeof model === 'string' ? { model } : {}),
+        requestedAtMs: Date.now(),
+      });
       if (state.pending.length > MAX_PENDING) {
         state.pending.splice(0, state.pending.length - MAX_PENDING);
       }

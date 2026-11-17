@@ -60,6 +60,7 @@ import {
 import { ScriptedEngine, scriptedEngineEnabled } from './voice/engines/scripted-engine.mjs';
 import { verifySignedAccessRequest, ReplayCache } from './signature.mjs';
 import { handlePublicRoute } from './routes/public.mjs';
+import { handlePairingPage } from './routes/pairing-page.mjs';
 import { handleProviderRoute } from './routes/providers.mjs';
 import { describeAuthFailure } from './auth-failure.mjs';
 import { selectDefaultBackend, unresolvedBackendResponse } from './backend-resolution.mjs';
@@ -2745,8 +2746,30 @@ export async function createGate(config = {}) {
   const pairing = new PairingStore(join(root, '.pairing.json'));
   const replayCache = new ReplayCache();
 
+  async function servePairingPageBeforeMiddleware(req, res) {
+    let pathname;
+    try {
+      pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+    } catch {
+      return false;
+    }
+    return await handlePairingPage({
+      req,
+      res,
+      pathname,
+      method: req.method,
+      pairing,
+      deviceTokens,
+      port: server.address()?.port ?? port,
+    });
+  }
+
   // Create HTTP server
   const server = createServer(async (req, res) => {
+    // This operator-only page has to reject remote and forwarded requests
+    // before any middleware can consume their body.
+    if (await servePairingPageBeforeMiddleware(req, res)) return;
+
     // Web CORS: opt-in via --allow-origin / VERSUTUS_GATE_ALLOW_ORIGIN. Until
     // the operator names origins this handles nothing at all (core/cors.mjs).
     if (webCors(req, res)) return;
@@ -2813,6 +2836,7 @@ export async function createGate(config = {}) {
         replayCache,
         deviceTokens,
         pairing,
+        port: server.address()?.port ?? port,
         verifySignedAccessRequest,
         readJsonBody,
       })) return;

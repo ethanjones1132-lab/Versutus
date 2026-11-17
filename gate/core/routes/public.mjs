@@ -12,6 +12,7 @@ export async function handlePublicRoute({
   replayCache,
   deviceTokens,
   pairing,
+  port,
   verifySignedAccessRequest,
   readJsonBody,
 }) {
@@ -112,9 +113,12 @@ export async function handlePublicRoute({
       deviceId: device.id,
       publicKeyB64Url: device.publicKey,
       clientId: device.clientId,
+      name: device.name ?? body.client?.name,
+      model: device.model ?? body.client?.model,
       role,
       scopes,
     });
+    console.log(`pairing: a phone is asking to connect - approve it at http://localhost:${port}/pair`);
     res.writeHead(202);
     res.end(JSON.stringify({ status: 'pending', requestId }));
     return true;

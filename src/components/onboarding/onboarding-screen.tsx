@@ -379,7 +379,9 @@ export function OnboardingScreen() {
               deviceId ? (
                 <PairingPanel deviceId={deviceId} pairingDetails={pairingDetails} />
               ) : (
-                <Text variant="headline">Approve this phone on your PC</Text>
+                <Text variant="headline">
+                  On your PC, open http://localhost:8760/pair and click Approve.
+                </Text>
               )
             ) : null}
           </Card>
