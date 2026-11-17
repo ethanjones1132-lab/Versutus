@@ -71,6 +71,13 @@ function rowTitles(): string[] {
     .map((node) => (node.props as { title: string }).title);
 }
 
+function rowSubtitles(): string[] {
+  if (!renderer) return [];
+  return renderer.root
+    .findAllByType('ListRow' as never)
+    .map((node) => (node.props as { subtitle?: string }).subtitle ?? '');
+}
+
 function textContent(): string[] {
   if (!renderer) return [];
   return renderer.root.findAllByType('Text' as never).flatMap((node) => {
@@ -133,6 +140,37 @@ describe('the Routines view tells each backend apart', () => {
     // Only the per-host line is red; the whole read did not fail.
     expect(errorCards()).toBe(0);
     expect(texts).toContain('Hermes: 2 routines');
+  });
+
+  test('Bots that are not set up read as a neutral count, and statuses as words', async () => {
+    const soon = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+    mockGateway.activityFeed.readRoutines.mockResolvedValue(feed(
+      [
+        { id: 'job-1', backendId: 'hermes', name: 'Nightly digest', paused: false, lastStatus: 'ok', nextRunAt: soon },
+        { id: 'job-2', backendId: 'hermes', name: 'Inbox sweep', paused: false, lastStatus: 'blocked_config' },
+      ],
+      [
+        {
+          id: 'hermes',
+          label: 'Hermes',
+          status: 'partial',
+          error: 'Bot anvil could not be read; Bot bounty could not be read; Bot closer could not be read',
+        },
+      ],
+    ));
+
+    mount();
+    await flush();
+
+    // The wire's words are translated for the row.
+    expect(rowSubtitles()).toEqual(['Last run OK · next in 3 h', 'Needs setup']);
+    // Setup trouble is a neutral count, not the Gate's semicolon-joined list.
+    const texts = textContent();
+    expect(texts).toContain("Hermes: 2 routines · 3 Bots aren't set up yet");
+    expect(texts.join('\n')).not.toContain('could not be read;');
+    expect(texts.join('\n')).not.toContain('blocked_config');
+    expect(errorCards()).toBe(0);
+    expect(buttonLabels()).not.toContain('Retry');
   });
 
   test('an older Gate without the route says so without a failure card', async () => {

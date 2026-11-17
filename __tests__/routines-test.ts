@@ -208,12 +208,12 @@ test('routineJobsFromList keeps parseable jobs and drops junk', () => {
   expect(routineJobsFromList({ data: [HERMES_INBOX] })).toEqual([]);
 });
 
-test('the routine subtitle is the Activity one-liner, not paused/active', () => {
+test('the routine subtitle is the Activity one-liner, in readable words', () => {
   const now = Date.parse('2026-08-25T09:00:00Z');
   const inbox = routineJobFromUnknown(HERMES_INBOX);
   expect(inbox).not.toBeNull();
   if (!inbox) return;
-  expect(routineJobSummary(inbox, now)).toBe('ok · next in 6m');
+  expect(routineJobSummary(inbox, now)).toBe('Last run OK · next in 6 min');
 });
 
 test('a paused routine says Paused even when a next run is known', () => {

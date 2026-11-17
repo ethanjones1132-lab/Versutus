@@ -1,6 +1,8 @@
-import { cronJobSummary, type CronJob } from './cron';
+import { type CronJob } from './cron';
 import { parseRoutineName, routineName } from './routine-name';
 import { formatRunFailure } from './run-failures';
+import { routineNextRunLabel } from '@/lib/routines/next-run';
+import { routineStatusWord } from '@/lib/routines/status';
 
 // Re-exported so the public surface of this module is unchanged for callers
 // and tests that already import the naming convention from here.
@@ -131,19 +133,19 @@ export function routineJobsFromList(raw: unknown): RoutineJob[] {
   return jobs;
 }
 
-/** The Activity one-liner: health, then when it next runs. */
+/**
+ * The Activity one-liner: the last run in words, then when it next runs.
+ *
+ * The row speaks the app's vocabulary, not the wire's: a raw `blocked_config`
+ * or a bare `ok` never reaches the screen. A paused routine says only that and
+ * ignores the stale next-run date Hermes leaves behind.
+ */
 export function routineJobSummary(job: RoutineJob, now = Date.now()): string {
-  return cronJobSummary(
-    {
-      id: job.id,
-      title: job.name ?? job.id,
-      paused: job.paused,
-      nextRunAt: job.nextRunAt ?? null,
-      lastStatus: job.lastStatus ?? null,
-      running: job.running,
-    },
-    now,
-  );
+  if (job.running) return 'running now';
+  const status = routineStatusWord(job.lastStatus, job.paused === true);
+  if (job.paused) return status;
+  const when = job.nextRunAt ? routineNextRunLabel(job.nextRunAt, now) : null;
+  return when ? `${status} · next ${when}` : status;
 }
 
 /**

@@ -4,6 +4,7 @@ import { AppState, ScrollView, StyleSheet, View } from 'react-native';
 import { CronJobSheet } from '@/components/activity/cron-job-sheet';
 import { CronRunSheet } from '@/components/activity/cron-run-sheet';
 import { NewRoutineSheet } from '@/components/routines/new-routine-sheet';
+import { routineCoverageLine } from '@/lib/routines/coverage';
 import { routineTargets } from '@/lib/routines/targets';
 import { gatewayJobInput } from '@/lib/gateway/cron-create';
 import type { PublicBot } from '@/lib/gateway/bots';
@@ -26,9 +27,11 @@ import { cronJobViewFromRoutine, routineJobSummary } from '@/lib/gateway/routine
  * Every backend's routines, grouped by the Bot that owns them.
  *
  * A backend with no routine concept says so in its own quiet line — never a
- * failure, never a zero. Only a read that really failed is red, and it carries
- * the Gate's reason beside a Retry. Which backend answered what is a per-host
- * fact, so each row names its backend and every backend gets a coverage line.
+ * failure, never a zero. Bots that are not set up yet are counted, not quoted,
+ * and stay neutral. Only a read that really failed is red, and it carries one
+ * sentence of the Gate's reason beside a Retry. Which backend answered what is
+ * a per-host fact, so each row names its backend and every backend gets a
+ * coverage line.
  */
 export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number }) {
   const { activeGateway, activityFeed, status, botJobs, listBots } = useGateway();
@@ -285,10 +288,14 @@ export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number })
             <Text variant="caption" color="tertiary">Could not refresh — showing the last read.</Text>
           ) : null}
           {visibleBackends.map((coverage) => {
-            const line = coverageLine(coverage, counts.get(coverage.id) ?? 0);
+            const line = routineCoverageLine(coverage, counts.get(coverage.id) ?? 0);
             return (
               <View key={coverage.id} style={styles.coverage}>
-                <Text variant="caption" color={line.failed ? 'statusDisconnected' : 'tertiary'} style={styles.coverageText}>
+                <Text
+                  variant="caption"
+                  color={line.failed ? 'statusDisconnected' : 'tertiary'}
+                  style={styles.coverageText}
+                >
                   {`${coverage.label}: ${line.text}`}
                 </Text>
                 {line.failed ? (
@@ -369,24 +376,6 @@ function routineJobView(routine: RoutineEntry): CronJob {
 
 function backendLabel(backends: readonly ActivityCoverage[], id: string): string {
   return backends.find((backend) => backend.id === id)?.label ?? id;
-}
-
-/**
- * One backend's coverage, in its own words: a real count, a plain none, a
- * neutral "not supported here", or a failure that carries the Gate's reason.
- */
-function coverageLine(coverage: ActivityCoverage, count: number): { text: string; failed: boolean } {
-  const routines = count === 1 ? '1 routine' : `${count} routines`;
-  switch (coverage.status) {
-    case 'complete':
-      return { text: count > 0 ? routines : 'none', failed: false };
-    case 'partial':
-      return { text: `${routines} · ${coverage.error ?? 'some could not be read'}`, failed: false };
-    case 'unavailable':
-      return { text: 'not supported here', failed: false };
-    case 'failed':
-      return { text: coverage.error ?? 'could not be read', failed: true };
-  }
 }
 
 const styles = StyleSheet.create({
