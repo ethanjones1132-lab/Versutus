@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
+import { memo, useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { Animated, StyleSheet, View } from 'react-native';
 
 import { BotAvatar, GroupAvatar } from '@/components/chat/bot-avatar';
@@ -123,7 +123,9 @@ function ChatHeaderImpl({
     () => 0,
   );
   const elapsed = handsfreeCallClock(callStartedAtMs, elapsedSeconds * 1000);
-  const pulseOpacity = useRef(new Animated.Value(1)).current;
+  // A lazily created, stable Animated.Value (useState, not a ref read during
+  // render: react-hooks/refs).
+  const [pulseOpacity] = useState(() => new Animated.Value(1));
   useEffect(() => {
     if (callMode !== 'live-here') {
       pulseOpacity.setValue(1);
