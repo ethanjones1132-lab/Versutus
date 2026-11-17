@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
+import { createHash, generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
 
-import { buildSignedPayload, verifySignedAccessRequest, ReplayCache } from '../core/signature.mjs';
+import { buildSignedPayload, deriveDeviceId, verifySignedAccessRequest, ReplayCache } from '../core/signature.mjs';
 
 /** Node-only Ed25519 fixture — no dependency on the app's signing library. */
 function fixture(overrides = {}) {
@@ -11,7 +11,7 @@ function fixture(overrides = {}) {
   const publicKeyB64Url = der.subarray(der.length - 32).toString('base64url');
 
   const request = {
-    deviceId: 'device-1',
+    deviceId: deriveDeviceId(publicKeyB64Url),
     publicKeyB64Url,
     clientId: 'versutus-mobile',
     role: 'operator',
@@ -28,6 +28,25 @@ test('accepts a correctly signed, fresh request', () => {
   const { request } = fixture();
   const result = verifySignedAccessRequest(request, { now: request.signedAtMs });
   assert.equal(result.ok, true);
+});
+
+test('derives a device id the way the app does: sha256 of the raw key, hex', () => {
+  const { publicKey } = generateKeyPairSync('ed25519');
+  const der = publicKey.export({ type: 'spki', format: 'der' });
+  const raw = der.subarray(der.length - 32);
+  const derived = deriveDeviceId(raw.toString('base64url'));
+  assert.equal(derived, createHash('sha256').update(raw).digest('hex'));
+  assert.match(derived, /^[0-9a-f]{64}$/);
+});
+
+test('rejects a request whose device id is not derived from its public key', () => {
+  // A key signs a fresh, well-formed payload that names another device's id.
+  const victim = fixture();
+  const attacker = fixture({ deviceId: victim.request.deviceId });
+  const result = verifySignedAccessRequest(attacker.request, { now: attacker.request.signedAtMs });
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /device id/);
+  assert.notEqual(result.replay, true, 'a mismatched key never reaches the replay branch');
 });
 
 test('rejects a tampered field', () => {

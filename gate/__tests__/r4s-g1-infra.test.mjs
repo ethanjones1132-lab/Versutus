@@ -10,6 +10,7 @@ import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
 
 import { createGate } from '../core/server.mjs';
 import { PairingStore } from '../core/pairing.mjs';
+import { deriveDeviceId } from '../core/signature.mjs';
 
 const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
 
@@ -28,7 +29,8 @@ function signedAccessBody(overrides = {}) {
   const { publicKey, privateKey } = overrides.keys ?? generateKeyPairSync('ed25519');
   const der = publicKey.export({ type: 'spki', format: 'der' });
   const publicKeyB64Url = der.subarray(der.length - 32).toString('base64url');
-  const deviceId = overrides.deviceId ?? 'device-test';
+  // The device id the app would present: the hash of its own public key.
+  const deviceId = overrides.deviceId ?? deriveDeviceId(publicKeyB64Url);
   const clientId = 'versutus-mobile';
   const role = 'operator';
   const scopes = ['chat:send'];
@@ -155,7 +157,7 @@ test('a re-sent pending access request returns the same requestId, not 403 repla
   const root = await testSetup();
   const gate = await createGate({ root, port: 0 });
   try {
-    const body = JSON.stringify(signedAccessBody({ deviceId: 'device-pending' }));
+    const body = JSON.stringify(signedAccessBody());
     const headers = { 'Content-Type': 'application/json' };
     const url = `http://127.0.0.1:${gate.port}/.well-known/gateway/access`;
     const first = await fetch(url, { method: 'POST', headers, body });
@@ -167,6 +169,81 @@ test('a re-sent pending access request returns the same requestId, not 403 repla
     assert.equal(pending.status, 'pending');
     assert.equal(replayed.status, 'pending');
     assert.equal(replayed.requestId, pending.requestId);
+  } finally {
+    await gate.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a request signed with another key cannot claim a paired device id', async () => {
+  const root = await testSetup();
+  const gate = await createGate({ root, port: 0 });
+  try {
+    const pairing = new PairingStore(join(root, '.pairing.json'));
+    await pairing.openWindow(60_000);
+    const headers = { 'Content-Type': 'application/json' };
+    const url = `http://127.0.0.1:${gate.port}/.well-known/gateway/access`;
+
+    const keys = generateKeyPairSync('ed25519');
+    const realBody = signedAccessBody({ keys });
+    const granted = await fetch(url, { method: 'POST', headers, body: JSON.stringify(realBody) });
+    assert.equal(granted.status, 200);
+    const grant = await granted.json();
+    assert.equal(grant.status, 'granted');
+    assert.ok(grant.token);
+
+    // A fresh keypair signs a well-formed request that names the paired
+    // device's id. The id is not derived from this key, so it is not that
+    // device's request and no token may ride on it.
+    const attacker = signedAccessBody({ deviceId: realBody.device.id, signedAtMs: Date.now() + 1 });
+    assert.notEqual(attacker.device.publicKey, realBody.device.publicKey);
+    const denied = await fetch(url, { method: 'POST', headers, body: JSON.stringify(attacker) });
+    assert.equal(denied.status, 403);
+    const denial = await denied.json();
+    assert.equal(denial.status, 'denied');
+    assert.match(denial.reason, /device id/);
+    assert.ok(!('token' in denial), 'a mismatched key must not receive a token');
+    assert.ok(!JSON.stringify(denial).includes(grant.token));
+
+    // The real device's key still gets its token.
+    const again = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(signedAccessBody({ keys, signedAtMs: Date.now() + 2 })),
+    });
+    assert.equal(again.status, 200);
+    const renewed = await again.json();
+    assert.equal(renewed.status, 'granted');
+    assert.equal(renewed.token, grant.token, 'the real device keeps its token');
+  } finally {
+    await gate.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a mismatched key does not queue a pending request of its own', async () => {
+  const root = await testSetup();
+  const gate = await createGate({ root, port: 0 });
+  try {
+    const pairing = new PairingStore(join(root, '.pairing.json'));
+    const headers = { 'Content-Type': 'application/json' };
+    const url = `http://127.0.0.1:${gate.port}/.well-known/gateway/access`;
+
+    const device = signedAccessBody();
+    const pending = await fetch(url, { method: 'POST', headers, body: JSON.stringify(device) });
+    assert.equal(pending.status, 202);
+    assert.equal((await pending.json()).status, 'pending');
+
+    const attacker = signedAccessBody({ deviceId: device.device.id, signedAtMs: Date.now() + 1 });
+    const denied = await fetch(url, { method: 'POST', headers, body: JSON.stringify(attacker) });
+    assert.equal(denied.status, 403, 'a pending id is not answered 202 to another key');
+    const denial = await denied.json();
+    assert.equal(denial.status, 'denied');
+    assert.ok(!('requestId' in denial));
+
+    const queued = await pairing.listPending();
+    assert.equal(queued.length, 1, 'the mismatched request is not queued');
+    assert.equal(queued[0].publicKeyB64Url, device.device.publicKey);
   } finally {
     await gate.close();
     await rm(root, { recursive: true, force: true });

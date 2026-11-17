@@ -1,4 +1,4 @@
-import { createPublicKey, verify as cryptoVerify } from 'node:crypto';
+import { createHash, createPublicKey, verify as cryptoVerify } from 'node:crypto';
 
 // Fixed ASN.1 SPKI header for a 32-byte raw Ed25519 public key. Node's
 // crypto module has no "raw" import format for OKP keys, so a bare public
@@ -6,10 +6,24 @@ import { createPublicKey, verify as cryptoVerify } from 'node:crypto';
 // will accept it.
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
-function publicKeyFromB64Url(b64url) {
+function publicKeyBytesFromB64Url(b64url) {
   const raw = Buffer.from(b64url, 'base64url');
   if (raw.length !== 32) throw new Error('public key must decode to 32 bytes');
+  return raw;
+}
+
+function publicKeyFromBytes(raw) {
   return createPublicKey({ key: Buffer.concat([ED25519_SPKI_PREFIX, raw]), format: 'der', type: 'spki' });
+}
+
+/**
+ * The device id the app derives from its own public key: the lowercase hex
+ * SHA-256 of the 32 raw key bytes (src/lib/gateway/device-identity.ts). The
+ * access route binds a request to this id, so a signature made with one key
+ * cannot speak for an id that belongs to another key.
+ */
+export function deriveDeviceId(publicKeyB64Url) {
+  return createHash('sha256').update(publicKeyBytesFromB64Url(publicKeyB64Url)).digest('hex');
 }
 
 /** The exact string the app signs — see src/lib/portal/access.ts. */
@@ -66,9 +80,9 @@ export class ReplayCache {
  * Verify a signed access request from the app's device-pairing handshake.
  *
  * Rejects a payload whose `signedAtMs` is more than `maxSkewMs` from `now` in
- * either direction, and — when a `replayCache` is supplied — rejects a
- * signature already seen. Never throws: a malformed key or signature is a
- * verification failure, not a crash.
+ * either direction, whose `deviceId` is not the id derived from its public key,
+ * and — when a `replayCache` is supplied — a signature already seen. Never
+ * throws: a malformed key or signature is a verification failure, not a crash.
  */
 export function verifySignedAccessRequest(request, { now = Date.now(), maxSkewMs = 300_000 /* 5 min: device/server clock drift tolerance */, replayCache } = {}) {
   const { deviceId, publicKeyB64Url, clientId, role, scopes, signedAtMs, signature } = request;
@@ -78,10 +92,20 @@ export function verifySignedAccessRequest(request, { now = Date.now(), maxSkewMs
   }
 
   let publicKey;
+  let publicKeyBytes;
   try {
-    publicKey = publicKeyFromB64Url(publicKeyB64Url);
+    publicKeyBytes = publicKeyBytesFromB64Url(publicKeyB64Url);
+    publicKey = publicKeyFromBytes(publicKeyBytes);
   } catch (error) {
     return { ok: false, reason: `invalid public key: ${error.message}` };
+  }
+
+  // Bind the request to the key that signed it. The app's device id is the
+  // hash of its own public key, so a request that names one id and carries
+  // another key is not from that device, whatever the signature verifies.
+  const derivedDeviceId = createHash('sha256').update(publicKeyBytes).digest('hex');
+  if (derivedDeviceId !== deviceId) {
+    return { ok: false, reason: 'device id does not match the public key' };
   }
 
   let signatureBytes;

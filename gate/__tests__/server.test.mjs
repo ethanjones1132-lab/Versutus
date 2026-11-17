@@ -8,6 +8,7 @@ import { request as httpRequest } from 'node:http';
 import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
 
 import { createGate } from '../core/server.mjs';
+import { deriveDeviceId } from '../core/signature.mjs';
 
 // Raw POST that survives the server destroying an oversized request: the
 // 413 arrives on the response stream while the request stream is still
@@ -197,7 +198,8 @@ function signedAccessBody(overrides = {}) {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
   const der = publicKey.export({ type: 'spki', format: 'der' });
   const publicKeyB64Url = der.subarray(der.length - 32).toString('base64url');
-  const deviceId = overrides.deviceId ?? 'device-test';
+  // The device id the app would present: the hash of its own public key.
+  const deviceId = overrides.deviceId ?? deriveDeviceId(publicKeyB64Url);
   const clientId = 'versutus-mobile';
   const role = 'operator';
   const scopes = ['chat:send'];
