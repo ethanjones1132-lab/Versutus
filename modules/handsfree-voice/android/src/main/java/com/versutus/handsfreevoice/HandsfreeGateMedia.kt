@@ -54,7 +54,19 @@ class HandsfreeGateMedia(
     private const val READ_FAILURE_BACKOFF_MS = 10L
     private const val MAX_CONSECUTIVE_READ_FAILURES = 100
     private val phoneSequences = ConcurrentHashMap<String, AtomicLong>()
+    private const val LOG_TAG = "HandsfreeGateMedia"
+    /** The first few frames of each link are logged: enough to see a start. */
+    private const val LOGGED_FRAMES = 3
   }
+
+  /**
+   * Gate frames this link has read since its last [start]. JS reads it to prove
+   * the link without relying on the `gate` event: on the A54 that event lost a
+   * live link's attach frames, and the start failed a call the PC was serving.
+   * Written only by OkHttp's reader thread, read from the JS thread.
+   */
+  @Volatile var framesReceived = 0
+    private set
 
   private val client = OkHttpClient.Builder()
     .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -115,6 +127,7 @@ class HandsfreeGateMedia(
     negotiationConfirmed = false
     protocolV2 = false
     activeCallId = voiceSessionId
+    framesReceived = 0
     captureState.setNegotiated(false)
     captureLevel.reset()
     sawEnded = false
@@ -270,8 +283,14 @@ class HandsfreeGateMedia(
   private fun handleTextFrame(text: String) {
     val frame = try {
       GateFrameCodec.parse(text, activeCallId)
-    } catch (_: GateProtocolError) {
+    } catch (error: GateProtocolError) {
+      Log.w(LOG_TAG, "dropped an unreadable Gate frame: ${error.message}")
       return
+    }
+    val seen = framesReceived + 1
+    framesReceived = seen
+    if (seen <= LOGGED_FRAMES) {
+      Log.i(LOG_TAG, "Gate frame $seen: t=${frame.t} v=${frame.protocolVersion}")
     }
     if (frame.protocolVersion == 2) protocolV2 = true
     if (!negotiationConfirmed && (frame.protocolVersion == 2 || frame.t == "ready" || frame.t == "phase")) {

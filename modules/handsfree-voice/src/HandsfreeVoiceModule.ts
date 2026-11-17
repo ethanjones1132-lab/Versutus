@@ -55,6 +55,12 @@ export declare class HandsfreeVoiceModule extends NativeModule<HandsfreeVoiceMod
   /** Close the Gate media socket, capture and playback. */
   stopGateMedia(): Promise<void>;
   /**
+   * How many Gate frames the media socket opened last has read, counted on the
+   * native side. It proves the Gate is on the link without relying on the
+   * `gate` event reaching JS. Absent on iOS and on builds that predate it.
+   */
+  gateMediaFramesReceived?(): number;
+  /**
    * True when a `versutus://call` link carries this app's own HMAC signature
    * and a recent timestamp (§4.4). A link alone never opens the microphone.
    */

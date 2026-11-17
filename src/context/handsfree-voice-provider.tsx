@@ -428,6 +428,13 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   // boolean is not evidence. Held outside React — it is awaited by the start
   // chain and settled from socket callbacks.
   const gateLinkRef = useRef(createGateLinkProbe());
+  // The native link's own frame count: the same proof, read without the event
+  // bridge, which on the A54 dropped a live link's attach frames and failed
+  // three calls in a row. Handed to each proof, never read during render.
+  const nativeGateFrames = useCallback(
+    (): number => moduleRef.current?.gateMediaFramesReceived?.() ?? 0,
+    [],
+  );
 
   // Everything a stable callback has to read at call time. Updated after every
   // render, so `start` and the reply watchers always see the current values
@@ -578,6 +585,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   }, []);
 
   const unsubscribe = useCallback(() => {
+    if (subscriptionsRef.current.length > 0) {
+      console.warn(`[handsfree-gate] removing ${subscriptionsRef.current.length} listeners`);
+    }
     for (const subscription of subscriptionsRef.current) subscription.remove();
     subscriptionsRef.current = [];
   }, []);
@@ -839,7 +849,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
               startGateMedia: (options) => moduleRef.current?.startGateMedia(options) ?? Promise.resolve(false),
               lastSeq: gateLastSeqRef.current,
               armLinkProof: () => gateLinkRef.current.arm(),
-              proveLink: (budgetMs) => gateLinkRef.current.prove(budgetMs),
+              proveLink: (budgetMs) => gateLinkRef.current.prove(budgetMs, nativeGateFrames),
               isAborted: () =>
                 endingRef.current || !gateModeRef.current || gateGrantRef.current !== grant,
               // Spend the window the Gate itself advertised — it may hold the
@@ -866,8 +876,15 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         }
         fold(frame);
       };
+      // The first frames of each subscription are logged: a start that fails
+      // its link proof says from the log whether any frame reached JS at all.
+      let framesSeen = 0;
       subscriptionsRef.current = [
         module.addListener('gate', (event) => {
+          if (framesSeen < 3) {
+            framesSeen += 1;
+            console.warn(`[handsfree-gate] frame ${framesSeen} reached JS`);
+          }
           // Every frame settles the link proof on its way past, including the
           // socket deaths: the Gate's first word on this link is what makes it
           // real, and its refusal is what makes it dead.
@@ -903,7 +920,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         }),
       ];
     },
-    [clearGateMute, dispatch, level, runGateEffect, trackGateApproval, unsubscribe],
+    [clearGateMute, dispatch, level, nativeGateFrames, runGateEffect, trackGateApproval, unsubscribe],
   );
 
   const teardown = useCallback(async () => {
@@ -1536,7 +1553,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         // stack. This is what makes the start honest: it waits for the Gate's
         // first frame on that socket, so a link that never comes up fails the
         // start instead of reporting a call that can hear nothing.
-        proveLink: (budgetMs) => gateLinkRef.current.prove(budgetMs),
+        proveLink: (budgetMs) => gateLinkRef.current.prove(budgetMs, nativeGateFrames),
       }).finally(() => budget.dispose());
 
       if (attempt.result === 'start-timed-out') {
@@ -1598,7 +1615,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       dispatch({ type: 'started', startedAtMs: Date.now() });
       return { result: 'started' };
     },
-    [abandonGateStart, clearGateApprovalTimer, dispatch, refuseGateStart, subscribeGate],
+    [abandonGateStart, clearGateApprovalTimer, dispatch, nativeGateFrames, refuseGateStart, subscribeGate],
   );
 
   const start = useCallback(

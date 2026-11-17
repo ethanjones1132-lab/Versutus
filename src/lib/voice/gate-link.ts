@@ -62,12 +62,36 @@ export type GateLinkProbe = {
    * leaving a live link to time out as if the Gate had never spoken.
    */
   arm: () => void;
-  /** Wait for the Gate's first frame on this link, its death, or the budget. */
-  prove: (budgetMs?: number) => Promise<GateLinkProof>;
+  /**
+   * Wait for the Gate's first frame on this link, its death, or the budget.
+   * `nativeFramesReceived`, when given, overrides the probe's own reader for
+   * this proof (see {@link GateLinkProbeOptions.nativeFramesReceived}).
+   */
+  prove: (budgetMs?: number, nativeFramesReceived?: () => number) => Promise<GateLinkProof>;
   /** Hand every arriving frame to the probe. Settles a pending proof. */
   observe: (frame: string) => void;
   /** Forget a proof whose start has ended, so a late frame settles nothing. */
   release: () => void;
+};
+
+/** How often a pending proof asks the native link whether the Gate has spoken. */
+export const GATE_LINK_NATIVE_POLL_MS = 250;
+
+export type GateLinkProbeOptions = {
+  /**
+   * How many Gate frames the native media link has read on the socket it
+   * opened last. On 2026-11-16 three calls on the A54 failed their proof while
+   * the native side had read the Gate's attach frames, negotiated and streamed
+   * ten seconds of microphone audio: the frames never reached the JS listener.
+   * The native count is the same evidence the listener would have carried, read
+   * without the event bridge, so a dropped event can no longer fail a live
+   * link. Absent on a build whose native module cannot answer.
+   */
+  nativeFramesReceived?: () => number;
+  /** How often a pending proof polls `nativeFramesReceived`. */
+  nativePollMs?: number;
+  /** Where the probe says a link was proven without a frame reaching JS. */
+  warn?: (message: string) => void;
 };
 
 /**
@@ -79,18 +103,33 @@ export type GateLinkProbe = {
  * because something answered on the wire. Only the socket-gone frames are a
  * failure; everything else is the link talking.
  */
-export function createGateLinkProbe(): GateLinkProbe {
+export function createGateLinkProbe(options: GateLinkProbeOptions = {}): GateLinkProbe {
+  const pollMs = options.nativePollMs ?? GATE_LINK_NATIVE_POLL_MS;
+  const warn = options.warn ?? ((message: string) => console.warn(message));
   let settle: ((proof: GateLinkProof) => void) | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let poll: ReturnType<typeof setInterval> | null = null;
   // A frame that arrived after `arm` but before `prove`. It belongs to the link
   // being opened, so the proof that follows it may use it; frames observed
   // outside an armed link are late news about a link that is gone.
   let latched: GateLinkProof | null = null;
   let armed = false;
 
+  const nativeHeard = (read: (() => number) | undefined): boolean => {
+    try {
+      return (read?.() ?? 0) > 0;
+    } catch {
+      // A native read that throws is no evidence either way; the listener and
+      // the budget still decide.
+      return false;
+    }
+  };
+
   const clear = (): void => {
     if (timer !== null) clearTimeout(timer);
     timer = null;
+    if (poll !== null) clearInterval(poll);
+    poll = null;
     settle = null;
     latched = null;
     armed = false;
@@ -101,7 +140,11 @@ export function createGateLinkProbe(): GateLinkProbe {
       clear();
       armed = true;
     },
-    prove(budgetMs: number = GATE_LINK_READY_MS): Promise<GateLinkProof> {
+    prove(
+      budgetMs: number = GATE_LINK_READY_MS,
+      nativeFramesReceived?: () => number,
+    ): Promise<GateLinkProof> {
+      const readNative = nativeFramesReceived ?? options.nativeFramesReceived;
       // A re-opened link supersedes the proof before it: the socket that never
       // spoke is not the socket being waited on now. A frame this link already
       // sent while it was being opened is not superseded: it is the proof.
@@ -115,7 +158,24 @@ export function createGateLinkProbe(): GateLinkProbe {
         };
         armed = true;
         settle = finish;
-        timer = setTimeout(() => finish('timeout'), budgetMs);
+        const provenNatively = (): boolean => {
+          if (!nativeHeard(readNative)) return false;
+          warn('[handsfree-gate] link proven by the native socket; no Gate frame reached JS');
+          finish('frame');
+          return true;
+        };
+        timer = setTimeout(() => {
+          // The last look before giving up: the Gate may have spoken between
+          // two polls, or the poll may be slower than the budget.
+          if (provenNatively()) return;
+          warn(`[handsfree-gate] link proof timed out after ${budgetMs} ms`);
+          finish('timeout');
+        }, budgetMs);
+        if (readNative) {
+          poll = setInterval(() => {
+            provenNatively();
+          }, pollMs);
+        }
       });
     },
     observe(frame: string): void {
@@ -127,6 +187,7 @@ export function createGateLinkProbe(): GateLinkProbe {
       if (armed) latched = proof;
     },
     release(): void {
+      if (settle) warn('[handsfree-gate] link proof released while waiting');
       clear();
     },
   };

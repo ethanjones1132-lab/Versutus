@@ -127,6 +127,115 @@ describe('the probe', () => {
     probe.observe(ready);
     await expect(probe.prove(100)).resolves.toBe('frame');
   });
+
+  // 2026-11-16 on the A54: the native socket read the Gate's `call`, `phase`
+  // and `ready`, negotiated, and streamed ten seconds of microphone audio, but
+  // no `gate` event reached JS. The proof timed out and the start cancelled a
+  // call the PC was serving, three times in a row.
+  describe('when the gate event never reaches JS', () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    test('the native frame count proves the link well inside the budget', async () => {
+      jest.useFakeTimers();
+      let native = 0;
+      const warnings: string[] = [];
+      const probe = createGateLinkProbe({
+        nativeFramesReceived: () => native,
+        nativePollMs: 250,
+        warn: (message) => warnings.push(message),
+      });
+      probe.arm();
+      const proving = probe.prove(10_000);
+      let settled: string | undefined;
+      void proving.then((proof) => {
+        settled = proof;
+      });
+      await jest.advanceTimersByTimeAsync(1_000);
+      expect(settled).toBeUndefined();
+      // The Gate's attach frames are read natively; no event follows.
+      native = 3;
+      await jest.advanceTimersByTimeAsync(250);
+      expect(settled).toBe('frame');
+      // Said once, so the next log shows the bridge dropped this link's frames.
+      expect(warnings).toEqual([
+        '[handsfree-gate] link proven by the native socket; no Gate frame reached JS',
+      ]);
+    });
+
+    // The provider hands the reader to each proof, since it reads a ref that
+    // must not be touched while rendering.
+    test('a reader handed to the proof itself is polled the same way', async () => {
+      jest.useFakeTimers();
+      const probe = createGateLinkProbe({ nativePollMs: 250, warn: () => undefined });
+      const proving = probe.prove(10_000, () => 1);
+      await jest.advanceTimersByTimeAsync(250);
+      await expect(proving).resolves.toBe('frame');
+    });
+
+    test('a native count that never moves still times out', async () => {
+      jest.useFakeTimers();
+      const warnings: string[] = [];
+      const probe = createGateLinkProbe({
+        nativeFramesReceived: () => 0,
+        warn: (message) => warnings.push(message),
+      });
+      const proving = probe.prove(10_000);
+      await jest.advanceTimersByTimeAsync(10_000);
+      await expect(proving).resolves.toBe('timeout');
+      expect(warnings).toEqual(['[handsfree-gate] link proof timed out after 10000 ms']);
+    });
+
+    test('a native read that throws is no evidence, and the event still proves the link', async () => {
+      jest.useFakeTimers();
+      const probe = createGateLinkProbe({
+        nativeFramesReceived: () => {
+          throw new Error('module gone');
+        },
+        warn: () => undefined,
+      });
+      const proving = probe.prove(10_000);
+      await jest.advanceTimersByTimeAsync(500);
+      probe.observe(ready);
+      await expect(proving).resolves.toBe('frame');
+    });
+
+    test('a proof that settled stops asking the native link', async () => {
+      jest.useFakeTimers();
+      let reads = 0;
+      const probe = createGateLinkProbe({
+        nativeFramesReceived: () => {
+          reads += 1;
+          return 0;
+        },
+        nativePollMs: 250,
+        warn: () => undefined,
+      });
+      const proving = probe.prove(10_000);
+      probe.observe(ready);
+      await expect(proving).resolves.toBe('frame');
+      const before = reads;
+      await jest.advanceTimersByTimeAsync(5_000);
+      expect(reads).toBe(before);
+    });
+
+    test('a released proof stops asking, so an abandoned start is not revived natively', async () => {
+      jest.useFakeTimers();
+      let settled = false;
+      const probe = createGateLinkProbe({
+        nativeFramesReceived: () => 5,
+        nativePollMs: 250,
+        warn: () => undefined,
+      });
+      void probe.prove(10_000).then(() => {
+        settled = true;
+      });
+      probe.release();
+      await jest.advanceTimersByTimeAsync(20_000);
+      expect(settled).toBe(false);
+    });
+  });
 });
 
 describe('openGateVoiceSession waits for the Gate to speak', () => {

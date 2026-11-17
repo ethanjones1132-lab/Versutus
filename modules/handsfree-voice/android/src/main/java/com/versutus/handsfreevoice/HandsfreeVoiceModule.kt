@@ -238,8 +238,15 @@ class HandsfreeVoiceModule : Module() {
         return@AsyncFunction
       }
       gateMedia?.stop()
+      val emitted = java.util.concurrent.atomic.AtomicInteger(0)
       val media = HandsfreeGateMedia({ frame ->
-        sendEvent("gate", mapOf("frame" to frame))
+        val n = emitted.incrementAndGet()
+        try {
+          sendEvent("gate", mapOf("frame" to frame))
+          if (n <= 3) android.util.Log.i("HandsfreeVoice", "gate event $n sent to JS (${frame.length} chars)")
+        } catch (error: Exception) {
+          android.util.Log.e("HandsfreeVoice", "gate event $n could not reach JS", error)
+        }
       }, initiallyMuted = HandsfreeGateMediaOwner.isMuted(), resumeLastSeq = lastSeq)
       gateMedia = media
       media.start(context, url, token, voiceSessionId)
@@ -247,6 +254,12 @@ class HandsfreeVoiceModule : Module() {
       HandsfreeGateMediaOwner.attach(media)
       promise.resolve(true)
     }.runOnQueue(Queues.MAIN)
+
+    // The link's own count of Gate frames read, so JS can prove the link even
+    // when a `gate` event never reaches it.
+    Function("gateMediaFramesReceived") {
+      gateMedia?.framesReceived ?: 0
+    }
 
     AsyncFunction("sendGateControl") { json: String ->
       gateMedia?.sendControl(json) ?: false
@@ -270,7 +283,8 @@ class HandsfreeVoiceModule : Module() {
     }
   }
 
-  private var gateMedia: HandsfreeGateMedia? = null
+  // Written on the main queue, read by `gateMediaFramesReceived` on the JS thread.
+  @Volatile private var gateMedia: HandsfreeGateMedia? = null
 
   private fun startService(context: Context, title: String, promise: Promise, startId: String) {
     // A start the JS side abandoned (its deadline ran out and stopSession
