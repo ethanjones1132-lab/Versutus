@@ -32,6 +32,7 @@ function readSource(...parts: string[]): string {
 const sheet = readSource('src', 'components', 'chat', 'handsfree-call-sheet.tsx');
 const banner = readSource('src', 'components', 'voice', 'handsfree-call-banner.tsx');
 const composer = readSource('src', 'components', 'chat', 'chat-composer.tsx');
+const header = readSource('src', 'components', 'chat', 'chat-header.tsx');
 const screen = readSource('src', 'components', 'chat', 'chat-screen.tsx');
 const layout = readSource('src', 'app', '_layout.tsx');
 const indicator = readSource('src', 'components', 'voice', 'handsfree-call-indicator.tsx');
@@ -130,6 +131,30 @@ describe('the Call control is separate from push-to-talk', () => {
     expect(micAt).toBeGreaterThan(callAt);
     expect(screen).toContain('onStartCall={canStartHandsfree ? openCallSheet : undefined}');
     expect(screen).toContain('callActive={handsfreeActive}');
+    expect(screen).toContain('onCallPress={surface.kind === \'roster\' ? undefined : handleCallHeaderPress}');
+    expect(header).toContain("callMode?: 'start' | 'live-here' | 'live-elsewhere'");
+    expect(header).toContain("onPress={onCallPress}");
+  });
+
+  test('the chat header starts via the consent-aware sheet and explains disabled calls', () => {
+    expect(screen).toContain('openCallSheet();');
+    expect(screen).toContain('callDisabledReason');
+    expect(screen).toContain('callCallsOff\n          ? callEngine?.reason ?? VOICE_CALLS_OFF_REASON');
+    expect(screen).toContain('Connect to a gateway to start a hands-free call.');
+    expect(header).toContain("? 'Start hands-free call'");
+    expect(header).toContain('accessibilityHint={callDisabledReason}');
+    expect(header).toContain('disabled={callMode === \'start\' && Boolean(callDisabledReason)}');
+  });
+
+  test('a live call is shown in its chat and can be returned to from another chat', () => {
+    expect(screen).toContain("activeCallThreadKey === currentCallThreadKey");
+    expect(screen).toContain("activeCallThreadKey === currentCallThreadKey\n        ? 'live-here'\n        : 'live-elsewhere'");
+    expect(screen).toContain('scrollToLatest();');
+    expect(screen).toContain('showBotSurface(botId, sessionId)');
+    expect(header).toContain('On a call with ${callLabel ?? \'Bot\'}');
+    expect(header).toContain('Return to the call with ${callLabel ?? \'Bot\'}');
+    expect(header).toContain('handsfreeCallClock(callStartedAtMs');
+    expect(header).toContain('styles.liveDot');
   });
 
   test('the mic path still calls only the draft writers and never sends', () => {

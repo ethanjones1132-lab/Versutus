@@ -1,11 +1,17 @@
-import { memo } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { memo, useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
+import { Animated, StyleSheet, View } from 'react-native';
 
 import { BotAvatar, GroupAvatar } from '@/components/chat/bot-avatar';
 import { Icon, PressableScale, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import { chatHeaderSubtitle, chatHeaderTitle } from '@/lib/motion/chat-header-layout';
+import { handsfreeCallClock } from '@/lib/voice/handsfree-call-copy';
+
+const subscribeCallClock = (onStoreChange: () => void) => {
+  const timer = setInterval(onStoreChange, 1000);
+  return () => clearInterval(timer);
+};
 
 export type ChatHeaderProps = {
   gatewayName: string;
@@ -52,6 +58,13 @@ export type ChatHeaderProps = {
    * it is covering something instead of letting text collide with the title.
    */
   scrolled?: boolean;
+  /** Starts a call, returns to the active call, or scrolls its banner into view. */
+  onCallPress?: () => void;
+  callMode?: 'start' | 'live-here' | 'live-elsewhere';
+  callLabel?: string;
+  callStartedAtMs?: number;
+  /** A disabled call remains visible and explains itself to assistive tech. */
+  callDisabledReason?: string;
 };
 
 /**
@@ -82,6 +95,11 @@ function ChatHeaderImpl({
   spendNote,
   botThinking = false,
   scrolled = false,
+  onCallPress,
+  callMode = 'start',
+  callLabel,
+  callStartedAtMs,
+  callDisabledReason,
 }: ChatHeaderProps) {
   const tokens = useTokens();
   const title = chatHeaderTitle({ gatewayName, backendLabel, groupName });
@@ -94,6 +112,32 @@ function ChatHeaderImpl({
     groupName,
     statusDetail,
   });
+  const subscribeElapsed = useCallback(
+    (onStoreChange: () => void) =>
+      callStartedAtMs === undefined ? () => undefined : subscribeCallClock(onStoreChange),
+    [callStartedAtMs],
+  );
+  const elapsedSeconds = useSyncExternalStore(
+    subscribeElapsed,
+    () => Math.floor(Date.now() / 1000),
+    () => 0,
+  );
+  const elapsed = handsfreeCallClock(callStartedAtMs, elapsedSeconds * 1000);
+  const pulseOpacity = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (callMode !== 'live-here') {
+      pulseOpacity.setValue(1);
+      return undefined;
+    }
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseOpacity, { toValue: 0.25, duration: 550, useNativeDriver: true }),
+        Animated.timing(pulseOpacity, { toValue: 1, duration: 550, useNativeDriver: true }),
+      ]),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [callMode, pulseOpacity]);
 
   const leading = onRosterPress ? (
     <PressableScale
@@ -208,6 +252,39 @@ function ChatHeaderImpl({
     </PressableScale>
   ) : null;
 
+  const callControl = onCallPress ? (
+    <PressableScale
+      onPress={onCallPress}
+      disabled={callMode === 'start' && Boolean(callDisabledReason)}
+      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={
+        callMode === 'live-elsewhere'
+          ? `Return to the call with ${callLabel ?? 'Bot'}`
+          : callMode === 'start'
+            ? 'Start hands-free call'
+            : `Hands-free call with ${callLabel ?? 'Bot'}, ${elapsed ?? 'live'}. Show call banner.`
+      }
+      accessibilityHint={callDisabledReason}
+      accessibilityState={{ disabled: callMode === 'start' && Boolean(callDisabledReason) }}
+      style={[styles.control, styles.callHitTarget, styles.callControl, callMode !== 'start' && styles.liveCallControl]}>
+      {callMode === 'start' ? (
+        <Icon name={{ ios: 'phone', android: 'call', web: 'call' }} size={19} color={callDisabledReason ? 'textTertiary' : 'textPrimary'} />
+      ) : callMode === 'live-here' ? (
+        <Animated.View style={[styles.liveDot, { backgroundColor: tokens.statusConnected, opacity: pulseOpacity }]} />
+      ) : (
+        <Icon name={{ ios: 'phone.fill', android: 'call', web: 'call' }} size={16} color="accent" />
+      )}
+      {callMode !== 'start' ? (
+        <Text variant="caption" color={callMode === 'live-elsewhere' ? 'accent' : 'primary'} numberOfLines={1} style={styles.callText}>
+          {callMode === 'live-elsewhere'
+            ? `On a call with ${callLabel ?? 'Bot'}`
+            : elapsed ?? 'On a call'}
+        </Text>
+      ) : null}
+    </PressableScale>
+  ) : null;
+
   return (
     <View
       testID="chat-header"
@@ -217,6 +294,7 @@ function ChatHeaderImpl({
       ]}>
       {leading}
       {titles}
+      {callControl}
       {overflow}
     </View>
   );
@@ -247,6 +325,27 @@ const styles = StyleSheet.create({
     borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  callHitTarget: {
+    minWidth: 44,
+    minHeight: 44,
+  },
+  callControl: {
+    flexDirection: 'row',
+    gap: Spacing.one,
+    paddingHorizontal: Spacing.one,
+  },
+  liveCallControl: {
+    maxWidth: 156,
+  },
+  callText: {
+    flexShrink: 1,
+    fontVariant: ['tabular-nums'],
+  },
+  liveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
   identity: {
     flex: 1,

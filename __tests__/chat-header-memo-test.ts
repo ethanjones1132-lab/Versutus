@@ -44,7 +44,7 @@ describe('chat header render cost', () => {
     // callbacks (the handleHeader*Press useCallback wrappers) so a message-only
     // change short-circuits the header.
     const src = readChatScreenSource();
-    const header = src.match(/<ChatHeader[\s\S]*?\/>/)?.[0];
+    const header = src.match(/<ChatHeader\s+scrolled=\{headerScrolled\}[\s\S]*?\/>/)?.[0];
     expect(header).toBeDefined();
 
     // Each press prop is the stable wrapper, never an inline arrow that would
@@ -58,6 +58,9 @@ describe('chat header render cost', () => {
     );
     expect(header).toMatch(
       /onRosterPress=\{surface\.kind === 'roster' \? undefined : handleHeaderRosterPress\}/,
+    );
+    expect(header).toMatch(
+      /onCallPress=\{surface\.kind === 'roster' \? undefined : handleCallHeaderPress\}/,
     );
 
     const sheet = readChatScreenSource().match(/<ChatOverflowSheet[\s\S]*?\/>/)?.[0];

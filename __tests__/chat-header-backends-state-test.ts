@@ -74,7 +74,7 @@ describe('Chat header backend picker expanded state', () => {
     expect(src).toMatch(/<ChatHeader[\s\S]*?backendsExpanded=\{backendPickerVisible\}[\s\S]*?\/>/);
   });
 
-  test('the expanded state lives on the backend title and the overflow, never on the back button', () => {
+  test('expanded state stays on backend and overflow while the call control carries disabled state', () => {
     const src = readChatHeaderSource();
     // Split on the opening tag rather than matching to a self-closing `/>`:
     // the one-row header's title/subtitle pair has no self-closing tag between
@@ -83,12 +83,13 @@ describe('Chat header backend picker expanded state', () => {
     const stateCarriers = allPressables.filter((p) =>
       /accessibilityState=\{\{/.test(p),
     );
-    // Backend title + Chat-options overflow: Back-to-roster is a flat
-    // navigation button with no sheet to announce, and the model subtitle is a
-    // plain jump to the model picker.
-    expect(stateCarriers).toHaveLength(2);
+    // Backend title + Chat-options overflow + the call control. Back-to-roster
+    // is still a flat navigation button and the model subtitle a plain jump.
+    expect(stateCarriers).toHaveLength(3);
     expect(stateCarriers[0]).toMatch(/onPress=\{onBackendPress\}/);
     expect(stateCarriers[1]).toMatch(/onPress=\{onOverflowPress\}/);
+    expect(stateCarriers[2]).toMatch(/onPress=\{onCallPress\}/);
+    expect(stateCarriers[2]).toMatch(/accessibilityState=\{\{ disabled:/);
     const overflowBlock = src.match(
       /accessibilityLabel="Chat options"[\s\S]*?\/>/,
     )?.[0];

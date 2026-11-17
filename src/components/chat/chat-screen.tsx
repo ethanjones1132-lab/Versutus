@@ -1221,17 +1221,21 @@ export function ChatScreen() {
   // the same thing to this screen: nothing opened, so the operator goes back to
   // the roster. This is the contract the deep-link router already reads.
   const showBotSurface = useCallback(
-    (botId: string) => {
+    (botId: string, sessionId?: string) => {
       showSurface({ kind: 'bot', botId });
       void openBot(botId)
         .then((opened) => {
-          if (!opened) showSurface({ kind: 'roster' });
+          if (!opened) {
+            showSurface({ kind: 'roster' });
+            return;
+          }
+          if (sessionId) selectSession(sessionId);
         })
         .catch(() => {
           showSurface({ kind: 'roster' });
         });
     },
-    [openBot, showSurface],
+    [openBot, selectSession, showSurface],
   );
 
   // A request to move the surface, from outside this screen — the quick-reply
@@ -2153,6 +2157,49 @@ export function ChatScreen() {
     listRef.current?.scrollToEnd({ animated: true });
   }, []);
 
+  const currentCallThreadKey = draftThread ? composerDraftKey(draftThread) : undefined;
+  const activeCallThreadKey = callThreadProjection?.threadKey;
+  const callMode =
+    handsfreeActive && activeCallThreadKey
+      ? activeCallThreadKey === currentCallThreadKey
+        ? 'live-here'
+        : 'live-elsewhere'
+      : 'start';
+  const handleCallHeaderPress = useCallback(() => {
+    if (callMode === 'live-here') {
+      // The banner is docked above the bottom inset; bringing the transcript
+      // to its end makes the live call controls immediately visible as well.
+      scrollToLatest();
+      return;
+    }
+    if (callMode === 'live-elsewhere' && activeCallThreadKey) {
+      const parts = activeCallThreadKey.split(':');
+      const kind = parts[1];
+      const sessionId = parts.slice(kind === 'bot' ? 3 : 2).join(':');
+      if (kind === 'bot' && parts[2]) {
+        const botId = parts[2];
+        showBotSurface(botId, sessionId);
+      } else if (kind === 'configurable') {
+        showSurface({ kind: 'configurable' });
+        if (sessionId) selectSession(sessionId);
+      }
+      return;
+    }
+    openCallSheet();
+  }, [activeCallThreadKey, callMode, openCallSheet, scrollToLatest, selectSession, showBotSurface, showSurface]);
+
+  const callDisabledReason = !activeGateway
+    ? 'Connect to a gateway to start a hands-free call.'
+    : surface.kind !== 'bot' && surface.kind !== 'configurable'
+      ? 'Hands-free calls are unavailable in this chat.'
+      : handsfree.startBlocker
+        ? handsfreeStartBlockerCopy(handsfree.startBlocker)
+        : callCallsOff
+          ? callEngine?.reason ?? VOICE_CALLS_OFF_REASON
+          : !canStartHandsfree
+            ? 'Hands-free calls are unavailable right now.'
+            : undefined;
+
   // When the roster mount read last ran, and for which gateway. A `status`
   // flip re-runs the effect below; it must not re-read every time.
   const rosterReadAtRef = useRef<{ gatewayId: string; at: number } | null>(null);
@@ -2880,6 +2927,11 @@ export function ChatScreen() {
   if (!activeGateway) {
     return (
       <Screen>
+        <ChatHeader
+          gatewayName={settings.pcName ?? 'Versutus'}
+          onCallPress={() => undefined}
+          callDisabledReason="Connect to a gateway to start a hands-free call."
+        />
         <ChatEmptyState
           title="Not connected yet"
           description={
@@ -2927,6 +2979,11 @@ export function ChatScreen() {
         onBackendPress={surface.kind === 'configurable' && backends.length > 0 ? handleHeaderBackendPress : undefined}
         onRosterPress={surface.kind === 'roster' ? undefined : handleHeaderRosterPress}
         onMenuPress={surface.kind === 'roster' ? handleHeaderMenuPress : undefined}
+        onCallPress={surface.kind === 'roster' ? undefined : handleCallHeaderPress}
+        callMode={callMode}
+        callLabel={handsfree.label}
+        callStartedAtMs={handsfree.startedAtMs}
+        callDisabledReason={callMode === 'start' ? callDisabledReason : undefined}
         backendsExpanded={backendPickerVisible}
         overflowExpanded={overflowVisible}
       />

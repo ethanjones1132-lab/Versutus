@@ -83,7 +83,7 @@ describe('Chat header backend title screen-reader state', () => {
     expect(src).toContain('chatHeaderSubtitle({');
   });
 
-  test('accessibilityState appears on the backend-title and overflow PressableScales and is not duplicated on surrounding controls', () => {
+  test('backend and overflow state is retained alongside the call button disabled state', () => {
     const src = readChatHeaderSource();
     // The backend-title PressableScale and the Chat-options overflow
     // PressableScale carry an accessibilityState prop. The Back to roster
@@ -99,8 +99,8 @@ describe('Chat header backend title screen-reader state', () => {
       /accessibilityState=\{\{\s*disabled:\s*!onBackendPress \|\| !backendLabel,\s*expanded:\s*backendsExpanded \?\? false\s*\}\}/,
     );
 
-    // Ensure only the backend title and the overflow carry a state tuple
-    // (the Back-to-roster button and the model subtitle must NOT grow one).
+    // The call button adds a third state tuple; the Back-to-roster button and
+    // model subtitle remain plain navigation/picker controls.
     // Split on the opening tag rather than matching to a self-closing `/>`:
     // title and subtitle sit between them with no self-closing tag of their
     // own, so a `/>`-terminated match would swallow both pressables as one.
@@ -108,6 +108,8 @@ describe('Chat header backend title screen-reader state', () => {
     const stateCarriers = allPressables.filter((p) =>
       /accessibilityState=\{\{/.test(p),
     );
-    expect(stateCarriers).toHaveLength(2);
+    expect(stateCarriers).toHaveLength(3);
+    expect(stateCarriers[2]).toMatch(/onPress=\{onCallPress\}/);
+    expect(stateCarriers[2]).toMatch(/accessibilityState=\{\{ disabled:/);
   });
 });
