@@ -147,7 +147,10 @@ describe('the Call control is separate from push-to-talk', () => {
 
   test('the screen builds the target from its own state and hands it to start', () => {
     expect(screen).toContain('handsfree.start({');
-    expect(screen).toContain('sessionId: draftThread.sessionId');
+    // The session sent is the one the chat was prepared with, which starts as
+    // the open thread's own session: a chat with none lets the Gate open one.
+    expect(screen).toContain('sessionId: callSessionId');
+    expect(screen).toContain('let callSessionId = draftThread.sessionId;');
     expect(screen).toContain("surfaceKind: surface.kind");
     expect(screen).toContain('voice: botVoice ?? {}');
     expect(screen).toContain('const callTargetLabel = useMemo');
@@ -233,7 +236,9 @@ describe('the call sheet can always be dismissed', () => {
     const at = screen.indexOf('const startCallWith = useCallback(');
     const handler = screen.slice(at, screen.indexOf('}, [activeGateway, botVoice', at));
     expect(handler).toMatch(/try\s*\{[\s\S]*await handsfree\.start\(/);
-    expect(handler).toMatch(/finally\s*\{\s*setCallBusy\(false\);\s*\}/);
+    // The preparing line is cleared with busy: a failed start must not leave
+    // the sheet saying it is still getting the chat ready.
+    expect(handler).toMatch(/finally\s*\{[\s\S]*?setCallPreparing\(false\);[\s\S]*?setCallBusy\(false\);/);
   });
 });
 
@@ -310,7 +315,11 @@ describe('the sheet names the engine before consent', () => {
     expect(sheet).toContain('disabled={Boolean(busy || startDisabled)}');
     expect(screen).toContain('engineWarning={callCallsOff ? undefined : callEngine?.reason}');
     expect(screen).toContain('preferredEngineUnready');
-    expect(screen).toContain("handsfreeStartResultCopy('no-session')");
+    // A chat with no session is prepared, never refused: the sheet says it is
+    // getting ready and Start is not withheld for it (VS-124).
+    expect(screen).toContain('notice={callPreparing ? HANDSFREE_CALL_PREPARING_COPY : undefined}');
+    expect(screen).not.toContain("handsfreeStartResultCopy('no-session')");
+    expect(screen).toContain('const callStartBlocked = callCapsLoading || preferredEngineUnready || callCallsOff;');
   });
 
   test('shows the chosen engine’s own disclosure over the default', () => {

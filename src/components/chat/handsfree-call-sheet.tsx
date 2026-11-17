@@ -25,6 +25,7 @@ export function HandsfreeCallSheet({
   busy,
   startDisabled,
   error,
+  notice,
   engineLabel,
   engineWarning,
   disclosure,
@@ -35,8 +36,10 @@ export function HandsfreeCallSheet({
   visible: boolean;
   label?: string;
   busy?: boolean;
-  /** Start is offered but not tappable: host unreadiness, no session, still loading. */
+  /** Start is offered but not tappable: host unreadiness, still loading. */
   startDisabled?: boolean;
+  /** A line beside Start while the call is being prepared, e.g. opening the chat. */
+  notice?: string;
   error?: string;
   engineLabel?: string;
   /** Why the chosen engine is not the one the operator asked for, shown before Start. */
@@ -89,6 +92,12 @@ export function HandsfreeCallSheet({
         {engineWarning ? (
           <Text variant="caption" color="secondary" style={styles.error}>
             {engineWarning}
+          </Text>
+        ) : null}
+
+        {notice ? (
+          <Text variant="caption" color="secondary" style={styles.error}>
+            {notice}
           </Text>
         ) : null}
 

@@ -179,7 +179,12 @@ import {
   type BotVoiceRefinementField,
 } from '@/lib/voice/bot-voices';
 import { pushDeviceParams } from '@/lib/notifications/push-registration';
-import { handsfreeEndReasonCopy, handsfreeStartResultCopy } from '@/lib/voice/handsfree-call-copy';
+import {
+  HANDSFREE_CALL_PREPARING_COPY,
+  handsfreeEndReasonCopy,
+  handsfreeStartResultCopy,
+} from '@/lib/voice/handsfree-call-copy';
+import { adoptedCallSessionId } from '@/lib/voice/call-session';
 import { handsfreeStartBlockerCopy } from '@/lib/voice/handsfree-start-policy';
 import { callProjectionForThread } from '@/lib/voice/call-thread-projection';
 import {
@@ -548,6 +553,9 @@ export function ChatScreen() {
     loadingOlderSessions,
     loadOlderSessions,
     currentSessionId,
+    prepareCallSession,
+    adoptThreadSession,
+    resumeThreadSession,
     pendingRunApproval,
     resolveRunApproval,
     recentCommands,
@@ -600,6 +608,12 @@ export function ChatScreen() {
   } = handsfree;
   const [callSheetVisible, setCallSheetVisible] = useState(false);
   const [callBusy, setCallBusy] = useState(false);
+  /**
+   * Start is opening (or waiting for) this chat's conversation. A chat with no
+   * session is not refused any more, so the sheet says it is getting ready for
+   * at most `CALL_SESSION_READY_MS` and then lets the call proceed (VS-124).
+   */
+  const [callPreparing, setCallPreparing] = useState(false);
   const [callCapsLoading, setCallCapsLoading] = useState(false);
   const [callError, setCallError] = useState<string | undefined>();
   const [callPreference, setCallPreference] = useState<VoiceEnginePreference>('auto');
@@ -841,6 +855,14 @@ export function ChatScreen() {
       cancelled = true;
     };
   }, [draftThread]);
+  // A chat whose first reply named its session after the operator had already
+  // left it reopens on that session. The id was kept for the chat the turn was
+  // SENT from, not for whatever was open when the header arrived, so this is
+  // the only place that can claim it (VS-124 item 3).
+  useEffect(() => {
+    if (currentSessionId || !draftThread || !resumeThreadSession) return;
+    resumeThreadSession();
+  }, [currentSessionId, draftThread, resumeThreadSession]);
   // A call's recovery merges surviving speech into the stored draft on every
   // terminal path (promoteHandsfreeRecovery in the provider's teardown), but
   // a call is ended from the banner while THIS screen stays mounted — the
@@ -1736,6 +1758,41 @@ export function ChatScreen() {
     return sessionLabel ?? 'Versutus chat';
   }, [rosterRows, selectedBotId, sessionLabel, surface]);
 
+  /**
+   * The chat the Gate opened for a call whose thread had none. The provider's
+   * start answers whether the call opened, not which conversation it speaks
+   * into, so the id is read from the live call's own record. A refused read is
+   * not a failed call: the call stays live and only the adoption is missed.
+   */
+  const fetchCallChatSession = useCallback(async (gatewayId: string): Promise<string | undefined> => {
+    if (activeGateway?.id !== gatewayId) return undefined;
+    try {
+      const answer = await gatewayRequest<{ sessionId?: string | null }>(
+        'voice.session.chat',
+        await pushDeviceParams(),
+      );
+      return typeof answer?.sessionId === 'string' ? answer.sessionId : undefined;
+    } catch {
+      return undefined;
+    }
+  }, [activeGateway?.id, gatewayRequest]);
+
+  /**
+   * The chat the Gate opened for a call whose thread had none, waiting until
+   * that call is over. The provider binds a live call to the session it started
+   * with — a session change on screen ends the call as a thread change — so the
+   * id is adopted the moment the call is no longer live.
+   */
+  const [pendingCallSession, setPendingCallSession] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (!pendingCallSession || handsfreeActive) return;
+    adoptThreadSession?.(pendingCallSession);
+    setPendingCallSession(undefined);
+    // The conversation was opened on the Gate during the call, so what is on
+    // screen is the pre-call thread: read the call's turns back into it.
+    void reloadHistory?.().catch(() => undefined);
+  }, [adoptThreadSession, handsfreeActive, pendingCallSession, reloadHistory]);
+
   // One start path, shared by the sheet's Start and by a call this device has
   // already consented to. `choice` is the engine resolved for THIS call; null
   // means the capabilities read did not answer, which keeps the long-standing
@@ -1752,10 +1809,6 @@ export function ChatScreen() {
       setCallError(choice.reason ?? VOICE_CALLS_OFF_REASON);
       return false;
     }
-    if (!draftThread.sessionId) {
-      setCallError(handsfreeStartResultCopy('no-session'));
-      return false;
-    }
     if (handsfree.startBlocker) {
       setCallError(handsfreeStartBlockerCopy(handsfree.startBlocker));
       return false;
@@ -1766,10 +1819,21 @@ export function ChatScreen() {
     // a fallback for a context that does not carry it.
     const transport = choice && choice.engine !== 'phone' ? 'gate' : 'phone';
     const decidedTransport = handsfree.transport ?? transport;
+    // A chat with nothing sent in it has no session yet. That is not a refusal:
+    // the session is resolved (or opened) here, bounded, and a chat that cannot
+    // be prepared still starts — the Gate opens the conversation then, and the
+    // call adopts it below (VS-124).
+    const alreadyHasSession = Boolean(draftThread.sessionId);
+    let callSessionId = draftThread.sessionId;
+    setCallPreparing(!alreadyHasSession);
     try {
+      if (!callSessionId) {
+        callSessionId = (await prepareCallSession?.()) ?? '';
+      }
+      setCallPreparing(false);
       const attempt = await handsfree.start({
         gatewayId: activeGateway.id,
-        sessionId: draftThread.sessionId,
+        sessionId: callSessionId,
         surfaceKind: surface.kind,
         botId: surface.kind === 'bot' ? surface.botId : undefined,
         // The call is answered where the thread's typed turns are: the same
@@ -1788,6 +1852,16 @@ export function ChatScreen() {
           void rememberHandsfreeConsent(choice.engine, decidedTransport);
         }
         setCallSheetVisible(false);
+        // The Gate opened the chat this call answers in (the thread had none),
+        // so keep the id it names: the transcript lands in this chat and the
+        // next typed message continues it rather than opening a second thread.
+        // It is adopted when the call is no longer live — see the effect above.
+        if (!callSessionId) {
+          void fetchCallChatSession(activeGateway.id).then((returned) => {
+            const adopt = adoptedCallSessionId({ sent: callSessionId, returned });
+            if (adopt) setPendingCallSession(adopt);
+          });
+        }
         return true;
       }
       setCallError(
@@ -1810,9 +1884,10 @@ export function ChatScreen() {
       setCallError(handsfreeStartResultCopy('start-failed-unexpectedly', { transport, engine: choice?.engine ?? preference }));
       return false;
     } finally {
+      setCallPreparing(false);
       setCallBusy(false);
     }
-  }, [activeGateway, botVoice, callTargetLabel, draftThread, handsfree, selectedBackendId, selectedBotId, surface]);
+  }, [activeGateway, botVoice, adoptThreadSession, callTargetLabel, draftThread, fetchCallChatSession, handsfree, prepareCallSession, selectedBackendId, selectedBotId, surface]);
 
   // Which open of the sheet a `voice.capabilities` answer belongs to. Opening the
   // sheet twice inside one request's latency left both reads live: the slower
@@ -1832,9 +1907,10 @@ export function ChatScreen() {
    */
   const openCallSheet = useCallback((options?: { requireSheet?: boolean }) => {
     const seq = ++callCapsReadSeqRef.current;
-    setCallError(
-      draftThread?.sessionId ? undefined : handsfreeStartResultCopy('no-session'),
-    );
+    // A chat with no session is no longer a reason to refuse: Start resolves it
+    // (or the Gate opens it), and the sheet says "Getting this chat ready…"
+    // while that happens (VS-124).
+    setCallError(undefined);
     setCallCapsLoading(true);
     // The engine is chosen from the stored preference and the Gate's live
     // readiness, so the sheet can name where the audio will go before consent.
@@ -1926,8 +2002,10 @@ export function ChatScreen() {
   const preferredEngineUnready =
     (callPreference === 'local' || callPreference === 'codex') &&
     callEngine?.fellBackFrom === callPreference;
-  const callStartBlocked =
-    callCapsLoading || !draftThread?.sessionId || preferredEngineUnready || callCallsOff;
+  // Start is withheld only for a reason the call cannot fix: an unreadiness the
+  // engine answer named, or the Gate's voice switch being off. A chat with no
+  // session yet is NOT one of them — that is what the start path prepares.
+  const callStartBlocked = callCapsLoading || preferredEngineUnready || callCallsOff;
   const handleCancelCall = useCallback(() => {
     // Dismissing the sheet ends the open that asked: a read still in flight has
     // nobody to answer for and must not clear the next sheet's loading flag.
@@ -3496,6 +3574,7 @@ export function ChatScreen() {
         label={callTargetLabel}
         busy={callBusy || callCapsLoading}
         startDisabled={callStartBlocked}
+        notice={callPreparing ? HANDSFREE_CALL_PREPARING_COPY : undefined}
         error={callError ?? (callCallsOff ? callEngine?.reason : undefined)}
         engineLabel={callEngineLabel}
         engineWarning={callCallsOff ? undefined : callEngine?.reason}

@@ -45,6 +45,12 @@ export type OpenGateVoiceSessionInput = {
     label: string;
     voiceEngine?: string;
     surfaceKind: 'configurable' | 'bot';
+    /**
+     * The chat the call answers in, or an empty string when this chat has none
+     * yet. Empty is not a refusal: a brand-new thread and a Bot thread opened
+     * for the first time name no session, so the field is left off the request
+     * and the Gate opens the one the call speaks in (VS-124).
+     */
     sessionId: string;
     botId?: string;
     /**
@@ -257,7 +263,10 @@ export async function openGateVoiceSession(
         engine: input.target.voiceEngine ?? 'auto',
         thread: {
           kind: input.target.surfaceKind,
-          sessionId: input.target.sessionId,
+          // A chat with no session says so by naming none: the Gate opens the
+          // one the call answers in. Sending an empty string instead would be a
+          // session id the Gate has to guess about.
+          ...(input.target.sessionId ? { sessionId: input.target.sessionId } : {}),
           botId: input.target.botId,
           // A Bot names its own environment, exactly as a typed turn's `bot`
           // does; naming the thread's backend too would pin a Bot's call to an

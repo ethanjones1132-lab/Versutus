@@ -30,8 +30,15 @@ export const HANDSFREE_DISCLOSURE =
 export const HANDSFREE_RECOVERY_DISCLOSURE =
   'If the call is interrupted unexpectedly, what you said can appear in the message box — review it before sending, as always.';
 
-/** The label beside the Call control. */
+/** Shown beside the Call control. */
 export const HANDSFREE_START_LABEL = 'Start hands-free call';
+/**
+ * What the sheet says while a chat with no session yet is being opened for the
+ * call. Bounded by the screen (a few seconds): a brand-new chat must never read
+ * as "send a message first", and a wait that outlasts the budget proceeds and
+ * lets the PC open the conversation instead (VS-124).
+ */
+export const HANDSFREE_CALL_PREPARING_COPY = 'Getting this chat ready…';
 /** The banner's permanent auto-send reminder. */
 export const HANDSFREE_BANNER_TITLE = 'Hands-free call';
 /** The persistent half of the banner's title, spelling out the contract. */
@@ -258,7 +265,11 @@ export function handsfreeStartResultCopy(
     case 'device-params-failed':
       return 'This phone could not name itself to the PC. Try reconnecting, then start again.';
     case 'no-session':
-      return 'This conversation has not started yet. Send a message first, then start the call.';
+      // Reached when the PC refuses the thread itself (a malformed request, or
+      // a Gate too old to open a chat for a call). A chat that has nothing in
+      // it yet can still be called: the PC opens the conversation, so this
+      // never tells the operator to send a message first (VS-124).
+      return 'The PC could not open a chat for this call. Try again from the conversation you want to call.';
     case 'not-paired':
       return 'The PC has not approved this phone, so it will not open a call. Approve this phone on the PC, then start again.';
     case 'call-in-progress':

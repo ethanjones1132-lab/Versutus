@@ -365,6 +365,11 @@ export function DemoGatewayProvider({ children }: { children: React.ReactNode })
       loadOlderSessions: settle,
       currentSessionId,
       historyLoading: false,
+      // The showcase has one stable thread per surface, so there is nothing to
+      // prepare and nothing to adopt.
+      prepareCallSession: async () => currentSessionId,
+      adoptThreadSession: () => undefined,
+      resumeThreadSession: () => false,
       createNewSession: settle,
       deleteSessionById: settle,
       deleteLocalMessage: (id) =>

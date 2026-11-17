@@ -215,25 +215,44 @@ describe('openGateVoiceSession against a fake Gate', () => {
     expect(attempt.detail).toBeUndefined();
   });
 
-  test('a thread with no session never reaches the media socket', async () => {
-    const error = Object.assign(new Error('thread must name a session'), { code: 'invalid_request' });
-    let media = 0;
+  test('a thread with no session still reaches the Gate, which opens the chat', async () => {
+    // A brand-new chat has nothing in it, and that used to stop here with
+    // "send a message first". The request now names no session at all, so the
+    // Gate opens the conversation the call answers in (VS-124).
+    const granted = {
+      voiceSessionId: 'vs-opened',
+      streamPath: '/v1/voice/stream',
+      engine: 'local',
+      chatSessionId: 'ses-opened',
+    };
+    const requests: { method: string; params: Record<string, unknown> }[] = [];
+    let media: { voiceSessionId: string } | null = null;
     const attempt = await openGateVoiceSession({
       gatewayUrl: 'http://127.0.0.1:8760',
       gatewayToken: 'tok',
       target: { ...target, sessionId: '' },
       device: { deviceId: 'phone-abc12345' },
-      gatewayRequest: async () => {
-        throw error;
+      gatewayRequest: async (method, params) => {
+        requests.push({ method, params });
+        return method === 'voice.session.start' ? granted : { stopped: true };
       },
-      startGateMedia: async () => {
-        media += 1;
+      startGateMedia: async (options) => {
+        media = { voiceSessionId: options.voiceSessionId };
         return true;
       },
+      startId: 'hs-new-chat',
       log: () => undefined,
     });
-    expect(attempt.result).toBe('no-session');
-    expect(media).toBe(0);
+
+    expect(attempt.result).toBe('started');
+    const start = requests.find((request) => request.method === 'voice.session.start');
+    const thread = start?.params.thread as Record<string, unknown>;
+    expect(thread).not.toHaveProperty('sessionId');
+    expect(thread.kind).toBe(target.surfaceKind);
+    // The call's audio link is joined to the session the Gate opened, and the
+    // grant names the chat the call belongs to.
+    expect(media).toEqual({ voiceSessionId: 'vs-opened' });
+    expect(attempt.grant?.chatSessionId).toBe('ses-opened');
   });
 
   // The abandoned first attempt. The Gate grants the session, the media socket

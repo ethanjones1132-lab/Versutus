@@ -326,11 +326,21 @@ function chooseEngine(requested, engines) {
   };
 }
 
+function threadHasSession(thread) {
+  return typeof thread?.sessionId === 'string' && thread.sessionId.length > 0;
+}
+
+/**
+ * A thread a call can answer in. It names a Bot or the configurable chat, and
+ * it MAY arrive without a session: a brand-new chat, and a Bot Chat the phone
+ * has never sent in, have none yet. The Gate opens one for the call rather than
+ * refusing it (VS-124) — see `createCallSession` below.
+ */
 function validThread(thread) {
-  return thread !== null && typeof thread === 'object'
-    && (thread.kind === 'bot' || thread.kind === 'configurable')
-    && typeof thread.sessionId === 'string'
-    && thread.sessionId.length > 0;
+  if (thread === null || typeof thread !== 'object') return false;
+  if (thread.kind !== 'bot' && thread.kind !== 'configurable') return false;
+  if (thread.sessionId === undefined || thread.sessionId === null || thread.sessionId === '') return true;
+  return threadHasSession(thread);
 }
 
 export function createVoiceRpc({
@@ -340,6 +350,13 @@ export function createVoiceRpc({
   makeId = randomUUID,
   install = null,
   prepareCallBackend = null,
+  /**
+   * Opens the chat session a call answers in when the phone's thread has none
+   * (`({ voiceSessionId, thread }) => Promise<{ sessionId, backendId? }>`). The
+   * Gate wires this to the same first-turn path a typed message takes, so the
+   * call's transcript lands in a real conversation the phone can adopt.
+   */
+  createCallSession = null,
   log = () => {},
 } = {}) {
   // The install the operator started from the phone, if any. It outlives the
@@ -419,7 +436,7 @@ export function createVoiceRpc({
       try {
         deviceId = requireDevice(ctx, params);
         if (!validThread(params.thread)) {
-          throw rpcError('thread must name a session', 400, 'invalid_request');
+          throw rpcError('thread must name a Bot or the chat', 400, 'invalid_request');
         }
         const existing = registry.liveForDevice(deviceId);
         // A call with a socket on it is live, and a second start is still
@@ -466,19 +483,53 @@ export function createVoiceRpc({
         engineLabel = choice.engine;
 
         voiceSessionId = makeId();
+        // A phone can press Call before anything has been typed in this chat: a
+        // brand-new thread, a Bot Chat opened for the first time. Such a thread
+        // names no session, and refusing it was the sheet's "send a message
+        // first" dead end (VS-124). The Gate opens the chat the call answers in
+        // exactly as a first typed turn would, and names it in the grant so the
+        // phone can keep this conversation.
+        let thread = params.thread;
+        if (!threadHasSession(thread)) {
+          if (typeof createCallSession !== 'function') {
+            throw rpcError(
+              'This Gate cannot open a chat for a call. Update the PC app, then start again.',
+              501,
+              'session_unavailable',
+            );
+          }
+          // Nothing is granted while this runs: a creation that fails leaves the
+          // phone a named refusal and the device free, exactly as a start that
+          // never happened.
+          const opened = await createCallSession({ voiceSessionId, thread });
+          if (!opened?.sessionId) {
+            throw rpcError('The PC could not open a chat for this call. Try again.', 502, 'session_start_failed');
+          }
+          thread = {
+            ...thread,
+            sessionId: opened.sessionId,
+            // The environment that opened it owns the session; a thread that
+            // already named one keeps its own (the index was asked already).
+            ...(opened.backendId && !thread.backendId ? { backendId: opened.backendId } : {}),
+          };
+          log(
+            `voice.session.start chat device=${deviceTag(deviceId)} session=${voiceSessionId} chat=${opened.sessionId}`,
+          );
+        }
         const started = registry.create({
           voiceSessionId,
           deviceId,
           engine: choice.engine,
-          thread: params.thread,
+          thread,
           startedAt: now(),
         });
         // Which backend answers this call's turns is decided here, while the
         // phone is still dialling, instead of inside its first reply — and it
         // cannot change between two turns of one call. The resolve runs in the
         // background: the start reply never waits for it, a failure is not
-        // remembered, and the first turn asks again if it has to.
-        const lease = prepareCallBackend?.({ voiceSessionId, thread: params.thread });
+        // remembered, and the first turn asks again if it has to. It is given
+        // the thread the call really answers in, chat session included.
+        const lease = prepareCallBackend?.({ voiceSessionId, thread });
         if (lease) {
           started.backendLease = lease;
           // Never awaited, never a failure of the start reply: a resolve that
@@ -489,6 +540,11 @@ export function createVoiceRpc({
         log(`voice.session.start ok device=${deviceTag(deviceId)} engine=${choice.engine} session=${voiceSessionId}`);
         return {
           voiceSessionId,
+          // The chat this call's words belong to. A thread that already named
+          // one answers with it; a thread the Gate had to open answers with the
+          // id it opened, which is what lets the phone adopt the conversation
+          // instead of losing it when the call ends.
+          chatSessionId: thread.sessionId,
           engine: choice.engine,
           ...(choice.fellBackFrom ? { fellBackFrom: choice.fellBackFrom, reason: choice.reason } : {}),
           streamPath: '/v1/voice/stream',
@@ -518,6 +574,28 @@ export function createVoiceRpc({
       registry.end(params.voiceSessionId);
       log(`voice.session.stop ok device=${deviceTag(deviceId)} session=${params.voiceSessionId} reason=${params.reason ?? 'unspecified'}`);
       return { stopped: true };
+    },
+
+    /**
+     * The chat this device's live call is answering in.
+     *
+     * A call whose thread had no session is given one by the Gate (VS-124), and
+     * the phone has to adopt it or the conversation is lost when the call ends:
+     * its turns would be reachable only by history, and the next typed message
+     * would open a second thread. The start reply already carries
+     * `chatSessionId`; this answers for a phone that could not read it (an app
+     * that logs the grant away, a start reply that raced a reload) without
+     * making it guess by title or by newest row. No live call is not an error:
+     * the answer is nulls, which is exactly what "nothing to adopt" means.
+     */
+    'voice.session.chat': async (params = {}, ctx) => {
+      const deviceId = requireDevice(ctx, params);
+      const live = registry.liveForDevice(deviceId);
+      const chatSessionId = threadHasSession(live?.thread) ? live.thread.sessionId : null;
+      log(
+        `voice.session.chat device=${deviceTag(deviceId)} session=${live?.voiceSessionId ?? 'none'} chat=${chatSessionId ?? 'none'}`,
+      );
+      return { voiceSessionId: live?.voiceSessionId ?? null, sessionId: chatSessionId };
     },
   };
 

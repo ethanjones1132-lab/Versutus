@@ -95,6 +95,7 @@ const RPC_ACTIONS = [
   ['voice.install.start', {}, 'voice:manage'],
   ['voice.session.start', { thread: { sessionId: 'ses_1' } }, 'voice:manage'],
   ['voice.session.stop', { voiceSessionId: 'voice-1' }, 'voice:manage'],
+  ['voice.session.chat', { deviceId: 'dev-1' }, 'voice:manage'],
   ['bots.memory.write', { id: 'researcher', name: 'MEMORY.md', text: 'x' }, 'bots:manage'],
   ['approval.approve', { approvalId: 'a1' }, 'runs:start'],
   ['approval.deny', { approvalId: 'a1' }, 'runs:start'],

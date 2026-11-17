@@ -28,6 +28,43 @@ import { selectDefaultBackend } from '../backend-resolution.mjs';
 // the caller says which environment holds the session, and only a session no
 // environment claims falls through to the default.
 
+/** Month names, so a call's title reads the same on a host without full ICU. */
+const TITLE_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** The minute the last title named, and how many calls have opened inside it. */
+let lastCallTitleBase = '';
+let lastCallTitleSeq = 0;
+
+/**
+ * Title of the chat a call opens when its thread has no session yet.
+ *
+ * A call is titled as a call — "Call · 17 Nov 2026 · 14:32" — because it is the
+ * operator's own conversation and the session list has to say where it came
+ * from. The title must also be unique: Hermes recovers a duplicate title by
+ * handing back the EXISTING session, so two calls opened in the same minute
+ * would otherwise share one conversation (see `newThreadTitle` in server.mjs).
+ * A repeat inside the same minute takes a numbered suffix, which leaves the
+ * ordinary title clean.
+ *
+ * UTC, deliberately: a title is a record of when the call opened, and it must
+ * not change meaning with the host's timezone or locale.
+ */
+export function newVoiceCallTitle(now = new Date()) {
+  const day = String(now.getUTCDate()).padStart(2, '0');
+  const month = TITLE_MONTHS[now.getUTCMonth()];
+  const year = now.getUTCFullYear();
+  const hours = String(now.getUTCHours()).padStart(2, '0');
+  const minutes = String(now.getUTCMinutes()).padStart(2, '0');
+  const base = `Call · ${day} ${month} ${year} · ${hours}:${minutes}`;
+  if (base === lastCallTitleBase) {
+    lastCallTitleSeq += 1;
+  } else {
+    lastCallTitleBase = base;
+    lastCallTitleSeq = 0;
+  }
+  return lastCallTitleSeq === 0 ? base : `${base} (${lastCallTitleSeq + 1})`;
+}
+
 /**
  * How long a resolved backend stays memoised for a standalone caller. A lease,
  * not a cache: a backend can be replaced by an environment edit (a different

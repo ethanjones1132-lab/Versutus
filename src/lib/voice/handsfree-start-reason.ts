@@ -201,7 +201,10 @@ export function evaluateHandsfreeStart(input: HandsfreeStartEvaluation): Handsfr
     // here and must not block a PC-powered call. The native module itself is
     // still required — it owns the media socket and the foreground session.
     if (!input.gatewayUrl) return { kind: 'stop', result: 'no-gateway-url' };
-    if (!input.sessionId) return { kind: 'stop', result: 'no-session' };
+    // A chat with no session yet is not a refusal: a brand-new thread and a Bot
+    // thread opened for the first time have none, and the Gate opens the one
+    // the call answers in (VS-124). Sending a message first was the dead end
+    // this replaced, so the decision never names it.
     return { kind: 'gate' };
   }
 
@@ -272,6 +275,12 @@ export type GateVoiceGrant = {
   engine?: string;
   fellBackFrom?: string;
   reason?: string;
+  /**
+   * The chat this call's words belong to. The Gate opens it when the thread had
+   * no session yet (a brand-new chat), and names it so the phone can adopt the
+   * conversation instead of losing it when the call ends (VS-124).
+   */
+  chatSessionId?: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -293,9 +302,11 @@ export function parseVoiceSessionGrant(value: unknown): GateVoiceGrant | null {
   const engine = readGrantField(value, 'engine');
   const fellBackFrom = readGrantField(value, 'fellBackFrom');
   const reason = readGrantField(value, 'reason');
+  const chatSessionId = readGrantField(value, 'chatSessionId');
   if (engine) grant.engine = engine;
   if (fellBackFrom) grant.fellBackFrom = fellBackFrom;
   if (reason) grant.reason = reason;
+  if (chatSessionId) grant.chatSessionId = chatSessionId;
   return grant;
 }
 

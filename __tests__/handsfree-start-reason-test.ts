@@ -109,9 +109,11 @@ describe('evaluateHandsfreeStart', () => {
     expect(
       evaluateHandsfreeStart({ ...connected, transport: 'gate', gatewayUrl: '' }),
     ).toEqual({ kind: 'stop', result: 'no-gateway-url' });
+    // A chat with no session yet is not a refusal any more: the Gate opens the
+    // conversation the call answers in (VS-124).
     expect(
       evaluateHandsfreeStart({ ...connected, transport: 'gate', sessionId: '' }),
-    ).toEqual({ kind: 'stop', result: 'no-session' });
+    ).toEqual({ kind: 'gate' });
   });
 });
 

@@ -114,7 +114,9 @@ const DRIVERS: Record<ChainCode, () => Promise<HandsfreeStartFailure>> = {
   'phone-recognition-unavailable': async () => decision({ availability: noRecognition }),
   'phone-synthesis-unavailable': async () => decision({ availability: noSynthesis }),
   'no-gateway-url': async () => decision({ transport: 'gate', gatewayUrl: '' }),
-  'no-session': async () => decision({ transport: 'gate', sessionId: '' }),
+  // The PC refused the thread itself. A chat with no session is no longer a
+  // refusal (VS-124); what remains is a request the Gate cannot use at all.
+  'no-session': async () => chainResult({ gatewayRequest: gateRefusal('invalid_request') }),
 
   // The device identity read, before the Gate is asked for anything. This is the
   // same predicate the provider uses to choose between the two codes.

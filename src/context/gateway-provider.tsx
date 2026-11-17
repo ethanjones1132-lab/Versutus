@@ -65,6 +65,17 @@ import {
   prependEarlier,
 } from '@/lib/gateway/messages';
 import { liveSessionId, pinLiveSession, resolveResumeSession } from '@/lib/gateway/session-resume';
+import {
+  adoptTurnSession,
+  clearThreadSessionPin,
+  loadThreadSessionPins,
+  readThreadSessionPin,
+  saveThreadSessionPins,
+  writeThreadSessionPin,
+  type ThreadSessionPins,
+  type TurnThread,
+} from '@/lib/gateway/thread-session-pins';
+import { resolveCallThreadSession } from '@/lib/voice/call-session';
 import { threadSwitchFailureText, validateThreadSwitch } from '@/lib/gateway/thread-switch';
 import {
   applySessionListRead,
@@ -693,6 +704,25 @@ type GatewayContextValue = {
   currentSessionId?: string;
   /** True while session history is being (re)loaded — drives chat skeletons. */
   historyLoading: boolean;
+  /**
+   * The chat session a hands-free call from this thread should speak into.
+   *
+   * A thread with no session yet is not refused: a session the app is still
+   * reading is waited on briefly, a session its own first turn opened while the
+   * operator was elsewhere is picked up, and one is opened if neither exists.
+   * `undefined` means the Gate must open it, which the call start does (VS-124).
+   */
+  prepareCallSession: () => Promise<string | undefined>;
+  /**
+   * Adopt a session the Gate opened for this chat's call, so the call's
+   * transcript lands here and the next typed message continues it.
+   */
+  adoptThreadSession: (sessionId: string) => void;
+  /**
+   * Adopt the session this chat's own first turn opened while it was off
+   * screen. True when one was found, so a caller can tell "nothing to resume".
+   */
+  resumeThreadSession: () => boolean;
   /** Create a fresh session on the gateway and make it current. */
   createNewSession: (title?: string) => Promise<void>;
   /** Delete a session on the gateway (when the adapter supports it). */
@@ -1506,6 +1536,15 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * follows finds no bubble to write into.
    */
   const historyLoadingRef = useRef(false);
+  /**
+   * Chats whose first turn opened a session while the operator was looking at a
+   * different chat (`thread-session-pins`). Held in a ref, not render state: it
+   * is read by a callback at Call/start time, and a pin that re-rendered every
+   * surface would be a repaint nobody asked for.
+   */
+  const threadSessionPinsRef = useRef<ThreadSessionPins>({});
+  /** The call-session resolution in flight, so two taps open one chat, not two. */
+  const callSessionRef = useRef<Promise<string | undefined> | null>(null);
   const [loadingEarlierHistory, setLoadingEarlierHistory] = useState(false);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   // No offset/cursor on the history endpoint — "load earlier" re-fetches with
@@ -1972,6 +2011,150 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       .catch((error) => {
         setLastError(`Could not save gateway settings: ${error instanceof Error ? error.message : String(error)}`);
       });
+  }, []);
+
+  /**
+   * The chat the operator is in, as far as a session pin is concerned: the
+   * gateway plus the Bot (or the one configurable chat). Read from refs so a
+   * long-lived send can ask it after the operator has moved.
+   */
+  const currentThread = useCallback((): TurnThread | undefined => {
+    const gatewayId = activeGatewayRef.current?.id;
+    if (!gatewayId) return undefined;
+    return { gatewayId, botId: selectedBotIdRef.current ?? undefined };
+  }, []);
+
+  /**
+   * Keep a session for the chat a turn was sent from, because that chat is not
+   * the one on screen. Adopting it as the live session would put one
+   * conversation's messages in another thread.
+   */
+  const rememberThreadSession = useCallback((thread: TurnThread, sessionId: string) => {
+    const next = writeThreadSessionPin(threadSessionPinsRef.current, thread, sessionId);
+    if (next === threadSessionPinsRef.current) return;
+    threadSessionPinsRef.current = next;
+    void saveThreadSessionPins(next);
+  }, []);
+
+  /** Drop a chat's pin: deliberately new thread, or one that has been adopted. */
+  const forgetThreadSession = useCallback((thread: TurnThread) => {
+    const next = clearThreadSessionPin(threadSessionPinsRef.current, thread);
+    if (next === threadSessionPinsRef.current) return;
+    threadSessionPinsRef.current = next;
+    void saveThreadSessionPins(next);
+  }, []);
+
+  /**
+   * Adopt a session as the live thread. Same write as `createNewSession`, minus
+   * the cleared transcript: a call adopted mid-conversation must not wipe the
+   * messages already on screen.
+   */
+  const adoptThreadSession = useCallback((sessionId: string) => {
+    const wanted = sessionId.trim();
+    if (!wanted || sessionIdRef.current === wanted) return;
+    // Pinning the client is not enough: connect copies stored onto live before
+    // disconnect can rewrite it. Same persist as createNewSession.
+    const pinned = pinLiveSession({
+      client: clientRef.current ?? { setSessionId: () => undefined },
+      sessionId: wanted,
+      profile: activeGatewayRef.current ?? undefined,
+    });
+    sessionIdRef.current = wanted;
+    setCurrentSessionId(wanted);
+    if (pinned && pinned !== activeGatewayRef.current) {
+      activeGatewayRef.current = pinned;
+      setActiveGateway(pinned);
+      persistGateway(pinned);
+    }
+  }, [persistGateway]);
+
+  /** A pin is spent once it is read: a second read would resurrect a thread left behind. */
+  const takeThreadSessionPin = useCallback((thread: TurnThread): string | undefined => {
+    const pinned = readThreadSessionPin(threadSessionPinsRef.current, thread);
+    if (pinned) forgetThreadSession(thread);
+    return pinned;
+  }, [forgetThreadSession]);
+
+  /**
+   * The session a call from the chat on screen should speak into, or undefined
+   * when the Gate must open it.
+   *
+   * A chat with nothing typed in it has no session yet, and that is not a
+   * refusal: `resolveCallThreadSession` waits out a read that is still running,
+   * picks up a conversation this chat's own first turn opened while it was off
+   * screen, and otherwise opens one here — the same create a first typed turn
+   * would make, pinned to the model the thread names. A create that fails is
+   * not the end of the call: the Gate opens it (VS-124).
+   */
+  const prepareCallSession = useCallback(async (): Promise<string | undefined> => {
+    if (sessionIdRef.current) return sessionIdRef.current;
+    if (callSessionRef.current) return callSessionRef.current;
+    const thread = currentThread();
+    const run = (async () => {
+      const found = await resolveCallThreadSession({
+        current: () => sessionIdRef.current,
+        resolving: () => historyLoadingRef.current,
+        pinned: () => (thread ? takeThreadSessionPin(thread) : undefined),
+        open: async () => {
+          const client = clientRef.current;
+          const gateway = activeGatewayRef.current;
+          const create = client?.createSession;
+          if (typeof create !== 'function' || client?.canManageSessions === false || !gateway) {
+            return undefined;
+          }
+          try {
+            const created = await create(
+              undefined,
+              effectiveModel(gateway, selectedBackendIdRef.current, selectedBotIdRef.current),
+            );
+            // A read that was still in flight landed while this one opened:
+            // keep the session that landed and drop the extra thread rather
+            // than leaving an orphan row in the list.
+            if (sessionIdRef.current) {
+              const remove = clientRef.current?.deleteSession;
+              if (created?.id && remove) {
+                void remove(created.id).catch(() => undefined);
+              }
+              return sessionIdRef.current;
+            }
+            return created?.id;
+          } catch {
+            return undefined;
+          }
+        },
+      });
+      if (found) adoptThreadSession(found);
+      return found;
+    })();
+    callSessionRef.current = run;
+    try {
+      return await run;
+    } finally {
+      if (callSessionRef.current === run) callSessionRef.current = null;
+    }
+  }, [adoptThreadSession, currentThread, takeThreadSessionPin]);
+
+  /** Adopt the conversation this chat's own first turn opened while it was off screen. */
+  const resumeThreadSession = useCallback((): boolean => {
+    if (sessionIdRef.current) return false;
+    const thread = currentThread();
+    if (!thread) return false;
+    const pinned = takeThreadSessionPin(thread);
+    if (!pinned) return false;
+    adoptThreadSession(pinned);
+    return true;
+  }, [adoptThreadSession, currentThread, takeThreadSessionPin]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadThreadSessionPins().then((stored) => {
+      if (cancelled) return;
+      // A pin written while the read was in flight is newer than the store.
+      threadSessionPinsRef.current = { ...stored, ...threadSessionPinsRef.current };
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   /**
@@ -4794,6 +4977,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const selectedBackendId = selectedBackendIdRef.current;
       const selectedBotId = selectedBotIdRef.current;
       const client = clientRef.current;
+      // The chat these words are sent from, captured NOW: the reply's session
+      // header can arrive after the operator has moved to another chat, and it
+      // belongs to this one whichever surface is open by then (VS-124).
+      const sentThread = { gatewayId: gateway?.id ?? '', botId: selectedBotId ?? undefined };
       // An image-only turn is valid: the guard must not require text.
       if ((!trimmed && files.length === 0) || !gateway || !client || isSending) return 'busy';
 
@@ -4945,6 +5132,16 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               // adopting its id left the phone holding no thread: the next turn
               // created another, and this one was only reachable by history.
               if (sessionIdRef.current) return;
+              // Whose conversation this is was decided when the turn was sent,
+              // not by whatever surface is open now. An operator who left the
+              // chat mid-reply would otherwise pin this conversation onto the
+              // chat they moved to; the id is kept for the chat it came from,
+              // and that chat adopts it when it reopens.
+              const openThread = currentThread();
+              if (!openThread || adoptTurnSession({ sent: sentThread, open: openThread, sessionId }) === 'pin') {
+                rememberThreadSession(sentThread, sessionId);
+                return;
+              }
               sessionIdRef.current = sessionId;
               setCurrentSessionId(sessionId);
               // Pinning the client is not enough: connect copies stored onto
@@ -5148,8 +5345,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     [
       activeGateway,
       clearInterruptedRecovery,
+      currentThread,
       isSending,
       persistGateway,
+      rememberThreadSession,
     ],
   );
 
@@ -8179,6 +8378,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       });
       sessionIdRef.current = created.id;
       setCurrentSessionId(created.id);
+      // A deliberately new thread is not the chat a first reply's pin belongs
+      // to: the old conversation must not be adopted back onto it.
+      const threadScope = activeGatewayRef.current?.id;
+      if (threadScope) {
+        forgetThreadSession({ gatewayId: threadScope, botId: selectedBotIdRef.current ?? undefined });
+      }
       setMessages((prev) => {
         // A reply still streaming belongs to the thread being left; carrying
         // its bubble keeps every later delta finding it instead of discarding
@@ -8205,6 +8410,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     activeGateway,
     clearInterruptedRecovery,
     closeSessionSelector,
+    forgetThreadSession,
     persistGateway,
     selectedBackendId,
     selectedBotIdRef,
@@ -8393,6 +8599,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       loadOlderSessions,
       currentSessionId,
       historyLoading,
+      prepareCallSession,
+      adoptThreadSession,
+      resumeThreadSession,
       createNewSession,
       deleteSessionById,
       deleteLocalMessage,
@@ -8418,6 +8627,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       openSessionSelector, closeSessionSelector, selectSession, sessionListState, currentSessionId,
       sessionListHasOlder, loadingOlderSessions, loadOlderSessions,
       historyLoading, createNewSession, deleteSessionById, deleteLocalMessage,
+      prepareCallSession, adoptThreadSession, resumeThreadSession,
       tlsFingerprintChange,
       dynamicCommands,
       relatedWorkflows,

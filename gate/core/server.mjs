@@ -52,6 +52,7 @@ import { createRoutineRegistry } from './scheduler/registry.mjs';
 import {
   findSessionEnvironment,
   locateVoiceThread,
+  newVoiceCallTitle,
   resolveVoiceBackend,
   startVoiceBackendLease,
 } from './voice/voice-backend.mjs';
@@ -829,6 +830,7 @@ const DEVICE_RPC_SCOPES = new Map([
   ['voice.install.start', { scope: 'voice:manage', action: 'install the voice models' }],
   ['voice.session.start', { scope: 'voice:manage', action: 'start a voice call' }],
   ['voice.session.stop', { scope: 'voice:manage', action: 'stop a voice call' }],
+  ['voice.session.chat', { scope: 'voice:manage', action: 'read the chat a call is using' }],
   ['bots.memory.write', { scope: 'bots:manage', action: "write a Bot's memory" }],
   // Deciding an approval is the act the REST run-approval route already gates
   // with runs:start, so it asks for the scope the app is paired with.
@@ -2152,6 +2154,10 @@ export async function createGate(config = {}) {
         + `${backendId ? ` environment=${backendId}` : ''} via=${via}`,
       ),
     }),
+    // A thread with no session yet is not a reason to refuse a call: the Gate
+    // opens the chat the call will answer in, the same way a first typed turn
+    // opens one (VS-124).
+    createCallSession: ({ thread }) => createCallThreadSession(thread),
   });
 
   /**
@@ -2175,6 +2181,55 @@ export async function createGate(config = {}) {
     }
     const environmentId = await findSessionEnvironment(backendManager, sessionId);
     return environmentId ? { ...thread, backendId: environmentId } : thread;
+  }
+
+  /**
+   * The chat a call answers in when the phone's thread names no session.
+   *
+   * A brand-new chat, and a Bot Chat the phone has never sent in, have no
+   * session yet — and a call used to be refused there with "send a message
+   * first" (VS-124). This opens it the way a first typed turn does: the thread's
+   * own environment (or the Gate's default), the model the phone named, pinned
+   * at creation so the thread is not born on the host default, and written
+   * through to the Gate's copy of the session list so the next list shows it as
+   * the newest conversation.
+   *
+   * The thread's own `backendId`/`botId` are honoured first, and a thread that
+   * named neither is located exactly as a call's backend is (`locateCallThread`):
+   * a session-less thread is unscoped, so that resolution is the default rule.
+   */
+  async function createCallThreadSession(thread) {
+    const located = await locateCallThread(thread);
+    const { backend, environmentId } = await resolveConversationScopeOrThrow(
+      located.backendId,
+      located.botId,
+    );
+    if (typeof backend?.createSession !== 'function') {
+      throw namedRefusal(
+        'This chat backend cannot open a conversation for a call',
+        'session_unavailable',
+        501,
+      );
+    }
+    const named = typeof thread?.model === 'string' ? thread.model.trim() : '';
+    const model = named ? parseQualifiedModel(named) : undefined;
+    const created = await backend.createSession({ title: newVoiceCallTitle(), model });
+    if (!created?.id) {
+      throw namedRefusal(
+        'This chat backend answered without a conversation',
+        'session_start_failed',
+        502,
+      );
+    }
+    if (backend.kind === 'hermes') {
+      await sessionListIndex.upsert(sessionIndexKey(environmentId, located.botId), {
+        id: created.id,
+        last_active: Date.now(),
+        ...(created.title ? { title: created.title } : {}),
+        ...(model?.modelId ? { model: model.modelId } : {}),
+      }).catch(() => undefined);
+    }
+    return { sessionId: created.id, backendId: environmentId };
   }
 
   /**
