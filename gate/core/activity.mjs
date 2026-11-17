@@ -121,7 +121,7 @@ function sessionItem(backend, session, since) {
   };
 }
 
-function runItem(backend, run) {
+function runItem(backend, run, now) {
   const started = timestamp(run?.startedAt);
   if (!Number.isFinite(started)) return null;
   const ended = timestamp(run.endedAt);
@@ -134,7 +134,8 @@ function runItem(backend, run) {
     title: run.operation ?? 'Run',
     metrics: {},
     // A run that began before `since` but finished after it belongs to the window.
-    _activityAt: Number.isFinite(ended) ? Math.max(started, ended) : started,
+    // A run with no end is still executing, so it belongs to the window at `now`.
+    _activityAt: Number.isFinite(ended) ? Math.max(started, ended) : now,
     ...(Number.isFinite(ended) ? { finishedAt: new Date(ended).toISOString() } : {}),
   };
 }
@@ -187,7 +188,7 @@ export async function collectActivity({
     });
     if (runsResult.status === 'fulfilled') {
       for (const run of Array.isArray(runsResult.value) ? runsResult.value : []) {
-        const item = runItem(backend, run);
+        const item = runItem(backend, run, now);
         if (item && item._activityAt >= effectiveSince) items.push(item);
       }
     }

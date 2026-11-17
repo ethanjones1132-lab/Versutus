@@ -129,6 +129,57 @@ test('a run that began before since but finished after it is in the window', asy
   assert.deepEqual(result.items.map((item) => item.id), ['one:run:overnight']);
 });
 
+test('a run still executing when the window opens is in the window, with no invented end', async () => {
+  const result = await collectActivity({
+    since: '2026-11-10T00:00:00.000Z',
+    now,
+    backends: [{
+      id: 'one',
+      label: 'One',
+      listRuns: () => [
+        { runId: 'still-running', startedAt: '2026-11-09T23:00:00.000Z', state: 'running' },
+      ],
+      listSessions: () => [],
+    }],
+  });
+  assert.deepEqual(result.items.map((item) => item.id), ['one:run:still-running']);
+  assert.equal(Object.hasOwn(result.items[0], 'finishedAt'), false);
+  assert.equal(result.items[0].status, 'running');
+});
+
+test('the same run, once finished after since, is still in the window', async () => {
+  const result = await collectActivity({
+    since: '2026-11-10T00:00:00.000Z',
+    now,
+    backends: [{
+      id: 'one',
+      label: 'One',
+      listRuns: () => [
+        { runId: 'still-running', startedAt: '2026-11-09T23:00:00.000Z', endedAt: '2026-11-10T02:00:00.000Z', state: 'completed' },
+      ],
+      listSessions: () => [],
+    }],
+  });
+  assert.deepEqual(result.items.map((item) => item.id), ['one:run:still-running']);
+  assert.equal(result.items[0].finishedAt, '2026-11-10T02:00:00.000Z');
+});
+
+test('a run that started and finished before since stays out of the window', async () => {
+  const result = await collectActivity({
+    since: '2026-11-10T00:00:00.000Z',
+    now,
+    backends: [{
+      id: 'one',
+      label: 'One',
+      listRuns: () => [
+        { runId: 'yesterday', startedAt: '2026-11-09T20:00:00.000Z', endedAt: '2026-11-09T21:00:00.000Z', state: 'completed' },
+      ],
+      listSessions: () => [],
+    }],
+  });
+  assert.deepEqual(result.items, []);
+});
+
 test('backend status: failed only when every read failed, partial when some did', async () => {
   const boom = () => { throw new Error('offline'); };
   const result = await collectActivity({
