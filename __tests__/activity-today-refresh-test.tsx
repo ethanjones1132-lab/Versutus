@@ -4,7 +4,9 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
 import { TodaySection } from '@/components/activity/today-section';
 import { sinceMidnightAnchor } from '@/lib/activity/today';
+import type { ApprovalRow } from '@/lib/gateway/approvals';
 import type { ActivityFeed } from '@/lib/gateway/activity-feed';
+import type { ActivityRun } from '@/lib/gateway/runs';
 
 jest.mock('react-native-reanimated', () => ({
   Easing: {
@@ -45,8 +47,8 @@ const mockGateway = {
     | { id: string; name: string; url: string }
     | undefined,
   status: 'connected',
-  activityRunsForActiveGateway: [],
-  pendingApprovals: [],
+  activityRunsForActiveGateway: [] as ActivityRun[],
+  pendingApprovals: [] as ApprovalRow[],
   pendingRunApproval: null,
   resolveRunApproval: () => undefined,
   listBots: jest.fn(async () => []),
@@ -115,10 +117,19 @@ function visibleText(): string[] {
   });
 }
 
+function sectionTitles(): string[] {
+  if (!renderer) return [];
+  return renderer.root
+    .findAllByType('SectionHeader' as never)
+    .map((node) => (node.props as { title: string }).title);
+}
+
 beforeEach(() => {
   jest.useFakeTimers();
   mockGateway.activeGateway = { id: 'gw-a', name: 'Alpha', url: 'http://alpha.test:8642' };
   mockGateway.status = 'connected';
+  mockGateway.activityRunsForActiveGateway = [];
+  mockGateway.pendingApprovals = [];
   mockGateway.listBots.mockClear();
   mockGateway.activityFeed.readActivity.mockReset();
 });
@@ -287,5 +298,81 @@ describe('Today keeps its empty and stale copy honest', () => {
     });
     await flush();
     expect(visibleText().some((line) => line.includes(' · Older than today'))).toBe(true);
+  });
+});
+
+describe('Today says which day, and which scope, its rows belong to', () => {
+  test('a failed post-midnight re-read keeps the anchor on the day its rows were read', async () => {
+    jest.setSystemTime(new Date(2026, 10, 10, 23, 59, 50));
+    const yesterday = new Date(2026, 10, 10).toISOString();
+    mockGateway.activityFeed.readActivity
+      .mockResolvedValueOnce(feed(yesterday, 'A session'))
+      .mockRejectedValueOnce(new Error('gateway read timed out'));
+
+    mount();
+    await flush();
+    expect(visibleText()).toContain(sinceMidnightAnchor(yesterday));
+
+    // The day rolls over and the re-read fails, so the previous feed stays on
+    // screen: its anchor must stay on that feed's boundary, not today's.
+    await flush(20_000);
+    await flush();
+    expect(mockGateway.activityFeed.readActivity).toHaveBeenCalledTimes(2);
+    expect(visibleText()).toContain(sinceMidnightAnchor(yesterday));
+    expect(visibleText()).not.toContain(sinceMidnightAnchor(new Date(2026, 10, 11).toISOString()));
+  });
+
+  test('a selected chip says the live runs and the need-you count cover every backend', async () => {
+    jest.setSystemTime(new Date(2026, 10, 10, 12));
+    const since = new Date(2026, 10, 10).toISOString();
+    const session = (backendId: string, title: string) => ({
+      id: `${backendId}:session:1`,
+      backendId,
+      kind: 'session' as const,
+      sessionId: `${backendId}-s-1`,
+      startedAt: '2026-11-10T10:00:00.000Z',
+      status: 'complete' as const,
+      title,
+      metrics: {},
+    });
+    mockGateway.activityFeed.readActivity.mockResolvedValue({
+      since,
+      generatedAt: '2026-11-10T12:00:00.000Z',
+      backends: [
+        { id: 'backend-a', label: 'Alpha', status: 'complete' },
+        { id: 'backend-b', label: 'Beta', status: 'complete' },
+      ],
+      items: [session('backend-a', 'A session'), session('backend-b', 'B session')],
+    } satisfies ActivityFeed);
+    mockGateway.activityRunsForActiveGateway = [{
+      id: 'run-1',
+      prompt: 'Still going',
+      status: 'running',
+      startedAt: new Date(2026, 10, 10, 11).getTime(),
+      events: [],
+    }];
+    mockGateway.pendingApprovals = [
+      { approvalId: 'ap-1', cls: 'read' },
+      { approvalId: 'ap-2', cls: 'workspace_write' },
+    ];
+
+    mount();
+    await flush();
+    // Unfiltered, the copy makes no claim about scope.
+    expect(rowTitles()).toEqual(['A session', 'B session']);
+    expect(visibleText()).not.toContain('Covers every backend, not just this one.');
+
+    const chip = renderer!.root
+      .findAllByType('Chip' as never)
+      .find((node) => (node.props as { label?: string }).label === 'Alpha');
+    expect(chip).toBeDefined();
+    act(() => { (chip!.props as { onPress: () => void }).onPress(); });
+    await flush();
+
+    // Feed rows obey the chip; the live runs and the count cannot, and say so.
+    expect(rowTitles()).toEqual(['A session']);
+    expect(sectionTitles()).toContain('In progress');
+    expect(visibleText()).toContain('Covers every backend, not just this one.');
+    expect(visibleText().some((line) => line.includes('2 need you on every backend'))).toBe(true);
   });
 });

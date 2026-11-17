@@ -192,6 +192,9 @@ export function TodaySection({
   const groups = feed ? groupActivityForToday(visibleItems, feed.backends, bots) : [];
   // The summary describes the rows on screen: a selected chip narrows both.
   const counts = activityCounts(visibleItems);
+  // Live runs and the approval count carry no backend id, so a selected chip
+  // cannot narrow them. They say so instead of borrowing the chip's scope.
+  const unscopedNote = backendFilter !== undefined;
   // These are the app's own runs, not the Gate's archived environment runs the
   // feed carries, so they do not wait on a read and use the app's vocabulary.
   const liveRuns = liveRunsForToday(activityRunsForActiveGateway);
@@ -215,6 +218,12 @@ export function TodaySection({
   const inProgress = liveRuns.length ? (
     <View style={styles.section}>
       <SectionHeader title="In progress" />
+      {unscopedNote ? (
+        // The chip cannot narrow these runs: an app run names its gateway and
+        // its Bot, never its backend. Saying so beats a heading that borrows
+        // the selected chip's scope.
+        <Text variant="caption" color="tertiary">Covers every backend, not just this one.</Text>
+      ) : null}
       <RecentRuns runs={liveRuns} onOpenRun={onOpenRun} />
     </View>
   ) : null;
@@ -254,10 +263,14 @@ export function TodaySection({
             />
           ) : null}
           <Text variant="caption" color="secondary">
-            {`${counts.runs} run${counts.runs === 1 ? '' : 's'} · ${counts.sessions} session${counts.sessions === 1 ? '' : 's'}${pendingApprovals.length ? ` · ${pendingApprovals.length} need you` : ''}`}
+            {`${counts.runs} run${counts.runs === 1 ? '' : 's'} · ${counts.sessions} session${counts.sessions === 1 ? '' : 's'}${pendingApprovals.length ? ` · ${pendingApprovals.length} need you${unscopedNote ? ' on every backend' : ''}` : ''}`}
           </Text>
           {visibleItems.length > 0 ? (
-            <Text variant="micro" color="tertiary">{sinceMidnightAnchor(since)}</Text>
+            // The anchor labels the rows on screen, so it reads the feed's own
+            // since — the boundary this read actually used. The current `since`
+            // state may have already moved past a failed re-read, and
+            // relabelling yesterday's rows with the new day would lie.
+            <Text variant="micro" color="tertiary">{sinceMidnightAnchor(feed.since)}</Text>
           ) : null}
           {groups.map((group) => (
             <View key={group.key} style={styles.section}>
