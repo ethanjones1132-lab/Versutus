@@ -20,7 +20,7 @@ function job(id, name, extras = {}) {
   return { id, name, schedule: '0 3 * * *', enabled: true, ...extras };
 }
 
-async function makeGate({ environments = ['backend-a', 'backend-b'], jobs = {} } = {}) {
+async function makeGate({ environments = ['backend-a', 'backend-b'], jobs = {}, starts = null } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'gate-routines-'));
   roots.push(root);
   const gateHome = join(root, '.gate-home');
@@ -75,7 +75,10 @@ async function makeGate({ environments = ['backend-a', 'backend-b'], jobs = {} }
   const gate = await createGate({
     root, gateHome, port: 0, environmentRegistry: registry,
     backendServerFactory: () => ({
-      ensureRunning: async () => ({ baseUrl: 'http://127.0.0.1:1', attached: true }),
+      ensureRunning: async () => {
+        starts?.push('start');
+        return { baseUrl: 'http://127.0.0.1:1', attached: true };
+      },
       stop: async () => {},
       isOwned: () => false,
     }),
@@ -262,6 +265,47 @@ test('GET /v1/routines requires Gate authentication', async () => {
   try {
     const response = await fetch(url(gate));
     assert.equal(response.status, 401);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('scheduled adapter routine routes use the registry without starting its backend', async () => {
+  const starts = [];
+  const gate = await makeGate({ environments: ['claude-code'], starts });
+  try {
+    const headers = auth(gate);
+    const base = `http://127.0.0.1:${gate.port}`;
+    const create = await fetch(`${base}/v1/jobs?backendId=claude-code`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Digest', prompt: 'Summarize the day', schedule: '0 9 * * *' }),
+    });
+    assert.equal(create.status, 200);
+    const created = await create.json();
+
+    const listed = await fetch(`${base}/v1/jobs?backendId=claude-code`, { headers });
+    assert.equal(listed.status, 200);
+    assert.equal((await listed.json()).jobs[0].id, created.id);
+
+    for (const action of ['pause', 'resume']) {
+      const response = await fetch(`${base}/v1/jobs/${created.id}/${action}?backendId=claude-code`, {
+        method: 'POST',
+        headers,
+      });
+      assert.equal(response.status, 200);
+    }
+    const routines = await fetch(`${url(gate, 'backendId=claude-code')}`, { headers });
+    assert.equal(routines.status, 200);
+    assert.equal((await routines.json()).routines[0].id, created.id);
+    assert.deepEqual(starts, []);
+
+    const removed = await fetch(`${base}/v1/jobs/${created.id}?backendId=claude-code`, {
+      method: 'DELETE',
+      headers,
+    });
+    assert.equal(removed.status, 200);
+    assert.deepEqual(starts, []);
   } finally {
     await gate.close();
   }

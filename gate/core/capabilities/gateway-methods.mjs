@@ -258,6 +258,7 @@ function usageOf(session) {
  */
 export function createGatewayMethods({
   getBackend,
+  routineScheduler,
   sessionScopes,
   allBackendScopes,
   forgetSession: forget,
@@ -274,6 +275,17 @@ export function createGatewayMethods({
     cachedSession: typeof cachedSession === 'function' ? cachedSession : async () => null,
     sessionSearchBoundMs,
   };
+  async function schedulerFor(params) {
+    return typeof routineScheduler === 'function' ? routineScheduler(params) : null;
+  }
+  async function scheduledJobs(params) {
+    const scheduler = await schedulerFor(params);
+    return scheduler ? scheduler.listJobs() : null;
+  }
+  async function jobHistory(scheduler, jobId) {
+    const { jobs } = await scheduler.listJobs();
+    return jobs.find((job) => String(job.id) === String(jobId))?.history ?? [];
+  }
 
   return {
     // The Gate answers for itself; no backend required.
@@ -330,8 +342,10 @@ export function createGatewayMethods({
 
     // Hermes-dialect passthroughs the slash-command registry speaks. Left raw
     // on purpose: `/cron` renders whatever the host returns.
-    'cron.list': (params) => via(getBackend, params, 'listJobs', (b) => b.listJobs()),
-    'cron.status': (params) => via(getBackend, params, 'listJobs', (b) => b.listJobs()),
+    'cron.list': async (params) => (await scheduledJobs(params))
+      ?? via(getBackend, params, 'listJobs', (b) => b.listJobs()),
+    'cron.status': async (params) => (await scheduledJobs(params))
+      ?? via(getBackend, params, 'listJobs', (b) => b.listJobs()),
 
     // ── Cron transparency ────────────────────────────────────────────
     // The curated surfaces. `cron.list` above answers the dialect; these
@@ -340,8 +354,12 @@ export function createGatewayMethods({
     // execution, and the sessions its runs wrote. The
     // `cron_<jobId>_<ts>` naming that links them is a HOST convention and
     // stays here, so the phone never learns how Hermes spells a session id.
-    'cron.jobs': async (params) =>
-      via(getBackend, params, 'listJobs', async (backend) => {
+    'cron.jobs': async (params) => {
+      const scheduled = await scheduledJobs(params);
+      if (scheduled) {
+        return { object: 'list', data: scheduled.jobs.map(toCronJobView).filter(Boolean) };
+      }
+      return via(getBackend, params, 'listJobs', async (backend) => {
         const raw = await backend.listJobs();
         // Same key list formatCron and ManifestClient.listJobs read
         // (['data', 'jobs', 'crons', 'items']): a host answering
@@ -350,15 +368,47 @@ export function createGatewayMethods({
           .map(toCronJobView)
           .filter(Boolean);
         return { object: 'list', data: jobs };
-      }),
+      });
+    },
 
     'cron.runs': async (params) => {
       const jobId = jobIdOf(params);
+      const scheduled = await schedulerFor(params);
+      if (scheduled) {
+        return {
+          object: 'list',
+          data: (await jobHistory(scheduled, jobId)).map((run) => ({
+            id: run.id,
+            jobId,
+            at: parseCronSessionId(run.id)?.at ?? null,
+            startedAt: run.started_at ?? null,
+            finishedAt: run.finished_at ?? null,
+            status: run.status === 'ok' ? 'completed' : run.status === 'error' ? 'failed' : 'running',
+            turnCount: 1,
+            error: run.error ?? null,
+            output: run.output ?? '',
+          })),
+        };
+      }
       // Resolve on the CRON capability, not on listSessions. Every backend can
       // list sessions — Claude Code sorts first and answers with its own
       // transcripts, which contain no cron runs at all. The environment that
       // owns the jobs is the only one whose sessions can hold their runs.
       return via(getBackend, params, 'listJobs', async (backend) => {
+        if (typeof backend.listJobRuns === 'function') {
+          const runs = await backend.listJobRuns(jobId);
+          return { object: 'list', data: (runs ?? []).map((run) => ({
+            id: run.id,
+            jobId,
+            at: parseCronSessionId(run.id)?.at ?? null,
+            startedAt: run.started_at ?? null,
+            finishedAt: run.finished_at ?? null,
+            status: run.status === 'ok' ? 'completed' : run.status === 'error' ? 'failed' : 'running',
+            turnCount: 1,
+            error: run.error ?? null,
+            output: run.output ?? '',
+          })) };
+        }
         if (typeof backend.listSessions !== 'function') {
           throw new Error(`This gateway's cron backend cannot list sessions, so run history is unavailable`);
         }
@@ -376,9 +426,30 @@ export function createGatewayMethods({
       if (!parseCronSessionId(runId)) {
         throw new Error(`"${runId}" is not a cron run id`);
       }
+      const scheduled = await schedulerFor(params);
+      if (scheduled) {
+        const parsed = parseCronSessionId(runId);
+        const run = (await jobHistory(scheduled, parsed.jobId))
+          .find((entry) => String(entry.id) === String(runId));
+        if (!run) throw new Error(`Cron run "${runId}" was not found`);
+        return {
+          object: 'list',
+          data: [toCronTurn({
+            id: `${runId}_output`,
+            role: 'assistant',
+            content: run.output ?? '',
+            timestamp: run.finished_at,
+          })].filter(Boolean),
+        };
+      }
       // Same reasoning as cron.runs: the transcript lives on the environment
       // that ran the job, not on whichever one lists messages first.
       return via(getBackend, params, 'listJobs', async (backend) => {
+        if (typeof backend.getJobRun === 'function') {
+          const run = await backend.getJobRun(parseCronSessionId(runId)?.jobId, String(runId));
+          if (!run) throw new Error(`Cron run "${runId}" was not found`);
+          return { object: 'list', data: [{ id: `${runId}_output`, role: 'assistant', content: run.output ?? '', timestamp: run.finished_at }] .map(toCronTurn).filter(Boolean) };
+        }
         if (typeof backend.listMessages !== 'function') {
           throw new Error(`This gateway's cron backend cannot read transcripts`);
         }
@@ -386,12 +457,26 @@ export function createGatewayMethods({
         return { object: 'list', data: (messages ?? []).map(toCronTurn).filter(Boolean) };
       });
     },
-    'jobs.run': (params) => via(getBackend, params, 'runJob', (b) => b.runJob(jobIdOf(params))),
-    'jobs.pause': (params) => via(getBackend, params, 'setJobPaused', (b) => b.setJobPaused(jobIdOf(params), true)),
-    'jobs.resume': (params) => via(getBackend, params, 'setJobPaused', (b) => b.setJobPaused(jobIdOf(params), false)),
-    'jobs.create': (params) => via(getBackend, params, 'createJob', (b) => b.createJob(jobInputOf(params))),
-    'jobs.remove': (params) => via(getBackend, params, 'removeJob', (b) => b.removeJob(jobIdOf(params))),
-
+    'jobs.run': async (params) => {
+      const scheduler = await schedulerFor(params);
+      return scheduler ? scheduler.runJob(jobIdOf(params)) : via(getBackend, params, 'runJob', (b) => b.runJob(jobIdOf(params)));
+    },
+    'jobs.pause': async (params) => {
+      const scheduler = await schedulerFor(params);
+      return scheduler ? scheduler.setJobPaused(jobIdOf(params), true) : via(getBackend, params, 'setJobPaused', (b) => b.setJobPaused(jobIdOf(params), true));
+    },
+    'jobs.resume': async (params) => {
+      const scheduler = await schedulerFor(params);
+      return scheduler ? scheduler.setJobPaused(jobIdOf(params), false) : via(getBackend, params, 'setJobPaused', (b) => b.setJobPaused(jobIdOf(params), false));
+    },
+    'jobs.create': async (params) => {
+      const scheduler = await schedulerFor(params);
+      return scheduler ? scheduler.createJob(jobInputOf(params)) : via(getBackend, params, 'createJob', (b) => b.createJob(jobInputOf(params)));
+    },
+    'jobs.remove': async (params) => {
+      const scheduler = await schedulerFor(params);
+      return scheduler ? scheduler.removeJob(jobIdOf(params)) : via(getBackend, params, 'removeJob', (b) => b.removeJob(jobIdOf(params)));
+    },
     'sessions.list': async (params) =>
       via(getBackend, params, 'listSessions', async (b) => ({
         object: 'list',

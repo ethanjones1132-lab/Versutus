@@ -1240,6 +1240,42 @@ function stubFrontedRegistry(calls) {
   return registry;
 }
 
+test('a Hermes adapter continues to front its own jobs instead of using the Gate scheduler', async () => {
+  const calls = [];
+  const registry = stubFrontedRegistry(calls);
+  const adapter = registry.get('stubcli');
+  adapter.adapterId = 'hermes';
+  registry.get = (id) => {
+    if (id !== 'hermes') throw new Error(`unknown CLI adapter "${id}"`);
+    return adapter;
+  };
+  registry.list = () => [adapter];
+  const { gate } = await makeGate({
+    calls,
+    registry,
+    environments: [{ id: 'hermes-local', adapterId: 'hermes' }],
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/jobs`, { headers: auth(gate) });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).data[0].id, 'job-1');
+    assert.ok(calls.includes('listJobs'));
+  } finally {
+    await gate.close();
+  }
+});
+
+test('an unknown adapter without job methods remains unsupported', async () => {
+  const { gate } = await makeGate();
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/jobs`, { headers: auth(gate) });
+    assert.equal(response.status, 501);
+    assert.equal((await response.json()).error.code, 'backend_unsupported');
+  } finally {
+    await gate.close();
+  }
+});
+
 test('skills, diagnostics and cron are advertised only when a backend fronts them', async () => {
   const plain = await makeGate();
   try {

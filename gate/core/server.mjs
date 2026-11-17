@@ -48,6 +48,7 @@ import { LocalEngine, spawnVoiceWorker } from './voice/engines/local-engine.mjs'
 import { createVoiceWorkerPool } from './voice/engines/worker-pool.mjs';
 import { voicePaths, voiceStatus, installVoice, uvRunner } from './voice/runtime.mjs';
 import { runBackendTurn, modelReport } from './voice/turn-runner.mjs';
+import { createRoutineRegistry } from './scheduler/registry.mjs';
 import {
   findSessionEnvironment,
   locateVoiceThread,
@@ -1819,6 +1820,22 @@ export async function createGate(config = {}) {
       }),
     createServer: backendServerFactory,
   });
+  const routineRegistry = createRoutineRegistry({
+    directory: join(gateHome, 'routines'),
+    listEnvironments: () => environmentStore.list(),
+    getBackend: (environmentId) => backendManager.get(environmentId),
+    now: config.routineNow,
+    setTimer: config.routineSetTimer,
+    runTurn: async (backend, sessionId, prompt) => {
+      let output = '';
+      const result = await runBackendTurn(backend, sessionId, { text: prompt }, {
+        onDelta: (delta) => { output += delta; },
+        stallTimeoutMs: 0,
+      });
+      if (!result.hasContent) throw new Error('Backend completed the routine without a reply');
+      return { output };
+    },
+  });
 
   // OpenCode's CLI protocol probe can time out while its native HTTP backend
   // is already usable. This fallback proves the actual chat path with a
@@ -1878,6 +1895,24 @@ export async function createGate(config = {}) {
   async function backendCanServe(entry, method) {
     const methods = await backendManager.methodsOf(entry.id);
     return methods === null || methods.has(method);
+  }
+
+  async function scheduledRoutineFor(backendId, botId = null, method = 'listJobs') {
+    if (botId && !backendId) return null;
+    if (backendId) {
+      if (!await routineRegistry.isScheduled(backendId)) return null;
+      return routineRegistry.forEnvironment(backendId, botId);
+    }
+    // Preserve ordering and the old fronting contract without starting a
+    // backend merely to learn whether it owns routine methods.
+    for (const entry of await backendManager.list()) {
+      if (await routineRegistry.isScheduled(entry.id)) {
+        return routineRegistry.forEnvironment(entry.id, botId);
+      }
+      const methods = await backendManager.methodsOf(entry.id);
+      if (!methods || methods.has(method)) return null;
+    }
+    return null;
   }
 
   /**
@@ -2289,6 +2324,23 @@ export async function createGate(config = {}) {
   // owns the reply shape, unlike the REST routes' `resolveBackend`.
   const gatewayMethods = {
     ...createGatewayMethods({
+      routineScheduler: async (params) => {
+        const botId = params?.botId ?? params?.bot;
+        const environmentId = params?.backendId;
+        if (environmentId) {
+          if (!await routineRegistry.isScheduled(environmentId)) return null;
+          return routineRegistry.forEnvironment(environmentId, botId ?? null);
+        }
+        if (botId) return null;
+        for (const entry of await backendManager.list()) {
+          if (await routineRegistry.isScheduled(entry.id)) {
+            return routineRegistry.forEnvironment(entry.id, null);
+          }
+          const methods = await backendManager.methodsOf(entry.id);
+          if (!methods || methods.has('listJobs')) return null;
+        }
+        return null;
+      },
       listDevices: () => deviceTokens.list(),
       revokeDevice: async (deviceId) => {
         const revoked = await deviceTokens.revoke(deviceId);
@@ -2868,6 +2920,10 @@ export async function createGate(config = {}) {
         }
         const backends = await Promise.all(entries.map(async (entry) => {
           const base = { id: entry.id, label: entry.label };
+          if (await routineRegistry.isScheduled(entry.id)) {
+            const scheduler = await routineRegistry.forEnvironment(entry.id);
+            return { ...base, listJobs: () => scheduler.listJobs() };
+          }
           // A method list that proves no `listJobs` is a backend with no
           // routine concept: say unavailable without starting it. `null` is
           // unknown, not proof of support — the started backend's own shape
@@ -3848,6 +3904,11 @@ export async function createGate(config = {}) {
 
       if (pathname === '/v1/jobs' && method === 'GET') {
         const botId = readBotId(url);
+        const scheduler = await scheduledRoutineFor(url.searchParams.get('backendId'), botId);
+        if (scheduler) {
+          await frontedRequest(() => scheduler.listJobs(), 'jobs_read_failed');
+          return;
+        }
         const backend = botId
           ? await resolveConversationBackend(url.searchParams.get('backendId'), botId)
           : await resolveBackendFor('listJobs');
@@ -3860,6 +3921,11 @@ export async function createGate(config = {}) {
       if (pathname === '/v1/jobs' && method === 'POST') {
         const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         const botId = readBotId(url, body);
+        const scheduler = await scheduledRoutineFor(body.backendId ?? url.searchParams.get('backendId'), botId, 'createJob');
+        if (scheduler) {
+          await frontedRequest(() => scheduler.createJob(body), 'job_create_failed');
+          return;
+        }
         const backend = botId
           ? await resolveConversationBackend(body.backendId ?? url.searchParams.get('backendId'), botId)
           : await resolveBackendFor('createJob');
@@ -4177,6 +4243,20 @@ export async function createGate(config = {}) {
         const jobId = decodeURIComponent(rawJobId);
         const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         const botId = readBotId(url, body);
+        const scheduler = await scheduledRoutineFor(
+          body.backendId ?? url.searchParams.get('backendId'),
+          botId,
+          action === 'run' ? 'runJob' : 'setJobPaused',
+        );
+        if (scheduler) {
+          await frontedRequest(async () => {
+            const result = action === 'run'
+              ? await scheduler.runJob(jobId)
+              : await scheduler.setJobPaused(jobId, action === 'pause');
+            return result ?? { ok: true };
+          }, `job_${action}_failed`);
+          return;
+        }
         const methodName = action === 'run' ? 'runJob' : 'setJobPaused';
         const backend = botId
           ? await resolveConversationBackend(body.backendId ?? url.searchParams.get('backendId'), botId)
@@ -4212,6 +4292,14 @@ export async function createGate(config = {}) {
         }
         const botId = readBotId(url, body);
         if (!url.searchParams.has('backendId') && body.backendId) url.searchParams.set('backendId', body.backendId);
+        const scheduler = await scheduledRoutineFor(url.searchParams.get('backendId'), botId, 'updateJob');
+        if (scheduler) {
+          await frontedRequest(
+            () => scheduler.updateJob(decodeURIComponent(jobUpdateMatch[1]), update),
+            'job_update_failed',
+          );
+          return;
+        }
         const backend = botId
           ? await resolveConversationBackend(url.searchParams.get('backendId'), botId)
           : await resolveBackendFor('updateJob');
@@ -4230,6 +4318,11 @@ export async function createGate(config = {}) {
         const jobId = decodeURIComponent(rawJobId);
         const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         const botId = readBotId(url, body);
+        const scheduler = await scheduledRoutineFor(body.backendId ?? url.searchParams.get('backendId'), botId, 'removeJob');
+        if (scheduler) {
+          await frontedRequest(() => scheduler.removeJob(jobId), 'job_delete_failed');
+          return;
+        }
         const backend = botId
           ? await resolveConversationBackend(body.backendId ?? url.searchParams.get('backendId'), botId)
           : await resolveBackendFor('removeJob');
@@ -5149,6 +5242,7 @@ export async function createGate(config = {}) {
       });
     },
     async close() {
+      await routineRegistry.stopAll();
       // A coalesced index write must not be lost to a restart: a delete the
       // operator just made would otherwise live only in this process, and the
       // next list would answer from the copy and show it again. Bounded, because
@@ -5218,6 +5312,7 @@ export async function createGate(config = {}) {
 
   // Start listening
   await gateObj.listen();
+  await routineRegistry.startAll();
 
   // The Gate is up and serving; the worker is warmed behind that, so a call
   // that arrives now finds models already loaded. Never awaited: a Gate whose
