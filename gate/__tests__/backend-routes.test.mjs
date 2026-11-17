@@ -111,7 +111,7 @@ function runScopeRegistry(calls) {
  * controlled — used to drive the Gate's own empty-turn detection rather than
  * a fixed canned reply.
  */
-function stubTurnRegistry({ calls = [], sendMessage, streamEvents } = {}) {
+function stubTurnRegistry({ calls = [], kind, sendMessage, streamEvents } = {}) {
   const adapter = {
     adapterId: 'stubcli',
     adapterRevision: '1',
@@ -122,6 +122,9 @@ function stubTurnRegistry({ calls = [], sendMessage, streamEvents } = {}) {
     async probe() { return { state: 'ready', cliVersion: '1.0.0', protocol: 'acp' }; },
     createBackend() {
       return {
+        // The CLI the backend speaks for, when the test names one: a failure's
+        // sentence names the backend, so the kind is what makes it checkable.
+        ...(kind ? { kind } : {}),
         async listSessions() { return [SESSION]; },
         async createSession(input) {
           // Records the model so a test can prove the session was born pinned.
@@ -597,6 +600,32 @@ test('chat routed to a backend goes through the CLI, not the provider proxy', as
     const body = await response.json();
     assert.equal(body.choices[0].message.content, 'echo ping');
     assert.ok(calls.some((c) => c.startsWith('sendMessage:')));
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a non-streaming typed turn on a signed-out CLI is told in one sentence, not in its stderr', async () => {
+  // VS-127: the app streams, but the same route answers a non-streaming turn,
+  // and that catch used to hand the caller the CLI's own words as the message.
+  const registry = stubTurnRegistry({
+    kind: 'claude-code',
+    sendMessage: async () => { throw new Error('claude-code: OAuth token has been revoked'); },
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({ backendId: 'stub-local', sessionId: 'ses_1', messages: [{ role: 'user', content: 'ping' }] }),
+    });
+    assert.equal(response.status, 502);
+    const body = await response.json();
+    assert.equal(body.error.code, 'backend_signed_out');
+    assert.equal(
+      body.error.message,
+      'Claude Code on your PC is signed out. Open a terminal on the PC, run `claude`, and sign in.',
+    );
+    assert.equal(body.error.details, 'claude-code: OAuth token has been revoked');
   } finally {
     await gate.close();
   }

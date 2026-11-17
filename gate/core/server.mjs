@@ -48,6 +48,7 @@ import { LocalEngine, spawnVoiceWorker } from './voice/engines/local-engine.mjs'
 import { createVoiceWorkerPool } from './voice/engines/worker-pool.mjs';
 import { voicePaths, voiceStatus, installVoice, uvRunner } from './voice/runtime.mjs';
 import { runBackendTurn, modelReport } from './voice/turn-runner.mjs';
+import { describeTurnFailure } from './voice/turn-failure.mjs';
 import { createRoutineRegistry } from './scheduler/registry.mjs';
 import {
   findSessionEnvironment,
@@ -693,8 +694,20 @@ async function streamBackendTurn(backend, sessionId, { text, model, images, file
       // A throw is where the app's turns actually end: it always streams, so a
       // backend that refuses a turn outright (non-2xx, 429, 5xx, a stall) never
       // reaches the outcome recorded above and would otherwise never be scored.
-      const code = typeof error?.code === 'string' && /^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/.test(error.code)
+      const named = typeof error?.code === 'string' && /^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/.test(error.code)
         ? error.code : 'backend_error';
+      // A backend that is signed out, or one whose plan is spent, is the one
+      // failure the operator can fix from the sentence alone — so the Gate names
+      // it exactly as a call does (voice/turn-failure.mjs), and the CLI's own
+      // words ride behind as `details`. Every other ending keeps the backend's
+      // text, which is the only account of it anyone has.
+      const failure = describeTurnFailure(error, { backend: backend?.kind ?? backendId ?? undefined });
+      const actionable = failure.code === 'backend_signed_out' || failure.code === 'backend_quota';
+      const ending = {
+        message: actionable ? failure.message : error.message,
+        code: actionable ? failure.code : named,
+        ...(actionable && failure.details ? { details: failure.details } : {}),
+      };
       if (!durable.clientDisconnected) {
         recordOutcome?.(healthKey, { reason: error?.message, error });
       }
@@ -704,8 +717,8 @@ async function streamBackendTurn(backend, sessionId, { text, model, images, file
       // socket write with `clientDisconnected` itself, so this reaches the event
       // log and the attached phone, and nothing else. Only the model-health
       // verdict needs the caller to have been there to see the failure.
-      emit(JSON.stringify({ error: { message: error.message, code } }));
-      endTurn('failed', { error: { message: error.message, code } });
+      emit(JSON.stringify({ error: ending }));
+      endTurn('failed', { error: ending });
     }
   } finally {
     // Every other ending is recorded by the code that caused it (Stop through
@@ -4936,8 +4949,22 @@ export async function createGate(config = {}) {
             // answered, so it is neither a failure nor a second response.
             if (res.headersSent) return;
             if (!res.destroyed) recordTurnOutcome(healthKey, { reason: error?.message, error });
+            // VS-127: the same sentence a call and a streamed turn get. A CLI
+            // that is signed out or out of plan is the one failure the operator
+            // can fix from the answer alone, and a non-streaming caller must not
+            // be handed that CLI's stderr as the headline.
+            const failure = describeTurnFailure(error, { backend: backend?.kind ?? environmentId ?? undefined });
+            const actionable = failure.code === 'backend_signed_out' || failure.code === 'backend_quota';
             res.writeHead(502, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: { message: error.message, code: 'backend_error' } }));
+            res.end(JSON.stringify({
+              error: actionable
+                ? {
+                  message: failure.message,
+                  code: failure.code,
+                  ...(failure.details ? { details: failure.details } : {}),
+                }
+                : { message: error.message, code: 'backend_error' },
+            }));
           }
           return;
         }

@@ -319,3 +319,63 @@ test('a failed turn is named by who failed, never in the backend\'s own words', 
   assert.match(line, /code=backend_exited/);
   assert.equal(line.includes('4417'), false);
 });
+
+// VS-127: a CLI that is signed out or spent is told on a call in one sentence
+// naming the backend and its one fix. The CLI's own words stay on the host log
+// (and the code there is the machine-readable one), never in what the call says.
+test('a signed-out backend is told to the call with the one fix for that backend', async (t) => {
+  const engine = makeEngine();
+  const runTurn = async (_session, _text, handlers) => {
+    handlers.onStage({ stage: 'resolve.ready', backend: 'claude-code' });
+    throw new Error('claude-code: OAuth token has been revoked');
+  };
+  const call = await startCall(t, { engine, runTurn });
+
+  engine.emit('final', { text: 'hello' });
+  const failed = await waitFor(() => call.frames.find((frame) => frame.t === 'turn' && frame.state === 'failed'));
+  assert.equal(
+    failed.error,
+    'Claude Code on your PC is signed out. Open a terminal on the PC, run `claude`, and sign in.',
+  );
+  assert.equal(JSON.stringify(call.frames).includes('OAuth'), false, 'the CLI\'s words never cross the wire');
+  const line = call.lines.find((entry) => /^voice\.turn fail /.test(entry));
+  assert.match(line, /code=backend_signed_out/);
+});
+
+test('an OpenCode with no provider credential is told to the call to run `opencode auth login`', async (t) => {
+  const engine = makeEngine();
+  const runTurn = async (_session, _text, handlers) => {
+    handlers.onStage({ stage: 'resolve.ready', backend: 'opencode' });
+    throw new Error('opencode: no provider credential is configured for this model');
+  };
+  const call = await startCall(t, { engine, runTurn });
+
+  engine.emit('final', { text: 'hello' });
+  const failed = await waitFor(() => call.frames.find((frame) => frame.t === 'turn' && frame.state === 'failed'));
+  assert.equal(
+    failed.error,
+    'OpenCode on your PC is signed out. Open a terminal on the PC, run `opencode auth login`, and sign in.',
+  );
+  assert.equal(JSON.stringify(call.frames).includes('provider credential'), false, 'the CLI\'s words never cross the wire');
+  const line = call.lines.find((entry) => /^voice\.turn fail /.test(entry));
+  assert.match(line, /code=backend_signed_out/);
+});
+
+test('a spent plan is told to the call with the reset the CLI reported', async (t) => {
+  const engine = makeEngine();
+  const runTurn = async (_session, _text, handlers) => {
+    handlers.onStage({ stage: 'resolve.ready', backend: 'codex' });
+    throw new Error("codex: You've hit your usage limit. Resets at 14:00.");
+  };
+  const call = await startCall(t, { engine, runTurn });
+
+  engine.emit('final', { text: 'hello' });
+  const failed = await waitFor(() => call.frames.find((frame) => frame.t === 'turn' && frame.state === 'failed'));
+  assert.equal(
+    failed.error,
+    "Codex has used up its plan's limit. It resets at 14:00; until then pick another backend.",
+  );
+  assert.equal(JSON.stringify(call.frames).includes('usage limit'), false);
+  const line = call.lines.find((entry) => /^voice\.turn fail /.test(entry));
+  assert.match(line, /code=backend_quota/);
+});

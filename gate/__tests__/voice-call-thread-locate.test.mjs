@@ -243,3 +243,133 @@ test('the Gate\'s own account of having no backend is passed on as written', () 
   );
   assert.deepEqual(describeTurnFailure(error), { code: 'no_voice_backend', message: error.message });
 });
+
+// ─── Signed out, and out of plan: the two failures the operator can fix ───
+// VS-127. A CLI says both in stderr, in its own words; the phone is told what
+// to do about it in one sentence naming the backend and its one fix, per
+// backend. The CLI's words are kept as `details` and are never the sentence.
+
+test('a signed-out or spent backend is named with the one fix for that backend', () => {
+  const cases = [
+    // The three real-world strings this ticket exists for.
+    [
+      new Error('claude-code: OAuth token has been revoked'),
+      'claude-code',
+      'backend_signed_out',
+      'Claude Code on your PC is signed out. Open a terminal on the PC, run `claude`, and sign in.',
+    ],
+    [
+      new Error("codex: You've hit your usage limit. Resets at 14:00."),
+      'codex',
+      'backend_quota',
+      "Codex has used up its plan's limit. It resets at 14:00; until then pick another backend.",
+    ],
+    [
+      new Error('opencode: no provider credential is configured for this model'),
+      'opencode',
+      'backend_signed_out',
+      'OpenCode on your PC is signed out. Open a terminal on the PC, run `opencode auth login`, and sign in.',
+    ],
+    // The other spellings the same two failures arrive in.
+    [
+      new Error('codex: Please run `codex login` before sending a turn'),
+      'codex',
+      'backend_signed_out',
+      'Codex on your PC is signed out. Open a terminal on the PC, run `codex login`, and sign in.',
+    ],
+    [
+      new Error('opencode: rate limit exceeded; resets in 2 hours'),
+      'opencode',
+      'backend_quota',
+      "OpenCode has used up its plan's limit. It resets in 2 hours; until then pick another backend.",
+    ],
+    [
+      new Error('hermes: insufficient_quota'),
+      'hermes',
+      'backend_quota',
+      "Hermes has used up its plan's limit. Until it resets, pick another backend.",
+    ],
+    [
+      new Error('opencode: Insufficient balance. Add credit to continue.'),
+      'opencode',
+      'backend_quota',
+      "OpenCode has used up its plan's limit. Until it resets, pick another backend.",
+    ],
+    [
+      new Error('hermes: authentication failed'),
+      'hermes',
+      'backend_signed_out',
+      'Hermes is signed out. Open Hermes on the PC and sign in again.',
+    ],
+    // Claude Code's own result line says "Failed to authenticate." before it
+    // says anything else (backends/claude-code.mjs keys on that prefix): the
+    // verb, not the noun, is what a real signed-out run carries.
+    [
+      new Error('claude-code: Failed to authenticate.'),
+      'claude-code',
+      'backend_signed_out',
+      'Claude Code on your PC is signed out. Open a terminal on the PC, run `claude`, and sign in.',
+    ],
+    // Codex names the reset as "try again at 1:37 PM", which is still the
+    // moment the operator can act on.
+    [
+      new Error("codex: You've hit your usage limit. Try again at 3:12 PM."),
+      'codex',
+      'backend_quota',
+      "Codex has used up its plan's limit. It resets at 3:12 PM; until then pick another backend.",
+    ],
+    // A typed turn knows its environment id, not the kind: the id still names
+    // the backend, so the sentence is the right one.
+    [
+      new Error('codex: your plan has reached its usage limit'),
+      'codex-local',
+      'backend_quota',
+      "Codex has used up its plan's limit. Until it resets, pick another backend.",
+    ],
+    // No backend named at all: the generic sentence still says what to do.
+    [
+      new Error('OAuth token has been revoked'),
+      undefined,
+      'backend_signed_out',
+      'The backend is signed out. Sign in again on the machine that runs it.',
+    ],
+  ];
+  for (const [error, backend, code, message] of cases) {
+    const failure = describeTurnFailure(error, { backend });
+    assert.equal(failure.code, code, `${error.message} is ${code}`);
+    assert.equal(failure.message, message);
+    assert.equal(failure.details, error.message, 'the backend\'s own words ride behind as details');
+    assert.ok(!failure.message.includes(error.message), 'and are never the headline');
+  }
+});
+
+test('a plain rate limit stays transient, and a Gate-held key stays the Gate\'s refusal', () => {
+  // "slow down" with a 429 is not a plan's ceiling: it is the transient limit.
+  assert.deepEqual(
+    describeTurnFailure(Object.assign(new Error('slow down'), { status: 429 }), { backend: 'codex' }),
+    { code: 'backend_rate_limited', message: 'Codex is rate limited right now.' },
+  );
+  // A 401 whose text names no sign-in problem is still the credential the Gate
+  // holds for the backend, not a CLI the operator was signed out of.
+  assert.deepEqual(
+    describeTurnFailure(Object.assign(new Error('nope'), { status: 401 }), { backend: 'hermes' }),
+    { code: 'backend_auth', message: 'Hermes refused the sign-in the Gate has for it.' },
+  );
+  // A Gate-held provider key with nothing to send is NOT a CLI sign-out: the
+  // CLI has no sign-in to run for it.
+  const providerKey = describeTurnFailure(new Error('provider has no credential to send'), { backend: 'hermes' });
+  assert.equal(providerKey.code, 'backend_error');
+  // A number in the words is only the CLI's sign-in state when the throw names
+  // no status: `hermes: HTTP 401` is Hermes refusing the key the GATE holds
+  // (API_SERVER_KEY), so the fix is that key, not `hermes`'s own setting.
+  assert.deepEqual(
+    describeTurnFailure(Object.assign(new Error('hermes: HTTP 401'), { status: 401 }), { backend: 'hermes' }),
+    { code: 'backend_auth', message: 'Hermes refused the sign-in the Gate has for it.' },
+  );
+  // With no status at all, the same number is the CLI's own account of having
+  // been signed out — which is all a dead process leaves behind.
+  assert.equal(
+    describeTurnFailure(new Error('claude-code: 401 Unauthorized'), { backend: 'claude-code' }).code,
+    'backend_signed_out',
+  );
+});

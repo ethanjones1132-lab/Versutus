@@ -1008,8 +1008,12 @@ test('a phone leaving a replay does not touch the turn', async () => {
  * A backend whose turn the test fails by hand, after the phone has left: the
  * `sendMessage` promise keeps its reject, so the exact edge under test — the
  * turn has detached, and THEN the upstream errors — can be built.
+ *
+ * `kind` names the CLI the backend speaks for (`claude-code`, `codex`, …): a
+ * real environment backend carries it, and the sentence a failure is told in
+ * depends on it.
  */
-function failingTurnRegistry(turns, { delta } = {}) {
+function failingTurnRegistry(turns, { delta, kind } = {}) {
   const signals = [];
   const adapter = {
     adapterId: 'stubcli',
@@ -1021,6 +1025,7 @@ function failingTurnRegistry(turns, { delta } = {}) {
     async probe() { return { state: 'ready', cliVersion: '1.0.0', protocol: 'acp' }; },
     createBackend() {
       return {
+        ...(kind ? { kind } : {}),
         async listSessions() { return [SESSION]; },
         async createSession(input) { return { ...SESSION, title: input?.title ?? null }; },
         async deleteSession() {},
@@ -1087,6 +1092,87 @@ test('a detached turn that fails upstream journals the error, so its replay neve
     assert.ok(errorAt >= 0, `a replay of a failed turn must carry its failure: ${frames.join(' | ')}`);
     assert.ok(errorAt < frames.indexOf('data: [DONE]'), 'the error frame comes before the end of the stream');
     assert.match(replay, /"code":"backend_error"/);
+  } finally {
+    await gate.close();
+  }
+});
+
+// ─── A typed turn's failure, in the phone's words ─────────────────────────
+// VS-127: a spoken turn has always been told in a sentence the Gate wrote; a
+// typed turn used to be told in the CLI's own stderr. The two failures the
+// operator can fix — signed out, and out of plan — are now the same sentence in
+// both, with the CLI's words behind `details`.
+
+/** The error frame a stream carried, as the phone reads it. */
+const errorFrameOf = (body) => {
+  const frame = framesOf(body).find((candidate) => candidate.includes('"error"'));
+  assert.ok(frame, `the stream carried no error frame: ${body}`);
+  return JSON.parse(frame.replace(/^data: /, '')).error;
+};
+
+test('a typed turn on a signed-out CLI is told in one sentence, with its own text as details', async () => {
+  const turns = [];
+  const gate = await makeGate({ registry: failingTurnRegistry(turns, { kind: 'claude-code' }) });
+  try {
+    const live = streamingTurn(gate.gate, { turnId: TURN_ID, text: 'refactor it' });
+    assert.ok(await until(() => turns.length === 1));
+    turns[0].reject(new Error('claude-code: OAuth token has been revoked'));
+
+    const error = errorFrameOf(await (await live).text());
+    assert.equal(error.code, 'backend_signed_out');
+    assert.equal(
+      error.message,
+      'Claude Code on your PC is signed out. Open a terminal on the PC, run `claude`, and sign in.',
+    );
+    assert.equal(error.details, 'claude-code: OAuth token has been revoked');
+
+    // The journal holds the same split, so a phone that replays the turn later
+    // is told the same thing.
+    const { body } = await turnMeta(gate, TURN_ID);
+    assert.equal(body.status, 'failed');
+    assert.equal(body.error.code, 'backend_signed_out');
+    assert.equal(body.error.message, error.message);
+    assert.equal(body.error.details, 'claude-code: OAuth token has been revoked');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a typed turn on an OpenCode with no provider credential is told to run `opencode auth login`', async () => {
+  const turns = [];
+  const gate = await makeGate({ registry: failingTurnRegistry(turns, { kind: 'opencode' }) });
+  try {
+    const live = streamingTurn(gate.gate, { turnId: TURN_ID, text: 'draft the release notes' });
+    assert.ok(await until(() => turns.length === 1));
+    turns[0].reject(new Error('opencode: no provider credential is configured for this model'));
+
+    const error = errorFrameOf(await (await live).text());
+    assert.equal(error.code, 'backend_signed_out');
+    assert.equal(
+      error.message,
+      'OpenCode on your PC is signed out. Open a terminal on the PC, run `opencode auth login`, and sign in.',
+    );
+    assert.equal(error.details, 'opencode: no provider credential is configured for this model');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a typed turn whose plan is spent names the reset the CLI reported', async () => {
+  const turns = [];
+  const gate = await makeGate({ registry: failingTurnRegistry(turns, { kind: 'codex' }) });
+  try {
+    const live = streamingTurn(gate.gate, { turnId: TURN_ID, text: 'keep going' });
+    assert.ok(await until(() => turns.length === 1));
+    turns[0].reject(new Error("codex: You've hit your usage limit. Resets at 14:00."));
+
+    const error = errorFrameOf(await (await live).text());
+    assert.equal(error.code, 'backend_quota');
+    assert.equal(
+      error.message,
+      "Codex has used up its plan's limit. It resets at 14:00; until then pick another backend.",
+    );
+    assert.equal(error.details, "codex: You've hit your usage limit. Resets at 14:00.");
   } finally {
     await gate.close();
   }
