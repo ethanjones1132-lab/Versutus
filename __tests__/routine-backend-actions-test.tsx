@@ -765,6 +765,29 @@ describe('the Gate client names the backend in the request', () => {
     expect(calls[0].body).toEqual({});
   });
 
+  // VS-121: Activity's New routine creates on the backend and Bot the person
+  // picked, which may not be the chat's. No scope keeps today's request.
+  test('New routine creates on the named backend and Bot, or the root when botId is null', async () => {
+    const calls = stubFetch();
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    client.setBotId?.('stale-chat-bot');
+    const job = { name: 'inbox', prompt: 'Summarize mail', schedule: '0 9 * * 1-5' };
+
+    await client.createJob(job, { backendId: 'claude-code', botId: null });
+    await client.createJob(job, { backendId: 'hermes-a', botId: 'mira' });
+    await client.createJob(job);
+
+    expect(calls[0]).toMatchObject({ method: 'POST' });
+    expect(calls[0].url).toContain('/v1/jobs?backendId=claude-code');
+    expect(calls[0].url).not.toContain('bot=');
+    expect(calls[0].body).toEqual({ ...job, backendId: 'claude-code' });
+    expect(calls[1].url).toContain('bot=mira');
+    expect(calls[1].url).toContain('backendId=hermes-a');
+    expect(calls[1].body).toEqual({ ...job, bot: 'mira', backendId: 'hermes-a' });
+    expect(calls[2].url).not.toContain('backendId');
+    expect(calls[2].body).toEqual({ ...job, bot: 'stale-chat-bot' });
+  });
+
   test('run history is scoped through the cron.runs RPC when a backend is named', async () => {
     const calls = stubFetch();
     const client = new ManifestClient(PROFILE, IDENTITY, {});

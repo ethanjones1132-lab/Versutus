@@ -875,11 +875,21 @@ export class ManifestClient implements PortalClient {
     return [];
   }
 
-  async createJob(input: { name: string; prompt: string; schedule: string }): Promise<{ id: string; name?: string }> {
+  /**
+   * Create a job. With no scope it lands where it always did (the chat's Bot,
+   * if any); a scope names the backend and Bot exactly as run/pause/remove do,
+   * so Activity's New routine can create on any backend the Gate serves
+   * (VS-121), including one the chat is not on.
+   */
+  async createJob(
+    input: { name: string; prompt: string; schedule: string },
+    scope?: string | RoutineScope,
+  ): Promise<{ id: string; name?: string }> {
     const path = this.requireEndpoint('jobs');
-    return this.rootTransport.request('POST', this.withBotOnly(path), {
+    return this.rootTransport.request('POST', this.withRoutineScope(path, scope), {
       ...input,
-      ...(this.botId ? { bot: this.botId } : {}),
+      ...this.routineScopeBody(scope),
+      ...(typeof scope === 'object' && scope?.backendId?.trim() ? { backendId: scope.backendId.trim() } : {}),
     });
   }
 

@@ -3,6 +3,10 @@ import { AppState, ScrollView, StyleSheet, View } from 'react-native';
 
 import { CronJobSheet } from '@/components/activity/cron-job-sheet';
 import { CronRunSheet } from '@/components/activity/cron-run-sheet';
+import { NewRoutineSheet } from '@/components/routines/new-routine-sheet';
+import { routineTargets } from '@/lib/routines/targets';
+import { gatewayJobInput } from '@/lib/gateway/cron-create';
+import type { PublicBot } from '@/lib/gateway/bots';
 import { Button, Card, Chip, ErrorCard, ListRow, SectionHeader, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
@@ -27,7 +31,7 @@ import { cronJobViewFromRoutine, routineJobSummary } from '@/lib/gateway/routine
  * fact, so each row names its backend and every backend gets a coverage line.
  */
 export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number }) {
-  const { activeGateway, activityFeed, status } = useGateway();
+  const { activeGateway, activityFeed, status, botJobs, listBots } = useGateway();
   // The feed, the filter and every open read belong to one Gate. Keying the
   // state to this id keeps a late answer from the Gate we just left from
   // painting under the one on screen.
@@ -51,6 +55,10 @@ export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number })
   // selected elsewhere cannot redirect a root job into that profile.
   const [openJobScope, setOpenJobScope] = useState<RoutineScope | undefined>();
   const [openRunId, setOpenRunId] = useState<string | null>(null);
+  // New routine (VS-121): any backend the Gate serves routines for, or any of
+  // its Bots, chosen here rather than inherited from the open chat.
+  const [newOpen, setNewOpen] = useState(false);
+  const [bots, setBots] = useState<PublicBot[]>([]);
   const requestId = useRef(0);
   const inFlight = useRef<{ settled: boolean; promise: Promise<void>; gatewayId?: string } | null>(null);
   const mounted = useRef(true);
@@ -146,6 +154,17 @@ export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number })
 
   const feed = state.feed;
   useEffect(() => {
+    // A context without a Bot list (an older provider, a test double) offers
+    // backend targets only.
+    if (!newOpen || typeof listBots !== 'function') return undefined;
+    let live = true;
+    void Promise.resolve(listBots()).then(
+      (result) => { if (live) setBots(Array.isArray(result) ? result : []); },
+      () => { if (live) setBots([]); },
+    );
+    return () => { live = false; };
+  }, [listBots, newOpen]);
+  useEffect(() => {
     if (backendFilter && feed && !feed.backends.some((backend) => backend.id === backendFilter)) {
       setBackendFilter(undefined);
     }
@@ -204,6 +223,22 @@ export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number })
       {feed ? (
         <>
           <SectionHeader title={`Routines${visibleRoutines.length ? ` (${visibleRoutines.length})` : ''}`} />
+          <Button label="New routine" variant="secondary" onPress={() => setNewOpen(true)} />
+          {newOpen ? (
+          <NewRoutineSheet
+            visible={newOpen}
+            targets={routineTargets(feed.backends, feed.routines, bots)}
+            initialBackendId={backendFilter}
+            onClose={() => setNewOpen(false)}
+            onCreate={(draft, scope) =>
+              botJobs.create(gatewayJobInput(draft), scope).then((created) => {
+                setNewOpen(false);
+                void read();
+                return created;
+              })
+            }
+          />
+          ) : null}
           {feed.backends.length > 1 ? (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
               <Chip label="All" selected={!backendFilter} onPress={() => setBackendFilter(undefined)} />

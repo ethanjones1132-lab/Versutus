@@ -160,7 +160,10 @@ export interface PortalClient {
   getActivityFeed?(since: string, backendId?: string): Promise<import('@/lib/gateway/activity-feed').ActivityFeed>;
   getRoutineFeed?(backendId?: string): Promise<import('@/lib/gateway/activity-feed').RoutineFeed>;
   listJobs?(): Promise<{ id: string; name?: string; paused?: boolean }[]>;
-  createJob?(input: { name: string; prompt: string; schedule: string }): Promise<{ id: string; name?: string }>;
+  createJob?(
+    input: { name: string; prompt: string; schedule: string },
+    scope?: string | RoutineScope,
+  ): Promise<{ id: string; name?: string }>;
   runJob?(jobId: string, backendId?: string | RoutineScope): Promise<void>;
   setJobPaused?(jobId: string, paused: boolean, backendId?: string | RoutineScope): Promise<void>;
   removeJob?(jobId: string, backendId?: string | RoutineScope): Promise<void>;

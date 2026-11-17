@@ -521,7 +521,10 @@ type GatewayContextValue = {
   botJobs: {
     list: () => Promise<{ id: string; name?: string; paused?: boolean }[]>;
     /** Resolves to the created job's id so a caller can keep the phone-side notice in step. */
-    create: (input: { name: string; prompt: string; schedule: string }) => Promise<{ id: string; name?: string }>;
+    create: (
+      input: { name: string; prompt: string; schedule: string },
+      scope?: string | RoutineScope,
+    ) => Promise<{ id: string; name?: string }>;
     run: (jobId: string, backendId?: string | RoutineScope) => Promise<void>;
     pause: (jobId: string, paused: boolean, backendId?: string | RoutineScope) => Promise<void>;
     remove: (jobId: string, backendId?: string | RoutineScope) => Promise<void>;
@@ -7605,12 +7608,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (!client?.listJobs) return [];
       return client.listJobs();
     },
-    create: async (input: { name: string; prompt: string; schedule: string }) => {
+    create: async (input: { name: string; prompt: string; schedule: string }, scope?: string | RoutineScope) => {
       const client = clientRef.current;
       if (!client?.createJob) throw new Error('This gateway does not manage jobs.');
       // The created record comes back so a caller (routine create on either
       // surface) can schedule the phone-side notice under the real job id.
-      return client.createJob(input);
+      return scope === undefined ? client.createJob(input) : client.createJob(input, scope);
     },
     run: async (jobId: string, backendId?: string | RoutineScope) => {
       const client = clientRef.current;
