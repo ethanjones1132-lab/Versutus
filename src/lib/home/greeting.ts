@@ -15,6 +15,10 @@ export function greetingFor(date: Date): string {
 /**
  * The one quiet line under the greeting: which Gate this is and whether the
  * team behind it can take work. Plain words — never a protocol state name.
+ *
+ * The count leads with the Bots that are set up, not with the roster's size: a
+ * Gate with two dozen profiles and eight working Bots should open on "8 Bots
+ * ready", with the ones needing setup as a short tail. Nobody has to subtract.
  */
 export function gateLineFor(input: {
   gatewayName: string;
@@ -32,5 +36,8 @@ export function gateLineFor(input: {
   if (readyBots === totalBots) {
     return totalBots === 1 ? `${gatewayName} · your Bot is ready` : `${gatewayName} · all ${totalBots} Bots ready`;
   }
-  return `${gatewayName} · ${readyBots} of ${totalBots} Bots ready`;
+  const waiting = Math.max(0, totalBots - readyBots);
+  const ready = `${readyBots} Bot${readyBots === 1 ? '' : 's'} ready`;
+  const tail = waiting === 1 ? '1 needs setup' : `${waiting} need setup`;
+  return `${gatewayName} · ${ready} · ${tail}`;
 }

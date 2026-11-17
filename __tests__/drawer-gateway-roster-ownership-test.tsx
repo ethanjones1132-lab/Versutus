@@ -313,11 +313,11 @@ describe('the drawer roster belongs to the gateway that read it', () => {
     // ...but B's failed read still says so, and still offers the retry.
     expect(texts(renderer!)).toContain('Your team');
     expect(texts(renderer!)).toContain("Couldn't refresh your team");
-    expect(texts(renderer!)).toContain('tap to retry');
+    expect(texts(renderer!)).toContain('Try again');
 
     // The retry reads B again; A's id is never sent to open.
     mockEnv.listBots.mockRejectedValueOnce(new Error('still refused'));
-    await pressLabel(renderer!, 'Tap to retry');
+    await pressLabel(renderer!, 'Try again');
     expect(mockEnv.openBot).not.toHaveBeenCalled();
     expect(chatRows(renderer!)).toEqual([]);
   });
@@ -397,7 +397,7 @@ describe('the drawer roster belongs to the gateway that read it', () => {
     // A second refused refresh keeps them too, and the row still opens B.
     mockEnv.listBots.mockRejectedValueOnce(new Error('still refused'));
     mockEnv.openBot.mockResolvedValue(true);
-    await pressLabel(renderer!, 'Tap to retry');
+    await pressLabel(renderer!, 'Try again');
     expect(texts(renderer!)).toContain('beta-cached');
 
     await pressLabel(renderer!, 'Chat with beta-cached');

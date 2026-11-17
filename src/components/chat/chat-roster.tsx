@@ -24,6 +24,7 @@ import {
 } from '@/lib/gateway/groups';
 import { botReportedRoutable, rosterBotTap } from '@/lib/gateway/roster-tap';
 import { filterRosterBots, rosterBackendFilters } from '@/lib/gateway/roster-filter';
+import { groupRosterRows, unsetBotsLabel } from '@/lib/gateway/roster-sections';
 import type { ConnectionStatus } from '@/lib/gateway/types';
 import { haptics } from '@/lib/haptics';
 import { gateLineFor, greetingFor } from '@/lib/home/greeting';
@@ -264,6 +265,10 @@ function ChatRosterImpl({
     () => ({ gateway: gatewayName, runtime: null }),
   );
   const [refreshing, setRefreshing] = useState(false);
+  // The fold at the foot of the ready Bots: shut on first paint, because the
+  // first screen belongs to the Bots that can take work. Per mount rather than
+  // per device — a fresh app open shows the ready list first again.
+  const [unsetExpanded, setUnsetExpanded] = useState(false);
   const tokens = useTokens();
   const insets = useSafeAreaInsets();
   // Whether the installed client can read a roster at all. A Hermes client
@@ -322,6 +327,43 @@ function ChatRosterImpl({
           </View>
         );
       }
+      if (item.kind === 'unset') {
+        // The fold itself: one quiet row where the unset Bots would have been,
+        // carrying their count. Pressing it opens the shelf in place — each row
+        // behind it is still the same tap-to-fix row the roster already had.
+        return (
+          <PressableScale
+            key="unset-bots"
+            onPress={async () => {
+              await haptics.selection();
+              setUnsetExpanded((open) => !open);
+            }}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: unsetExpanded }}
+            accessibilityLabel={`${unsetBotsLabel(item.count)}. ${unsetExpanded ? 'Hide them' : 'Show them'}.`}
+            style={styles.member}>
+            <View style={[styles.actionTile, { backgroundColor: tokens.backgroundElevated }]}>
+              <Icon
+                name={
+                  unsetExpanded
+                    ? { ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }
+                    : { ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }
+                }
+                size={18}
+                color="secondary"
+              />
+            </View>
+            <View style={styles.memberText}>
+              <Text variant="callout" numberOfLines={1} style={styles.memberName}>
+                {unsetBotsLabel(item.count)}
+              </Text>
+              <Text variant="caption" color="tertiary" numberOfLines={1}>
+                {unsetExpanded ? 'Hide them' : 'Tap to show them and fix what each needs'}
+              </Text>
+            </View>
+          </PressableScale>
+        );
+      }
       const row = item.row;
       if (row.kind === 'configurable') {
         return (
@@ -363,7 +405,7 @@ function ChatRosterImpl({
         />
       );
     },
-    [onSelectGroup, onGroupDetail, onSelectConfigurable, onSelectBot, onBotDetail, tokens.accentMuted],
+    [onSelectGroup, onGroupDetail, onSelectConfigurable, onSelectBot, onBotDetail, tokens.accentMuted, tokens.backgroundElevated, unsetExpanded],
   );
 
   if (loading && rows.length <= 1) {
@@ -406,15 +448,31 @@ function ChatRosterImpl({
       ? gateLineFor({ gatewayName, status, readyBots: readyBotCount, totalBots: totalBotCount })
       : undefined;
 
-  // FlatList data: the configurable row, every visible bot row, then every
-  // visible group room. Only these rows virtualize — search, errors, the
-  // creation rows, capability notes and empty states stay fixed in the
-  // header/footer so a 200-bot roster mounts only the rows on screen instead
-  // of the whole ScrollView at once per streamed frame (iter-090).
+  // FlatList data: the ready roof (Direct chat and every routable Bot), the
+  // fold for the ones that need setup, and then the group rooms. Only these
+  // rows virtualize — search, errors, the creation rows, capability notes and
+  // empty states stay fixed in the header/footer so a 200-bot roster mounts
+  // only the rows on screen instead of the whole ScrollView at once per
+  // streamed frame (iter-090).
+  //
+  // An active search outranks the fold: a match must never sit behind a shut
+  // row, so the unset rows render inline while the operator is looking for
+  // them, and the fold returns with the blank query.
+  const sections = groupRosterRows(visibleRows);
+  const searching = query.trim().length > 0;
+  const showUnset = searching || unsetExpanded;
   const items: RosterItem[] = [
-    ...visibleRows.map(
+    ...sections.ready.map(
       (row): RosterItem => ({ key: rowKindKey(row), kind: 'row', row }),
     ),
+    ...(sections.unset.length > 0 && !searching
+      ? [{ key: 'unset-bots', kind: 'unset' as const, count: sections.unset.length }]
+      : []),
+    ...(showUnset
+      ? sections.unset.map(
+          (row): RosterItem => ({ key: rowKindKey(row), kind: 'row', row }),
+        )
+      : []),
     ...visibleGroups.map(
       (group, index): RosterItem => ({
         key: group.id,
@@ -614,6 +672,7 @@ function rowKindKey(row: RosterRow): string {
 /** A single windowed row: a bot/configurable agent row or a group room. */
 type RosterItem =
   | { key: string; kind: 'row'; row: RosterRow }
+  | { key: string; kind: 'unset'; count: number }
   | { key: string; kind: 'group'; group: BotGroupRoom; showSectionLabel: boolean };
 
 export const ChatRoster = memo(ChatRosterImpl);

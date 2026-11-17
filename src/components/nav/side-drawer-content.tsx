@@ -189,7 +189,20 @@ function sameRoster(a: readonly PublicBot[], b: readonly PublicBot[]): boolean {
  * however late A's read lands.
  */
 type OwnedRoster = { gatewayId: string; bots: PublicBot[] };
-type OwnedTeamNote = { gatewayId: string; message: string; retryable: boolean };
+/**
+ * What a press on the line under the team does: re-read the roster, or re-open
+ * the Bot whose tap failed. Both are the operator's one way forward from the
+ * note, so neither is written as a dead end.
+ */
+type TeamNoteRetry = { kind: 'read' } | { kind: 'open'; bot: PublicBot };
+type OwnedTeamNote = { gatewayId: string; message: string; retry: TeamNoteRetry };
+
+/**
+ * How long a failed tap's line stays under the list. Long enough to read and
+ * press again; short enough that a line about one tap does not outlive the
+ * moment and read as a fact about the team.
+ */
+export const DRAWER_TEAM_NOTE_TTL_MS = 10_000;
 
 /** Nothing to draw while the displayed roster belongs to another gateway. */
 const NO_TEAM: readonly PublicBot[] = [];
@@ -435,9 +448,9 @@ const TeamSection = memo(function TeamSection({
   team: readonly PublicBot[];
   /** Stable across activity events that change nobody's presence. */
   presence: ReadonlyMap<string, TeamPresence>;
-  note: { message: string; retryable: boolean } | null;
+  note: { message: string; retry: TeamNoteRetry } | null;
   onPressBot: (bot: PublicBot) => void;
-  onRetry: () => void;
+  onRetry: (retry: TeamNoteRetry) => void;
 }) {
   return (
     <View style={styles.section}>
@@ -448,21 +461,15 @@ const TeamSection = memo(function TeamSection({
         <TeamRow key={bot.id} bot={bot} presence={presence.get(bot.id)} onPress={onPressBot} />
       ))}
       {note ? (
-        note.retryable ? (
-          <PressableScale
-            onPress={onRetry}
-            accessibilityRole="button"
-            accessibilityLabel={`${note.message}. Tap to retry.`}
-            style={styles.teamNote}>
-            <Text variant="caption" color="secondary">
-              {note.message} · tap to retry
-            </Text>
-          </PressableScale>
-        ) : (
-          <Text variant="caption" color="secondary" style={styles.teamNote}>
-            {note.message}
+        <PressableScale
+          onPress={() => onRetry(note.retry)}
+          accessibilityRole="button"
+          accessibilityLabel={`${note.message.replace(/\.$/, '')}. Try again.`}
+          style={styles.teamNote}>
+          <Text variant="caption" color="secondary">
+            {note.message} · Try again
           </Text>
-        )
+        </PressableScale>
       ) : null}
     </View>
   );
@@ -559,9 +566,10 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
   const [roster, setRoster] = useState<OwnedRoster | null>(null);
   // The line under the team list: a refused read keeps the last roster and says
   // so instead of leaving an empty section, and a refused tap says which Bot
-  // would not open. Only the read carries a retry, because the row itself is
-  // the retry for a tap. It names the gateway it describes, so A's refusal or
-  // A's failed tap is never painted beside B's team.
+  // would not open. Both carry "Try again" — the read re-reads the roster, the
+  // tap re-opens that Bot — because a line an operator cannot act on is just an
+  // apology. It names the gateway it describes, so A's refusal or A's failed
+  // tap is never painted beside B's team.
   const [teamNote, setTeamNote] = useState<OwnedTeamNote | null>(null);
   const [retryTick, setRetryTick] = useState(0);
   // When this drawer's last live read ran, and for which gateway — the ledger
@@ -678,7 +686,7 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
         // reason stays on the provider's own status line; this line is the
         // drawer admitting it is out of date. Named for the gateway it is
         // about: B's refusal must not surface beside A's team, or the reverse.
-        setTeamNote({ gatewayId, message: "Couldn't refresh your team", retryable: true });
+        setTeamNote({ gatewayId, message: "Couldn't refresh your team", retry: { kind: 'read' } });
       });
     return () => {
       cancelled = true;
@@ -687,8 +695,19 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
 
   const retryTeam = useCallback(() => {
     rosterReadAtRef.current = null;
+    setTeamNote(null);
     setRetryTick((tick) => tick + 1);
   }, []);
+
+  // A failed tap's line is about one moment, so it also leaves on its own. The
+  // timer is keyed on the note itself: a second failure replaces the note,
+  // cancelling this timer and starting a fresh ten seconds. A read refusal
+  // keeps its line until the next read — it describes the list, not a gesture.
+  useEffect(() => {
+    if (teamNote === null || teamNote.retry.kind !== 'open') return;
+    const timer = setTimeout(() => setTeamNote(null), DRAWER_TEAM_NOTE_TTL_MS);
+    return () => clearTimeout(timer);
+  }, [teamNote]);
 
   const go = useCallback(
     (href: NavHref) => {
@@ -727,15 +746,31 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
       if (gatewayIdRef.current !== pressedOn) return;
       if (!outcome.ok) {
         // The drawer stays open: a failed tap used to leave the operator on the
-        // previous Bot's chat with nothing said. Named for the gateway whose
+        // previous Bot's chat with nothing said. The line carries the Bot so
+        // "Try again" is the same open, not a guess. Named for the gateway whose
         // row was pressed, so a switch does not carry the complaint along.
-        setTeamNote({ gatewayId: pressedOn, message: outcome.reason, retryable: false });
+        setTeamNote({ gatewayId: pressedOn, message: outcome.reason, retry: { kind: 'open', bot } });
         return;
       }
+      // A Bot that opened is the end of any earlier complaint about one that
+      // did not, wherever this drawer currently sits.
+      setTeamNote(null);
       propsRef.current.navigation.closeDrawer();
       router.push('/chat');
     },
     [gatewayId, openBot, requestSurface, router],
+  );
+
+  // One line, two retries: the read re-reads the roster; a failed tap re-opens
+  // the Bot it names. Both clear the line first so a second attempt is not
+  // painted under the first attempt's verdict.
+  const retryNote = useCallback(
+    (retry: TeamNoteRetry) => {
+      setTeamNote(null);
+      if (retry.kind === 'read') retryTeam();
+      else void openTeammate(retry.bot);
+    },
+    [openTeammate, retryTeam],
   );
 
   // A fresh conversation with no Bot in between — the drawer's first answer
@@ -790,7 +825,7 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
             presence={presence}
             note={visibleTeamNote}
             onPressBot={openTeammate}
-            onRetry={retryTeam}
+            onRetry={retryNote}
           />
         ) : null}
       </DrawerContentScrollView>

@@ -17,10 +17,16 @@ jest.mock('expo-local-authentication', () => ({
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as LocalAuthentication from 'expo-local-authentication';
+import { Platform } from 'react-native';
 
 import {
+  APP_LOCK_COVER_BODY,
   APP_LOCK_STORAGE_KEY,
+  APP_LOCK_SUMMARY,
+  appLockBiometricCopy,
+  appLockCoverBodyFor,
   appLockFromStored,
+  appLockSummaryFor,
   appLockUnavailableCopy,
   appLockUnavailableReason,
   heldRouteHref,
@@ -103,10 +109,46 @@ describe('appLockUnavailableCopy', () => {
     expect(appLockUnavailableCopy('unsupported')).not.toBe(appLockUnavailableCopy('not-enrolled'));
   });
 
-  test('neither line pretends the lock is on', () => {
-    for (const reason of ['unsupported', 'not-enrolled'] as const) {
-      expect(appLockUnavailableCopy(reason)).not.toMatch(/locked|lock is on/i);
+  test('neither line pretends the lock is on, on either platform', () => {
+    for (const platform of ['ios', 'android']) {
+      for (const reason of ['unsupported', 'not-enrolled'] as const) {
+        expect(appLockUnavailableCopy(reason, platform)).not.toMatch(/locked|lock is on/i);
+      }
     }
+  });
+});
+
+describe('the lock copy names the prompt the platform actually shows', () => {
+  test('iOS asks for Face ID with the passcode as its fallback', () => {
+    expect(appLockBiometricCopy('ios')).toBe('Face ID or your passcode');
+    expect(appLockSummaryFor('ios')).toBe(
+      'Ask for Face ID or your passcode when Versutus opens. Kept on this device.',
+    );
+    expect(appLockCoverBodyFor('ios')).toBe(
+      'Unlock with Face ID or your passcode to reach your gateways.',
+    );
+  });
+
+  test('Android speaks of the fingerprint, face or screen lock — never Face ID', () => {
+    expect(appLockBiometricCopy('android')).toBe('your fingerprint, face or screen lock');
+    expect(appLockSummaryFor('android')).toContain('your fingerprint, face or screen lock');
+    expect(appLockCoverBodyFor('android')).toContain('your fingerprint, face or screen lock');
+    for (const copy of [
+      appLockSummaryFor('android'),
+      appLockCoverBodyFor('android'),
+      appLockUnavailableCopy('not-enrolled', 'android'),
+      appLockUnavailableCopy('unsupported', 'android'),
+    ]) {
+      expect(copy).not.toMatch(/Face ID/i);
+      expect(copy).not.toMatch(/passcode/i);
+    }
+  });
+
+  test('the shared constants are the running platform\'s copy, not a fixed one', () => {
+    // The Settings row and the cover import the constants; the function and the
+    // constant must agree, or one surface would speak for the other platform.
+    expect(APP_LOCK_SUMMARY).toBe(appLockSummaryFor(Platform.OS));
+    expect(APP_LOCK_COVER_BODY).toBe(appLockCoverBodyFor(Platform.OS));
   });
 });
 
@@ -426,7 +468,7 @@ describe('the gate and its switch', () => {
   test('iOS is told why Face ID is being asked for', () => {
     // Without this key expo-local-authentication falls back to the device
     // passcode on a Face ID iPhone (v57 docs), which the summary's "Face ID or
-    // your fingerprint" line would then be claiming wrongly.
+    // your passcode" line would then be claiming wrongly.
     const app = readSource('app.json');
     expect(app).toContain('NSFaceIDUsageDescription');
   });

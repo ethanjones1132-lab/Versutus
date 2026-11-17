@@ -379,7 +379,7 @@ describe('the drawer roster read', () => {
     expect(texts(renderer!)).toContain('cached');
     // ...and the drawer admits it is out of date, with a way forward.
     expect(texts(renderer!)).toContain("Couldn't refresh your team");
-    expect(texts(renderer!)).toContain('tap to retry');
+    expect(texts(renderer!)).toContain('Try again');
   });
 
   test('a first read that never succeeds still leaves a line on screen', async () => {
@@ -398,7 +398,7 @@ describe('the drawer roster read', () => {
     expect(texts(renderer!)).toContain("Couldn't refresh your team");
 
     mockEnv.listBots.mockResolvedValue([bot('forge')]);
-    await pressLabel(renderer!, 'Tap to retry');
+    await pressLabel(renderer!, 'Try again');
     await settle();
 
     expect(texts(renderer!)).toContain('forge');
@@ -555,5 +555,48 @@ describe('tapping a teammate', () => {
     expect(mockEnv.closeDrawer).not.toHaveBeenCalled();
     expect(mockEnv.push).not.toHaveBeenCalled();
     expect(texts(renderer!)).toContain("Couldn't open forge.");
+  });
+
+  test('a failed tap offers Try again, and the retry opens that same Bot', async () => {
+    mockEnv.listBots.mockResolvedValue([bot('forge')]);
+    mockEnv.openBot.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    await mount();
+
+    await pressLabel(renderer!, 'Chat with forge');
+    await settle();
+
+    // The refusal names the Bot, and the line is not a dead end: the retry is
+    // the same open, not a read of the roster.
+    expect(texts(renderer!)).toContain("Couldn't open forge.");
+    expect(texts(renderer!)).toContain('Try again');
+
+    await pressLabel(renderer!, 'Try again');
+    await settle();
+
+    expect(mockEnv.openBot).toHaveBeenCalledTimes(2);
+    expect(mockEnv.openBot).toHaveBeenLastCalledWith('forge');
+    expect(mockEnv.listBots).toHaveBeenCalledTimes(1);
+    // A Bot that opened is the end of the complaint about the one that did not.
+    expect(mockEnv.closeDrawer).toHaveBeenCalledTimes(1);
+    expect(mockEnv.push).toHaveBeenCalledWith('/chat');
+    expect(texts(renderer!)).not.toContain("Couldn't open forge.");
+  });
+
+  test("a failed tap's line leaves after ten seconds on its own", async () => {
+    mockEnv.listBots.mockResolvedValue([bot('forge')]);
+    mockEnv.openBot.mockResolvedValue(false);
+    await mount();
+
+    await pressLabel(renderer!, 'Chat with forge');
+    await settle();
+    expect(texts(renderer!)).toContain("Couldn't open forge.");
+
+    // Long enough to read and press, then gone — a line under the list that
+    // outlives the tap reads as a fact about the team.
+    await advance(9_000);
+    expect(texts(renderer!)).toContain("Couldn't open forge.");
+    await advance(1_000);
+    expect(texts(renderer!)).not.toContain("Couldn't open forge.");
+    expect(mockEnv.closeDrawer).not.toHaveBeenCalled();
   });
 });

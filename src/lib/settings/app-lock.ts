@@ -19,19 +19,40 @@
 // hold on a route it brought down is composed here too, so what the unlock
 // re-opens is a rule a case can call rather than a string built in a screen.
 
+import { Platform } from 'react-native';
+
 import { keyValueStorage } from '@/lib/storage/key-value';
 
 export const APP_LOCK_STORAGE_KEY = 'versutus:app-lock';
 
 export const APP_LOCK_LABEL = 'App lock';
 
-export const APP_LOCK_SUMMARY =
-  'Ask for Face ID or your fingerprint when Versutus opens. Kept on this device.';
+/**
+ * What the device's own prompt actually asks for, in the words each platform
+ * uses. iOS offers Face ID with the passcode as its fallback; Android's
+ * biometric prompt covers a fingerprint, face or the device's screen lock.
+ * Platform.OS decides by default, so every caller that says nothing keeps the
+ * copy its own platform promises.
+ */
+export function appLockBiometricCopy(platform: string = Platform.OS): string {
+  return platform === 'ios' ? 'Face ID or your passcode' : 'your fingerprint, face or screen lock';
+}
+
+/** The Settings row's one line, per platform. */
+export function appLockSummaryFor(platform: string = Platform.OS): string {
+  return `Ask for ${appLockBiometricCopy(platform)} when Versutus opens. Kept on this device.`;
+}
+
+/** The cover's one line while the app is shut, per platform. */
+export function appLockCoverBodyFor(platform: string = Platform.OS): string {
+  return `Unlock with ${appLockBiometricCopy(platform)} to reach your gateways.`;
+}
+
+export const APP_LOCK_SUMMARY = appLockSummaryFor();
 
 export const APP_LOCK_COVER_TITLE = 'Versutus is locked';
 
-export const APP_LOCK_COVER_BODY =
-  'Unlock with Face ID or your fingerprint to reach your gateways.';
+export const APP_LOCK_COVER_BODY = appLockCoverBodyFor();
 
 export const APP_LOCK_UNLOCK_LABEL = 'Unlock';
 
@@ -68,11 +89,23 @@ export function appLockUnavailableReason(
   return null;
 }
 
-/** The one line each reason prints where the switch cannot go. */
-export function appLockUnavailableCopy(reason: AppLockUnavailableReason): string {
+/**
+ * The one line each reason prints where the switch cannot go. Same platform
+ * split as the summary: an Android phone has no Face ID to offer, and an iPhone
+ * has no fingerprint reader on the models this app targets.
+ */
+export function appLockUnavailableCopy(
+  reason: AppLockUnavailableReason,
+  platform: string = Platform.OS,
+): string {
+  if (platform === 'ios') {
+    return reason === 'not-enrolled'
+      ? 'No Face ID or fingerprint is enrolled on this device. Enroll one in the device settings to use the lock.'
+      : 'This device cannot ask for Face ID or a fingerprint.';
+  }
   return reason === 'not-enrolled'
-    ? 'No Face ID or fingerprint is enrolled on this device. Enroll one in the device settings to use the lock.'
-    : 'This device cannot ask for Face ID or a fingerprint.';
+    ? 'No fingerprint, face or screen lock is set on this device. Set one up in the device settings to use the lock.'
+    : 'This device cannot check your fingerprint, face or screen lock.';
 }
 
 /**
