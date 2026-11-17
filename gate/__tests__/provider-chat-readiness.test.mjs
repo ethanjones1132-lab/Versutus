@@ -17,7 +17,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((r) => rm(r, { recursive: true, force: true })));
 });
 
-async function makeService() {
+async function makeService({ models = [] } = {}) {
   const gateHome = await mkdtemp(join(tmpdir(), 'gate-readiness-'));
   roots.push(gateHome);
   await mkdir(join(gateHome, 'config', 'providers'), { recursive: true });
@@ -38,10 +38,25 @@ async function makeService() {
   const store = new ProviderStore(gateHome);
   await store.put(
     (await store.get('zen')).config,
-    { auth: { state: 'ready' }, readiness: { state: 'ready', checkedAt: new Date().toISOString() } },
+    {
+      auth: { state: 'ready' },
+      readiness: { state: 'ready', checkedAt: new Date().toISOString() },
+      // What this provider carries is half of what tells a model-level 404
+      // from the endpoint answering with one, so a test that means the former
+      // has to put the model on the record first.
+      catalog: {
+        source: models.length ? 'live' : 'legacy_bootstrap',
+        state: models.length ? 'fresh' : 'unavailable',
+        generation: models.length ? 1 : 0,
+        ...(models.length ? { observedAt: new Date().toISOString() } : {}),
+        models,
+      },
+    },
   );
   return new ProviderService({ store, vault: { get: async () => 'k', set: async () => {}, delete: async () => {} } });
 }
+
+const LLAMA = { providerId: 'zen', id: 'llama-3.1-8b', label: 'Llama 3.1 8B', available: true };
 
 test('a 401 from a real chat turns a "ready" provider unavailable', async () => {
   const service = await makeService();
@@ -126,20 +141,96 @@ test('a concurrent 401 then 429 preserves the re-auth need', async () => {
   assert.equal(after.auth.state, 'needs_reauth');
 });
 
-test('a chat 404 for a model the provider does not carry never reaches the card', async () => {
-  const service = await makeService();
+test('a chat 404 for a model the provider lists never reaches the card', async () => {
+  // The requested model is on this provider's own catalog, so the 404 is the
+  // vendor refusing that model -- a model it has since retired, as in the
+  // NVIDIA case -- not the provider failing. The card keeps the verdict it
+  // earned: a model this vendor will not serve is not evidence about it.
+  const service = await makeService({ models: [LLAMA] });
   const missing = new Error('chat failed: 404 - model not found');
   missing.status = 404;
+  missing.model = LLAMA.id;
   await service.noteChatOutcome('zen', missing);
 
   const after = (await service.store.get('zen')).state;
-  // The turn is still recorded, but the provider keeps the verdict it earned:
-  // a model this vendor does not carry is not evidence about the provider.
+  // The turn is still recorded, but the provider keeps the verdict it earned.
   assert.equal(after.readiness.state, 'ready');
   assert.equal(after.readiness.code, undefined);
   assert.equal(after.auth.state, 'ready');
   assert.equal(after.lastError, undefined);
   assert.equal(after.lastChatOutcome.ok, false);
+});
+
+test('a model-scoped 404 named only in the vendor body leaves the card alone', async () => {
+  // No requested model on the error: the vendor's own explanation is the only
+  // evidence, and it names a model this provider carries.
+  const service = await makeService({ models: [LLAMA] });
+  const vetoed = new Error(`chat failed: 404 — {"error":{"message":"The model '${LLAMA.id}' does not exist"}}`);
+  vetoed.status = 404;
+  await service.noteChatOutcome('zen', vetoed);
+
+  const after = (await service.store.get('zen')).state;
+  assert.equal(after.readiness.state, 'ready');
+  assert.equal(after.auth.state, 'ready');
+  assert.equal(after.lastError, undefined);
+  assert.equal(after.lastChatOutcome.ok, false);
+});
+
+test('a 404 that names no model the provider lists is the endpoint answering', async () => {
+  // A wrong base URL or chat path: nothing on the record names a model, so
+  // there is no reason to read the 404 as a model verdict. The card has to say
+  // the provider is failing, or the operator is never told the route is wrong.
+  const service = await makeService();
+  const wrongRoute = new Error('chat failed: 404 — <html><body><h1>404 Not Found</h1></body></html>');
+  wrongRoute.status = 404;
+  await service.noteChatOutcome('zen', wrongRoute);
+
+  const after = (await service.store.get('zen')).state;
+  assert.notEqual(after.readiness.state, 'ready');
+  assert.equal(after.readiness.code, 'transient_network');
+  assert.equal(after.lastError.code, 'transient_network');
+  assert.match(after.lastError.message, /404/);
+  assert.equal(after.lastChatOutcome.ok, false);
+});
+
+test('a 404 naming a model this provider does not list is a provider fault', async () => {
+  // The catalog is the record of what the provider carries. A 404 naming a
+  // model outside it -- or a bare 404 beside a populated catalog -- is the
+  // route answering, not that model being refused.
+  const service = await makeService({ models: [LLAMA] });
+  const elsewhere = new Error('chat failed: 404 — model "gpt-4o-mini" not found');
+  elsewhere.status = 404;
+  elsewhere.model = 'gpt-4o-mini';
+  await service.noteChatOutcome('zen', elsewhere);
+
+  const after = (await service.store.get('zen')).state;
+  assert.notEqual(after.readiness.state, 'ready');
+  assert.equal(after.lastError.code, 'transient_network');
+});
+
+test('a chat error carries the model the turn named, so a model-level 404 stays off the card', async () => {
+  // The end-to-end shape: the adapter throws a bare 404, `ProviderService.chat`
+  // records which model was asked for on the error, and the outcome classifier
+  // reads that against the catalog.
+  const service = await makeService({ models: [LLAMA] });
+  service.adapters.zen = {
+    chat: async () => {
+      throw Object.assign(new Error('chat failed: 404'), { status: 404 });
+    },
+  };
+
+  let caught;
+  try {
+    await service.chat({ providerId: 'zen', model: LLAMA.id, messages: [] });
+  } catch (error) {
+    caught = error;
+  }
+  assert.equal(caught.model, LLAMA.id);
+
+  await service.noteChatOutcome('zen', caught);
+  const after = (await service.store.get('zen')).state;
+  assert.equal(after.readiness.state, 'ready');
+  assert.equal(after.lastError, undefined);
 });
 
 test('a failed outcome never poisons the per-provider queue', async () => {

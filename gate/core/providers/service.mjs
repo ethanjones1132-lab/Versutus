@@ -306,11 +306,13 @@ export class ProviderService {
         nextState.readiness = { state: 'ready', checkedAt: outcome.at };
         nextState.lastError = undefined;
       }
-    } else if (!isModelScopedError(error)) {
-      // A 404 means the turn named a model this provider does not carry, which
-      // says nothing about whether the provider can serve turns. Only the turn
-      // is stamped (above); auth, readiness and lastError are left alone so the
-      // vendor's "model not found" never becomes the card's verdict.
+    } else if (!isModelScopedError(error, { models: record.state.catalog?.models })) {
+      // A 404 that names a model this provider lists is the request's problem,
+      // not the provider's, so only the turn is stamped (above) and auth,
+      // readiness and lastError are left alone. A 404 that names no listed
+      // model is the endpoint answering -- a wrong base URL or chat path, or a
+      // proxy in front of the vendor -- and that is a provider fault the card
+      // has to show, or the operator is never told the route is wrong.
       const code = classifyProviderError(error);
       nextState.auth = {
         ...(record.state.auth ?? {}),
@@ -437,7 +439,19 @@ export class ProviderService {
       error.code = ProviderErrorCodes.missing_credentials;
       throw error;
     }
-    return this.adapterFor(request.providerId, record.config).chat(request, signal);
+    try {
+      return await this.adapterFor(request.providerId, record.config).chat(request, signal);
+    } catch (error) {
+      // The outcome is recorded from this error alone, and which model the
+      // turn named is half of what tells a model-level 404 from the endpoint
+      // answering with one (see `isModelScopedError`). Attached to the error
+      // the adapter threw, so every reader downstream sees the same request
+      // the turn carried; nothing about the request itself changes.
+      if (error && typeof error === 'object' && error.model === undefined && request.model !== undefined) {
+        error.model = request.model;
+      }
+      throw error;
+    }
   }
 
   async inspect(record) {
