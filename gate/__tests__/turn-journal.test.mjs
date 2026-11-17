@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, readdir, readdir as nodeReaddir, rm, writeFil
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { createTurnJournal } from '../core/turns/turn-journal.mjs';
+import { createTurnJournal, GATE_RESTART_FRAME } from '../core/turns/turn-journal.mjs';
 
 // The journal is the contract of docs/design/durable-turns.md 3.2: a turn's
 // frames on disk, in order, with a meta line that says how it ended — so a
@@ -341,6 +341,22 @@ test('recoverInterrupted settles every turn the journal still shows as running',
     assert.equal(known.reason, 'gate_restart');
     assert.equal(known.text, 'half an ans', 'what it did manage to say is still readable');
     assert.equal((await second.get('phone-a', 'turn-done')).status, 'done', 'a finished turn is not disturbed');
+
+    // A phone that re-subscribes to the recovered turn is told why it stopped,
+    // in the same frame `endByGate` writes, after the half answer it had seen.
+    // Without it the replay looks like a reply that simply ended.
+    const replayed = [];
+    const stop = await second.subscribe('phone-a', 'turn-stuck', 0, (event) => {
+      if (event) replayed.push(event);
+    });
+    stop?.();
+    assert.deepEqual(
+      replayed.map((event) => event.data),
+      [delta('half an ans'), GATE_RESTART_FRAME],
+      `a recovered turn replays its restart: ${replayed.map((event) => event.data).join(' | ')}`,
+    );
+    assert.equal(replayed.at(-1).seq, 2, 'the restart frame follows the frames already on disk');
+
     assert.deepEqual(await second.recoverInterrupted(), [], 'settling them twice is not a thing');
   } finally {
     await clean(dir);

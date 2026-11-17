@@ -744,6 +744,19 @@ test('a Gate that starts over settles the turn the last process left running', a
       assert.equal(body.text, 'half an ', 'what it did manage to say is still readable');
       const listed = await (await fetch(`${restarted.base}/v1/turns`, { headers: auth(restarted.gate) })).json();
       assert.deepEqual(listed.data.map((meta) => meta.turnId), [TURN_ID]);
+
+      // A phone that reattaches to the recovered turn replays the same ending a
+      // restart gave a turn it was still watching: the error frame, and no
+      // `[DONE]` that would finalise the half answer as complete.
+      const replay = await (await fetch(`${restarted.base}/v1/turns/${TURN_ID}/events?after=0`, {
+        headers: auth(restarted.gate),
+      })).text();
+      assert.match(replay, /gate_restart/);
+      assert.match(replay, /The Gate restarted while this turn was running\./);
+      assert.ok(
+        !replay.includes('[DONE]'),
+        `a recovered turn must not end as a clean completion: ${replay}`,
+      );
     } finally {
       await restarted.close();
     }

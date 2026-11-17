@@ -66,6 +66,19 @@ function renameWithRetry(io, from, to) {
   }
 
 /**
+ * The frame that says the Gate restarted while a turn was running.
+ *
+ * One shape for both writers: an attached turn's `endByGate` and the recovery
+ * that settles a turn the previous process left running. A phone that comes back
+ * to a recovered turn is told the same thing it would have been told had it
+ * still been listening, and the stream parser can never mistake the half answer
+ * for a complete one.
+ */
+export const GATE_RESTART_FRAME = JSON.stringify({
+  error: { code: 'gate_restart', message: 'The Gate restarted while this turn was running.' },
+});
+
+/**
  * Caller ids and turn ids end up as path segments, and a turn id arrives from
  * any API caller, so every segment is reduced to a safe charset before it
  * touches the disk. Same reduction as the run archive and the run streams.
@@ -359,6 +372,55 @@ export function createTurnJournal({
       // No file yet (or it was never persisted): the meta line is all there is.
     }
     writeWholeFileAtomic(path, `${JSON.stringify(meta)}\n${events ? `${events}\n` : ''}`);
+  }
+
+  /**
+   * Settle a turn whose owning process is gone, and record why, in one write.
+   *
+   * The frame is part of the same atomic rewrite as the status change: a reader
+   * never finds an interrupted turn that does not also carry the frame saying
+   * so, and a recovery cannot append the frame twice.
+   *
+   * The file is read whole here, unlike the meta-only reads the sweep does: the
+   * frame's sequence number has to follow the last frame actually on disk
+   * (`meta.lastSeq` is only rewritten when a turn ends), and a phone reattaching
+   * with `after=<last seen>` drops anything at or below it. The read cap and the
+   * dropped-frame count are the same ones a replay applies, so recovery cannot
+   * leave a file past the turn's bound.
+   */
+  function settleInterrupted(path, meta, finishedAt) {
+    const events = [];
+    try {
+      for (const line of io.readFileSync(path, 'utf8').split('\n').slice(1)) {
+        if (line.trim().length === 0) continue;
+        try {
+          const event = JSON.parse(line);
+          if (typeof event?.seq === 'number' && typeof event.data === 'string') events.push(event);
+        } catch {
+          // Torn frame from the crash that left the turn running: drop it.
+        }
+      }
+    } catch {
+      // No readable file: the meta line and the frame are all there is to write.
+    }
+    const lastSeq = events.reduce(
+      (max, event) => Math.max(max, event.seq),
+      Number.isInteger(meta.lastSeq) ? meta.lastSeq : 0,
+    );
+    const ending = { seq: lastSeq + 1, t: finishedAt, data: GATE_RESTART_FRAME };
+    const kept = boundEvents([...events, ending]);
+    const shed = events.length + 1 - kept.length;
+    const settled = {
+      ...meta,
+      status: 'interrupted',
+      reason: 'gate_restart',
+      lastSeq: ending.seq,
+      finishedAt,
+      updatedAt: finishedAt,
+      ...(shed > 0 ? { droppedEvents: (meta.droppedEvents ?? 0) + shed } : {}),
+    };
+    writeWholeFileAtomic(path, fileContents(settled, kept));
+    return settled;
   }
 
   /**
@@ -861,7 +923,8 @@ async cancel(callerId, turnId) {
      *
      * Meta lines only, for the same reason the sweep is: a startup that read
      * every retained turn whole to learn one word of each is a startup nobody
-     * waits for.
+     * waits for. A turn that must be settled is read whole, once, because its
+     * ending frame has to be numbered after the frames already on disk.
      */
     async recoverInterrupted() {
       const recovered = [];
@@ -885,14 +948,11 @@ async cancel(callerId, turnId) {
           const meta = readMetaLine(path);
           if (!meta || meta.status !== 'running') continue;
           const finishedAt = now();
-          const settled = {
-            ...meta,
-            status: 'interrupted',
-            reason: 'gate_restart',
-            finishedAt,
-            updatedAt: finishedAt,
-          };
-          rewriteMeta(path, settled);
+          // The error frame goes on the record with the status, so a phone that
+          // reattaches replays the reason the turn stopped instead of a half
+          // answer that ends as if it were complete. This is the same frame
+          // `endByGate` writes for an attached turn.
+          const settled = settleInterrupted(path, meta, finishedAt);
           const row = rowFor(caller.name, settled, path);
           index.set(row.key, row);
           recovered.push({

@@ -14,7 +14,7 @@ import { buildManifest } from './manifest.mjs';
 import { tailnetIpv4FromInterfaces } from './reachability.mjs';
 import { createSerialReload, createDebouncedReload } from './serial-reload.mjs';
 import { createSessionIndex, parseSessionIndexKey, sessionIndexKey } from './session-index.mjs';
-import { createTurnJournal } from './turns/turn-journal.mjs';
+import { createTurnJournal, GATE_RESTART_FRAME } from './turns/turn-journal.mjs';
 import { toGatewaySession } from './cli-environments/backends/hermes.mjs';
 import { ProviderStore } from './providers/store.mjs';
 import { migrateLegacyProviders } from './providers/migrate-v1.mjs';
@@ -236,11 +236,6 @@ function lastUserFiles(messages = []) {
   return null;
 }
 
-/** The frame every attached turn is ended with when the Gate itself goes down. */
-const GATE_RESTART_FRAME = JSON.stringify({
-  error: { code: 'gate_restart', message: 'The Gate restarted while this turn was running.' },
-});
-
 /** How the Gate says it ended a turn itself, per reason (design 3.4). */
 const GATE_STOP_FRAMES = {
   stalled: {
@@ -298,6 +293,10 @@ async function replayTurnStream(journal, callerId, turnId, res, {
   startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
   let ended = false;
   let unsubscribe = () => {};
+  // The last frame a replay carried: a turn that was recovered after a Gate
+  // restart ends on the restart error frame, and must not then be given the
+  // `[DONE]` that means "complete".
+  let lastFrame = null;
   // The phone leaving a replay releases the subscription and touches nothing
   // else: the turn keeps running, and the journal is there to replay again.
   res.on('close', () => { ended = true; unsubscribe(); });
@@ -305,10 +304,16 @@ async function replayTurnStream(journal, callerId, turnId, res, {
     if (ended) return;
     if (!event) {
       ended = true;
-      res.write('data: [DONE]\n\n');
+      // Same ending `finishStream` gives a turn that was still attached when the
+      // Gate went down: the error frame is the last thing the phone sees, and a
+      // `[DONE]` after a half answer would finalise it as a success.
+      if (known.reason !== 'gate_restart' && lastFrame !== GATE_RESTART_FRAME) {
+        res.write('data: [DONE]\n\n');
+      }
       res.end();
       return;
     }
+    lastFrame = event.data;
     res.write(`id: ${event.seq}\ndata: ${event.data}\n\n`);
   });
   // A phone that left while the replay was still reading the file would
