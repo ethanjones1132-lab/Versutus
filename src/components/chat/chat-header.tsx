@@ -335,7 +335,16 @@ const styles = StyleSheet.create({
     gap: Spacing.one,
     paddingHorizontal: Spacing.one,
   },
+  // The live control is not an icon circle: it carries a clock ("0:12",
+  // "1:04:12") or "On a call with <Bot>". It therefore owns its width —
+  // natural, but never below the room a mm:ss caption needs beside the dot
+  // (8 dot + 4 gap + ~48 clock + 8 padding) and never shrinking, so the
+  // clock is not cut to "0:…" the way the shared 40 pt circle cut it. The
+  // title block yields first instead (see `identity`/`titles` below).
   liveCallControl: {
+    width: 'auto',
+    minWidth: 72,
+    flexShrink: 0,
     maxWidth: 156,
   },
   callText: {
@@ -346,9 +355,11 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
+    flexShrink: 0,
   },
   identity: {
     flex: 1,
+    flexShrink: 1,
     minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
@@ -357,11 +368,13 @@ const styles = StyleSheet.create({
   },
   titles: {
     flex: 1,
+    flexShrink: 1,
     minWidth: 0,
     gap: 1,
   },
   titlePress: {
     alignSelf: 'flex-start',
+    flexShrink: 1,
     maxWidth: '100%',
     justifyContent: 'center',
   },
