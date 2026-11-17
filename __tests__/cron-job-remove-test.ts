@@ -207,10 +207,12 @@ describe('cron job sheet remove', () => {
   });
 
   test("gateway-methods dispatches 'jobs.remove' to removeJob on the resolved backend", () => {
-    // The Gate's RPC dispatch for jobs.remove is a one-liner that hands the
-    // jobId to the backend's removeJob — same shape as jobs.run / jobs.pause.
+    // The Gate's RPC dispatch for jobs.remove hands the jobId to the backend's
+    // removeJob — same shape as jobs.run / jobs.pause. Since VS-120 a Gate-owned
+    // scheduler answers first for backends with no cron of their own (Claude
+    // Code, Codex, OpenCode); every other backend still gets the fronted call.
     const src = readGatewayMethodsSource();
-    expect(src).toMatch(/'jobs\.remove':\s*\(params\)\s*=>\s*via\(getBackend,\s*params,\s*'removeJob',\s*\(b\)\s*=>\s*b\.removeJob\(jobIdOf\(params\)\)\)/);
+    expect(src).toMatch(/'jobs\.remove':\s*async\s*\(params\)\s*=>\s*\{\s*const scheduler = await schedulerFor\(params\);\s*return scheduler \? scheduler\.removeJob\(jobIdOf\(params\)\) : via\(getBackend,\s*params,\s*'removeJob',\s*\(b\)\s*=>\s*b\.removeJob\(jobIdOf\(params\)\)\);/);
   });
 
   test('the Hermes backend posts DELETE /api/jobs/{id} mirroring deleteSession', () => {
