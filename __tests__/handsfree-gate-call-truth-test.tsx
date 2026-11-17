@@ -317,6 +317,14 @@ describe('a Gate call whose link never comes up', () => {
       }),
     );
     expect(mockNative.startSession).toHaveBeenCalledTimes(1);
+    // The call's own thread rides to the native session as the app's own link,
+    // so a tap on the ongoing notification opens that Bot's chat.
+    expect(mockNative.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Hermes',
+        openUrl: 'versutus://chat?bot=hermes',
+      }),
+    );
     expect(mockMediaStarts).toHaveLength(1);
     expect(latest().phase).toBe('listening');
   });

@@ -147,9 +147,11 @@ describe('hands-free native contract', () => {
   });
 
   it('takes startSession options as a map on both platforms, matching the TS contract', () => {
-    expect(tsModule).toContain('startSession(options: { title: string; startId?: string })');
+    expect(tsModule).toContain('startSession(options: HandsfreeStartSessionOptions)');
+    expect(types).toMatch(/export type HandsfreeStartSessionOptions = \{[\s\S]*?openUrl\?: string;/);
     expect(kotlin).toMatch(/AsyncFunction\("startSession"\)\s*\{\s*options: Map<String, Any\?>, promise: Promise ->/);
     expect(kotlin).not.toMatch(/AsyncFunction\("startSession"\)\s*\{\s*title: String/);
+    expect(kotlin).toMatch(/AsyncFunction\("startSession"\)[\s\S]*?val openUrl = \(options\["openUrl"\] as\? String\)/);
     expect(swift).toMatch(/AsyncFunction\("startSession"\)\s*\{\s*\(options: \[String: Any\?\], promise: Promise\) in/);
     expect(swift).not.toMatch(/AsyncFunction\("startSession"\)\s*\{\s*\(title: String/);
   });

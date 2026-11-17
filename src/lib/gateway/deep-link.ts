@@ -47,6 +47,22 @@ export type DeepLinkTarget =
 
 const CALL_ENGINES: readonly DeepLinkCallEngine[] = ['auto', 'local', 'codex', 'phone'];
 
+/**
+ * The link that opens one Bot's Bot Chat — `versutus://chat?bot=<id>` — which is
+ * the inverse of the `chat` case [deepLinkTarget] answers, so a link built here
+ * is always one the shipped router opens. The ongoing call notification's tap
+ * is the producer: a call belongs to a thread, and this is how that thread
+ * travels to the native side.
+ *
+ * A thread with no Bot (the configurable surface) has no link of this kind, so
+ * it answers undefined and the caller keeps its own fallback rather than
+ * naming a thread this vocabulary cannot address.
+ */
+export function botChatLink(botId: string | undefined): string | undefined {
+  const id = (botId ?? '').trim();
+  return id ? `versutus://chat?bot=${encodeURIComponent(id)}` : undefined;
+}
+
 /** An absent or unknown engine is `auto`, never a guessed one. */
 function callEngine(value: string | undefined): DeepLinkCallEngine {
   return (CALL_ENGINES as readonly string[]).includes(value ?? '')

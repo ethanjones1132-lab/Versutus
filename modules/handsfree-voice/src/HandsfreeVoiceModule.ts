@@ -5,6 +5,7 @@ import type {
   HandsfreeGateMediaOptions,
   HandsfreeSpeakOptions,
   HandsfreeStartOutcome,
+  HandsfreeStartSessionOptions,
   HandsfreeVoiceModuleEvents,
 } from './HandsfreeVoice.types';
 
@@ -24,9 +25,10 @@ export declare class HandsfreeVoiceModule extends NativeModule<HandsfreeVoiceMod
   requestMicrophonePermission(): Promise<'granted' | 'denied' | 'unavailable'>;
   /**
    * Open a call session and promote the user-visible lifetime. `startId` names
-   * this attempt so a later `stopSession` can cancel exactly it.
+   * this attempt so a later `stopSession` can cancel exactly it; `openUrl` is
+   * the call's own thread, which the notification's tap opens.
    */
-  startSession(options: { title: string; startId?: string }): Promise<HandsfreeStartOutcome>;
+  startSession(options: HandsfreeStartSessionOptions): Promise<HandsfreeStartOutcome>;
   /** Begin recognizing one listening turn. Answers false if it could not start. */
   startListening(): Promise<boolean>;
   /** Stop the current recognition turn. */

@@ -20,6 +20,7 @@ import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
 import android.media.SoundPool
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -32,6 +33,7 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.Person
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import java.util.Locale
@@ -69,6 +71,13 @@ class HandsfreeCallService : Service() {
   private var tts: TextToSpeech? = null
   private var ttsReady = false
   private var speaking = false
+  /**
+   * True from the moment JS stops recognition to send the turn until the reply
+   * is spoken, the reply is skipped, or a new listen begins. It is the wait the
+   * notification names "Thinking": the service cannot see the send itself, only
+   * that it is no longer hearing and not yet speaking.
+   */
+  private var thinking = false
   private var speechGeneration = 0L
   private var queuedSpeech = mutableListOf<String>()
 
@@ -96,6 +105,37 @@ class HandsfreeCallService : Service() {
 
   /** The Bot/surface label the operator tapped Start on; a repost keeps it. */
   private var notificationTitle: String = ""
+
+  /**
+   * The link that opens this call's own chat, as JS named it when it started
+   * the session. Null keeps the notification's tap on the app's launch intent,
+   * which is what a build (or a thread) without a link has always done.
+   */
+  private var notificationOpenUrl: String? = null
+
+  /**
+   * The word the Gate itself named for this call (a Gate call's phases live on
+   * the Gate, not in the phone recognizer's flags), or null for a phone call
+   * and before the Gate's first phase frame.
+   */
+  private var gateWord: String? = null
+
+  /**
+   * True between the Gate media socket failing and the next frame of the new
+   * one. It is the notification's "Reconnecting" — the call is still up while
+   * its audio link is rebuilt, so it names that rather than a stale phase.
+   */
+  private var reconnecting = false
+
+  /** The word last posted, so a repeated Gate frame does not repost. */
+  private val notificationWord = HandsfreeCallWord()
+
+  /**
+   * When this call started, on the wall clock. Kept across every repost so the
+   * notification's chronometer counts from the call's first second instead of
+   * resetting each time the body changes.
+   */
+  private var callStartedAtMs = 0L
 
   private val audioManager: AudioManager
     get() = getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -150,7 +190,8 @@ class HandsfreeCallService : Service() {
       else -> {
         val title = intent?.getStringExtra(EXTRA_TITLE) ?: ""
         val attemptId = intent?.getStringExtra(EXTRA_START_ID)
-        startSession(title, attemptId, startId)
+        val openUrl = intent?.getStringExtra(EXTRA_OPEN_URL)
+        startSession(title, attemptId, startId, openUrl)
       }
     }
     return HandsfreeCallState.SERVICE_START_MODE
@@ -173,7 +214,12 @@ class HandsfreeCallService : Service() {
   // ── Session start ────────────────────────────────────────────────────────
 
   /** Opens the session and reports the outcome to the pending start. */
-  fun startSession(title: String, attemptId: String? = null, cmdStartId: Int = 0): Boolean {
+  fun startSession(
+    title: String,
+    attemptId: String? = null,
+    cmdStartId: Int = 0,
+    openUrl: String? = null,
+  ): Boolean {
     // Ownership is checked FIRST. A stale ACTION_START intent — one the module
     // already abandoned, or a retry superseded while it sat queued — must touch
     // nothing: not the service's owner field, not the call state, not the
@@ -193,7 +239,19 @@ class HandsfreeCallService : Service() {
       return false
     }
     HandsfreeGateMediaOwner.beginCall()
+    // The Gate media link is owned by the module, not this service: the service
+    // watches it for the phases the Gate names and for the socket dying under a
+    // call that is still up. Attached for the call's life, across reconnects.
+    HandsfreeGateMediaOwner.watch(gateMediaListener)
     notificationTitle = title
+    notificationOpenUrl = openUrl?.trim()?.takeIf { it.isNotEmpty() }
+    gateWord = null
+    reconnecting = false
+    notificationWord.reset()
+    // One baseline per call: every repost after this keeps the same start, so
+    // the call timer counts real call time.
+    callStartedAtMs = System.currentTimeMillis()
+    thinking = false
     try {
       startForegroundWithNotification(title)
       foregroundStarted = true
@@ -250,31 +308,141 @@ class HandsfreeCallService : Service() {
       muteIntent,
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
-    return NotificationCompat.Builder(this, CHANNEL_ID)
+    val caller = Person.Builder()
+      .setName(HandsfreeCallNotification.callerFor(title))
+      .setImportant(true)
+      .build()
+    // The timer's baseline is the call's own start, never the repost's, so the
+    // chronometer runs on through every phase change.
+    val startedAt = if (callStartedAtMs > 0L) callStartedAtMs else System.currentTimeMillis()
+    val builder = NotificationCompat.Builder(this, CHANNEL_ID)
       .setSmallIcon(android.R.drawable.ic_btn_speak_now)
       .setContentTitle(HandsfreeCallNotification.titleFor(title))
-      .setContentText(HandsfreeCallNotification.bodyFor(state.muted, listening, speaking))
+      // State words only: the lock screen says what the call is doing and never
+      // shows what was said or who said it.
+      .setContentText(stateWord())
       .setOngoing(true)
       .setSilent(true)
+      // Reposts change the body line and the timer only; none of them may buzz.
+      .setOnlyAlertOnce(true)
+      .setCategory(NotificationCompat.CATEGORY_CALL)
+      .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+      .setWhen(startedAt)
+      .setUsesChronometer(true)
       .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-      // End stays the terminal action, last; Mute/Unmute sits first, labelled
-      // with the state the tap will reach, and asks for that state through the
-      // service — the label follows what the service holds, never a guess.
+      .addPerson(caller)
+      // Mute/Unmute sits first, labelled with the state the tap will reach, and
+      // asks for that state through the service — the label follows what the
+      // service holds, never a guess.
       .addAction(0, HandsfreeCallNotification.muteActionLabelFor(state.muted), mutePending)
-      .run {
-        addAction(0, HandsfreeCallNotification.END_ACTION_LABEL, endPending)
-        build()
-      }
+    contentPending()?.let { builder.setContentIntent(it) }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      // CallStyle draws the notification as an ongoing call: the caller, a
+      // running call timer, the Mute action and the system's red Hang up
+      // button. The service already runs as a microphone foreground service, so
+      // this needs no phoneCall type and no full-screen-intent permission.
+      // forOngoingCall accepts up to two custom actions, so Mute fits beside it.
+      builder.setStyle(NotificationCompat.CallStyle.forOngoingCall(caller, endPending))
+    } else {
+      // Before Android 12 there is no call template; End stays a plain, last
+      // action so the notification keeps its full control set.
+      builder.addAction(0, HandsfreeCallNotification.END_ACTION_LABEL, endPending)
+    }
+    return builder.build()
+  }
+
+  /**
+   * Opens the call's own chat when the call notification is tapped.
+   *
+   * JS names the thread's own link when it starts the session, so the tap lands
+   * on the conversation the call is having rather than wherever the app was
+   * last left. The link is scoped to this package: it is this app's own
+   * `versutus://` vocabulary, so no other app may answer it, and a link this
+   * build cannot resolve falls back to the plain launch intent rather than a
+   * tap that does nothing.
+   */
+  private fun contentPending(): PendingIntent? {
+    val launch = callChatIntent() ?: packageManager.getLaunchIntentForPackage(packageName) ?: return null
+    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    return PendingIntent.getActivity(
+      this,
+      REQUEST_CODE_OPEN,
+      launch,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+  }
+
+  /** The call thread's own link as a VIEW intent for this app, when one resolves. */
+  private fun callChatIntent(): Intent? {
+    val url = notificationOpenUrl ?: return null
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).setPackage(packageName)
+    return if (packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY) != null) intent else null
   }
 
   /**
    * Reposts the ongoing notification as the call stands, so the body line the
-   * operator reads while backgrounded follows mute, speech and recognition.
+   * operator reads while backgrounded follows mute, speech, recognition, the
+   * wait between a turn leaving and the reply arriving, the Gate's own phase
+   * and a link being rebuilt.
    */
   private fun postNotification() {
     if (!foregroundStarted || destroyed) return
+    notificationWord.remember(stateWord())
     val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     manager.notify(NOTIFICATION_ID, buildNotification(notificationTitle))
+  }
+
+  /**
+   * The Gate's frames arrive many times a turn and usually name the word that
+   * is already shown; only a post that changes the word is worth a redraw.
+   */
+  private fun postNotificationIfChanged() {
+    if (!foregroundStarted || destroyed) return
+    if (!notificationWord.changedTo(stateWord())) return
+    postNotification()
+  }
+
+  /** The body line the notification carries right now. */
+  private fun stateWord(): String = HandsfreeCallNotification.bodyFor(
+    state.muted,
+    listening,
+    speaking,
+    thinking,
+    reconnecting,
+    gateWord,
+  )
+
+  // ── The Gate link the service does not own ───────────────────────────────
+
+  /**
+   * What the module's Gate media link reports while this call is up.
+   *
+   * A Gate call runs its loop on the Gate: the phone is its microphone and
+   * speaker, and the only evidence of what the call is doing is the frames the
+   * Gate sends. They arrive on the socket's own thread, so every one is folded
+   * onto this service's queue, where the call's state already lives.
+   */
+  private val gateMediaListener = object : HandsfreeGateMediaListener {
+    override fun onGateFrame(frame: GateFrame) {
+      mainHandler.post {
+        if (destroyed) return@post
+        HandsfreeCallNotification.wordForGateFrame(frame)?.let { gateWord = it }
+        // A frame on the socket is the link speaking: whatever was being
+        // rebuilt has been rebuilt.
+        reconnecting = false
+        postNotificationIfChanged()
+      }
+    }
+
+    override fun onGateLinkLost() {
+      mainHandler.post {
+        // The call stays up: its notification says the audio link is coming
+        // back rather than naming a phase from a socket that is gone.
+        if (destroyed || reconnecting) return@post
+        reconnecting = true
+        postNotificationIfChanged()
+      }
+    }
   }
 
   private fun createNotificationChannel() {
@@ -422,6 +590,8 @@ class HandsfreeCallService : Service() {
     }
     stopRequested = false
     listening = true
+    // A new listen ends the turn-in-flight wait the body called "Thinking".
+    thinking = false
     currentPartial = ""
     listenStartedAtMs = SystemClock.elapsedRealtime()
     endpoints.begin(listenStartedAtMs)
@@ -465,6 +635,10 @@ class HandsfreeCallService : Service() {
       stopRequested = true
       listening = false
       readyForSpeech = false
+      // JS stops recognition when it sends the turn: the call is no longer
+      // hearing and not yet speaking, which is the wait the body names
+      // "Thinking".
+      thinking = true
       cancelTick()
       postNotification()
       try {
@@ -682,6 +856,8 @@ class HandsfreeCallService : Service() {
     }
     speechGeneration += 1
     speaking = true
+    // The reply is here: the wait that read "Thinking" is over.
+    thinking = false
     queuedSpeech = chunks.toMutableList()
     nextChunkIndex = 0
     startBargeIn()
@@ -700,6 +876,9 @@ class HandsfreeCallService : Service() {
     nextChunkIndex = index
     if (index >= queuedSpeech.size) {
       speaking = false
+      // The reply finished; the call is not waiting on a turn any more — the
+      // next thing it does is listen, and JS says so when it does.
+      thinking = false
       stopBargeIn()
       postNotification()
       emit("speechFinished", mapOf("reason" to "done"))
@@ -745,6 +924,7 @@ class HandsfreeCallService : Service() {
     mainHandler.post {
       speechGeneration += 1
       speaking = false
+      thinking = false
       queuedSpeech.clear()
       stopBargeIn()
       postNotification()
@@ -939,6 +1119,10 @@ class HandsfreeCallService : Service() {
     mainHandler.post {
       if (!state.setMuted(muted)) return@post
       HandsfreeGateMediaOwner.setMuted(muted)
+      // The phase word the Gate last named belongs to the state the operator
+      // just left: after Unmute the body must not keep claiming "Muted" until
+      // the Gate names the next phase on its own.
+      if (!muted) gateWord = null
       if (muted) {
         listening = false
         cancelTick()
@@ -1012,7 +1196,13 @@ class HandsfreeCallService : Service() {
     // second pass has nothing left to do.
     if (destroyed) return
     destroyed = true
+    // stop() clears the owner's listener too: the call whose phases it named is
+    // over, and a lingering one would take the next media instance's frames.
     HandsfreeGateMediaOwner.stop()
+    gateWord = null
+    reconnecting = false
+    notificationOpenUrl = null
+    notificationWord.reset()
     listening = false
     readyForSpeech = false
     stopRequested = false
@@ -1029,6 +1219,8 @@ class HandsfreeCallService : Service() {
     stopBargeIn()
     speechGeneration += 1
     speaking = false
+    thinking = false
+    callStartedAtMs = 0L
     queuedSpeech.clear()
     try {
       tts?.stop()
@@ -1070,10 +1262,16 @@ class HandsfreeCallService : Service() {
     const val ACTION_UNMUTE = "com.versutus.handsfreevoice.action.UNMUTE"
     const val EXTRA_TITLE = "com.versutus.handsfreevoice.extra.TITLE"
     const val EXTRA_START_ID = "com.versutus.handsfreevoice.extra.START_ID"
+    // The call's own chat, as a `versutus://` link. Optional: a session started
+    // without one keeps the notification's tap on the app's launch intent.
+    const val EXTRA_OPEN_URL = "com.versutus.handsfreevoice.extra.OPEN_URL"
     // Distinct request codes: one PendingIntent per action, so the Mute intent
     // never overwrites the End intent's tap.
     private const val REQUEST_CODE_END = 8402
     private const val REQUEST_CODE_MUTE = 8403
+    // The content tap opens the app; its own code so it can never be handed the
+    // Mute or End intent.
+    private const val REQUEST_CODE_OPEN = 8404
     private const val CHANNEL_ID = "handsfree-call-v2"
     private const val LEGACY_CHANNEL_ID = "handsfree-call"
     /** Flip after the device matrix if Samsung's default recognizer misbehaves. */

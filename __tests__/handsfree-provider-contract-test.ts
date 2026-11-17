@@ -483,7 +483,9 @@ describe('a start that never answers is abandoned on both transports', () => {
     expect(start).toContain('cancelNativeSession(module, startId)');
     expect(gateStart).toContain('cancelStartSession: (startId) => cancelNativeSession(module, startId)');
     expect(start).toContain('newHandsfreeStartId()');
-    expect(gateStart).toContain('startSession: (title, startId) => module.startSession({ title, startId })');
+    expect(gateStart).toContain('startSession: (title, startId) => {');
+    expect(gateStart).toMatch(/module\.startSession\(\{ title, startId, openUrl \}\)/);
+    expect(gateStart).toContain('botChatLink(');
     // The cancel is keyed by the attempt's own id and its failure is swallowed,
     // so a sync throw or a rejection cannot strand the start or leak.
     expect(startAttempt).toContain('input.startSession(input.target.label, startId)');

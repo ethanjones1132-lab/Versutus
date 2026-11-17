@@ -119,6 +119,9 @@ class HandsfreeVoiceModule : Module() {
       // caller that never cancels.
       val startId = (options["startId"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
         ?: UUID.randomUUID().toString()
+      // The call's own thread, as the app's own link. Only the notification's
+      // content intent reads it; the service opens it scoped to this package.
+      val openUrl = (options["openUrl"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
       if (appContext.currentActivity == null) {
         promise.resolve("unavailable")
         return@AsyncFunction
@@ -146,7 +149,7 @@ class HandsfreeVoiceModule : Module() {
       // microphone behind a newer retry's back.
       HandsfreeCallService.claimStartAttempt(startId)
       if (permissions.hasGrantedPermissions(*required)) {
-        startService(context, title, promise, startId)
+        startService(context, title, promise, startId, openUrl)
       } else {
         permissions.askForPermissions({ result ->
           if (!HandsfreeCallService.ownsStartAttempt(startId)) {
@@ -164,7 +167,10 @@ class HandsfreeVoiceModule : Module() {
             // while-in-use microphone service is created. Ownership is checked
             // again inside startService, because the retry can claim the start
             // during this settle window.
-            Handler(Looper.getMainLooper()).postDelayed({ startService(context, title, promise, startId) }, RESUME_SETTLE_MS)
+            Handler(Looper.getMainLooper()).postDelayed(
+              { startService(context, title, promise, startId, openUrl) },
+              RESUME_SETTLE_MS,
+            )
           }
         }, *asked)
       }
@@ -293,7 +299,13 @@ class HandsfreeVoiceModule : Module() {
   // Written on the main queue, read by `gateMediaFramesReceived` on the JS thread.
   @Volatile private var gateMedia: HandsfreeGateMedia? = null
 
-  private fun startService(context: Context, title: String, promise: Promise, startId: String) {
+  private fun startService(
+    context: Context,
+    title: String,
+    promise: Promise,
+    startId: String,
+    openUrl: String?,
+  ) {
     // A start the JS side abandoned (its deadline ran out and stopSession
     // cancelled it) or a newer retry superseded must not create a service.
     if (!HandsfreeCallService.ownsStartAttempt(startId)) {
@@ -331,6 +343,7 @@ class HandsfreeVoiceModule : Module() {
         .setAction(HandsfreeCallService.ACTION_START)
         .putExtra(HandsfreeCallService.EXTRA_TITLE, title)
         .putExtra(HandsfreeCallService.EXTRA_START_ID, startId)
+      if (openUrl != null) intent.putExtra(HandsfreeCallService.EXTRA_OPEN_URL, openUrl)
       ContextCompat.startForegroundService(context, intent)
     } catch (_: Exception) {
       HandsfreeCallService.expireStartAttempt(startId)

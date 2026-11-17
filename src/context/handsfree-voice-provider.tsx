@@ -27,6 +27,7 @@ import { useSharedValue } from 'react-native-reanimated';
 
 import { useChatSurface, useGateway } from '@/context/gateway-provider';
 import { composerDraftKey, composerDraftThread, type ComposerDraftThread } from '@/lib/gateway/composer-draft';
+import { botChatLink } from '@/lib/gateway/deep-link';
 import { createMessageId } from '@/lib/gateway/messages';
 import type { ChatMessage } from '@/lib/gateway/types';
 import {
@@ -1625,7 +1626,16 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         // behind it are bounded together.
         deadline: budget,
         gatewayRequest: (method, params) => latest.current.gatewayRequest(method, params),
-        startSession: (title, startId) => module.startSession({ title, startId }),
+        startSession: (title, startId) => {
+          // The call notification's tap opens the thread the call is having.
+          // Only a Bot Chat has a link in this app's vocabulary; a configurable
+          // thread names none and the native side keeps its launch intent.
+          const surface = threadRef.current?.surface;
+          const openUrl = botChatLink(
+            surface !== undefined && surface.kind === 'bot' ? surface.botId : undefined,
+          );
+          return module.startSession({ title, startId, openUrl });
+        },
         // Keyed by the attempt's own id: this cleanup can never stop a newer
         // retry's session, and a sync throw or rejection is swallowed so it
         // cannot strand the start or leak an unhandled rejection.

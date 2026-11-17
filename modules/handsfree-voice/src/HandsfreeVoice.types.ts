@@ -22,6 +22,21 @@ export type HandsfreeAvailability = {
 /** How a request to open a call session resolved. */
 export type HandsfreeStartOutcome = 'started' | 'permission-denied' | 'unavailable';
 
+/** What the native side needs to open one call session. */
+export type HandsfreeStartSessionOptions = {
+  /** The Bot/surface label the operator tapped Start on. */
+  title: string;
+  /** This attempt's id, so a later `stopSession` can cancel exactly it. */
+  startId?: string;
+  /**
+   * The call's own thread, as the app's own `versutus://` link. Android attaches
+   * it to the ongoing notification's content intent, so a tap on the call opens
+   * the conversation it belongs to rather than wherever the app was left.
+   * Omitted (or a link this build does not answer) keeps the launch intent.
+   */
+  openUrl?: string;
+};
+
 /** One reply to speak, already cut into ordered chunks by the caller. */
 export type HandsfreeSpeakOptions = {
   chunks: string[];

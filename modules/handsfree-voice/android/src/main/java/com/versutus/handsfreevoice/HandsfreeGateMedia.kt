@@ -273,12 +273,16 @@ class HandsfreeGateMedia(
       // restart both close this way. Without a frame the banner would sit on
       // a dead call forever.
       if (running && !sawEnded) {
+        HandsfreeGateMediaOwner.reportLinkLost()
         onFrame(errorFrame("socket_closed", "The PC closed the call audio link."))
       }
     }
 
     override fun onFailure(webSocket: WebSocket, error: Throwable, response: Response?) {
       if (webSocket != socket) return
+      // A running call keeps its notification up: the phone names the link it
+      // is rebuilding rather than showing a phase from a socket that is gone.
+      if (running) HandsfreeGateMediaOwner.reportLinkLost()
       onFrame(errorFrame("socket_failed", error.message ?: "socket failed"))
     }
   }
@@ -303,6 +307,10 @@ class HandsfreeGateMedia(
     if (seen <= LOGGED_FRAMES) {
       Log.i(LOG_TAG, "Gate frame $seen: t=${frame.t} v=${frame.protocolVersion}")
     }
+    // The call's notification follows the Gate's own phases. The service does
+    // not own this socket, so it hears what was parsed rather than reading it.
+    // Any parsed frame also proves the link is live again after a failure.
+    HandsfreeGateMediaOwner.reportFrame(frame)
     if (frame.protocolVersion == 2) protocolV2 = true
     if (!negotiationConfirmed && (frame.protocolVersion == 2 || frame.t == "ready" || frame.t == "phase")) {
       negotiationConfirmed = true
@@ -631,11 +639,28 @@ internal object GateCaptureLevel {
   }
 }
 
+/**
+ * What the call service hears from the Gate media link it does not own: the
+ * frames parsed on the live socket (so the notification can name the Gate's own
+ * phase) and the socket dying under a running call (so it can say the link is
+ * being rebuilt).
+ */
+internal interface HandsfreeGateMediaListener {
+  /** A Gate frame was parsed on the live socket. */
+  fun onGateFrame(frame: GateFrame)
+
+  /** The socket failed or closed while the call was still running. */
+  fun onGateLinkLost()
+}
+
 /** The service and module have separate lifetimes; this bridges their media instance. */
 internal object HandsfreeGateMediaOwner {
   private var media: HandsfreeGateMedia? = null
   private var closed = false
   private var muted = false
+  // Read on the socket's own thread when a frame lands; written on the main
+  // thread when a call starts or ends.
+  @Volatile private var listener: HandsfreeGateMediaListener? = null
 
   @Synchronized fun beginCall() { closed = false; muted = false }
   @Synchronized fun attach(value: HandsfreeGateMedia) {
@@ -646,8 +671,27 @@ internal object HandsfreeGateMediaOwner {
   @Synchronized fun detach(value: HandsfreeGateMedia) { if (media === value) media = null }
   @Synchronized fun setMuted(value: Boolean) { muted = value; media?.setMuted(value) }
   @Synchronized fun isMuted(): Boolean = muted
+
+  /**
+   * Where the call's phase words and link losses are reported. Held by the
+   * service for exactly the call's life, across media instances: a reconnect
+   * replaces the socket but not the call whose notification follows it.
+   */
+  @Synchronized fun watch(listener: HandsfreeGateMediaListener?) { this.listener = listener }
+
+  /** A parsed Gate frame on the live socket, whichever media instance read it. */
+  fun reportFrame(frame: GateFrame) {
+    listener?.onGateFrame(frame)
+  }
+
+  /** The media socket failed or closed under a call that is still running. */
+  fun reportLinkLost() {
+    listener?.onGateLinkLost()
+  }
+
   @Synchronized fun stop() {
     closed = true
+    listener = null
     val current = media
     media = null
     current?.stop()
