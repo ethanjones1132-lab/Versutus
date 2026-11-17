@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, ScrollView, StyleSheet, View } from 'react-native';
+import { AppState, StyleSheet, View } from 'react-native';
 
 import { CronJobSheet } from '@/components/activity/cron-job-sheet';
 import { CronRunSheet } from '@/components/activity/cron-run-sheet';
@@ -8,7 +8,8 @@ import { routineCoverageLine } from '@/lib/routines/coverage';
 import { routineTargets } from '@/lib/routines/targets';
 import { gatewayJobInput } from '@/lib/gateway/cron-create';
 import type { PublicBot } from '@/lib/gateway/bots';
-import { Button, Card, Chip, ErrorCard, ListRow, SectionHeader, Skeleton, Text } from '@/components/ui';
+import { BackendFilterRow } from '@/components/ui/backend-filter-row';
+import { Button, Card, ErrorCard, ListRow, SectionHeader, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import {
@@ -159,14 +160,14 @@ export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number })
   useEffect(() => {
     // A context without a Bot list (an older provider, a test double) offers
     // backend targets only.
-    if (!newOpen || typeof listBots !== 'function') return undefined;
+    if (typeof listBots !== 'function') return undefined;
     let live = true;
     void Promise.resolve(listBots()).then(
       (result) => { if (live) setBots(Array.isArray(result) ? result : []); },
       () => { if (live) setBots([]); },
     );
     return () => { live = false; };
-  }, [listBots, newOpen]);
+  }, [listBots]);
   useEffect(() => {
     if (backendFilter && feed && !feed.backends.some((backend) => backend.id === backendFilter)) {
       setBackendFilter(undefined);
@@ -243,22 +244,19 @@ export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number })
           />
           ) : null}
           {feed.backends.length > 1 ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-              <Chip label="All" selected={!backendFilter} onPress={() => setBackendFilter(undefined)} />
-              {feed.backends.map((backend) => (
-                <Chip
-                  key={backend.id}
-                  label={backend.label}
-                  selected={backendFilter === backend.id}
-                  onPress={() => setBackendFilter(backend.id)}
-                />
-              ))}
-            </ScrollView>
+            <BackendFilterRow
+              filters={feed.backends}
+              selected={backendFilter}
+              onSelect={setBackendFilter}
+              accessibilityLabel="Filter routines by backend"
+            />
           ) : null}
           {[...groups.entries()].map(([botId, routines]) => (
             <View key={botId ?? 'gateway'} style={styles.group}>
               {groups.size > 1 || botId ? (
-                <Text variant="micro" color="secondary">{botId ? `Bot ${botId}` : 'Gateway'}</Text>
+                <Text variant="micro" color="secondary">
+                  {botId ? `Bot ${bots.find((bot) => bot.id === botId)?.displayName ?? botId}` : 'Gateway'}
+                </Text>
               ) : null}
               {routines.map((routine) => (
                 <ListRow
@@ -382,7 +380,6 @@ const styles = StyleSheet.create({
   root: { gap: Spacing.three },
   group: { gap: Spacing.two },
   row: { marginBottom: Spacing.one },
-  chips: { gap: Spacing.two },
   coverage: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.two },
   coverageText: { flex: 1, minWidth: 0 },
   skeleton: { gap: Spacing.two },

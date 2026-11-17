@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, ScrollView, StyleSheet, View } from 'react-native';
+import { AppState, StyleSheet, View } from 'react-native';
 
 import { ActivityRow, type ActivitySessionTarget } from '@/components/activity/activity-row';
 import { ApprovalDecisionCard } from '@/components/activity/approval-decision-card';
 import { ApprovalInbox } from '@/components/activity/approval-inbox';
 import { RecentRuns } from '@/components/activity/recent-runs';
-import { Card, Chip, ErrorCard, SectionHeader, Skeleton, Text } from '@/components/ui';
+import { BackendFilterRow } from '@/components/ui/backend-filter-row';
+import { Card, ErrorCard, SectionHeader, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { filterActivityByBackend, groupActivityForToday, liveRunsForToday, sinceMidnightAnchor } from '@/lib/activity/today';
@@ -245,17 +246,12 @@ export function TodaySection({
       {feed ? (
         <>
           {feed.backends.length > 1 ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-              <Chip label="All" selected={!backendFilter} onPress={() => setBackendFilter(undefined)} />
-              {feed.backends.map((backend) => (
-                <Chip
-                  key={backend.id}
-                  label={backend.label}
-                  selected={backendFilter === backend.id}
-                  onPress={() => setBackendFilter(backend.id)}
-                />
-              ))}
-            </ScrollView>
+            <BackendFilterRow
+              filters={feed.backends}
+              selected={backendFilter}
+              onSelect={setBackendFilter}
+              accessibilityLabel="Filter activity by backend"
+            />
           ) : null}
           <Text variant="caption" color="secondary">
             {`${counts.runs} run${counts.runs === 1 ? '' : 's'} · ${counts.sessions} session${counts.sessions === 1 ? '' : 's'}${pendingApprovals.length ? ` · ${pendingApprovals.length} need you` : ''}`}
@@ -303,4 +299,4 @@ export function TodaySection({
   );
 }
 
-const styles = StyleSheet.create({ root: { gap: Spacing.three }, section: { gap: Spacing.two }, chips: { gap: Spacing.two }, skeleton: { gap: Spacing.two } });
+const styles = StyleSheet.create({ root: { gap: Spacing.three }, section: { gap: Spacing.two }, skeleton: { gap: Spacing.two } });

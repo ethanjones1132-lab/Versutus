@@ -23,7 +23,22 @@ const item = (id: string, backendId: string, botId?: string): ActivityItem => ({
 describe('Today activity grouping', () => {
   test('groups by a known Bot and displays its name', () => {
     const groups = groupActivityForToday([item('one', 'b', 'bot-1')], coverage, [{ id: 'bot-1', displayName: 'Mira' }]);
-    expect(groups).toEqual([{ key: 'backend:b:bot:bot-1', title: 'Beta · Mira', items: [item('one', 'b', 'bot-1')] }]);
+    expect(groups).toEqual([{ key: 'bot:bot-1', title: 'Bot Mira', items: [item('one', 'b', 'bot-1')] }]);
+  });
+
+  test('activity for one Bot across backends lands in one Bot group', () => {
+    const items = [item('beta-run', 'b', 'bot-1'), item('alpha-run', 'a', 'bot-1')];
+    const groups = groupActivityForToday(items, coverage, [{ id: 'bot-1', displayName: 'Mira' }]);
+    expect(groups).toEqual([{ key: 'bot:bot-1', title: 'Bot Mira', items }]);
+  });
+
+  test('Bot groups follow roster order before backend-only groups', () => {
+    const groups = groupActivityForToday(
+      [item('backend-only', 'b'), item('second-bot', 'a', 'bot-2'), item('first-bot', 'b', 'bot-1')],
+      coverage,
+      [{ id: 'bot-1', displayName: 'Mira' }, { id: 'bot-2', displayName: 'Sage' }],
+    );
+    expect(groups.map((group) => group.title)).toEqual(['Bot Mira', 'Bot Sage', 'Beta']);
   });
 
   test('groups by backend when no Bot is present', () => {
@@ -36,7 +51,7 @@ describe('Today activity grouping', () => {
     expect(filterActivityByBackend(items, undefined)).toBe(items);
   });
 
-  test('an OpenCode Bot groups under Backend · Bot, apart from another Bot', () => {
+  test('an OpenCode Bot groups by display name, apart from another Bot', () => {
     const items = [
       item('build-thread', 'b', 'opencode-build'),
       item('review-thread', 'b', 'opencode-review'),
@@ -45,7 +60,7 @@ describe('Today activity grouping', () => {
       { id: 'opencode-build', displayName: 'Builder' },
       { id: 'opencode-review', displayName: 'Reviewer' },
     ]);
-    expect(groups.map((group) => group.title)).toEqual(['Beta · Builder', 'Beta · Reviewer']);
+    expect(groups.map((group) => group.title)).toEqual(['Bot Builder', 'Bot Reviewer']);
     expect(groups.map((group) => group.items.map((row) => row.id))).toEqual([
       ['build-thread'],
       ['review-thread'],

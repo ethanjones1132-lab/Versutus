@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BotAvatar, GroupAvatar } from '@/components/chat/bot-avatar';
 import { PulsingDot, statusColor } from '@/components/connection-badge';
 import { Button, Chip, EmptyState, Icon, PressableScale, Skeleton, Text, TextField, type IconName } from '@/components/ui';
+import { BackendFilterRow } from '@/components/ui/backend-filter-row';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import {
@@ -561,17 +562,12 @@ function ChatRosterImpl({
             </Text>
           ) : null}
           {backendFilters.length > 1 ? (
-            <View accessibilityRole="radiogroup" accessibilityLabel="Filter Bots by backend" style={styles.backendFilters}>
-              <Chip label="All" selected={activeRuntime === null} onPress={() => selectRuntime(null)} />
-              {backendFilters.map((filter) => (
-                <Chip
-                  key={filter.id}
-                  label={filter.label}
-                  selected={activeRuntime === filter.id}
-                  onPress={() => selectRuntime(filter.id)}
-                />
-              ))}
-            </View>
+            <BackendFilterRow
+              filters={backendFilters}
+              selected={activeRuntime}
+              onSelect={(runtime) => selectRuntime(runtime ?? null)}
+              accessibilityLabel="Filter Bots by backend"
+            />
           ) : null}
         </View>
       }
@@ -691,7 +687,6 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   sectionLabel: { marginTop: Spacing.two, marginBottom: Spacing.one, paddingHorizontal: Spacing.one },
-  backendFilters: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two, paddingHorizontal: Spacing.one, marginBottom: Spacing.two },
   member: {
     flexDirection: 'row',
     alignItems: 'center',

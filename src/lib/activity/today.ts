@@ -39,10 +39,9 @@ export function filterActivityByBackend(items: ActivityItem[], backendId: string
 }
 
 /**
- * Group by Bot when the Gate proved one, else by backend. A Bot's own group is
- * scoped to its backend, so two hosts that happen to share a Bot id stay two
- * groups. Backends keep the Gate's order, bots keep the roster's order, and
- * rows keep the feed's newest-first order inside a group.
+ * Group by Bot when the Gate proved one, else by backend. Bots keep the
+ * roster's order ahead of backend-only groups, which keep the Gate's order.
+ * Rows keep the feed's newest-first order inside a group.
  */
 export function groupActivityForToday(
   items: ActivityItem[],
@@ -55,9 +54,9 @@ export function groupActivityForToday(
   const order: string[] = [];
   for (const item of items) {
     const knownBot = item.botId ? botById.get(item.botId) : undefined;
-    const key = knownBot ? `backend:${item.backendId}:bot:${knownBot.id}` : `backend:${item.backendId}`;
+    const key = knownBot ? `bot:${knownBot.id}` : `backend:${item.backendId}`;
     const backendLabel = backendById.get(item.backendId)?.label ?? item.backendId;
-    const title = knownBot?.displayName ? `${backendLabel} · ${knownBot.displayName}` : backendLabel;
+    const title = knownBot?.displayName ? `Bot ${knownBot.displayName}` : backendLabel;
     const existing = groups.get(key);
     if (existing) existing.items.push(item);
     else {
@@ -70,12 +69,15 @@ export function groupActivityForToday(
   return order.map((key) => groups.get(key)!).sort((a, b) => {
     const aItem = a.items[0];
     const bItem = b.items[0];
-    const backendDelta = (backendOrder.get(aItem.backendId) ?? coverage.length) -
+    const aBot = aItem.botId && botById.has(aItem.botId) ? botOrder.get(aItem.botId) ?? bots.length : undefined;
+    const bBot = bItem.botId && botById.has(bItem.botId) ? botOrder.get(bItem.botId) ?? bots.length : undefined;
+    if (aBot !== undefined || bBot !== undefined) {
+      if (aBot === undefined) return 1;
+      if (bBot === undefined) return -1;
+      return aBot - bBot;
+    }
+    return (backendOrder.get(aItem.backendId) ?? coverage.length) -
       (backendOrder.get(bItem.backendId) ?? coverage.length);
-    if (backendDelta) return backendDelta;
-    const aBot = aItem.botId && botById.has(aItem.botId) ? botOrder.get(aItem.botId) ?? bots.length : bots.length;
-    const bBot = bItem.botId && botById.has(bItem.botId) ? botOrder.get(bItem.botId) ?? bots.length : bots.length;
-    return aBot - bBot;
   });
 }
 
