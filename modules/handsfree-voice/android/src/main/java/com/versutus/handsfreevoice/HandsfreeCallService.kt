@@ -137,7 +137,15 @@ class HandsfreeCallService : Service() {
       // phase asks for recognition.
       ACTION_MUTE, ACTION_UNMUTE -> {
         val muted = HandsfreeCallNotification.mutedForAction(intent.action)
-        if (muted != null) setMuted(muted)
+        if (muted != null) {
+          // Applied on this service's own queue (so the tap mutes the
+          // microphone even with no JS runtime listening), then reported: the
+          // banner folds the same state through the same path the in-app
+          // control takes, and the JS answer's own setMuted is a no-op because
+          // this state already holds the value.
+          setMuted(muted)
+          emit("muteRequest", mapOf("muted" to muted))
+        }
       }
       else -> {
         val title = intent?.getStringExtra(EXTRA_TITLE) ?: ""

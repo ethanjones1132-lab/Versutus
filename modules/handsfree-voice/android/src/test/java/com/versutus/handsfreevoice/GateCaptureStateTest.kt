@@ -79,6 +79,43 @@ class GateCaptureStateTest {
     assertEquals(4, sent.size)
   }
 
+  @Test fun aMuteLandsWhileTheCaptureThreadIsParkedInABlockingRead() {
+    // The production capture loop spends nearly all its time inside a blocking
+    // AudioRecord read. Holding the capture state's monitor across it put a
+    // Mute tap behind that read on the caller's thread — the same thread the
+    // banner is drawn from. The mute flag is volatile and written without it.
+    val state = GateCaptureState()
+    val entered = java.util.concurrent.CountDownLatch(1)
+    val release = java.util.concurrent.CountDownLatch(1)
+    val mic = object : MicSource {
+      var started = false
+      override fun start() { started = true }
+      override fun stop() { started = false }
+      override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        entered.countDown()
+        release.await(5, java.util.concurrent.TimeUnit.SECONDS)
+        return if (started) 1 else 0
+      }
+      override fun drain() {}
+      override fun release() { started = false }
+    }
+    state.setRunning(true)
+    state.attachSource(mic)
+    val capture = Thread { state.readAndSend(mic, ByteArray(4)) {} }
+    capture.start()
+    assertTrue("the capture thread never reached its read", entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+
+    val applied = java.util.concurrent.CountDownLatch(1)
+    val tap = Thread { state.setMuted(true); applied.countDown() }
+    tap.start()
+    assertTrue("a Mute tap waited on the blocking read", applied.await(1, java.util.concurrent.TimeUnit.SECONDS))
+    assertFalse(state.shouldRead())
+
+    release.countDown()
+    capture.join(5_000)
+    tap.join(5_000)
+  }
+
   private class FakeMicSource : MicSource {
     var started = false
     var starts = 0

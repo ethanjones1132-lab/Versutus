@@ -81,6 +81,15 @@ export type HandsfreeLevelEvent = {
 };
 
 /**
+ * The ongoing notification's Mute/Unmute action was tapped. The service has
+ * already applied it (the tap works with no JS runtime on the phone); this is
+ * how the banner learns about it, so both surfaces are one state.
+ */
+export type HandsfreeMuteRequestEvent = {
+  muted: boolean;
+};
+
+/**
  * One JSON frame from the Gate media socket, forwarded verbatim. The Gate owns
  * the call loop, so the phone only reports what it sent rather than acting on
  * it; the app maps frames to banner state in `src/lib/voice/gate-call.ts`.
@@ -115,4 +124,6 @@ export type HandsfreeVoiceModuleEvents = {
   bargeIn: (event: HandsfreeBargeInEvent) => void;
   level: (event: HandsfreeLevelEvent) => void;
   gate: (event: HandsfreeGateEvent) => void;
+  /** Android's notification Mute/Unmute was tapped; the service applied it. */
+  muteRequest: (event: HandsfreeMuteRequestEvent) => void;
 };

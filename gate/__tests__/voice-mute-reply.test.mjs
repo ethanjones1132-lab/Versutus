@@ -22,10 +22,44 @@ const speaking = () => run(
   listening(),
 ).state;
 
+/** A turn that has been sent and is still being thought about. */
+const thinking = () => run(
+  [{ type: 'final', text: 'Hello there.' }],
+  run([{ type: 'ready', turnId: 'vs-mute', utteranceHoldMs: 0 }]).state,
+).state;
+
 const says = (effects) => effects.filter((e) => e.kind === 'engine.speak');
 const frames = (effects, t) => effects
   .filter((e) => e.kind === 'send' && e.frame.t === t)
   .map((e) => e.frame);
+
+test('a mute taken while the turn is still being thought about is not ignored', () => {
+  // This is the phase an operator reaches for Mute most often — the turn is
+  // sent and the PC is still answering — and it used to be the one phase the
+  // reducer refused. No `phase: muted` frame meant no surface agreed: the
+  // phone's capture was off, the Gate's engine hearing, the banner folded on a
+  // promise nobody kept.
+  const muted = run([{ type: 'mute' }], thinking());
+  assert.equal(muted.state.phase, 'muted');
+  assert.equal(muted.state.muted, true);
+  assert.equal(muted.state.resumePhase, 'thinking');
+  assert.deepEqual(frames(muted.effects, 'phase').map((f) => f.phase), ['muted']);
+  assert.ok(muted.effects.some((e) => e.kind === 'engine.setMuted' && e.muted === true));
+
+  // The turn keeps running: its reply still belongs to the phone, and none of it
+  // is spoken while the microphone is shut.
+  const more = run([{ type: 'replyDelta', text: 'Hi there.' }], muted.state);
+  assert.equal(more.state.phase, 'muted');
+  assert.deepEqual(frames(more.effects, 'reply').map((f) => f.delta), ['Hi there.']);
+  assert.equal(says(more.effects).length, 0, 'a muted call speaks nothing');
+
+  // Unmute returns to the turn in flight, not to listening under an answer the
+  // operator has not heard.
+  const back = run([{ type: 'unmute' }], more.state);
+  assert.equal(back.state.phase, 'thinking');
+  assert.equal(back.state.muted, false);
+  assert.deepEqual(frames(back.effects, 'phase').map((f) => f.phase), ['thinking']);
+});
 
 test('a mute during the reply does not drop the rest of it', () => {
   const muted = run([{ type: 'mute' }], speaking());

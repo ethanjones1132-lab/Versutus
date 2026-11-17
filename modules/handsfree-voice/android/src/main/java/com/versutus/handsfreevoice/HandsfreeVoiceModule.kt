@@ -261,6 +261,13 @@ class HandsfreeVoiceModule : Module() {
       gateMedia?.framesReceived ?: 0
     }
 
+    // The microphone's mute state, answered without touching a socket or
+    // waiting on the capture thread. A mute the Gate never confirmed is checked
+    // against this before the banner is painted back.
+    Function("isMuted") {
+      HandsfreeGateMediaOwner.isMuted()
+    }
+
     AsyncFunction("sendGateControl") { json: String ->
       gateMedia?.sendControl(json) ?: false
     }

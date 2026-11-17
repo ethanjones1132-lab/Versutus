@@ -61,6 +61,13 @@ export declare class HandsfreeVoiceModule extends NativeModule<HandsfreeVoiceMod
    */
   gateMediaFramesReceived?(): number;
   /**
+   * Whether the microphone is muted right now, as the service and the capture
+   * hold it. Answers without waiting on the capture thread, so a mute the Gate
+   * never confirmed can be checked against what the phone is really doing.
+   * Absent on iOS and on builds that predate it.
+   */
+  isMuted?(): boolean;
+  /**
    * True when a `versutus://call` link carries this app's own HMAC signature
    * and a recent timestamp (§4.4). A link alone never opens the microphone.
    */

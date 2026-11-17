@@ -87,11 +87,14 @@ class HandsfreeGateMedia(
     nowMs = SystemClock::elapsedRealtime,
   )
   private val captureLock = Any()
+  // Held only for the mute frame's own bookkeeping: never the capture lock,
+  // which the capture loop holds across a blocking AudioRecord read.
+  private val muteSendLock = Any()
   @Volatile private var socketOpen = false
   @Volatile private var negotiationConfirmed = false
   @Volatile private var protocolV2 = false
   private var activeCallId = ""
-  private var lastMuteFrameSent: Boolean? = null
+  @Volatile private var lastMuteFrameSent: Boolean? = null
   private val speechStartSequences = mutableMapOf<Long, Long>()
 
   init { captureState.setMuted(initiallyMuted) }
@@ -165,10 +168,18 @@ class HandsfreeGateMedia(
     return socket?.send(encodeNegotiatedControl(json)) ?: false
   }
 
+  /**
+   * Mute or unmute the microphone and tell the Gate.
+   *
+   * Nothing here waits on [captureLock]: the capture loop holds it across a
+   * blocking AudioRecord read, and a Mute tap queued behind that read is a
+   * button that does nothing for a whole frame (and, on the caller's thread, a
+   * banner that cannot redraw). The mute itself is the capture state's own
+   * volatile flag, which the loop reads before and after every read; the socket
+   * write is OkHttp's own queue, never the main thread.
+   */
   fun setMuted(muted: Boolean): Boolean {
-    synchronized(captureLock) {
-      captureState.setMuted(muted)
-    }
+    captureState.setMuted(muted)
     return sendMuteIfOpen(muted)
   }
 
@@ -176,7 +187,7 @@ class HandsfreeGateMedia(
   internal fun isRunning(): Boolean = running
   internal fun isStopped(): Boolean = stopped
 
-  private fun sendMuteIfOpen(muted: Boolean): Boolean = synchronized(captureLock) {
+  private fun sendMuteIfOpen(muted: Boolean): Boolean = synchronized(muteSendLock) {
     if (!socketOpen || !negotiationConfirmed) return@synchronized false
     if (lastMuteFrameSent == muted) return@synchronized true
     val sent = socket?.send(encodeNegotiatedControl(GateFrameCodec.encodePhone(GateFrame.Phone.Mute(muted)))) ?: false
@@ -537,7 +548,10 @@ internal class GateCaptureState {
   @Synchronized fun attachSource(value: MicSource) { source = value; updateSource() }
   @Synchronized fun setRunning(value: Boolean) { running = value; updateSource() }
   @Synchronized fun setNegotiated(value: Boolean) { negotiated = value; updateSource() }
-  @Synchronized fun readAndSend(mic: MicSource, buffer: ByteArray, send: (ByteArray) -> Unit): Int {
+  // Deliberately NOT @Synchronized: the capture loop spends this call's whole
+  // duration inside the blocking read below, and a Mute tap must not wait for
+  // it. Every field it reads is @Volatile, and the source is passed in.
+  fun readAndSend(mic: MicSource, buffer: ByteArray, send: (ByteArray) -> Unit): Int {
     if (!shouldRead()) return 0
     val count = mic.read(buffer, 0, buffer.size)
     if (count > 0 && shouldSend()) send(buffer.copyOf(count))

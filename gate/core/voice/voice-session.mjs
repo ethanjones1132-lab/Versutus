@@ -94,12 +94,14 @@ function endCall(state, reason) {
 
 /**
  * Is a running turn still owed a reply? A mute taken while the reply is being
- * spoken suspends the audio, not the turn: the turn's frames still belong to the
- * phone, and letting them through is what stops the call hanging in `muted`.
+ * spoken — or while it is still being thought about — suspends the audio, not
+ * the turn: the turn's frames still belong to the phone, and letting them
+ * through is what stops the call hanging in `muted`.
  */
 function replyOwed(state) {
   if (state.phase === 'thinking' || state.phase === 'speaking') return true;
-  return state.phase === 'muted' && state.resumePhase === 'speaking';
+  return state.phase === 'muted'
+    && (state.resumePhase === 'speaking' || state.resumePhase === 'thinking');
 }
 
 /**
@@ -429,7 +431,16 @@ export function reduceVoiceSession(state, event) {
 
     case 'mute': {
       if (state.phase === 'muted') return stay(state);
-      if (state.phase !== 'listening' && state.phase !== 'speaking') return stay(state);
+      // A mute from `thinking` is the one the operator reaches for most: the
+      // microphone has to go off while the PC is still answering. Refusing it
+      // here left the phone's capture muted, the Gate's engine hearing, and no
+      // `phase: muted` frame for either side to agree on — three answers to one
+      // question, and the banner waiting five seconds for a frame that was
+      // never sent. The turn keeps running (resumePhase remembers where to go
+      // back to), so its reply is still delivered and spoken after unmute.
+      if (state.phase !== 'listening' && state.phase !== 'speaking' && state.phase !== 'thinking') {
+        return stay(state);
+      }
       // Mute turns the microphone off; it never cuts the Bot off. A reply that is
       // playing keeps playing (VS-023), so no speech cancel is sent here.
       // Mute also ends whatever was being heard: the microphone is off, so an
@@ -443,7 +454,12 @@ export function reduceVoiceSession(state, event) {
 
     case 'unmute': {
       if (state.phase !== 'muted') return stay(state);
-      const back = state.resumePhase === 'speaking' ? 'speaking' : 'listening';
+      // Back to whatever the mute interrupted: a reply that was playing, or a
+      // turn that was still being thought about. Only a mute taken from
+      // `listening` reopens the microphone.
+      const back = state.resumePhase === 'speaking'
+        ? 'speaking'
+        : state.resumePhase === 'thinking' ? 'thinking' : 'listening';
       const effects = [{ kind: 'engine.setMuted', muted: false }, phaseEffect(back)];
       // A mute taken mid-hold held the utterance with it: the hold that elapsed
       // while the mic was shut could not send, so listening restarts it rather

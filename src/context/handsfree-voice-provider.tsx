@@ -403,6 +403,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   // Highest contiguous Gate→phone sequence applied to the current call. It is
   // sent as the reconnect cursor before native capture resumes.
   const gateLastSeqRef = useRef(0);
+  // The seq of the first Gate frame this call never saw, or 0. One line is
+  // logged per call for it: a hole is news, and a socket that drops many frames
+  // must not write a line for each.
+  const gateSeqGapRef = useRef(0);
   const callProjectionRef = useRef<CallThreadProjection | null>(null);
   const gateApprovalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gateApprovalBusyRef = useRef<string | null>(null);
@@ -514,9 +518,14 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   /**
    * Put the banner back the way the Gate last described the call. Used when the
    * control frame is refused or never confirmed: a banner that says "Muted"
-   * while the Gate is still capturing is a lie the operator pays for. Only the
-   * MUTE is put back — the Gate's latest phase is more current than the one
-   * from before the tap, and rewinding it would report a phase that has moved on.
+   * while the Gate is still capturing is a lie the operator pays for.
+   *
+   * The microphone itself is asked first. A mute that the Gate never confirmed
+   * may still have taken effect — the native capture flag and the notification
+   * were changed before the socket frame was sent — and reverting to
+   * "Listening" there would hide a microphone that is genuinely off. Only when
+   * the phone cannot say (a build without the probe) or says the capture is
+   * where it was is the pre-tap phase put back.
    */
   const rollbackGateMute = useCallback(
     (why: string) => {
@@ -528,11 +537,19 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         phase: gateBannerRef.current.phase === 'muted' ? pending.previous.phase : gateBannerRef.current.phase,
         muted: pending.previous.muted,
       };
+      // What the capture is really doing decides the flag; the pre-tap state
+      // above is only what a build with no probe can say.
+      const nativeMuted = moduleRef.current?.isMuted?.();
+      if (typeof nativeMuted === 'boolean') {
+        next.muted = nativeMuted;
+        next.phase = nativeMuted ? 'muted' : next.phase;
+      }
       gateBannerRef.current = next;
       setGateBanner(next);
       noteWaiting(appPhaseForGate(next.phase) === 'sending');
       console.warn(
-        `[gate-mute] ${why} session=${gateSessionIdRef.current ?? 'unknown'} phase=${next.phase}`,
+        `[gate-mute] ${why} session=${gateSessionIdRef.current ?? 'unknown'} phase=${next.phase}`
+        + ` captureMuted=${typeof nativeMuted === 'boolean' ? String(nativeMuted) : 'unknown'}`,
       );
     },
     [clearGateMute, noteWaiting],
@@ -562,6 +579,16 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         previous: { phase: previous.phase, muted: previous.muted },
         timer: setTimeout(() => rollbackGateMute('the Gate never confirmed the mute'), GATE_MUTE_CONFIRM_MS),
       };
+      // The notification's own action label and body are drawn from the
+      // service's state, so the fold has to reach the service — otherwise the
+      // banner says "Muted" while the shade still offers "Mute". The service
+      // applies it to the same capture the control frame just addressed, and a
+      // second mute frame for the same state is not sent.
+      try {
+        void Promise.resolve(moduleRef.current?.setMuted?.(muted)).catch(() => undefined);
+      } catch {
+        // best-effort: an absent or refusing service must not fail the mute
+      }
       return moduleRef.current?.sendGateControl(
         serializeGateControl(gateControlFor(muted ? 'mute' : 'unmute')),
       );
@@ -634,6 +661,13 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         }),
         module.addListener('bargeIn', () => {
           dispatch({ type: 'bargeIn' });
+        }),
+        // The notification's Mute/Unmute, for a call the phone engine drives.
+        // The service has already applied it to the recognizer; this is the
+        // same event the in-app control dispatches, so the banner and the shade
+        // stay one state here too.
+        module.addListener('muteRequest', (event) => {
+          dispatch({ type: event.muted === true ? 'mute' : 'unmute' });
         }),
         // `level` is banner-only: it never reaches the reducer and nothing
         // depends on it, so a platform that omits it changes nothing. A sample is
@@ -771,7 +805,24 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         }
         if (parsed && 'seq' in parsed && typeof parsed.seq === 'number' && parsed.v === 2) {
           if (parsed.seq <= gateLastSeqRef.current) return;
-          if (parsed.seq !== gateLastSeqRef.current + 1) return;
+          if (parsed.seq !== gateLastSeqRef.current + 1) {
+            // A frame this phone never saw — the native socket drops one it
+            // cannot read (anything over its own 4 KiB ceiling), a socket
+            // under backpressure burns a sequence without sending it, and a
+            // caller that has only just attached can miss the first one.
+            // Dropping THIS frame used to drop every frame after it for the
+            // rest of the call, because the cursor never advanced again: the
+            // banner froze where it was, and a mute the Gate did apply was
+            // never folded. The hole is named once and the frame is folded
+            // from the Gate's own account instead.
+            if (gateSeqGapRef.current === 0) {
+              gateSeqGapRef.current = parsed.seq;
+              console.warn(
+                `[handsfree-gate] frame gap session=${gateSessionIdRef.current ?? 'unknown'}`
+                + ` expected=${gateLastSeqRef.current + 1} got=${parsed.seq}`,
+              );
+            }
+          }
           gateLastSeqRef.current = parsed.seq;
         }
         const localDecision = parsed?.t === 'approval' && parsed.approvalId
@@ -879,6 +930,15 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       // The first frames of each subscription are logged: a start that fails
       // its link proof says from the log whether any frame reached JS at all.
       let framesSeen = 0;
+      // A mute applied by the notification while no JS runtime was listening is
+      // still the microphone's state: this one adopts it instead of painting
+      // "Listening" over a capture that is off. The Gate's next `phase` frame is
+      // the authority and overwrites it.
+      if (module.isMuted?.() === true && gateBannerRef.current.phase !== 'muted') {
+        const adopted: GateCallBanner = { ...gateBannerRef.current, phase: 'muted', muted: true };
+        gateBannerRef.current = adopted;
+        setGateBanner(adopted);
+      }
       subscriptionsRef.current = [
         module.addListener('gate', (event) => {
           if (framesSeen < 3) {
@@ -898,6 +958,30 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
             return;
           }
           fold(event.frame);
+        }),
+        // The notification's Mute/Unmute is the same button as the banner's.
+        // The service has already applied it to the capture (so a call with no
+        // JS runtime is still muted), and it says so here; the banner takes the
+        // identical path the in-app control takes, so the fold, the control
+        // frame and the Gate's confirming `phase` are one state on every
+        // surface. JS answering with its own `setMuted` is a no-op: the
+        // service's state already holds the value.
+        module.addListener('muteRequest', (event) => {
+          const muted = event.muted === true;
+          if (!gateModeRef.current) {
+            // The phone engine's banner is the reducer's: the same event the
+            // in-app control dispatches, so the notification and the banner are
+            // one state there too. The reducer's own `set-muted` effect reaches
+            // the service again, which refuses the unchanged value.
+            dispatch({ type: muted ? 'mute' : 'unmute' });
+            return;
+          }
+          void Promise.resolve(foldGateMute(muted)).then(
+            (sent) => {
+              if (sent === false) rollbackGateMute('the Gate refused the mute');
+            },
+            () => rollbackGateMute('the mute could not be sent'),
+          );
         }),
         // The amplitude sample is banner-only, exactly as on the phone engine.
         module.addListener('level', (event) => {
@@ -920,7 +1004,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         }),
       ];
     },
-    [clearGateMute, dispatch, level, nativeGateFrames, runGateEffect, trackGateApproval, unsubscribe],
+    [clearGateMute, dispatch, foldGateMute, level, nativeGateFrames, rollbackGateMute, runGateEffect, trackGateApproval, unsubscribe],
   );
 
   const teardown = useCallback(async () => {
@@ -1468,6 +1552,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       gateSessionIdRef.current = undefined;
       gateGrantRef.current = null;
       gateLastSeqRef.current = 0;
+      gateSeqGapRef.current = 0;
       gateDeviceRef.current = null;
       gateReconnectingRef.current = false;
       gateBannerRef.current = INITIAL_GATE_CALL;
