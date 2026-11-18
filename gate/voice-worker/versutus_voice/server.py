@@ -40,19 +40,26 @@ MAX_UTTERANCE_SECONDS = 30
 # barely believes, is dropped rather than sent as something the operator said.
 NO_SPEECH_PROB_MAX = 0.6
 AVG_LOGPROB_MIN = -1.0
+# Past this, Whisper is sure it heard no speech, and no confidence in the words
+# buys the segment back: a television line transcribed word for word is still
+# not the operator talking (VS-145). Above NO_SPEECH_PROB_MAX but below this,
+# the words decide, because soft speech scores high no-speech while the model
+# remains sure of them.
+NO_SPEECH_PROB_DECISIVE = 0.8
+
+
+def _is_non_speech(segment):
+    """Whether Whisper's own scores say this segment is not the operator."""
+    no_speech = getattr(segment, "no_speech_prob", 0.0) or 0.0
+    logprob = getattr(segment, "avg_logprob", 0.0) or 0.0
+    if no_speech > NO_SPEECH_PROB_DECISIVE:
+        return True
+    return no_speech > NO_SPEECH_PROB_MAX and logprob < AVG_LOGPROB_MIN
 
 
 def join_spoken_segments(segments):
     """The text of the segments Whisper is confident were speech."""
-    kept = []
-    for segment in segments:
-        no_speech = getattr(segment, "no_speech_prob", 0.0) or 0.0
-        logprob = getattr(segment, "avg_logprob", 0.0) or 0.0
-        if no_speech > NO_SPEECH_PROB_MAX and logprob < AVG_LOGPROB_MIN:
-            continue
-        if no_speech > 0.9:
-            continue
-        kept.append(segment.text)
+    kept = [segment.text for segment in segments if not _is_non_speech(segment)]
     return "".join(kept).strip()
 
 

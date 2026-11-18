@@ -58,6 +58,24 @@ def _pipeline(events, min_utterance_ms):
     )
 
 
+def _replay_pipeline(events, segments):
+    """A pipeline whose transcriber replays one clip's Whisper segments.
+
+    Production applies the filter when segments become text
+    (`build_default_pipeline`), so replaying through it makes the same
+    decision the operator's clip gets.
+    """
+    return VoicePipeline(
+        vad=OneUtteranceVad(),
+        transcriber=PartialTranscriber(lambda pcm, beam_size: join_spoken_segments(segments)),
+        turn_judge=None,
+        synthesizer=SpeechSynthesizer(lambda text: [text.encode("ascii")]),
+        emit=lambda method, params: events.append((method, params)),
+        min_utterance_ms=0,
+        spawn=lambda fn: fn(),
+    )
+
+
 def test_a_blip_shorter_than_the_minimum_is_not_a_turn():
     events = []
     pipeline = _pipeline(events, min_utterance_ms=400)
@@ -109,6 +127,40 @@ def test_a_doubtful_segment_on_a_quiet_line_is_dropped():
 def test_a_quiet_but_confident_segment_is_kept():
     # Soft speech can score high no-speech while Whisper is sure of the words.
     assert join_spoken_segments([_Segment(" yes", no_speech_prob=0.7, avg_logprob=-0.3)]) == "yes"
+
+
+# Two labelled clips replayed from a live call (VS-145): Whisper's segments and
+# the scores it gave them, which are all the filter reads.
+# A television line the phone's microphone picked up. The words are confident,
+# but the model is sure it heard no speech, and that outweighs them.
+NON_SPEECH_CLIP = [_Segment(" Thank you.", no_speech_prob=0.85, avg_logprob=-0.2)]
+# Genuine quiet speech: the operator is far from the phone, so the no-speech
+# score and the words' confidence are both low, and this must still be a turn.
+QUIET_SPEECH_CLIP = [_Segment(" What time is it", no_speech_prob=0.45, avg_logprob=-0.8)]
+
+
+def test_a_confident_non_speech_clip_does_not_become_a_turn():
+    # Before VS-145 this committed "Thank you.": 0.85 was under the old 0.9
+    # cutoff, and -0.2 was too confident for the doubtful-words branch.
+    assert join_spoken_segments(NON_SPEECH_CLIP) == ""
+
+    events = []
+    pipeline = _replay_pipeline(events, NON_SPEECH_CLIP)
+    pipeline.pushAudio({"chunk": encode_chunk(_pcm(600), 16000)})
+
+    methods = [method for method, _params in events]
+    assert "voice.final" not in methods
+    assert methods.count("voice.noSpeechDrop") == 1
+
+
+def test_a_quiet_speech_clip_still_commits():
+    assert join_spoken_segments(QUIET_SPEECH_CLIP) == "What time is it"
+
+    events = []
+    pipeline = _replay_pipeline(events, QUIET_SPEECH_CLIP)
+    pipeline.pushAudio({"chunk": encode_chunk(_pcm(600), 16000)})
+
+    assert [params["text"] for method, params in events if method == "voice.final"] == ["What time is it"]
 
 
 class LateStartVad:
