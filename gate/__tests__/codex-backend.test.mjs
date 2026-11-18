@@ -27,6 +27,11 @@ function stubRpc(responses = {}) {
   };
 }
 
+/** Let a turn's promises settle between ticks of a mock clock. */
+function flushTurn() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 test('a thread maps onto the session shape the app parses', () => {
   const mapped = toGatewaySession({
     id: 'th_1',
@@ -243,6 +248,123 @@ test('a turn that never completes is not published as a finished answer', { time
   const interrupt = calls.filter((call) => call.method === 'turn/interrupt');
   assert.equal(interrupt.length, 1, 'the app-server keeps working unless the turn is stopped');
   assert.equal(interrupt[0].params.turnId, 'tu_1', 'and the stop targets the live turn');
+});
+
+// The bound is an idle bound, not a stopwatch on the send: a turn that is still
+// streaming is working, and cutting it off at three minutes published a fragment
+// as the answer. The clock restarts on every sign of life, so progress at 179 s
+// keeps the turn alive past 180 s.
+test('progress restarts the idle bound, so a still-talking turn is not cut off', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.after(() => t.mock.timers.reset());
+  let emit = () => {};
+  const { calls, rpc } = stubRpc({ 'turn/start': { turnId: 'tu_1' }, 'turn/interrupt': {} });
+  const backend = createCodexBackend({
+    rpc, cwd: 'C:\\ws', turnTimeoutMs: 1_000,
+    subscribe: (handler) => { emit = handler; return () => { emit = () => {}; }; },
+  });
+
+  const turn = backend.sendMessage('th_1', { text: 'build it' });
+  await flushTurn();
+
+  // Just short of the bound, then past the send-time deadline: the delta is a
+  // sign of life, so the turn is still alive at 1.6x the bound.
+  t.mock.timers.tick(800);
+  emit({ method: 'item/agentMessage/delta', params: { threadId: 'th_1', delta: 'still ' } });
+  await flushTurn();
+  t.mock.timers.tick(800);
+  await flushTurn();
+  assert.equal(
+    calls.some((call) => call.method === 'turn/interrupt'), false,
+    'a turn that spoke inside the bound must not be stopped for silence',
+  );
+
+  emit({ method: 'item/agentMessage/delta', params: { threadId: 'th_1', delta: 'working' } });
+  emit({ method: 'turn/completed', params: { threadId: 'th_1' } });
+  const result = await turn;
+  assert.equal(result.text, 'still working');
+  assert.equal(calls.some((call) => call.method === 'turn/interrupt'), false);
+});
+
+// The app-server documents the order item/started -> requestApproval ->
+// serverRequest/resolved -> item/completed for a command that needs a ruling,
+// and sends nothing at all while it waits for that ruling. So an item that is
+// open is either executing or parked on the operator: either way it is not idle,
+// and the approval wait must not consume the turn's budget.
+test('a command waiting on approval suspends the idle bound', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.after(() => t.mock.timers.reset());
+  let emit = () => {};
+  const { calls, rpc } = stubRpc({ 'turn/start': { turnId: 'tu_1' }, 'turn/interrupt': {} });
+  const backend = createCodexBackend({
+    rpc, cwd: 'C:\\ws', turnTimeoutMs: 1_000,
+    subscribe: (handler) => { emit = handler; return () => { emit = () => {}; }; },
+  });
+
+  const turn = backend.sendMessage('th_1', { text: 'rm -rf build' });
+  await flushTurn();
+
+  const command = { id: 'cmd_1', type: 'commandExecution', command: 'rm -rf build' };
+  emit({ method: 'item/started', params: { threadId: 'th_1', item: command } });
+  await flushTurn();
+  // Ten times the bound passes while the approval card is unanswered.
+  t.mock.timers.tick(10_000);
+  await flushTurn();
+  assert.equal(
+    calls.some((call) => call.method === 'turn/interrupt'), false,
+    'an approval that has not been ruled on must not spend the idle budget',
+  );
+
+  // The operator approves: the command runs, its item closes and the turn ends.
+  emit({ method: 'serverRequest/resolved', params: { threadId: 'th_1', requestId: 99 } });
+  emit({
+    method: 'item/completed',
+    params: { threadId: 'th_1', item: { ...command, status: 'completed', aggregatedOutput: 'removed\n' } },
+  });
+  emit({ method: 'item/agentMessage/delta', params: { threadId: 'th_1', delta: 'done' } });
+  emit({ method: 'turn/completed', params: { threadId: 'th_1' } });
+
+  const result = await turn;
+  assert.equal(result.text, 'done');
+  assert.equal(calls.some((call) => call.method === 'turn/interrupt'), false);
+});
+
+test('the idle bound resumes once the open item closes, and still stops a silent turn', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.after(() => t.mock.timers.reset());
+  let emit = () => {};
+  const { calls, rpc } = stubRpc({ 'turn/start': { turnId: 'tu_1' }, 'turn/interrupt': {} });
+  const backend = createCodexBackend({
+    rpc, cwd: 'C:\\ws', turnTimeoutMs: 1_000,
+    subscribe: (handler) => { emit = handler; return () => { emit = () => {}; }; },
+  });
+
+  const turn = backend.sendMessage('th_1', { text: 'write it' });
+  const settled = turn.then(() => 'answered', (error) => error);
+  await flushTurn();
+
+  const patch = { id: 'patch_1', type: 'fileChange', status: 'inProgress' };
+  emit({ method: 'item/started', params: { threadId: 'th_1', item: patch } });
+  await flushTurn();
+  t.mock.timers.tick(5_000);
+  await flushTurn();
+  assert.equal(calls.some((call) => call.method === 'turn/interrupt'), false, 'open item: not idle');
+
+  // The operator declines; the item closes and nothing else is said. From here
+  // the full idle budget applies again, and a turn that stays silent is stopped.
+  emit({
+    method: 'item/completed',
+    params: { threadId: 'th_1', item: { ...patch, status: 'declined' } },
+  });
+  await flushTurn();
+  t.mock.timers.tick(1_000);
+  await flushTurn();
+
+  const outcome = await settled;
+  assert.match(outcome.message, /did not answer within/i, 'silence after the ruling is still a silent turn');
+  const interrupt = calls.filter((call) => call.method === 'turn/interrupt');
+  assert.equal(interrupt.length, 1, 'and the app-server turn is stopped with it');
+  assert.equal(interrupt[0].params.turnId, 'tu_1');
 });
 
 test('a failed turn still rejects, and the stop path leaves no subscription behind', async () => {

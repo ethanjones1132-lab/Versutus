@@ -141,14 +141,19 @@ export function isApprovalRequest(method) {
 }
 
 /**
- * How long a turn the app-server has already accepted is given to finish.
+ * How long a turn the app-server has already accepted may stay *silent*.
  *
- * A turn this old that has neither failed nor completed is not going to: the
- * text collected so far is a fragment, and reporting it as the answer tells the
- * operator the model is done while it is still working. Injectable so a test
- * proves the failure without waiting one out.
+ * Silence is measured from the last sign of life, never from `turn/start`: a
+ * turn that is still streaming deltas, streaming tool output or waiting on a
+ * tool is working, and reporting its fragment as the answer tells the operator
+ * the model is done while it is still working. Only a turn that has said
+ * nothing for this long is treated as one that is not going to answer.
+ * Injectable so a test proves the failure without waiting one out.
  */
 const TURN_TIMEOUT_MS = 180_000;
+
+/** An item the app-server opened without an id (nothing else to key it on). */
+const ANONYMOUS_ITEM = '#item';
 
 /**
  * The one Bot this environment serves: the agent itself (ADR 0016).
@@ -202,13 +207,31 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeou
    * the turn's own bound, and the caller's signal — without which a Stop ended
    * the phone's turn and left the app-server working into a bus nobody was
    * reading for the rest of these three minutes.
+   *
+   * The bound is an *idle* bound. Any notification the app-server emits for
+   * this thread is a sign of life and restarts it — a turn past three minutes
+   * that is still streaming deltas, tool output or token usage is working, and
+   * treating it as silent published a fragment as the answer. A tool item the
+   * app-server has opened and not finished (`item/started` … `item/completed`)
+   * suspends the bound altogether: it is either executing or parked on an
+   * approval the operator has not ruled on yet, and the app-server sends
+   * nothing while it waits for that ruling. The approval wait therefore never
+   * spends the turn's budget; the budget starts again when the item closes.
    */
   function awaitTurn(threadId, { timeoutMs = TURN_TIMEOUT_MS, signal } = {}) {
     if (!subscribe) return Promise.resolve({ text: '', completed: false });
     return new Promise((resolve) => {
       let text = '';
+      // Open tool items by call id. Empty means the turn is not demonstrably
+      // working, so the idle bound is what decides whether it still is.
+      const openItems = new Set();
+      let timer = null;
+      let released = false;
+      let unsubscribe;
       const release = () => {
+        released = true;
         clearTimeout(timer);
+        timer = null;
         signal?.removeEventListener('abort', onAbort);
         unsubscribe?.();
       };
@@ -216,24 +239,41 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeou
         release();
         resolve({ text, completed: true, ...extra });
       };
+      const expire = () => {
+        release();
+        resolve({ text, completed: false });
+      };
+      // Arm the idle bound from now — unless a tool is open, which is work in
+      // progress whatever the clock says. `unref` keeps an idle bound from
+      // holding the process open on its own.
+      const arm = () => {
+        if (released) return;
+        clearTimeout(timer);
+        timer = null;
+        if (openItems.size > 0) return;
+        timer = setTimeout(expire, timeoutMs);
+        timer.unref?.();
+      };
       const onAbort = () => {
         release();
         resolve({ text, completed: false, aborted: true });
       };
-      const timer = setTimeout(() => {
-        unsubscribe?.();
-        resolve({ text, completed: false });
-      }, timeoutMs);
-      timer.unref?.();
-      const unsubscribe = subscribe((message) => {
+      unsubscribe = subscribe((message) => {
+        if (released) return;
         if (message?.params?.threadId && message.params.threadId !== threadId) return;
         const event = normalizeCodexEvent(message);
         if (event?.type === 'message.delta') text += event.payload.text ?? '';
-        else if (event?.type === 'run.completed') finish();
-        else if (event?.type === 'run.failed') finish({ error: event.payload.error });
+        else if (event?.type === 'run.completed') { finish(); return; }
+        else if (event?.type === 'run.failed') { finish({ error: event.payload.error }); return; }
+        // Track the approval window: an item opened and not closed covers both
+        // an executing command and a command waiting on the operator's ruling.
+        const itemId = event?.payload?.callId;
+        if (event?.type === 'tool.started') openItems.add(itemId ?? ANONYMOUS_ITEM);
+        else if (event?.type === 'tool.output') openItems.delete(itemId ?? ANONYMOUS_ITEM);
+        arm();
       });
       if (signal?.aborted) onAbort();
-      else signal?.addEventListener('abort', onAbort, { once: true });
+      else { signal?.addEventListener('abort', onAbort, { once: true }); arm(); }
     });
   }
 
@@ -313,11 +353,12 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeou
         throw new Error(typeof outcome.error === 'string' ? outcome.error : JSON.stringify(outcome.error));
       }
       if (!outcome.completed) {
-        // The turn never reached `turn/completed`, so the text so far is a
-        // fragment of a turn the app-server is still running. Publishing it
-        // with `finish_reason: stop` would tell the operator the model is done
-        // while it is still working — and the model-health table would score the
-        // silence as a success. Stop the turn and say what happened.
+        // The turn never reached `turn/completed` and said nothing for the whole
+        // idle bound, so the text so far is a fragment of a turn the app-server
+        // may still be running. Publishing it with `finish_reason: stop` would
+        // tell the operator the model is done while it is still working — and
+        // the model-health table would score the silence as a success. Stop the
+        // turn and say what happened.
         await interruptTurn(sessionId, result?.turnId ?? threadTurns.get(sessionId));
         const seconds = Math.max(1, Math.round(turnTimeoutMs / 1000));
         throw new Error(
