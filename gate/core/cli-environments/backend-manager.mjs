@@ -144,7 +144,12 @@ export function createBackendManager({
     }
   }
 
-  /** Wire-safe description for the manifest and the app's backend picker. */
+  /**
+   * Wire-safe description for the app's backend picker and the authenticated
+   * `/v1/backends`. `workspaceRoot` stays here because an operator editing an
+   * environment needs it; the public manifest strips it in `buildManifest`,
+   * since `/.well-known/gateway.json` is answered without a device grant.
+   */
   async function describe() {
     return (await list()).map((record) => {
       const adapter = registry.get(record.adapterId);

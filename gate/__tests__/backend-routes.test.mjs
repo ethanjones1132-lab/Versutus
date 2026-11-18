@@ -329,6 +329,27 @@ test('the manifest advertises sessions only because a backend provides them', as
     assert.ok(manifest.endpoints.sessionMessages, 'sessionMessages endpoint must be advertised');
     assert.equal(manifest.backends?.[0]?.id, 'stub-local');
     assert.equal(manifest.backends?.[0]?.kind, 'environment');
+    // The public manifest is answered without a device grant, so it names the
+    // environment and what it can do, but never the directory it writes to.
+    assert.equal(manifest.backends?.[0]?.label, 'Stub stubcli');
+    assert.ok(Array.isArray(manifest.backends?.[0]?.capabilities));
+    assert.equal(manifest.backends?.[0]?.workspaceRoot, undefined);
+    const serialized = JSON.stringify(manifest);
+    assert.equal(JSON.stringify(manifest.backends).includes('workspaceRoot'), false);
+    assert.equal(serialized.includes('C:\\\\ws'), false, 'the workspace path must not be published');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('the authenticated backend list still carries the workspace root the public manifest withholds', async () => {
+  const { gate } = await makeGate();
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/backends`, { headers: auth(gate) });
+    assert.equal(response.status, 200);
+    const { backends } = await response.json();
+    assert.equal(backends[0].id, 'stub-local');
+    assert.equal(backends[0].workspaceRoot, 'C:\\ws');
   } finally {
     await gate.close();
   }

@@ -31,6 +31,48 @@ test('routine editing is advertised only by a backend that supports it', () => {
   assert.equal(editing.endpoints.jobUpdate, '/v1/jobs/{id}');
 });
 
+test('describes a backend by identity, capability and health, never by its workspace path', () => {
+  const backend = {
+    id: 'opencode-local',
+    label: 'OpenCode',
+    kind: 'environment',
+    adapterId: 'opencode',
+    capabilities: ['sessions', 'tools', 'models'],
+    workspaceRoot: 'C:\\Projects\\Versutus',
+    state: 'ready',
+    cliVersion: '1.18.18',
+  };
+  const manifest = buildManifest({ name: 'Gate', capabilityKinds, capabilityInstances, backends: [backend] });
+
+  // The public manifest is answered without a device grant, so the parts of a
+  // backend a phone legitimately needs are still there...
+  assert.deepEqual(manifest.backends, [{
+    id: 'opencode-local',
+    label: 'OpenCode',
+    kind: 'environment',
+    adapterId: 'opencode',
+    capabilities: ['sessions', 'tools', 'models'],
+    state: 'ready',
+    cliVersion: '1.18.18',
+  }]);
+  // ...and the local directory the environment may write to is not.
+  assert.equal(manifest.backends[0].workspaceRoot, undefined);
+  const serialized = JSON.stringify(manifest);
+  assert.equal(JSON.stringify(manifest.backends).includes('workspaceRoot'), false);
+  assert.equal(serialized.includes(JSON.stringify(backend.workspaceRoot)), false, 'the local workspace path must not be published');
+});
+
+test('keeps advertising the backend-driven endpoints and capabilities without the workspace path', () => {
+  const manifest = buildManifest({
+    name: 'Gate',
+    backends: [{ id: 'opencode-local', label: 'OpenCode', capabilities: ['sessions'], workspaceRoot: 'C:\\Projects' }],
+  });
+  assert.equal(manifest.endpoints.backends, '/v1/backends');
+  assert.equal(manifest.capabilities.sessions, true);
+  assert.equal(manifest.backends.length, 1);
+  assert.equal(manifest.backends[0].label, 'OpenCode');
+});
+
 test('advertises tailnet IPv4s on transport when given, and omits an empty list', () => {
   const withIp = buildManifest({
     name: 'Gate',

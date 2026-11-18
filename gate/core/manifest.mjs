@@ -48,9 +48,27 @@ function providerEntryFromSnapshot(snapshot) {
 const byId = (a, b) => a.id.localeCompare(b.id);
 
 /**
+ * A backend as the public manifest may describe it: who it is, what it can do,
+ * and how healthy it is — never where on disk it writes.
+ *
+ * `workspaceRoot` is a local filesystem path. It is useful to a consumer that
+ * is about to edit the environment, which reads it from the authenticated
+ * `/v1/backends`, but this manifest is served unauthenticated at
+ * `/.well-known/gateway.json` and must not name a path on the operator's disk.
+ * The field is stripped here rather than only at the call site so no route that
+ * builds a manifest can publish it back.
+ */
+function publicBackendEntry(entry) {
+  const rest = { ...entry };
+  delete rest.workspaceRoot;
+  return rest;
+}
+
+/**
  * @param {Object} options
  * @param {string} options.name
  * @param {string} [options.version]
+ * @param {Array<Object>} [options.backends] - described environments; their local workspace path is stripped on the way out
  * @param {Array<Object>} [options.providerSnapshots] - v2 provider state, from ProviderService.toSnapshot()
  * @param {Array<Object>} [options.capabilityKinds] - wire-shaped, from describeKinds()
  * @param {Array<Object>} [options.capabilityInstances] - wire-shaped, from resolveManifestInstances()
@@ -162,7 +180,7 @@ export function buildManifest({
       // observably fronts, so the app stops hiding cron on a gateway that has it.
       ...(backendCan('cron') ? { jobs_admin: true } : {}),
     },
-    backends,
+    backends: backends.map(publicBackendEntry),
     providers,
     capabilityKinds,
     capabilityInstances,
