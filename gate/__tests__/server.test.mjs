@@ -41,6 +41,9 @@ async function testSetup() {
     join(root, 'core', 'capabilities', 'provider', 'kind.mjs'),
   );
   await mkdir(join(root, 'registry'), { recursive: true });
+  // The record names TEST_KEY as its only credential; a provider whose key is
+  // absent offers no models (readiness decides that), so the fixture sets it.
+  process.env.TEST_KEY = 'fake-key-for-tests';
   await writeFile(
     join(root, 'registry', 'test-provider.json'),
     JSON.stringify({

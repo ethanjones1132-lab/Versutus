@@ -4,6 +4,7 @@ import { effectiveModel, resolveSendModel, withSelectedModel,
   staleModelPin,
   stalePinNote,
   connectDefaultModel,
+  firstAvailableModelId,
 } from '@/lib/gateway/model-selection';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
@@ -431,5 +432,62 @@ describe('the model a first connect may pin as the default', () => {
   test('no advertised model means nothing to pin', () => {
     expect(connectDefaultModel({ model: undefined }, {}, [])).toBeUndefined();
     expect(connectDefaultModel({ model: undefined }, {}, [{ models: [''] }])).toBeUndefined();
+  });
+
+  test('a provider with no credential never supplies the pinned default', () => {
+    // A fresh Gate advertises the provider it has no key for first (that is how
+    // nvidia.json migrates), and pinning its model made the first send a 409.
+    const fresh = [
+      {
+        id: 'nvidia',
+        models: ['deepseek-ai/deepseek-v4-flash-0731'],
+        auth: { state: 'missing' },
+        readiness: { state: 'unavailable', code: 'missing_credentials' },
+      },
+      {
+        id: 'kilo',
+        models: ['kilo/glm-5.3'],
+        auth: { state: 'ready' },
+        readiness: { state: 'ready' },
+      },
+    ];
+    expect(connectDefaultModel({ model: undefined }, {}, fresh)).toBe('kilo/glm-5.3');
+  });
+
+  test('a disabled provider never supplies the pinned default', () => {
+    const entries = [
+      { models: ['locked/one'], auth: { state: 'ready' }, readiness: { state: 'disabled', code: 'disabled' } },
+      { models: ['open/two'], auth: { state: 'ready' }, readiness: { state: 'ready' } },
+    ];
+    expect(connectDefaultModel({ model: undefined }, {}, entries)).toBe('open/two');
+  });
+
+  test('nothing is pinned when no provider can answer', () => {
+    const entries = [
+      { models: ['nvidia/model'], auth: { state: 'missing' }, readiness: { state: 'unavailable' } },
+      { models: [], auth: { state: 'ready' }, readiness: { state: 'ready' } },
+    ];
+    expect(connectDefaultModel({ model: undefined }, {}, entries)).toBeUndefined();
+  });
+});
+
+describe('the first model a connected composer may pin', () => {
+  test('skips rows whose provider is not signed in', () => {
+    expect(
+      firstAvailableModelId([
+        { id: 'nvidia/model', available: false },
+        { id: 'kilo/glm-5.3', available: true },
+      ]),
+    ).toBe('kilo/glm-5.3');
+  });
+
+  test('an unmarked row is available, as it predates the signal', () => {
+    expect(firstAvailableModelId([{ id: 'plain/model' }])).toBe('plain/model');
+  });
+
+  test('pins nothing when every row is locked or the catalog is empty', () => {
+    expect(firstAvailableModelId([{ id: 'nvidia/model', available: false }])).toBeUndefined();
+    expect(firstAvailableModelId([{ id: '', available: true }])).toBeUndefined();
+    expect(firstAvailableModelId([])).toBeUndefined();
   });
 });

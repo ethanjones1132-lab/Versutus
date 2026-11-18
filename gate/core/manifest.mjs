@@ -7,6 +7,7 @@
  */
 
 import { isTailnetIpv4 } from './reachability.mjs';
+import { providerOffersModels } from './providers/health.mjs';
 
 export const MANIFEST_SPEC = 'versutus-gateway/v1';
 export const GATE_KIND = 'versutus-gate';
@@ -15,13 +16,21 @@ export const GATE_KIND = 'versutus-gate';
  * A provider as a client needs to see it: enough state to decide whether it is
  * usable, and nothing that could be a credential. The manifest is served to any
  * paired device, so `credentialRef`, `baseUrl` and key material stay out.
+ *
+ * `models` is empty when the provider cannot answer (see `providerOffersModels`):
+ * the app pins its first default from this list, so advertising a model behind
+ * a provider with no credential is what made a fresh Gate's first send a
+ * guaranteed refusal. The entry itself stays, with the readiness and auth that
+ * explain why, so the provider is still visible as needing a key.
  */
 function providerEntryFromSnapshot(snapshot) {
   return {
     id: snapshot.id,
     label: snapshot.label,
     basePath: `/p/${snapshot.id}`,
-    models: (snapshot.catalog?.models ?? []).map((model) => model.id),
+    models: providerOffersModels(snapshot)
+      ? (snapshot.catalog?.models ?? []).map((model) => model.id)
+      : [],
     capabilities: { chat: true, streaming: true },
     readiness: {
       state: snapshot.readiness?.state ?? 'unavailable',

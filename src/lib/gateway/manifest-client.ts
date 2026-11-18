@@ -539,12 +539,22 @@ export class ManifestClient implements PortalClient {
     return parseRoutineFeed(raw);
   }
 
-  /** First model this gate advertises, if any. */
+  /**
+   * First model this gate advertises, if any.
+   *
+   * The first PROVIDER is not necessarily one that can answer — a fresh Gate
+   * lists the provider it has no key for first, with no models — so the first
+   * provider that actually advertises one supplies the fallback.
+   */
   private defaultModelId(): string | undefined {
-    const fromProviders = this.identity.providers?.[0]?.models?.[0];
-    if (typeof fromProviders === 'string' && fromProviders) return fromProviders;
-    const fromManifest = this.identity.manifest?.providers?.[0]?.models?.[0];
-    if (typeof fromManifest === 'string' && fromManifest) return fromManifest;
+    const lists = [
+      ...(this.identity.providers ?? []).map((provider) => provider.models),
+      ...(this.identity.manifest?.providers ?? []).map((provider) => provider.models),
+    ];
+    for (const models of lists) {
+      const first = models?.[0];
+      if (typeof first === 'string' && first) return first;
+    }
     return undefined;
   }
 

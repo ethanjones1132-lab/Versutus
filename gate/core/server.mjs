@@ -17,6 +17,7 @@ import { createSessionIndex, parseSessionIndexKey, sessionIndexKey } from './ses
 import { createTurnJournal, GATE_RESTART_FRAME } from './turns/turn-journal.mjs';
 import { toGatewaySession } from './cli-environments/backends/hermes.mjs';
 import { ProviderStore } from './providers/store.mjs';
+import { providerOffersModels } from './providers/health.mjs';
 import { migrateLegacyProviders } from './providers/migrate-v1.mjs';
 import { ProviderService } from './providers/service.mjs';
 import { CredentialVault } from './credentials/vault.mjs';
@@ -5015,10 +5016,40 @@ export async function createGate(config = {}) {
         }
 
         const snapshots = await listProvidersOrEmpty();
-        const advertised = snapshots.flatMap((snapshot) => (
-          snapshot.catalog?.models ?? []
-        ).map((model) => ({ providerId: snapshot.id, modelId: model.id })));
+        // Only a provider that can answer contributes a model here: this list
+        // decides which provider the turn below is sent to, and a keyless one
+        // would turn a model-less send into a guaranteed 409. The snapshot
+        // already carries that verdict (see `providerOffersModels`).
+        const advertised = snapshots
+          .filter((snapshot) => providerOffersModels(snapshot))
+          .flatMap((snapshot) => (
+            snapshot.catalog?.models ?? []
+          ).map((model) => ({ providerId: snapshot.id, modelId: model.id })));
+        // Availability keeps keyless models out of the selectable list, but it
+        // must not erase the ambiguity of an explicitly requested model name:
+        // callers still need a providerId when more than one provider declares
+        // it, even if those providers currently need credentials.
+        const declaredProviderIds = new Set([
+          ...snapshots
+            .filter((snapshot) => (snapshot.catalog?.models ?? []).some((model) => model.id === body.model))
+            .map((snapshot) => snapshot.id),
+          ...state.providers
+            .filter((provider) => (provider.config.models || []).includes(body.model))
+            .map((provider) => provider.id),
+        ]);
+        if (body.model && !body.providerId && declaredProviderIds.size > 1) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: {
+              message: `Model "${body.model}" is declared by multiple providers`,
+              code: 'ambiguous_model',
+            },
+          }));
+          return;
+        }
         for (const provider of state.providers) {
+          const envName = provider.config?.apiKeyEnv;
+          if (typeof envName !== 'string' || !envName || !process.env[envName]) continue;
           for (const modelId of provider.config.models || []) {
             if (!advertised.some((entry) => entry.providerId === provider.id && entry.modelId === modelId)) {
               advertised.push({ providerId: provider.id, modelId });

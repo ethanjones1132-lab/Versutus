@@ -49,8 +49,11 @@ test('/v1/models omits a disabled provider and still lists the enabled ones', as
   await mkdir(join(gateHome, 'config', 'providers'), { recursive: true });
   await mkdir(join(root, 'core', 'capabilities', 'provider'), { recursive: true });
   await copyFile(kindModulePath, join(root, 'core', 'capabilities', 'provider', 'kind.mjs'));
-  // A legacy twin with bootstrap models only, so the fallback path is here too.
+  // A legacy twin with bootstrap models only, migrated into the v2 store. Its
+  // key is present, because a provider with no credential no longer offers
+  // models at all -- readiness is what decides that.
   await mkdir(join(root, 'registry'), { recursive: true });
+  process.env.TWIN_KEY = 'fixture-value';
   await writeFile(join(root, 'registry', 'twin.json'), JSON.stringify({
     kind: 'provider',
     label: 'Twin',
@@ -86,12 +89,14 @@ test('/v1/models omits a disabled provider and still lists the enabled ones', as
       [],
       'a disabled provider must not be offered in the picker',
     );
-    // The legacy fallback is untouched: it is still listed when nothing else is.
+    // A provider whose key variable is set is still offered from the bootstrap
+    // list, exactly as the live catalog path offers it.
     assert.deepEqual(
       body.data.filter((model) => model.providerId === 'twin').map((model) => model.id),
       ['twin-model'],
     );
   } finally {
+    delete process.env.TWIN_KEY;
     await gate.close();
     await rm(root, { recursive: true, force: true });
   }

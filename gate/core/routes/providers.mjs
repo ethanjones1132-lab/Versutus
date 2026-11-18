@@ -1,4 +1,5 @@
 import { sanitizeSnapshot } from '../providers/rpc.mjs';
+import { providerOffersModels } from '../providers/health.mjs';
 import { healthScopeId } from '../model-health.mjs';
 
 export async function handleProviderRoute({
@@ -121,9 +122,11 @@ export async function handleProviderRoute({
     const snapshots = await listProvidersOrEmpty();
     const allModels = [];
     for (const snapshot of snapshots) {
-      // A disabled provider is asked nothing and answers nothing, so
-      // offering its models only sends the picker somewhere that refuses.
-      if (snapshot.readiness?.state === 'disabled') continue;
+      // A provider that cannot answer contributes nothing to the picker. It is
+      // disabled, or it has no credential: `providerOffersModels` reads that
+      // verdict, so a migrated provider whose key is not present no longer
+      // hands the composer a default model whose first send is a 409.
+      if (!providerOffersModels(snapshot)) continue;
       const models = snapshot.catalog?.models?.length
         ? snapshot.catalog.models.map((model) => model.id)
         : state.providers.find((provider) => provider.id === snapshot.id)?.config.models ?? [];
@@ -139,7 +142,13 @@ export async function handleProviderRoute({
       }
     }
     if (allModels.length === 0) {
+      // The bootstrap list is what a legacy record advertises before anything
+      // has been asked of it, so it obeys the same rule: a legacy record names
+      // the environment variable that is its only credential, and with it
+      // unset the picker would be handed a model that cannot run.
       for (const provider of state.providers) {
+        const envName = provider.config?.apiKeyEnv;
+        if (typeof envName !== 'string' || !envName || !process.env[envName]) continue;
         for (const modelId of provider.config.models || []) {
           allModels.push({
             id: modelId,

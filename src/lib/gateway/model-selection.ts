@@ -324,22 +324,76 @@ export function stalePinNote(stale: {
 }
 
 /**
+ * A provider as a Gate's manifest advertises it, narrowed to what decides
+ * whether a model behind it can be pinned.
+ */
+type ModelProvidingEntry = {
+  models?: readonly string[];
+  auth?: { state?: string };
+  readiness?: { state?: string; code?: string };
+};
+
+/**
+ * Whether a provider can answer a turn, from what the manifest already says.
+ *
+ * A disabled provider answers nothing, and one whose credential is missing
+ * cannot authenticate a send: pinning its model is the same refusal, one step
+ * later. The Gate advertises both facts (`readiness.state`, `auth.state`), so
+ * this is a read of its verdict, not a second guess. An entry carrying neither
+ * field predates the signal and is not condemned by its absence.
+ */
+export function providerCanAnswer(provider: ModelProvidingEntry): boolean {
+  if (provider.readiness?.state === 'disabled') return false;
+  if (provider.auth?.state === 'missing') return false;
+  return provider.readiness?.code !== 'missing_credentials'
+    && provider.readiness?.code !== 'credential_unreadable';
+}
+
+/**
+ * The first model in a live catalog a composer may pin, or undefined.
+ *
+ * Rows marked `available: false` belong to a provider that is not signed in; a
+ * pin on one is a pin on a view the picker itself locks. This used to fall back
+ * to the first row anyway so a send never carried `model: undefined` -- which
+ * traded a named refusal for a pinned model that could only refuse, the exact
+ * 409 the composer is supposed to avoid. Nothing available means nothing is
+ * pinned.
+ */
+export function firstAvailableModelId(
+  models: readonly { id?: string; available?: boolean }[],
+): string | undefined {
+  const found = models.find(
+    (model) => model.available !== false && typeof model.id === 'string' && model.id.trim().length > 0,
+  );
+  return found?.id?.trim();
+}
+
+/**
  * The model a first connect may pin as a profile's default, or undefined.
  *
  * Only a provider-only Gate needs one: its chats have nowhere else to go. A
  * Gate that fronts backends routes chat through them (Hermes owns its models),
  * and pinning its first PROVIDER model sent every turn that had lost its Bot to
  * that provider instead of Hermes (2026-09-16).
+ *
+ * The first entry is not necessarily one that can answer: a fresh Gate
+ * advertises the provider it has not got a key for first, and pinning its model
+ * made the very first send a guaranteed 409. So the first model behind a
+ * provider that can answer wins, and none does when no provider can.
  */
 export function connectDefaultModel(
   profile: { model?: string },
   manifest: { backends?: readonly unknown[] },
-  providers: readonly { models?: readonly string[] }[],
+  providers: readonly ModelProvidingEntry[],
 ): string | undefined {
   if (profile.model) return undefined;
   if ((manifest.backends?.length ?? 0) > 0) return undefined;
-  const first = providers[0]?.models?.[0];
-  return typeof first === 'string' && first.length > 0 ? first : undefined;
+  for (const provider of providers) {
+    if (!providerCanAnswer(provider)) continue;
+    const first = provider.models?.[0];
+    if (typeof first === 'string' && first.length > 0) return first;
+  }
+  return undefined;
 }
 
 /** The provider segment of a qualified "provider/model" id, if it has one. */

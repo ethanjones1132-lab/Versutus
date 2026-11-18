@@ -22,6 +22,13 @@ export type GatewayManifestProvider = {
   basePath: string;
   models: string[];
   capabilities: { chat?: boolean; streaming?: boolean; [key: string]: boolean | undefined };
+  /**
+   * The Gate's verdict on the provider, when it advertises one. `auth.state:
+   * 'missing'` and a `readiness` that is `disabled` or reports missing
+   * credentials mean the provider cannot answer, and its `models` are empty.
+   */
+  auth?: { state?: string };
+  readiness?: { state?: string; code?: string };
 };
 
 function isGatewayManifestProvider(value: unknown): value is GatewayManifestProvider {

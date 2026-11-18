@@ -64,7 +64,44 @@ export class ProviderService {
 
   async list() {
     const records = await this.store.list();
-    return records.map((record) => toSnapshot(record.config, record.state));
+    return Promise.all(records.map((record) => this.rosterSnapshot(record)));
+  }
+
+  /**
+   * A snapshot as the roster, the manifest and the model list should read it.
+   *
+   * The v1 migration writes a record with no `auth` at all: the legacy file
+   * named an environment variable and the Gate never checked it. `toSnapshot`
+   * defaults that absence to `missing`, which is right for a provider nobody
+   * has looked at -- but `credentialPresent` is the one reader that also knows
+   * the migration's environment fallback, so it is asked here rather than
+   * handing the picker a model list no turn could authenticate. A record that
+   * already carries an `auth` verdict keeps it: that verdict is what a check or
+   * a real turn concluded, and this must never overwrite one with a guess.
+   */
+  async rosterSnapshot(record) {
+    const snapshot = toSnapshot(record.config, record.state);
+    if (record.state?.auth || !record.config.enabled) return snapshot;
+    let present;
+    try {
+      present = await this.credentialPresent(record.config, record);
+    } catch {
+      // A presence check that could not run is not evidence of absence: keep
+      // the snapshot as stored instead of hiding a provider the Gate cannot
+      // currently look at.
+      return snapshot;
+    }
+    if (present) {
+      return {
+        ...snapshot,
+        auth: nextAuthState({ mode: snapshot.mode, present: true, previous: snapshot.auth?.state }),
+      };
+    }
+    return {
+      ...snapshot,
+      auth: nextAuthState({ mode: snapshot.mode, present: false }),
+      readiness: readinessFromAuthAndError({ enabled: true, authState: 'missing' }),
+    };
   }
 
   async get(id) {

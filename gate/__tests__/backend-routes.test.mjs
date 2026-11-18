@@ -13,6 +13,7 @@ const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind
 const roots = [];
 
 afterEach(async () => {
+  delete process.env.VERSUTUS_BACKEND_ROUTES_TEST_KEY;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -162,13 +163,14 @@ async function makeGate({ calls = [], provider, registry, terminalSessions, envi
   await copyFile(kindModulePath, join(root, 'core', 'capabilities', 'provider', 'kind.mjs'));
   await mkdir(join(root, 'registry'), { recursive: true });
   if (provider) {
+    process.env.VERSUTUS_BACKEND_ROUTES_TEST_KEY = 'fixture-value';
     await writeFile(join(root, 'registry', `${provider.id}.json`), JSON.stringify({
       kind: 'provider',
       label: provider.label ?? provider.id,
       config: {
         flavor: 'openai',
         baseUrl: 'https://api.example.com/v1',
-        apiKeyEnv: 'TEST_KEY',
+        apiKeyEnv: 'VERSUTUS_BACKEND_ROUTES_TEST_KEY',
         models: provider.models ?? [],
         streaming: true,
       },

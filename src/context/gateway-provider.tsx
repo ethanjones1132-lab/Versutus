@@ -138,7 +138,7 @@ import {
   environmentProbeFailureText,
   probeEnvironmentLifecycle,
 } from '@/lib/gateway/environment-probe';
-import { applyModelOverride, effectiveModel, modelSwitchAnnouncement, resolveSendModel, scopeModelsToBackend, shouldReleaseSessionForModel, staleModelPin, stalePinNote, withSelectedModel, connectDefaultModel } from '@/lib/gateway/model-selection';
+import { applyModelOverride, effectiveModel, firstAvailableModelId, modelSwitchAnnouncement, resolveSendModel, scopeModelsToBackend, shouldReleaseSessionForModel, staleModelPin, stalePinNote, withSelectedModel, connectDefaultModel } from '@/lib/gateway/model-selection';
 import {
   buildEarlyProbeUrls,
   dropAlreadyWavedCandidates,
@@ -3898,7 +3898,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
       // Pin a default model so chat is not sent with model: undefined (Gate
       // would 404 "No provider declares model undefined"). Prefer a model
-      // whose provider is signed in — the first row can be a locked one.
+      // whose provider is signed in — the first row can be a locked one — and
+      // pin nothing when every row is locked: a pin this client already knows
+      // cannot answer is the guaranteed refusal it is meant to avoid.
       if (!gateway.model && isCurrent()) {
         // Off the connect path: the catalog is a whole read the operator is not
         // waiting for, and awaiting it here stretched every caller of
@@ -3910,7 +3912,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               const models = await client.getModels();
               if (!isCurrent()) return;
               const scoped = scopeModelsToBackend(models, selectedBackendIdRef.current ?? gateway.backendId);
-              const first = scoped.find((m) => m.available !== false)?.id ?? scoped[0]?.id ?? models[0]?.id;
+              const first = firstAvailableModelId(scoped) ?? firstAvailableModelId(models);
               if (first && isCurrent()) {
                 const withModel = { ...gateway, model: first };
                 setActiveGateway(withModel);
