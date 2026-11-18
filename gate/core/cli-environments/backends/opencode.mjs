@@ -1066,10 +1066,15 @@ export function createOpenCodeBackend({
   function openTurnBus(sessionId, model, signal, major = 1, botId = null) {
     const controller = new AbortController();
     const runningTools = new Set();
+    // Approval requests this session is waiting on. Like a running tool, an
+    // open card is the turn working: the operator is deciding, not the model
+    // failing to answer, and the inbox still accepts a ruling.
+    const openApprovals = new Set();
     let startedOutput = false;
     let retryNote = '';
     let feedDead = false;
     let timer = null;
+    let releaseApprovalWatch = null;
     let settled = false;
     let idleController = null;
     let resolveOutcome;
@@ -1097,10 +1102,12 @@ export function createOpenCodeBackend({
       if (settled) return;
       clearTimeout(timer);
       timer = null;
-      // A long tool is the turn working, not a dead turn: no bound while one runs.
-      // A dead feed is the opposite — no progress can arrive to clear the bound,
-      // so it stays armed even if a tool was running when the feed died.
-      if (!feedDead && runningTools.size > 0) return;
+      // A long tool, or an approval card the inbox still accepts, is the turn
+      // working, not a dead turn: no bound while one is open. A dead feed is the
+      // opposite — no progress can arrive to clear the bound (and no ruling can
+      // arrive for a card), so it stays armed even if a tool was running or a
+      // card was open when the feed died.
+      if (!feedDead && (runningTools.size > 0 || openApprovals.size > 0)) return;
       timer = setTimeout(() => finish({ kind: 'silent', boundMs: bound() }), bound());
       timer.unref?.();
     };
@@ -1140,6 +1147,9 @@ export function createOpenCodeBackend({
         timer = null;
       }
       signal?.removeEventListener('abort', onCallerAbort);
+      // A closed turn must not keep watching the approval bridge.
+      releaseApprovalWatch?.();
+      releaseApprovalWatch = null;
     };
     if (signal?.aborted) onCallerAbort();
     else signal?.addEventListener('abort', onCallerAbort, { once: true });
@@ -1201,6 +1211,15 @@ export function createOpenCodeBackend({
 
     let subscription = null;
     if (!settled) {
+      // The bridge owns a card's lifetime: while one is open for this session
+      // the turn is waiting on a decision, so its bound is suspended. A ruling,
+      // an expiry or a withdrawal settles it and re-arms from that moment.
+      releaseApprovalWatch = permissionBridge?.watch?.(({ phase, sessionId: owner, requestId } = {}) => {
+        if (settled || owner !== sessionId || typeof requestId !== 'string') return;
+        if (phase === 'open') openApprovals.add(requestId);
+        else openApprovals.delete(requestId);
+        arm();
+      }) ?? null;
       arm();
       subscription = backend.streamEvents(sessionId, onEvent, controller.signal, botId);
       // A feed that fails is silence from then on: the bound still ends the

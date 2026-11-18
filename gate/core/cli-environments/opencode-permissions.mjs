@@ -32,6 +32,21 @@ export function createOpenCodePermissionBridge({
   const seenAt = new Map();
   const resolvedDuringOpen = new Set();
   let sendReply = replyApproval;
+  // Turns watch a card's lifetime: a turn whose approval is still open for a
+  // decision is working, not silent, so its idle bound must not run. Watchers
+  // hear the moment a card lands in the inbox and the moment it can no longer
+  // be decided — whichever way that happened (a ruling, the approval timeout's
+  // deny, another client's reply, or a pending snapshot proving it gone).
+  const watchers = new Set();
+  const notify = (phase, sessionId, requestId) => {
+    for (const watcher of watchers) {
+      try {
+        watcher({ phase, sessionId, requestId });
+      } catch {
+        /* a watcher must never break the approval it is watching */
+      }
+    }
+  };
 
   async function asked(event, botId = null) {
     const request = event?.properties ?? event?.data ?? {};
@@ -124,6 +139,9 @@ export function createOpenCodePermissionBridge({
       approvals.withdraw(normalized.approvalId, 'OpenCode permission was resolved elsewhere');
       return;
     }
+    // The card is in the inbox and this Gate will wait for its ruling: a turn
+    // on this session is not a dead turn until that wait ends.
+    notify('open', sessionId, requestId);
 
     const waiting = approvals.waitForDecision(normalized.approvalId);
     let timer;
@@ -138,6 +156,9 @@ export function createOpenCodePermissionBridge({
       ruling = await Promise.race([waiting, timeout]);
     } finally {
       clearTimeout(timer);
+      // Whatever ended the wait, the inbox no longer accepts a decision, so a
+      // turn's clock starts again from this moment.
+      notify('settle', sessionId, requestId);
     }
     if (!ruling || ruling.withdrawn) return;
     if (byNativeId.get(requestId)?.approvalId === normalized.approvalId) {
@@ -200,6 +221,17 @@ export function createOpenCodePermissionBridge({
     replied,
     reconcile,
     mark,
+    /**
+     * Follow every card's lifetime. The listener gets `{ phase, sessionId,
+     * requestId }` with phase `open` once the inbox accepts a decision and
+     * `settle` once it no longer does; the returned function stops the watch.
+     * A turn uses this to treat an open card like a running tool.
+     */
+    watch(watcher) {
+      if (typeof watcher !== 'function') return () => {};
+      watchers.add(watcher);
+      return () => { watchers.delete(watcher); };
+    },
     setReplyApproval(handler) { sendReply = handler; },
   };
 }

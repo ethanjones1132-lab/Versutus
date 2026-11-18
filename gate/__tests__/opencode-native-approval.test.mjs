@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { keepEventLoopAlive } from './fixtures/keep-event-loop-alive.mjs';
 import { ApprovalService } from '../core/cli-environments/approvals.mjs';
 import { createApprovalRpc } from '../core/approvals/rpc.mjs';
 import { createOpenCodeBackend, normalizeOpenCodeEvent } from '../core/cli-environments/backends/opencode.mjs';
@@ -206,6 +207,36 @@ test('approval.required frames retain permission, scope, session, backend, and B
     source: { type: 'tool', messageID: 'msg_1', id: 'call_1' },
     session: 'ses_1', backendId: 'oc-local', botId: 'writer',
   });
+});
+
+// ─── a turn treats an open card like a running tool ──────────────────
+// The idle bound must be suspended only while the inbox still accepts a
+// decision, so the bridge reports both edges: the card landing and the moment
+// it can no longer be ruled on (a ruling, an expiry, a withdrawal).
+
+test('a card reports open and settle exactly once when it is ruled on', async () => {
+  const approvals = new ApprovalService();
+  const phases = [];
+  const bridge = createOpenCodePermissionBridge({ approvals, ...owner, replyApproval: async () => undefined });
+  const stop = bridge.watch(({ phase, sessionId, requestId }) => phases.push(`${phase}:${sessionId}:${requestId}`));
+  const work = bridge.asked(asked('permission.v2.asked'), 'writer');
+  await nextTurn();
+  const [row] = approvals.list();
+  await approvals.decide(row.approvalId, 'approve');
+  await work;
+  stop();
+  assert.deepEqual(phases, ['open:ses_1:per_1', 'settle:ses_1:per_1']);
+});
+
+test('an expiring card still settles, so a turn is never suspended past the decision window', { timeout: 5_000 }, async (t) => {
+  keepEventLoopAlive(t);
+  const approvals = new ApprovalService();
+  const phases = [];
+  const bridge = createOpenCodePermissionBridge({ approvals, ...owner, timeoutMs: 20, replyApproval: async () => undefined });
+  bridge.watch(({ phase, requestId }) => phases.push(`${phase}:${requestId}`));
+  await bridge.asked(asked('permission.v2.asked'), 'writer');
+  assert.deepEqual(phases, ['open:per_1', 'settle:per_1']);
+  assert.deepEqual(approvals.list(), [], 'the expired card is gone');
 });
 
 // ─── review fixes (Grok round, 2026-11-10) ───────────────────────────

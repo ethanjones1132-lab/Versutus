@@ -12,6 +12,8 @@ import {
   toGatewayMessage,
 } from '../core/cli-environments/backends/opencode.mjs';
 import { opencodeAdapter } from '../core/cli-environments/adapters/opencode.mjs';
+import { ApprovalService } from '../core/cli-environments/approvals.mjs';
+import { createOpenCodePermissionBridge } from '../core/cli-environments/opencode-permissions.mjs';
 
 // Shapes captured live from opencode 1.18.18 — see docs/opencode-backend-contract.md.
 const SESSION = {
@@ -1568,6 +1570,88 @@ test('a tool that runs longer than the bound is the turn working, not a dead tur
   send(idleFrame);
   const result = await turn;
   assert.equal(result.text, 'done');
+});
+
+// ─── an approval card is the turn working ───────────────────────────
+// A risky tool parks the turn until the operator decides. That wait is the
+// turn working, exactly like a running tool: the inbox still accepts a ruling,
+// so the first-output bound must not punish the turn as dead. A ruling ends the
+// suspension and re-arms the clock from that moment.
+
+const approvalAskedFrame = (requestId = 'per_1') => ({
+  type: 'permission.asked',
+  properties: {
+    id: requestId,
+    sessionID: 'ses_abc',
+    permission: 'bash',
+    patterns: ['npm test'],
+    metadata: { command: 'npm test' },
+  },
+});
+
+function approvingBackend(routes = {}) {
+  const approvals = new ApprovalService();
+  const permissionBridge = createOpenCodePermissionBridge({
+    approvals,
+    backendId: 'opencode',
+    environmentId: 'opencode',
+    timeoutMs: 30_000,
+  });
+  const fixture = liveBackend({
+    'POST /session/ses_abc/prompt_async': { ok: true },
+    'POST /session/ses_abc/permission/per_1/reply': { ok: true },
+    ...routes,
+  }, { ...FAST_BOUNDS, permissionBridge });
+  return { approvals, ...fixture };
+}
+
+test('an approval open past the first-output bound is not a dead turn, and a ruling releases it', { timeout: 5_000 }, async (t) => {
+  keepEventLoopAlive(t);
+  const { approvals, backend, calls, opened, send } = approvingBackend({
+    'GET /session/ses_abc/message': () => [assistantMessage('approved answer')],
+  });
+  const turn = startTurn(backend);
+  await waitUntil(opened);
+  send(approvalAskedFrame());
+  await waitUntil(() => approvals.list().length === 1, 'the approval card in the inbox');
+  // Three times the bound with nothing on the bus but the open card: on the
+  // pre-patch source this turn is already reported as "<model> did not answer".
+  const stillRunning = await failureWithin(turn, FAST_BOUNDS.firstOutputIdleMs * 3);
+  assert.equal(stillRunning, null, 'an open approval card must not be a dead turn');
+  const [card] = approvals.list();
+  await approvals.decide(card.approvalId, 'approve');
+  // The clock restarts at the ruling, so the answer is allowed to arrive now.
+  send(assistantPart(''));
+  send(answerDelta('approved answer'));
+  send(idleFrame);
+  const result = await turn;
+  assert.equal(result.text, 'approved answer');
+  assert.ok(
+    !calls.some((call) => call.path === '/session/ses_abc/abort'),
+    `a turn waiting on a ruling must not be stopped: ${JSON.stringify(calls)}`,
+  );
+});
+
+test('after the ruling the silence bound runs again from that moment', { timeout: 5_000 }, async (t) => {
+  keepEventLoopAlive(t);
+  const { approvals, backend, calls, opened, send } = approvingBackend({
+    'GET /session/ses_abc/message': () => [],
+    'POST /session/ses_abc/abort': { ok: true },
+  });
+  const turn = startTurn(backend);
+  await waitUntil(opened);
+  send(approvalAskedFrame());
+  await waitUntil(() => approvals.list().length === 1, 'the approval card in the inbox');
+  const stillRunning = await failureWithin(turn, FAST_BOUNDS.firstOutputIdleMs * 3);
+  assert.equal(stillRunning, null, 'an open approval card must not be a dead turn');
+  const [card] = approvals.list();
+  await approvals.decide(card.approvalId, 'approve');
+  // Suspension is not permanent: with the card settled and no output after it,
+  // the ordinary bound must still end this turn rather than let it hang.
+  const outcome = await failureWithin(turn, FAST_BOUNDS.firstOutputIdleMs * 4);
+  assert.ok(outcome?.error, `the bound must run again after the ruling: ${JSON.stringify(outcome)}`);
+  assert.match(outcome.error.message, /did not answer within \d+ s/);
+  assert.ok(calls.some((call) => call.path === '/session/ses_abc/abort'), 'the silent turn must be stopped');
 });
 
 // OpenCode retrying the provider emits a status frame and no answer: it is not
