@@ -85,7 +85,11 @@ export default function AddGatewayScreen() {
             grantedToken = result.token;
             setToken(result.token);
           }
-          if (result.status === 'pending-approval') setAccessNote(result.hint ?? 'Approval requested — approve this device on the gateway.');
+          if (result.status === 'pending-approval') {
+            setAccessNote(result.hint ?? 'Approval requested — approve this device on the gateway.');
+            setSaving(false);
+            return;
+          }
           if (result.status === 'denied') {
             setAccessNote(result.reason);
             setSaving(false);
