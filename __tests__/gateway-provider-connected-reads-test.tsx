@@ -267,10 +267,13 @@ function mockMakeClient(callbacks: PortalClientCallbacks): FakeClient {
     healthCheck: async () => HEALTHY,
     rpcRequest: async (method: string) => {
       client.rpcMethods.push(method);
-      if (method === 'approvals.pending' && approvalsReadHold) {
-        const hold = approvalsReadHold;
-        approvalsReadHold = null;
-        return hold;
+      if (method === 'approvals.pending') {
+        if (approvalsReadHold) {
+          const hold = approvalsReadHold;
+          approvalsReadHold = null;
+          return hold;
+        }
+        return { approvals: approvalsAnswer };
       }
       return { data: [] };
     },
@@ -321,6 +324,14 @@ let modelsAnswer: (() => Promise<unknown[]>) | null = null;
  * pending list's phase can be observed while that read is genuinely in flight.
  */
 let approvalsReadHold: Promise<unknown> | null = null;
+
+/**
+ * The rows the Gate holds right now. A test assigns this while the connection
+ * stays up to model an approval raised after the phone connected; every inbox
+ * read answers with it, so only a read the provider makes on its own can bring
+ * the row into `pendingApprovals`.
+ */
+let approvalsAnswer: unknown[] = [];
 
 const observed: { gateway: GatewayContextValue | null; chat: ChatSurfaceContextValue | null } = {
   gateway: null,
@@ -410,6 +421,7 @@ beforeEach(async () => {
   mockProbeOk = true;
   modelsAnswer = null;
   approvalsReadHold = null;
+  approvalsAnswer = [];
   appStateListeners = [];
   observed.gateway = null;
   observed.chat = null;
@@ -759,6 +771,76 @@ describe('the connected-time reads take their turn', () => {
     expect(client.listCronJobsCalls).toBe(0);
     expect(client.listBotsCalls).toBe(0);
     expect(gatewayApi().status).toBe('disconnected');
+  });
+});
+
+// The inbox used to be read once per connection transition and never again. A
+// run the phone did not start raises its approval at the Gate afterwards, and
+// the Gate's policy denies it unanswered after 120 s: a connected phone that
+// read the list only at connect never learned the request existed, and the
+// badge — the same `pendingApprovals` list, counted — stayed dark with it.
+describe('an approval raised after connect reaches the inbox without a pull', () => {
+  async function connectAlpha(): Promise<FakeClient> {
+    const alpha = profile({ id: 'alpha', url: 'http://alpha.test:8642', kind: 'custom' });
+    mockState.gateways = [alpha];
+    mockState.activeId = alpha.id;
+    mockState.manifests.set(alpha.url, GATE_MANIFEST);
+    await mount();
+    await settle(4, 2_000);
+    return mockClients[0];
+  }
+
+  test('the row is listed while the connection stays up, with no manual refresh', async () => {
+    const client = await connectAlpha();
+    expect(gatewayApi().pendingApprovalsState).toBe('ready');
+    expect(gatewayApi().pendingApprovals).toEqual([]);
+    const readsAtConnect = approvalsReads(client);
+
+    // The Gate raises the request after this phone connected. Nothing calls
+    // `refreshPendingApprovals` by hand from here on.
+    approvalsAnswer = [
+      { approvalId: 'late-1', type: 'write', summary: 'Write the minutes to the shared drive' },
+    ];
+    // The connect read's own loading phase is over; only the repeats from here
+    // are this test's business.
+    pendingStatesSeen.length = 0;
+
+    // Two reads' worth of connection time, still well inside the Gate's 120 s
+    // window. A provider that read only on the `connected` transition sees
+    // nothing here.
+    await advance(30_000);
+
+    expect(gatewayApi().pendingApprovals.map((row) => row.approvalId)).toEqual(['late-1']);
+    // The badge draws `pendingApprovals.length` (side drawer, Runs): one list,
+    // so the count moves with the row the moment it lands.
+    expect(gatewayApi().pendingApprovals).toHaveLength(1);
+    expect(gatewayApi().pendingApprovalsState).toBe('ready');
+    // The repeats were the provider's own reads, behind the one the connect made.
+    expect(approvalsReads(client)).toBeGreaterThan(readsAtConnect);
+    // A repeat keeps the rows on screen: it must not paint the inbox's skeleton
+    // over an approval the operator is still deciding.
+    expect(pendingStatesSeen).not.toContain('loading');
+  });
+
+  test('a disconnect still empties the inbox, and no later read brings the row back', async () => {
+    await connectAlpha();
+    approvalsAnswer = [{ approvalId: 'late-1', type: 'write' }];
+    await advance(30_000);
+    expect(gatewayApi().pendingApprovals).toHaveLength(1);
+
+    await act(async () => {
+      gatewayApi().disconnectGateway();
+    });
+    await settle(2);
+
+    expect(gatewayApi().pendingApprovals).toEqual([]);
+    expect(gatewayApi().pendingApprovalsState).toBe('unavailable');
+
+    // The Gate still holds the row; there is no live connection to prove it,
+    // so no repeat read may put it back.
+    await advance(30_000);
+    expect(gatewayApi().pendingApprovals).toEqual([]);
+    expect(gatewayApi().pendingApprovalsState).toBe('unavailable');
   });
 });
 

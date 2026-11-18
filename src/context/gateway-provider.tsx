@@ -813,6 +813,15 @@ const TURN_RESUME_AFTER_HISTORY_MS = 150;
  * order that put the cheapest, most-wanted reads last.
  */
 const CONNECTED_APPROVALS_DELAY_MS = 600;
+/**
+ * How often a live connection re-reads the approval inbox after the connect
+ * read. A run the phone did not start (a Bot's own run, a cron) raises its
+ * approval at the Gate, and the Gate's policy denies it unanswered after
+ * 120 s; nothing on this connection announces the request, so the inbox has to
+ * look again. One eighth of that window keeps the read cheap on a
+ * single-threaded Gate and still lands the row long before the deny.
+ */
+const CONNECTED_APPROVALS_REFRESH_MS = 15_000;
 const CONNECTED_ROUTINE_LIST_DELAY_MS = 900;
 const CONNECTED_WIDGET_BOTS_DELAY_MS = 1_200;
 const CONNECTED_ROUTINE_REARM_DELAY_MS = 1_500;
@@ -1069,6 +1078,31 @@ function isGatewayAuthFailure(error: unknown): boolean {
   if (isAuthRejection(error)) return true;
   const message = error instanceof Error ? error.message : String(error);
   return /(?:invalid api key|unauthorized|authentication required|rejected the api key)/i.test(message);
+}
+
+/**
+ * Whether two `approvals.pending` reads describe the same inbox. The inbox is
+ * re-read on a timer while a connection is live, and `pendingApprovals` is part
+ * of the gateway context value: a fresh array on every unchanged read would
+ * re-render every screen that reads this provider once a tick. A read that
+ * learned nothing new keeps the list it had, identity and all.
+ */
+function sameApprovalRows(previous: ApprovalRow[], next: ApprovalRow[]): boolean {
+  if (previous === next) return true;
+  if (previous.length !== next.length) return false;
+  return previous.every((row, at) => {
+    const other = next[at];
+    return (
+      row.approvalId === other.approvalId
+      && row.cls === other.cls
+      && row.runId === other.runId
+      && row.environmentId === other.environmentId
+      && row.botId === other.botId
+      && row.operation === other.operation
+      && row.summary === other.summary
+      && row.createdAt === other.createdAt
+    );
+  });
 }
 
 /**
@@ -5493,7 +5527,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     setPendingApprovalsError(null);
     try {
       const payload = await gatewayRequest<unknown>('approvals.pending', {});
-      setPendingApprovals(approvalRowsFromUnknown(payload));
+      const rows = approvalRowsFromUnknown(payload);
+      // A repeat read that learned nothing new keeps the same list: the timer
+      // would otherwise hand every consumer of this provider a new array for
+      // an unchanged inbox.
+      setPendingApprovals((current) => (sameApprovalRows(current, rows) ? current : rows));
       setPendingApprovalsState('ready');
     } catch (caught) {
       // A refused read says nothing about what the Gate is still holding: the
@@ -5538,6 +5576,15 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   // The Gate owns the list, so read it whenever a connection is live and drop
   // it the moment one is not: a stale pending row must never outread the Gate.
+  //
+  // The connect read alone is not enough. An approval the phone never asked
+  // for — a Bot's own run, a cron — is raised at the Gate, and the Gate's
+  // policy denies it unanswered after 120 s. No event on this connection names
+  // it: the streams this client holds are per-turn, and a phone watching no
+  // turn in particular carries nothing that would announce a new request. So
+  // while the connection is live the inbox is read again at a bounded
+  // interval, and the next read is armed only once the last one settled — a
+  // Gate that is busy with a run is never asked twice over for the same list.
   useEffect(() => {
     // Deferred: the effect only schedules the read, so the setState inside it
     // never runs synchronously in the effect body (set-state-in-effect). A
@@ -5552,13 +5599,26 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       });
       return undefined;
     }
-    // Still off the transcript's back: this read answers on a turn the Gate
-    // serves one request at a time. It is not part of the self-heal guard — an
-    // approval the operator has not answered does not wait 60s to appear.
-    const cancelRead = scheduleConnectedRead(CONNECTED_APPROVALS_DELAY_MS, () => {
-      void refreshPendingApprovals();
-    });
-    return cancelRead;
+    let live = true;
+    let cancelRead: (() => void) | undefined;
+    // The first read is what paints the inbox's loading state on connect.
+    // Every later one is silent: the rows the operator is working through stay
+    // on screen instead of being swapped for the skeleton every 15 s.
+    let firstRead = true;
+    const readInbox = () => {
+      // Still off the transcript's back: this read answers on a turn the Gate
+      // serves one request at a time. It is not part of the self-heal guard —
+      // an approval the operator has not answered does not wait 60s to appear.
+      void refreshPendingApprovals(firstRead ? undefined : { silent: true }).finally(() => {
+        firstRead = false;
+        if (live) cancelRead = scheduleConnectedRead(CONNECTED_APPROVALS_REFRESH_MS, readInbox);
+      });
+    };
+    cancelRead = scheduleConnectedRead(CONNECTED_APPROVALS_DELAY_MS, readInbox);
+    return () => {
+      live = false;
+      cancelRead?.();
+    };
   }, [status, refreshPendingApprovals, scheduleConnectedRead]);
 
   const runTask = useCallback(
