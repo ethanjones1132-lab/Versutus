@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
@@ -99,6 +100,9 @@ class HandsfreeCallService : Service() {
   // refused request still leaves them set. Tracked apart from `focused` so the
   // undo runs whether or not focus was granted.
   private var communicationModeApplied = false
+  private var audioDeviceCallback: AudioDeviceCallback? = null
+  private var requestedCommunicationDeviceId: Int? = null
+  private var legacyScoRequested = false
 
   private var destroyed = false
   private var foregroundStarted = false
@@ -126,6 +130,8 @@ class HandsfreeCallService : Service() {
    * its audio link is rebuilt, so it names that rather than a stale phase.
    */
   private var reconnecting = false
+  private var capturePaused = false
+  private var playbackGap = false
 
   /** The word last posted, so a repeated Gate frame does not repost. */
   private val notificationWord = HandsfreeCallWord()
@@ -183,7 +189,7 @@ class HandsfreeCallService : Service() {
           // banner folds the same state through the same path the in-app
           // control takes, and the JS answer's own setMuted is a no-op because
           // this state already holds the value.
-          setMuted(muted)
+          applyMute(muted)
           emit("muteRequest", mapOf("muted" to muted))
         }
       }
@@ -281,6 +287,8 @@ class HandsfreeCallService : Service() {
     notificationOpenUrl = openUrl?.trim()?.takeIf { it.isNotEmpty() }
     gateWord = null
     reconnecting = false
+    capturePaused = false
+    playbackGap = false
     notificationWord.reset()
     // One baseline per call: every repost after this keeps the same start, so
     // the call timer counts real call time.
@@ -434,6 +442,8 @@ class HandsfreeCallService : Service() {
     thinking,
     reconnecting,
     gateWord,
+    capturePaused,
+    playbackGap,
   )
 
   // ── The Gate link the service does not own ───────────────────────────────
@@ -451,6 +461,11 @@ class HandsfreeCallService : Service() {
       mainHandler.post {
         if (destroyed) return@post
         HandsfreeCallNotification.wordForGateFrame(frame)?.let { gateWord = it }
+        if (frame is GateFrame.Speech) {
+          if (frame.state == "start") playbackGap = false
+          if (frame.state == "gap") playbackGap = true
+        }
+        if (frame is GateFrame.Final) playbackGap = false
         // A frame on the socket is the link speaking: whatever was being
         // rebuilt has been rebuilt.
         reconnecting = false
@@ -464,6 +479,20 @@ class HandsfreeCallService : Service() {
         // back rather than naming a phase from a socket that is gone.
         if (destroyed || reconnecting) return@post
         reconnecting = true
+        capturePaused = false
+        playbackGap = false
+        postNotificationIfChanged()
+      }
+    }
+
+    override fun onGateAudioPressure(code: String) {
+      mainHandler.post {
+        if (destroyed || reconnecting) return@post
+        when (code) {
+          "capture_backpressure" -> capturePaused = true
+          "capture_backpressure_cleared" -> capturePaused = false
+          "playback_backpressure" -> playbackGap = true
+        }
         postNotificationIfChanged()
       }
     }
@@ -489,7 +518,7 @@ class HandsfreeCallService : Service() {
     if (focused) return
     audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
     communicationModeApplied = true
-    routeToLoudspeaker()
+    watchAudioDevices()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
         .setAudioAttributes(
@@ -527,34 +556,80 @@ class HandsfreeCallService : Service() {
     focused = false
     audioFocusRequest = null
     if (communicationModeApplied) {
-      releaseLoudspeaker()
+      audioDeviceCallback?.let { audioManager.unregisterAudioDeviceCallback(it) }
+      audioDeviceCallback = null
+      releaseCallRoute()
       audioManager.mode = AudioManager.MODE_NORMAL
       communicationModeApplied = false
     }
   }
 
-  // A communication-mode call plays through the earpiece unless told
-  // otherwise, which made a hands-free call audible only at the ear even at
-  // full volume. It is hands-free, so it takes the loudspeaker, unless the
-  // operator has a headset or Bluetooth device on, which keeps its own route.
-  private fun routeToLoudspeaker() {
+  private fun watchAudioDevices() {
+    if (audioDeviceCallback != null) return
+    val callback = object : AudioDeviceCallback() {
+      override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) = updateCallRoute()
+      override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) = updateCallRoute()
+    }
+    audioDeviceCallback = callback
+    audioManager.registerAudioDeviceCallback(callback, mainHandler)
+    updateCallRoute()
+  }
+
+  @Suppress("DEPRECATION")
+  private fun updateCallRoute() {
+    if (destroyed || !state.isActive || !communicationModeApplied) return
+    val manager = audioManager
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-      val devices = audioManager.availableCommunicationDevices
-      if (devices.any { it.type in PERSONAL_AUDIO_TYPES }) return
-      devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
-        ?.let { audioManager.setCommunicationDevice(it) }
+      val devices = manager.availableCommunicationDevices
+      val currentId = manager.communicationDevice?.id
+      val choice = chooseHandsfreeAudioRoute(devices.map { HandsfreeRouteDevice(it.id, it.type) }, currentId)
+      val device = devices.firstOrNull { it.id == choice?.id }
+      // Set even when it is already the default: keep the requested route as
+      // Android's default policy changes during the call.
+      if (device != null && requestedCommunicationDeviceId == device.id && currentId == device.id) return
+      if (device != null && manager.setCommunicationDevice(device)) {
+        requestedCommunicationDeviceId = device.id
+      } else {
+        requestedCommunicationDeviceId = null
+        manager.clearCommunicationDevice()
+        if (manager.communicationDevice == null && device == null) {
+          emit("fatalError", mapOf("reason" to "media-failed"))
+          end("media-failed")
+        }
+      }
     } else {
-      @Suppress("DEPRECATION")
-      if (audioManager.isWiredHeadsetOn || audioManager.isBluetoothScoOn) return
-      @Suppress("DEPRECATION")
-      audioManager.isSpeakerphoneOn = true
+      val scoAvailable = manager.isBluetoothScoAvailableOffCall
+      val devices = manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        .filter { scoAvailable || it.type != AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+      val choice = chooseHandsfreeAudioRoute(devices.map { HandsfreeRouteDevice(it.id, it.type) })
+      if (choice?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) {
+        manager.isSpeakerphoneOn = false
+        if (!legacyScoRequested) {
+          manager.startBluetoothSco()
+          manager.isBluetoothScoOn = true
+          legacyScoRequested = true
+        }
+      } else {
+        releaseLegacySco()
+        manager.isSpeakerphoneOn = choice?.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+      }
     }
   }
 
-  private fun releaseLoudspeaker() {
+  @Suppress("DEPRECATION")
+  private fun releaseLegacySco() {
+    if (!legacyScoRequested) return
+    audioManager.isBluetoothScoOn = false
+    audioManager.stopBluetoothSco()
+    legacyScoRequested = false
+  }
+
+  private fun releaseCallRoute() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
       audioManager.clearCommunicationDevice()
+      requestedCommunicationDeviceId = null
     } else {
+      releaseLegacySco()
       @Suppress("DEPRECATION")
       audioManager.isSpeakerphoneOn = false
     }
@@ -1140,25 +1215,27 @@ class HandsfreeCallService : Service() {
   // ── Muting ───────────────────────────────────────────────────────────────
 
   fun setMuted(muted: Boolean) {
-    mainHandler.post {
-      if (!state.setMuted(muted)) return@post
-      HandsfreeGateMediaOwner.setMuted(muted)
-      // The phase word the Gate last named belongs to the state the operator
-      // just left: after Unmute the body must not keep claiming "Muted" until
-      // the Gate names the next phase on its own.
-      if (!muted) gateWord = null
-      if (muted) {
-        listening = false
-        cancelTick()
-        try {
-          recognizer?.cancel()
-        } catch (_: Exception) {
-        }
+    mainHandler.post { applyMute(muted) }
+  }
+
+  private fun applyMute(muted: Boolean) {
+    if (!state.setMuted(muted)) return
+    HandsfreeGateMediaOwner.setMuted(muted)
+    // The phase word the Gate last named belongs to the state the operator
+    // just left: after Unmute the body must not keep claiming "Muted" until
+    // the Gate names the next phase on its own.
+    if (!muted) gateWord = null
+    if (muted) {
+      listening = false
+      cancelTick()
+      try {
+        recognizer?.cancel()
+      } catch (_: Exception) {
       }
-      postNotification()
-      // Unmuting does not itself start a turn: the JS reducer decides which
-      // phase the call is in and asks for recognition when it is listening.
     }
+    postNotification()
+    // Unmuting does not itself start a turn: the JS reducer decides which
+    // phase the call is in and asks for recognition when it is listening.
   }
 
   // ── Terminal transition ──────────────────────────────────────────────────
@@ -1301,15 +1378,6 @@ class HandsfreeCallService : Service() {
     /** Flip after the device matrix if Samsung's default recognizer misbehaves. */
     private const val PREFER_ON_DEVICE_RECOGNIZER = false
     private const val NOTIFICATION_ID = 8401
-    // Routes the operator chose by plugging in or pairing; the loudspeaker never overrides them.
-    private val PERSONAL_AUDIO_TYPES = setOf(
-      AudioDeviceInfo.TYPE_WIRED_HEADSET,
-      AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
-      AudioDeviceInfo.TYPE_USB_HEADSET,
-      AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
-      AudioDeviceInfo.TYPE_BLE_HEADSET,
-      AudioDeviceInfo.TYPE_HEARING_AID,
-    )
     private const val TICK_MS = 200L
     private const val BUSY_RETRY_MS = 400L
     private const val VAD_SAMPLE_RATE = 16000

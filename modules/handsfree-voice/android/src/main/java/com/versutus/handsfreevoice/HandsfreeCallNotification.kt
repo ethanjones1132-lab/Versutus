@@ -69,10 +69,14 @@ internal object HandsfreeCallNotification {
     thinking: Boolean = false,
     reconnecting: Boolean = false,
     gateWord: String? = null,
+    capturePaused: Boolean = false,
+    playbackGap: Boolean = false,
   ): String =
     when {
       muted -> MUTED
       reconnecting -> RECONNECTING
+      capturePaused -> "Mic paused"
+      playbackGap -> "Some reply audio was missed"
       // The Gate holds a call's loop, so its own phase frame is the word for
       // the half the phone does not run — it beats the phone recognizer's
       // flags, which stay false under a Gate call.

@@ -68,6 +68,7 @@ export type HandsfreeCallBannerState = Pick<
   | 'startedAtMs'
   | 'sendingSinceMs'
   | 'turnError'
+  | 'audioStatus'
   | 'approval'
   | 'approvalBusy'
   | 'decideApproval'
@@ -86,7 +87,7 @@ export function HandsfreeCallBannerView({
   call: HandsfreeCallBannerState;
   docked?: boolean;
 }) {
-  const { phase, partial, label, level, engine, engineReason, muted, mute, unmute, skipReply, end, startedAtMs, sendingSinceMs, turnError, approval, approvalBusy, decideApproval } =
+  const { phase, partial, label, level, engine, engineReason, muted, mute, unmute, skipReply, end, startedAtMs, sendingSinceMs, turnError, audioStatus, approval, approvalBusy, decideApproval } =
     call;
   const tokens = useTokens();
   const insets = useSafeAreaInsets();
@@ -120,12 +121,15 @@ export function HandsfreeCallBannerView({
   const turnFailureCopy = handsfreeTurnFailureCopy(turnError);
   const approvalCopy = handsfreeApprovalCopy(approval);
 
-  const phaseLabel = handsfreePhaseLabel(phase);
+  const audioPaused = audioStatus === 'reconnecting' || audioStatus === 'capture-paused';
+  const phaseLabel = audioStatus === 'reconnecting'
+    ? 'Reconnecting'
+    : audioStatus === 'capture-paused' ? 'Mic paused' : handsfreePhaseLabel(phase);
   const speaking = phase === 'speaking';
   // What a screen reader is told in one breath: the state and its hint. The
   // confirming grace window keeps its Listening label but is not silent: a
   // re-arming hold is finishing a turn it has already heard, not dead.
-  const phaseLine = speaking
+  const phaseLine = speaking && !audioPaused
     ? `${phaseLabel} · ${HANDSFREE_SPEAKING_HINT}`
     : phase === 'confirming'
       ? `${phaseLabel} · ${HANDSFREE_CONFIRMING_HINT}`
@@ -138,19 +142,22 @@ export function HandsfreeCallBannerView({
   // The one line of news, most urgent first. What is being heard comes after
   // anything that needs a decision; a standing hint is last, there for the
   // eye while nothing else needs saying.
+  const turnNews = audioStatus === 'playback-gap' ? 'Some reply audio was missed.' : turnFailureCopy;
   const news = approvalCopy
     ? { text: approvalCopy, urgent: true, live: false }
-    : turnFailureCopy
-      ? { text: turnFailureCopy, urgent: true, live: false }
-      : slowTurnCopy
-        ? { text: slowTurnCopy, urgent: true, live: false }
-        : partial
-          ? { text: partial, urgent: false, live: true }
-          : fallbackCopy
-            ? { text: fallbackCopy, urgent: false, live: false }
-            : hint
-              ? { text: hint, urgent: false, live: true }
-              : null;
+    : audioPaused
+      ? null
+      : turnNews
+        ? { text: turnNews, urgent: true, live: false }
+        : slowTurnCopy
+          ? { text: slowTurnCopy, urgent: true, live: false }
+          : partial
+            ? { text: partial, urgent: false, live: true }
+            : fallbackCopy
+              ? { text: fallbackCopy, urgent: false, live: false }
+              : hint
+                ? { text: hint, urgent: false, live: true }
+                : null;
   const engineLine = handsfreeEngineLine(engine);
   const who = [label, clock].filter(Boolean).join(' · ');
 

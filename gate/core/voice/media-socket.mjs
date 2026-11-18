@@ -368,6 +368,7 @@ export function attachVoiceMediaSocket({
     let undeliveredFrames = 0;
     let undeliveredBytes = 0;
     let resumeExpected = false;
+    let muteSyncPending = false;
     const speechStartSeq = new Map();
     const speechLifecycle = new Map();
     let v2ProbeFrame = null;
@@ -573,9 +574,9 @@ export function attachVoiceMediaSocket({
       // resume window exists for — would then leak a 1 Hz timer per re-attach.
       clearAudioTimer();
       audioTimer = setInterval(() => {
-        // A muted phone intentionally sends no PCM. Its mute control proves
-        // liveness; only an unmuted silent call is idle.
-        if (ws && call.phase !== 'muted' && now() - lastAudioAt > noAudioTimeoutMs) ws.close(1001, 'idle');
+        // A muted phone intentionally sends no PCM, even if it muted while
+        // the engine was still opening. Only unmuted silence is audio idle.
+        if (ws && !call.muted && now() - lastAudioAt > noAudioTimeoutMs) ws.close(1001, 'idle');
       }, Math.min(noAudioTimeoutMs, 1000));
       audioTimer.unref?.();
     };
@@ -1201,6 +1202,7 @@ export function attachVoiceMediaSocket({
         registry.markActivity(session.voiceSessionId);
         trace.audioFrames += 1;
         trace.audioBytes += frame.length;
+        if (call.muted) return;
         // The frame counts as traffic whether or not it can be used: it keeps
         // the call's liveness lease alive while a cold worker is still loading,
         // and the no-audio watchdog from closing a socket that is speaking into
@@ -1263,7 +1265,18 @@ export function attachVoiceMediaSocket({
         if (protocolVersion === 2 && control.t === 'resume') throw new Error('resume is only valid after reconnect');
         if (control.t === 'mute') {
           lastAudioAt = now();
+          if (control.on && !engineReady) {
+            earlyAudio.length = 0;
+            earlyAudioBytes = 0;
+          }
+          const phaseBefore = call.phase;
           dispatch({ type: control.on ? 'mute' : 'unmute' });
+          // Resume can replay an old phase, or no phase at all. An idempotent
+          // mute still gets the current phase as confirmation once ready.
+          if (muteSyncPending && engineReady && call.phase === phaseBefore) {
+            sendFrame({ t: 'phase', phase: call.phase });
+          }
+          muteSyncPending = false;
         } else if (control.t === 'played') {
           if (!turnPlayed && control.gen === turnGen && turnCommittedAt) {
             turnPlayed = true;
@@ -1348,6 +1361,7 @@ export function attachVoiceMediaSocket({
       // dead socket holding a lease nobody will ever close.
       const previous = ws;
       ws = newWs;
+      muteSyncPending = !first;
       clearResumeTimer();
       lastAudioAt = now();
       // Explicit, though `startAudioTimer` clears too: this is the path that
@@ -1359,6 +1373,11 @@ export function attachVoiceMediaSocket({
       registry.markAttached(session.voiceSessionId);
 
       newWs.on('message', onMessage);
+      // OkHttp's ping proves the silent/muted phone is still here. Renew its
+      // reservation, not the no-audio clock (unmuted silence must still close).
+      newWs.on('ping', () => {
+        if (ws === newWs) registry.markActivity(session.voiceSessionId);
+      });
       newWs.on('close', (code) => {
         if (ws === newWs) detach(code);
       });

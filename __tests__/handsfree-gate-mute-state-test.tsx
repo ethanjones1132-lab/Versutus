@@ -376,6 +376,27 @@ describe('a mute the Gate never confirmed is checked against the microphone', ()
 });
 
 describe("the notification's Mute is the same path as the banner's", () => {
+  test('a replayed phase cannot hide the notification mute taken during reconnect', async () => {
+    await startLiveCall();
+    await call(async () => {
+      gateFrame('{"t":"error","code":"socket_failed","message":"link dropped","fatal":true}');
+      mockCaptureMuted = true;
+      mockNative.sendGateControl.mockResolvedValueOnce(false);
+      nativeEvent('muteRequest', { muted: true });
+      await jest.advanceTimersByTimeAsync(500);
+      gateFrame(opening); // The original hello proves the re-attach before replay.
+      await jest.advanceTimersByTimeAsync(0);
+      gateFrame(v2(4, { t: 'phase', phase: 'listening' }));
+    });
+    expect(mockNative.startGateMedia).toHaveBeenCalledTimes(2);
+    expect(latest().phase).toBe('muted');
+    expect(latest().muted).toBe(true);
+
+    await call(() => gateFrame(mutedPhase(5)));
+    expect(latest().audioStatus).toBeUndefined();
+    expect(latest().muted).toBe(true);
+  });
+
   test('a notification mute reaches the Gate control and the banner', async () => {
     await startLiveCall();
 

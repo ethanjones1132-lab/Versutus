@@ -1,6 +1,5 @@
 package com.versutus.handsfreevoice
 
-import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioRecord
@@ -53,6 +52,7 @@ class HandsfreeGateMedia(
     /** A read that returns nothing is usually a dead device, not a quiet one. */
     private const val READ_FAILURE_BACKOFF_MS = 10L
     private const val MAX_CONSECUTIVE_READ_FAILURES = 100
+    private const val MUTED_KEEPALIVE_MS = 15_000L
     private val phoneSequences = ConcurrentHashMap<String, AtomicLong>()
     private const val LOG_TAG = "HandsfreeGateMedia"
     /** The first few frames of each link are logged: enough to see a start. */
@@ -63,7 +63,7 @@ class HandsfreeGateMedia(
    * Gate frames this link has read since its last [start]. JS reads it to prove
    * the link without relying on the `gate` event: on the A54 that event lost a
    * live link's attach frames, and the start failed a call the PC was serving.
-   * Written only by OkHttp's reader thread, read from the JS thread.
+   * A terminal link reports -1, even if a frame arrived before it failed.
    */
   @Volatile var framesReceived = 0
     private set
@@ -87,19 +87,20 @@ class HandsfreeGateMedia(
     nowMs = SystemClock::elapsedRealtime,
   )
   private val captureLock = Any()
-  // Held only for the mute frame's own bookkeeping: never the capture lock,
-  // which the capture loop holds across a blocking AudioRecord read.
-  private val muteSendLock = Any()
+  // Serializes control sequencing and the last check before a PCM enqueue.
+  // Never held across a blocking AudioRecord read.
+  private val sendLock = Any()
   @Volatile private var socketOpen = false
   @Volatile private var negotiationConfirmed = false
   @Volatile private var protocolV2 = false
   private var activeCallId = ""
-  @Volatile private var lastMuteFrameSent: Boolean? = null
+  private var lastMuteFrameSent: Boolean? = null
+  private var readyMuteSynced = false
   private val speechStartSequences = mutableMapOf<Long, Long>()
 
   init { captureState.setMuted(initiallyMuted) }
   @Volatile private var sawEnded = false
-  private var socket: WebSocket? = null
+  @Volatile private var socket: WebSocket? = null
   private var captureThread: Thread? = null
   private var playbackThread: Thread? = null
   private var micSource: MicSource? = null
@@ -113,7 +114,7 @@ class HandsfreeGateMedia(
     maxPendingMs = 2_000,
     onCapacityReached = {
       Log.w("HandsfreeGateMedia", "Refusing speech audio after two-second queue limit")
-      onFrame(errorFrame("backpressure", "Call playback queue exceeded its two-second limit"))
+      reportPressure("playback_backpressure")
     },
   )
   private val playbackLock = Any()
@@ -122,16 +123,17 @@ class HandsfreeGateMedia(
   private var firstPcmReceivedAtMs: Long? = null
   private var firstPcmReceivedGen: Long? = null
 
-  @Synchronized fun start(context: Context, url: String, token: String, voiceSessionId: String) {
+  @Synchronized fun start(url: String, token: String, voiceSessionId: String): Boolean {
     stop()
     stopped = false
     running = true
-    captureState.setRunning(true)
     negotiationConfirmed = false
     protocolV2 = false
     activeCallId = voiceSessionId
     framesReceived = 0
     captureState.setNegotiated(false)
+    captureState.setPaused(false)
+    captureState.setRunning(true)
     captureLevel.reset()
     sawEnded = false
     currentGen = 0L
@@ -148,13 +150,15 @@ class HandsfreeGateMedia(
       // token with a trailing \r turned every call start into "unavailable".
       .addHeader("Authorization", "Bearer ${cleanHeaderValue(token)}")
       .build()
-    socket = client.newWebSocket(request, listener)
     // A call with no microphone or no speaker is failed at once instead of
-    // idling until the Gate's no-audio timeout closes the socket silently.
-    if (!startCapture(context) || !startPlayback()) {
-      onFrame(errorFrame("media_failed", MEDIA_FAILED_MESSAGE))
+    // letting the Gate's opening frame prove a link that cannot carry audio.
+    if (!runCatching { startCapture() && startPlayback() }.getOrDefault(false)) {
+      reportMediaFailure()
       stop()
+      return false
     }
+    synchronized(sendLock) { socket = client.newWebSocket(request, listener) }
+    return true
   }
 
   fun sendControl(json: String): Boolean {
@@ -163,9 +167,10 @@ class HandsfreeGateMedia(
     } catch (_: Exception) {
       null
     }
-    if (!negotiationConfirmed) return false
     if (control is GateFrame.Phone.Mute) return setMuted(control.on)
-    return socket?.send(encodeNegotiatedControl(json)) ?: false
+    return synchronized(sendLock) {
+      if (negotiationConfirmed && socketOpen) sendControlLocked(json) else false
+    }
   }
 
   /**
@@ -178,22 +183,27 @@ class HandsfreeGateMedia(
    * volatile flag, which the loop reads before and after every read; the socket
    * write is OkHttp's own queue, never the main thread.
    */
-  fun setMuted(muted: Boolean): Boolean {
+  fun setMuted(muted: Boolean): Boolean = synchronized(sendLock) {
     captureState.setMuted(muted)
-    return sendMuteIfOpen(muted)
+    sendMuteIfOpen()
   }
 
   internal fun isMuted(): Boolean = captureState.isMuted()
   internal fun isRunning(): Boolean = running
   internal fun isStopped(): Boolean = stopped
 
-  private fun sendMuteIfOpen(muted: Boolean): Boolean = synchronized(muteSendLock) {
-    if (!socketOpen || !negotiationConfirmed) return@synchronized false
-    if (lastMuteFrameSent == muted) return@synchronized true
-    val sent = socket?.send(encodeNegotiatedControl(GateFrameCodec.encodePhone(GateFrame.Phone.Mute(muted)))) ?: false
+  /** Caller holds sendLock. */
+  private fun sendMuteIfOpen(force: Boolean = false): Boolean {
+    val muted = captureState.isMuted()
+    if (!socketOpen || !negotiationConfirmed) return false
+    if (!force && lastMuteFrameSent == muted) return true
+    val sent = sendControlLocked(GateFrameCodec.encodePhone(GateFrame.Phone.Mute(muted)))
     if (sent) lastMuteFrameSent = muted
-    sent
+    return sent
   }
+
+  private fun sendControlLocked(json: String): Boolean =
+    socket?.send(encodeNegotiatedControl(json)) ?: false
 
   @Synchronized fun stop() {
     if (stopped) return
@@ -201,8 +211,13 @@ class HandsfreeGateMedia(
     running = false
     synchronized(captureLock) { captureState.setRunning(false) }
     HandsfreeGateMediaOwner.detach(this)
-    socket?.close(1000, "call ended")
-    socket = null
+    synchronized(sendLock) {
+      socket?.close(1000, "call ended")
+      socket = null
+      socketOpen = false
+      lastMuteFrameSent = null
+      readyMuteSynced = false
+    }
     // Both loops end on `running`, so the interrupt is only a wake-up: they
     // restore its flag and return rather than dying with it.
     captureThread?.interrupt()
@@ -215,8 +230,6 @@ class HandsfreeGateMedia(
     noiseSuppressor = null
     micSource?.runCatching { stop(); release() }
     micSource = null
-    socketOpen = false
-    lastMuteFrameSent = null
     audioTrack?.runCatching {
       if (playState == AudioTrack.PLAYSTATE_PLAYING) stop()
       release()
@@ -227,8 +240,10 @@ class HandsfreeGateMedia(
 
   private val listener = object : WebSocketListener() {
     override fun onOpen(webSocket: WebSocket, response: Response) {
-      if (webSocket !== socket) return
-      socketOpen = true
+      synchronized(sendLock) {
+        if (webSocket !== socket) return
+        socketOpen = true
+      }
     }
 
     // Every callback is identity-guarded: a replaced or stopped socket's
@@ -267,24 +282,35 @@ class HandsfreeGateMedia(
     }
 
     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-      if (webSocket != socket) return
-      // A clean close the Gate did not announce with an ended frame is still
-      // the end of the call from the phone's side: its idle timeout and its
-      // restart both close this way. Without a frame the banner would sit on
-      // a dead call forever.
+      if (!markSocketGone(webSocket)) return
       if (running && !sawEnded) {
+        // The Gate also puts its reason in the close when it ends a call. In
+        // particular, control backlog can prevent the ended frame from being
+        // sent, even if the close itself makes it through.
+        if (code == 1000 && reason in GATE_END_CLOSE_REASONS) {
+          handleTextFrame("""{"t":"ended","reason":"${escapeJsonString(reason)}"}""")
+          return
+        }
         HandsfreeGateMediaOwner.reportLinkLost()
         onFrame(errorFrame("socket_closed", "The PC closed the call audio link."))
       }
     }
 
     override fun onFailure(webSocket: WebSocket, error: Throwable, response: Response?) {
-      if (webSocket != socket) return
+      if (!markSocketGone(webSocket) || !running || sawEnded) return
       // A running call keeps its notification up: the phone names the link it
       // is rebuilding rather than showing a phase from a socket that is gone.
-      if (running) HandsfreeGateMediaOwner.reportLinkLost()
+      HandsfreeGateMediaOwner.reportLinkLost()
       onFrame(errorFrame("socket_failed", error.message ?: "socket failed"))
     }
+  }
+
+  private fun markSocketGone(webSocket: WebSocket): Boolean = synchronized(sendLock) {
+    if (webSocket !== socket) return@synchronized false
+    socketOpen = false
+    framesReceived = -1
+    captureState.setNegotiated(false)
+    true
   }
 
   /**
@@ -292,8 +318,23 @@ class HandsfreeGateMedia(
    * newlines, and JS only counts a `socket_failed` frame as retryable if it
    * parses, so every value goes through [escapeJsonString].
    */
-  private fun errorFrame(code: String, message: String): String =
-    """{"t":"error","code":"${escapeJsonString(code)}","message":"${escapeJsonString(message)}","fatal":true}"""
+  private fun errorFrame(code: String, message: String, fatal: Boolean = true): String =
+    """{"t":"error","code":"${escapeJsonString(code)}","message":"${escapeJsonString(message)}","fatal":$fatal}"""
+
+  private fun reportPressure(code: String) {
+    // Local status only: this is emitted to the app, never put on the wire.
+    onFrame(errorFrame(code, "", fatal = false))
+    HandsfreeGateMediaOwner.reportAudioPressure(code)
+  }
+
+  private fun reportMediaFailure() {
+    synchronized(sendLock) {
+      running = false
+      framesReceived = -1
+      captureState.setNegotiated(false)
+    }
+    onFrame(errorFrame("media_failed", MEDIA_FAILED_MESSAGE))
+  }
 
   private fun handleTextFrame(text: String) {
     val frame = try {
@@ -302,25 +343,46 @@ class HandsfreeGateMedia(
       Log.w(LOG_TAG, "dropped an unreadable Gate frame: ${error.message}")
       return
     }
-    val seen = framesReceived + 1
-    framesReceived = seen
-    if (seen <= LOGGED_FRAMES) {
+    val terminal = frame is GateFrame.Ended || (frame is GateFrame.Error && frame.fatal) ||
+      (frame is GateFrame.Call && (frame.state == "ending" || frame.state == "ended"))
+    val seen = synchronized(sendLock) {
+      if (terminal) {
+        framesReceived = -1
+        sawEnded = true
+        running = false
+        captureState.setNegotiated(false)
+      } else if (framesReceived >= 0) {
+        framesReceived += 1
+      }
+      val ready = frame is GateFrame.Ready || (frame is GateFrame.Phase && frame.phase != "opening")
+      if (!terminal && running && socketOpen) {
+        if (frame.protocolVersion == 2) protocolV2 = true
+        if (!negotiationConfirmed && (protocolV2 || frame is GateFrame.Ready || frame is GateFrame.Phase)) {
+          negotiationConfirmed = true
+          // Resume must be the first v2 control. Queue mute immediately after
+          // it, in wire order, before any other controls or microphone PCM.
+          val sent = sendGateAttachControls(
+            protocolV2, resumeLastSeq,
+            resume = { lastSeq -> sendControlLocked(GateFrameCodec.encodePhone(GateFrame.Phone.Resume(lastSeq))) },
+            syncMute = { sendMuteIfOpen() },
+          )
+          readyMuteSynced = ready && sent
+          captureState.setNegotiated(sent)
+        } else if (negotiationConfirmed && ready && !readyMuteSynced) {
+          // Older Gates ignore mute while opening their engine. Reassert the
+          // current value at the first ready phase, not the one we opened with.
+          readyMuteSynced = sendMuteIfOpen(force = true)
+        }
+      }
+      framesReceived
+    }
+    if (seen in 1..LOGGED_FRAMES) {
       Log.i(LOG_TAG, "Gate frame $seen: t=${frame.t} v=${frame.protocolVersion}")
     }
     // The call's notification follows the Gate's own phases. The service does
     // not own this socket, so it hears what was parsed rather than reading it.
-    // Any parsed frame also proves the link is live again after a failure.
+    // A parsed frame also shows the notification the socket is talking again.
     HandsfreeGateMediaOwner.reportFrame(frame)
-    if (frame.protocolVersion == 2) protocolV2 = true
-    if (!negotiationConfirmed && (frame.protocolVersion == 2 || frame.t == "ready" || frame.t == "phase")) {
-      negotiationConfirmed = true
-      captureState.setNegotiated(true)
-      if (protocolV2 && resumeLastSeq != null) {
-        socket?.send(encodeNegotiatedControl(GateFrameCodec.encodePhone(GateFrame.Phone.Resume(resumeLastSeq))))
-      } else {
-        sendMuteIfOpen(captureState.isMuted())
-      }
-    }
     onFrame(text)
     when (frame) {
       is GateFrame.Speech -> {
@@ -346,15 +408,13 @@ class HandsfreeGateMedia(
         }
       }
       is GateFrame.Ended -> {
-        sawEnded = true
-        running = false
         phoneSequences.remove(activeCallId)
       }
       else -> Unit
     }
   }
 
-  private fun startCapture(context: Context): Boolean {
+  private fun startCapture(): Boolean {
     val minBytes = AudioRecord.getMinBufferSize(
       CAPTURE_SAMPLE_RATE,
       AudioFormat.CHANNEL_IN_MONO,
@@ -387,24 +447,39 @@ class HandsfreeGateMedia(
     captureState.attachSource(source)
     captureThread = Thread {
       val frame = ByteArray(CAPTURE_FRAME_BYTES)
+      val pressure = GateCapturePressure(MAX_SOCKET_QUEUE_BYTES, CAPTURE_FRAME_BYTES) { paused ->
+        captureState.setPaused(paused)
+        reportPressure(if (paused) "capture_backpressure" else "capture_backpressure_cleared")
+      }
       var failedReads = 0
+      var nextMuteRefreshAt = SystemClock.elapsedRealtime() + MUTED_KEEPALIVE_MS
       try {
         while (running) {
-          if (!captureState.shouldRead()) {
+          val current = socket
+          if (socketOpen && captureState.isMuted()) {
+            val now = SystemClock.elapsedRealtime()
+            if (now >= nextMuteRefreshAt) {
+              // Older Gates don't renew the silent call's lease on ping. The
+              // existing idempotent mute control still works as a keepalive.
+              synchronized(sendLock) {
+                if (captureState.isMuted()) sendMuteIfOpen(force = true) else false
+              }
+              nextMuteRefreshAt = now + MUTED_KEEPALIVE_MS
+            }
+          }
+          if (current == null || !socketOpen || pressure.shouldPause(current.queueSize()) || !captureState.shouldRead()) {
+            failedReads = 0
             Thread.sleep(READ_FAILURE_BACKOFF_MS)
             continue
           }
+          var sent = false
           val read = synchronized(captureLock) {
             captureState.readAndSend(source, frame) { bytes ->
-              val current = socket
-              if (current != null) {
-                if (current.queueSize() + bytes.size > MAX_SOCKET_QUEUE_BYTES) {
-                  onFrame(errorFrame("backpressure", "Call audio queue exceeded its two-second limit"))
-                  running = false
-                } else if (!current.send(ByteString.of(*bytes))) {
-                  onFrame(errorFrame("backpressure", "Call audio could not be queued"))
-                  running = false
-                }
+              sent = synchronized(sendLock) {
+                // A closing socket may decline a send; the close/failure
+                // callback (or a missed pong) owns reconnect, not capture.
+                running && socketOpen && current === socket && captureState.shouldSend() &&
+                  !pressure.shouldPause(current.queueSize()) && current.send(ByteString.of(*bytes))
               }
             }
           }
@@ -419,14 +494,14 @@ class HandsfreeGateMedia(
             Thread.sleep(READ_FAILURE_BACKOFF_MS)
             failedReads += 1
             if (failedReads >= MAX_CONSECUTIVE_READ_FAILURES) {
-              onFrame(errorFrame("media_failed", MEDIA_FAILED_MESSAGE))
+              reportMediaFailure()
               break
             }
             continue
           }
           // Measured from the frame just read, so the meter follows the audio
           // the Gate is actually receiving rather than a timer or a stub.
-          captureLevel.accept(frame, read)
+          if (sent) captureLevel.accept(frame, read)
           failedReads = 0
         }
       } catch (_: InterruptedException) {
@@ -493,9 +568,7 @@ class HandsfreeGateMedia(
               }
               if (receivedAtMs != null) {
                 val elapsedMs = elapsedSincePcmReceived(receivedAtMs, SystemClock.elapsedRealtime())
-                if (negotiationConfirmed) {
-                  socket?.send(encodeNegotiatedControl(GateFrameCodec.encodePhone(GateFrame.Phone.Played(gen, elapsedMs))))
-                }
+                sendControl(GateFrameCodec.encodePhone(GateFrame.Phone.Played(gen, elapsedMs)))
               }
             }
           }
@@ -524,6 +597,36 @@ class HandsfreeGateMedia(
   }
 }
 
+private val GATE_END_CLOSE_REASONS = setOf(
+  "user", "gate-restart", "network", "abandoned", "engine", "engine-error", "backpressure",
+)
+
+/** OkHttp cannot evict queued sends. Pause capture until the existing queue drains. */
+internal class GateCapturePressure(
+  private val maxBytes: Int,
+  private val frameBytes: Int,
+  private val onChanged: (Boolean) -> Unit,
+) {
+  private var paused = false
+
+  fun shouldPause(queuedBytes: Long): Boolean {
+    val next = if (paused) queuedBytes > maxBytes / 2 else queuedBytes + frameBytes > maxBytes
+    if (next != paused) {
+      paused = next
+      onChanged(next)
+    }
+    return paused
+  }
+}
+
+/** The same mute frame works with a v1 attach and an in-order v2 resume. */
+internal fun sendGateAttachControls(
+  protocolV2: Boolean,
+  lastSeq: Long?,
+  resume: (Long) -> Boolean,
+  syncMute: () -> Boolean,
+): Boolean = (!protocolV2 || lastSeq == null || resume(lastSeq)) && syncMute()
+
 internal data class GatePcmChunk(val gen: Long, val startSeq: Long, val pcm: ByteArray)
 
 /** V2 carries generation and the sequence of its `speech/start` control first. */
@@ -544,6 +647,7 @@ internal class GateCaptureState {
   @Volatile private var muted = false
   @Volatile private var running = false
   @Volatile private var negotiated = true
+  @Volatile private var paused = false
   private var source: MicSource? = null
 
   @Synchronized fun setMuted(value: Boolean): Boolean {
@@ -555,7 +659,16 @@ internal class GateCaptureState {
   fun isMuted(): Boolean = muted
   @Synchronized fun attachSource(value: MicSource) { source = value; updateSource() }
   @Synchronized fun setRunning(value: Boolean) { running = value; updateSource() }
-  @Synchronized fun setNegotiated(value: Boolean) { negotiated = value; updateSource() }
+  @Synchronized fun setNegotiated(value: Boolean) {
+    if (negotiated == value) return
+    negotiated = value
+    updateSource()
+  }
+  @Synchronized fun setPaused(value: Boolean) {
+    if (paused == value) return
+    paused = value
+    updateSource()
+  }
   // Deliberately NOT @Synchronized: the capture loop spends this call's whole
   // duration inside the blocking read below, and a Mute tap must not wait for
   // it. Every field it reads is @Volatile, and the source is passed in.
@@ -571,7 +684,7 @@ internal class GateCaptureState {
   private fun updateSource() {
     val current = source ?: return
     runCatching {
-      if (running && negotiated && !muted) {
+      if (shouldRead()) {
         current.start()
         current.drain()
       } else {
@@ -580,8 +693,8 @@ internal class GateCaptureState {
       }
     }
   }
-  fun shouldRead(): Boolean = running && negotiated && !muted
-  fun shouldSend(): Boolean = running && negotiated && !muted
+  fun shouldRead(): Boolean = running && negotiated && !muted && !paused
+  fun shouldSend(): Boolean = shouldRead()
 }
 
 /** The banner's dot is display-only, so ten samples a second is plenty. */
@@ -651,6 +764,8 @@ internal interface HandsfreeGateMediaListener {
 
   /** The socket failed or closed while the call was still running. */
   fun onGateLinkLost()
+
+  fun onGateAudioPressure(code: String) {}
 }
 
 /** The service and module have separate lifetimes; this bridges their media instance. */
@@ -687,6 +802,10 @@ internal object HandsfreeGateMediaOwner {
   /** The media socket failed or closed under a call that is still running. */
   fun reportLinkLost() {
     listener?.onGateLinkLost()
+  }
+
+  fun reportAudioPressure(code: String) {
+    listener?.onGateAudioPressure(code)
   }
 
   @Synchronized fun stop() {

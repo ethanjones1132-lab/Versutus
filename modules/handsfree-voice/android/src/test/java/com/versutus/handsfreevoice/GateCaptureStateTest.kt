@@ -59,6 +59,50 @@ class GateCaptureStateTest {
     assertFalse(fresh.shouldRead())
   }
 
+  @Test fun socketPressurePausesCaptureAtTwoSecondsAndRecoversWithoutStoppingTheCall() {
+    val state = GateCaptureState()
+    val mic = FakeMicSource()
+    val changes = mutableListOf<Boolean>()
+    val frameBytes = 640
+    val limit = 64_000
+    val pressure = GateCapturePressure(limit, frameBytes) { paused ->
+      changes.add(paused)
+      state.setPaused(paused)
+    }
+    state.setRunning(true)
+    state.attachSource(mic)
+    var queued = 0L
+    repeat(1_000) {
+      if (!pressure.shouldPause(queued)) {
+        state.readAndSend(mic, ByteArray(frameBytes)) { queued += frameBytes }
+      }
+      assertTrue(queued <= limit)
+    }
+    assertEquals(limit.toLong(), queued)
+    assertEquals(listOf(true), changes)
+    assertFalse(mic.started)
+    assertEquals(100, mic.reads)
+    assertTrue(pressure.shouldPause(32_001))
+
+    assertFalse(pressure.shouldPause(32_000))
+    assertTrue(mic.started)
+    assertEquals(1, state.readAndSend(mic, ByteArray(frameBytes)) {})
+    assertEquals(listOf(true, false), changes)
+  }
+
+  @Test fun drainingTheQueueDoesNotOpenAMutedMicrophone() {
+    val state = GateCaptureState()
+    val mic = FakeMicSource()
+    state.setRunning(true)
+    state.attachSource(mic)
+    val pressure = GateCapturePressure(64_000, 640, state::setPaused)
+    assertTrue(pressure.shouldPause(64_000))
+    state.setMuted(true)
+    assertFalse(pressure.shouldPause(0))
+    assertFalse(mic.started)
+    assertFalse(state.shouldSend())
+  }
+
   @Test fun audioBufferedAroundAMuteIsNeverSentAfterUnmute() {
     val state = GateCaptureState()
     val mic = FakeMicSource()

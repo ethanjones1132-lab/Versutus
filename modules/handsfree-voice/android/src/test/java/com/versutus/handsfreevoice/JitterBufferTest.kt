@@ -87,4 +87,19 @@ class JitterBufferTest {
     assertEquals(2, warnings)
     assertEquals(20, buffer.pendingMs())
   }
+
+  @Test fun overflowStillLetsTheSameReplyContinueWhenThereIsRoom() {
+    var gaps = 0
+    val buffer = JitterBuffer(targetMs = 20, maxPendingMs = 2_000) { gaps += 1 }
+    repeat(1_000) {
+      buffer.push(1, frame(20))
+      assertEquals(minOf(2_000, (it + 1) * 20), buffer.pendingMs())
+    }
+    assertEquals(1, gaps)
+    assertEquals(1L, buffer.drain()!!.gen)
+    buffer.push(1, ByteArray(20 * 48) { 2 })
+    assertEquals(2_000, buffer.pendingMs())
+    repeat(99) { assertEquals(0.toByte(), buffer.drain()!!.pcm.first()) }
+    assertEquals(2.toByte(), buffer.drain()!!.pcm.first())
+  }
 }

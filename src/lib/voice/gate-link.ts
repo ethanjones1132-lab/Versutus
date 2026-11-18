@@ -2,7 +2,8 @@
 // `startGateMedia` resolves as soon as the native side has handed the socket to
 // OkHttp and capture/playback are open; it has no `onOpen` to report, so its
 // boolean means "the request was issued", never "the Gate is listening". Every
-// failure therefore arrives later, as a `socket_failed`/`socket_closed` frame.
+// socket failure therefore arrives later, as a `socket_failed`/`socket_closed`
+// frame. Local capture/playback startup can fail before a socket is handed over.
 // Two consumers used to read that boolean as a live link, so a dead audio path
 // was invisible: the start reported success and the banner sat on "Listening"
 // for minutes with nothing heard, nothing sent and no end reason.
@@ -52,6 +53,15 @@ export function isGateSocketGone(frame: string): boolean {
   );
 }
 
+export function isGateTerminalFrame(frame: string | GateVoiceFrame | null): boolean {
+  const parsed = typeof frame === 'string' ? parseGateFrameOrNull(frame) : frame;
+  return (
+    parsed?.t === 'ended' ||
+    (parsed?.t === 'error' && parsed.fatal) ||
+    (parsed?.t === 'call' && (parsed.state === 'ending' || parsed.state === 'ended'))
+  );
+}
+
 export type GateLinkProbe = {
   /**
    * Mark that a link is about to be opened, so its first frame is kept even
@@ -85,7 +95,8 @@ export type GateLinkProbeOptions = {
    * ten seconds of microphone audio: the frames never reached the JS listener.
    * The native count is the same evidence the listener would have carried, read
    * without the event bridge, so a dropped event can no longer fail a live
-   * link. Absent on a build whose native module cannot answer.
+   * link. A negative result means the link failed, not that it was never
+   * heard from. Absent on a build whose native module cannot answer.
    */
   nativeFramesReceived?: () => number;
   /** How often a pending proof polls `nativeFramesReceived`. */
@@ -100,8 +111,8 @@ export type GateLinkProbeOptions = {
  * redraw the banner for each one.
  *
  * `observe` treats any frame — even one this build cannot parse — as proof,
- * because something answered on the wire. Only the socket-gone frames are a
- * failure; everything else is the link talking.
+ * because something answered on the wire. Terminal frames fail the proof;
+ * local pressure notices are not evidence either way.
  */
 export function createGateLinkProbe(options: GateLinkProbeOptions = {}): GateLinkProbe {
   const pollMs = options.nativePollMs ?? GATE_LINK_NATIVE_POLL_MS;
@@ -115,13 +126,13 @@ export function createGateLinkProbe(options: GateLinkProbeOptions = {}): GateLin
   let latched: GateLinkProof | null = null;
   let armed = false;
 
-  const nativeHeard = (read: (() => number) | undefined): boolean => {
+  const nativeCount = (read: (() => number) | undefined): number => {
     try {
-      return (read?.() ?? 0) > 0;
+      return read?.() ?? 0;
     } catch {
       // A native read that throws is no evidence either way; the listener and
       // the budget still decide.
-      return false;
+      return 0;
     }
   };
 
@@ -150,6 +161,7 @@ export function createGateLinkProbe(options: GateLinkProbeOptions = {}): GateLin
       // sent while it was being opened is not superseded: it is the proof.
       const early = latched;
       clear();
+      if (early === 'failed' || nativeCount(readNative) < 0) return Promise.resolve('failed');
       if (early) return Promise.resolve(early);
       return new Promise<GateLinkProof>((resolve) => {
         const finish = (proof: GateLinkProof): void => {
@@ -159,7 +171,12 @@ export function createGateLinkProbe(options: GateLinkProbeOptions = {}): GateLin
         armed = true;
         settle = finish;
         const provenNatively = (): boolean => {
-          if (!nativeHeard(readNative)) return false;
+          const count = nativeCount(readNative);
+          if (count < 0) {
+            finish('failed');
+            return true;
+          }
+          if (!(count > 0)) return false;
           warn('[handsfree-gate] link proven by the native socket; no Gate frame reached JS');
           finish('frame');
           return true;
@@ -179,12 +196,15 @@ export function createGateLinkProbe(options: GateLinkProbeOptions = {}): GateLin
       });
     },
     observe(frame: string): void {
-      const proof: GateLinkProof = isGateSocketGone(frame) ? 'failed' : 'frame';
+      const parsed = parseGateFrameOrNull(frame);
+      if (parsed?.t === 'error' && !parsed.fatal &&
+        (parsed.code.startsWith('capture_backpressure') || parsed.code === 'playback_backpressure')) return;
+      const proof: GateLinkProof = isGateTerminalFrame(parsed) ? 'failed' : 'frame';
       if (settle) {
         settle(proof);
         return;
       }
-      if (armed) latched = proof;
+      if (armed && latched !== 'failed') latched = proof;
     },
     release(): void {
       if (settle) warn('[handsfree-gate] link proof released while waiting');

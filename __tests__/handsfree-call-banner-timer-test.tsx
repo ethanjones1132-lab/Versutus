@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
 import { HandsfreeCallBanner } from '@/components/voice/handsfree-call-banner';
-import { useHandsfreeVoice } from '@/context/handsfree-voice-provider';
+import { useHandsfreeVoice, type HandsfreeVoiceContextValue } from '@/context/handsfree-voice-provider';
 
 jest.mock('react-native-reanimated', () => ({
   Easing: { bezier: () => (value: number) => value, elastic: () => (value: number) => value },
@@ -17,7 +17,7 @@ jest.mock('@/components/ui', () => ({
 }));
 jest.mock('@/components/voice/handsfree-call-indicator', () => ({ HandsfreeCallIndicator: 'HandsfreeCallIndicator' }));
 
-function mockVoice(active: boolean, startedAtMs?: number) {
+function mockVoice(active: boolean, startedAtMs?: number, audioStatus?: HandsfreeVoiceContextValue['audioStatus']) {
   jest.mocked(useHandsfreeVoice).mockReturnValue({
     active,
     phase: 'listening',
@@ -32,6 +32,7 @@ function mockVoice(active: boolean, startedAtMs?: number) {
     end: jest.fn(),
     startedAtMs,
     sendingSinceMs: null,
+    audioStatus,
   } as never);
 }
 
@@ -86,5 +87,18 @@ describe('HandsfreeCallBanner timer', () => {
     await act(async () => { jest.advanceTimersByTime(2000); });
     const after = JSON.stringify(renderer!.toJSON());
     expect(after).not.toBe(before);
+  });
+
+  test.each([
+    ['capture-paused', 'Mic paused'],
+    ['reconnecting', 'Reconnecting'],
+    ['playback-gap', 'Some reply audio was missed.'],
+  ] as const)('names %s without removing the in-call controls', async (status, copy) => {
+    mockVoice(true, undefined, status);
+    await act(async () => { renderer = create(createElement(HandsfreeCallBanner)); });
+    const banner = JSON.stringify(renderer!.toJSON());
+    expect(banner).toContain(copy);
+    expect(banner).toContain('End hands-free call');
+    if (status !== 'playback-gap') expect(banner).not.toContain('Listening');
   });
 });

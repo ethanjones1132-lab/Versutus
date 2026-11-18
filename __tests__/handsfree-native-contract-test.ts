@@ -373,17 +373,25 @@ describe('hands-free native contract', () => {
     // so a refused request leaves them set. Release used to return early when
     // focus was not held, and nothing undid them. The undo must run on its own
     // flag, not behind the `focused` guard that only the abandon needs.
-    const release = between(service, 'private fun releaseAudioFocus()', '// A communication-mode call');
+    const release = between(service, 'private fun releaseAudioFocus()', 'private fun watchAudioDevices()');
     expect(release).not.toMatch(/if \(!focused\) return/);
     expect(release).toMatch(/if \(focused\) \{[\s\S]*?abandonAudioFocus/);
     expect(release).toMatch(
-      /if \(communicationModeApplied\) \{[\s\S]*?releaseLoudspeaker\(\)[\s\S]*?audioManager\.mode = AudioManager\.MODE_NORMAL[\s\S]*?communicationModeApplied = false/,
+      /if \(communicationModeApplied\) \{[\s\S]*?unregisterAudioDeviceCallback\(it\)[\s\S]*?releaseCallRoute\(\)[\s\S]*?audioManager\.mode = AudioManager\.MODE_NORMAL[\s\S]*?communicationModeApplied = false/,
     );
     const request = between(service, 'private fun requestAudioFocus()', 'private fun releaseAudioFocus()');
     expect(request).toContain('communicationModeApplied = true');
     expect(request.indexOf('communicationModeApplied = true')).toBeLessThan(
       request.indexOf('audioManager.requestAudioFocus('),
     );
+  });
+
+  it('watches audio devices on the service queue for the life of the call', () => {
+    const watch = between(service, 'private fun watchAudioDevices()', 'private fun updateCallRoute()');
+    expect(watch).toContain('if (audioDeviceCallback != null) return');
+    expect(watch).toMatch(/onAudioDevicesAdded\([^\n]+\) = updateCallRoute\(\)/);
+    expect(watch).toMatch(/onAudioDevicesRemoved\([^\n]+\) = updateCallRoute\(\)/);
+    expect(watch).toContain('registerAudioDeviceCallback(callback, mainHandler)');
   });
 
   it('retires the silent notification channel for a visible one', () => {

@@ -208,6 +208,16 @@ export function handsfreeEndReasonCopy(reason: HandsfreeTerminalReason): string 
       // The audio link, not the operator: the Gate dropped the call audio and
       // the phone could not get back onto it before the PC let the call go.
       return 'The call ended because the audio link to the PC dropped.';
+    case 'gate-restart':
+      return 'The call ended because Versutus Gate restarted on your computer.';
+    case 'engine-failed':
+      return 'The call ended because the voice engine on your computer stopped working.';
+    case 'media-failed':
+      return 'The call ended because this phone couldn’t record or play call audio.';
+    case 'backpressure':
+      return 'The call ended because the audio connection couldn’t keep up.';
+    case 'gate-ended':
+      return 'Your computer ended the call.';
     case 'send-failed':
       return 'The call ended because a turn could not be sent or no reply arrived. What you said is back in the message box.';
     case 'speech-failed':

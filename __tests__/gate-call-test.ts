@@ -131,6 +131,14 @@ describe('reduceGateCall folds every Gate frame into the banner', () => {
     expect(speaking.phase).toBe('speaking');
     expect(speaking.muted).toBe(false);
   });
+
+  test('reply text and turn failure do not reopen the mic on the banner', () => {
+    const muted = reduceGateCall(INITIAL_GATE_CALL, { t: 'phase', phase: 'muted' }).state;
+    const reply = reduceGateCall(muted, { t: 'reply', turnId: 't1', delta: 'Still muted' }).state;
+    const failed = reduceGateCall(reply, { t: 'turn', turnId: 't1', state: 'failed' }).state;
+    expect(reply).toMatchObject({ phase: 'muted', muted: true, reply: 'Still muted' });
+    expect(failed).toMatchObject({ phase: 'muted', muted: true, turnState: 'failed' });
+  });
 });
 
 describe('a Gate call ends exactly once and never sends for the operator', () => {

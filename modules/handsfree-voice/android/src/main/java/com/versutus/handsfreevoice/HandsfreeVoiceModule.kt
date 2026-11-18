@@ -260,14 +260,14 @@ class HandsfreeVoiceModule : Module() {
         }
       }, initiallyMuted = HandsfreeGateMediaOwner.isMuted(), resumeLastSeq = lastSeq)
       gateMedia = media
-      media.start(context, url, token, voiceSessionId)
+      val started = media.start(url, token, voiceSessionId)
       // After start: start() begins with stop(), which detaches whatever the owner held.
-      HandsfreeGateMediaOwner.attach(media)
-      promise.resolve(true)
+      if (started) HandsfreeGateMediaOwner.attach(media)
+      promise.resolve(started)
     }.runOnQueue(Queues.MAIN)
 
-    // The link's own count of Gate frames read, so JS can prove the link even
-    // when a `gate` event never reaches it.
+    // The count of Gate frames read (or -1 for failure), so JS can prove the
+    // link even when a `gate` event never reaches it.
     Function("gateMediaFramesReceived") {
       gateMedia?.framesReceived ?: 0
     }

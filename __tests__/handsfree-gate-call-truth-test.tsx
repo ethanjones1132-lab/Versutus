@@ -361,6 +361,26 @@ describe('a Gate call whose link never comes up', () => {
     expect(latest().phase).toBe('idle');
   });
 
+  test('a fatal media error during Start releases the grant, even after an opening frame', async () => {
+    let result = '';
+    await call(async () => {
+      const starting = latest().start(target);
+      await settleChain();
+      gateFrame('{"t":"phase","phase":"opening"}');
+      gateFrame('{"t":"error","code":"media_failed","message":"Cannot record","fatal":true}');
+      result = (await starting).result;
+    });
+    expect(result).toBe('media-start-failed');
+    expect(phases()).not.toContain('listening');
+    expect(latest().phase).toBe('idle');
+    expect(latest().callsEnded).toBe(0);
+    expect(mockGateway.gatewayRequest).toHaveBeenCalledWith('voice.session.stop', {
+      voiceSessionId: 'vs-1',
+      reason: 'start-failed',
+      deviceId: 'phone-abc12345',
+    });
+  });
+
   test('a link the Gate speaks on immediately is a call', async () => {
     await startLiveCall();
     expect(mockMediaStarts).toHaveLength(1);
@@ -433,6 +453,40 @@ describe('a call the phone ends is released to the Gate as this phone', () => {
 });
 
 describe('a call that loses its link mid-way', () => {
+  test.each([
+    [{ t: 'ended', reason: 'gate-restart' }, 'gate-restart'],
+    [{ t: 'ended', reason: 'network' }, 'link-lost'],
+    [{ t: 'ended', reason: 'engine-error' }, 'engine-failed'],
+    [{ t: 'error', code: 'media_failed', message: 'Cannot play audio', fatal: true }, 'media-failed'],
+    [{ t: 'ended', reason: 'backpressure' }, 'backpressure'],
+    [{ t: 'ended', reason: 'future-code' }, 'gate-ended'],
+  ] as const)('keeps the terminal reason from %j for the end sheet', async (frame, reason) => {
+    await startLiveCall();
+    await call(async () => {
+      gateFrame(JSON.stringify(frame));
+      await jest.advanceTimersByTimeAsync(50);
+    });
+    expect(latest().lastEndReason).toBe(reason);
+    expect(handsfreeEndReasonCopy(reason)).toMatch(/\.$/);
+    expect(latest().callsEnded).toBe(1);
+    expect(mockMediaStarts).toHaveLength(1);
+  });
+
+  test('pressure is visible without ending or re-opening the call', async () => {
+    await startLiveCall();
+    const pressure = (code: string) => gateFrame(JSON.stringify({ t: 'error', code, message: '', fatal: false }));
+    await call(() => pressure('capture_backpressure'));
+    expect(latest().audioStatus).toBe('capture-paused');
+    expect(latest().active).toBe(true);
+    await call(() => pressure('capture_backpressure_cleared'));
+    expect(latest().audioStatus).toBeUndefined();
+    await call(() => pressure('playback_backpressure'));
+    expect(latest().audioStatus).toBe('playback-gap');
+    expect(latest().turnError).toBeNull();
+    expect(mockMediaStarts).toHaveLength(1);
+    expect(mockNative.stopGateMedia).not.toHaveBeenCalled();
+  });
+
   test('the resume window is spent re-opening it, then the call ends with its own reason', async () => {
     await startLiveCall();
     await call(async () => {
@@ -463,6 +517,7 @@ describe('a call that loses its link mid-way', () => {
       await jest.advanceTimersByTimeAsync(25_000);
     });
     expect(latest().active).toBe(true);
+    expect(latest().audioStatus).toBe('reconnecting');
     expect(latest().lastEndReason).toBeUndefined();
     expect(mockMediaStarts.length).toBeGreaterThan(1);
 

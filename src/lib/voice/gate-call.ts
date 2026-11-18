@@ -17,11 +17,13 @@ import {
   type VoicePhase,
   type VoiceSpeechState,
 } from './voice-stream-protocol';
+import type { HandsfreeTerminalReason } from './handsfree-session';
 
 /** Which side drives a call. `gate` means the Gate owns the loop. */
 export type HandsfreeCallTransport = 'phone' | 'gate';
 
 export type GateCallPhase = VoicePhase | 'ended';
+export type GateAudioStatus = 'reconnecting' | 'capture-paused' | 'playback-gap';
 
 export type GateCallBanner = {
   phase: GateCallPhase;
@@ -43,6 +45,8 @@ export type GateCallBanner = {
    * once. Null while no turn or non-fatal error has been reported.
    */
   turnError: string | null;
+  capturePaused: boolean;
+  playbackGap: boolean;
   speechGen: number;
   speechState: VoiceSpeechState | null;
   muted: boolean;
@@ -82,6 +86,8 @@ export const INITIAL_GATE_CALL: GateCallBanner = {
   reply: '',
   turnState: null,
   turnError: null,
+  capturePaused: false,
+  playbackGap: false,
   speechGen: 0,
   speechState: null,
   muted: false,
@@ -163,6 +169,7 @@ export function reduceGateCall(
         partial: '',
         recovery: frame.text,
         turnError: null,
+        playbackGap: false,
         // A new committed turn is a new card: the last turn's tool does not
         // belong to it any more.
         tool: null,
@@ -176,7 +183,7 @@ export function reduceGateCall(
         // and reopens listening, so the phone must not sit on `thinking`/`sending`
         // — or keep counting a slow turn — waiting for a reply that is never
         // coming. The reason is kept so the operator is told which turn died.
-        return stay({ ...next, phase: 'listening' });
+        return stay({ ...next, phase: state.muted ? 'muted' : 'listening' });
       }
       if (frame.state === 'done') {
         return stay({ ...next, reply: '', partial: '' }, [{ kind: 'reload-history' }]);
@@ -185,10 +192,15 @@ export function reduceGateCall(
     }
 
     case 'reply':
-      return stay({ ...state, phase: 'speaking', reply: state.reply + frame.delta });
+      return stay({ ...state, phase: state.muted ? 'muted' : 'speaking', reply: state.reply + frame.delta });
 
     case 'speech': {
-      const next = { ...state, speechGen: frame.gen, speechState: frame.state };
+      const next = {
+        ...state,
+        speechGen: frame.gen,
+        speechState: frame.state,
+        playbackGap: frame.state === 'gap' || (frame.state !== 'start' && state.playbackGap),
+      };
       return stay(next);
     }
 
@@ -224,6 +236,12 @@ export function reduceGateCall(
           effects: [{ kind: 'ended', reason: frame.code }],
         };
       }
+      // The phone emits these through the existing local bridge. They are
+      // media status, not failed turns, and never tear down the call.
+      if (frame.code === 'capture_backpressure' || frame.code === 'capture_backpressure_cleared') {
+        return stay({ ...state, capturePaused: frame.code === 'capture_backpressure' });
+      }
+      if (frame.code === 'playback_backpressure') return stay({ ...state, playbackGap: true });
       // A non-fatal error is the Gate's own news about this call and it is not
       // the end of it: it is named once on the banner, in the same words as a
       // failed turn, and folded away by the next turn that starts.
@@ -234,6 +252,29 @@ export function reduceGateCall(
         state: { ...state, phase: 'ended', endedReason: frame.reason },
         effects: [{ kind: 'ended', reason: frame.reason }],
       };
+  }
+}
+
+/** Map known wire reasons to copy keys; never show raw worker or socket text. */
+export function appEndReasonForGate(reason: string): HandsfreeTerminalReason {
+  switch (reason) {
+    case 'user':
+    case 'thread-changed':
+    case 'gate-restart':
+    case 'backpressure':
+      return reason;
+    case 'network':
+    case 'abandoned':
+      return 'link-lost';
+    case 'engine':
+    case 'engine-error':
+    case 'engine_error':
+    case 'engine_open_failed':
+      return 'engine-failed';
+    case 'media_failed':
+      return 'media-failed';
+    default:
+      return 'gate-ended';
   }
 }
 

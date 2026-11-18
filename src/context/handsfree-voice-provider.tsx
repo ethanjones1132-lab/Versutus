@@ -32,16 +32,18 @@ import { createMessageId } from '@/lib/gateway/messages';
 import type { ChatMessage } from '@/lib/gateway/types';
 import {
   INITIAL_GATE_CALL,
+  appEndReasonForGate,
   appPhaseForGate,
   gateControlFor,
   reduceGateCall,
   serializeGateControl,
+  type GateAudioStatus,
   type GateCallBanner,
   type GateCallEffect,
   type HandsfreeCallTransport,
 } from '@/lib/voice/gate-call';
 import { callCues } from '@/lib/voice/call-cues';
-import { createGateLinkProbe, isGateSocketGone } from '@/lib/voice/gate-link';
+import { createGateLinkProbe, isGateSocketGone, isGateTerminalFrame } from '@/lib/voice/gate-link';
 import { isDeviceIdentityError } from '@/lib/gateway/errors';
 import { recordFailure } from '@/lib/diagnostics/failure-log';
 import { pushDeviceParams } from '@/lib/notifications/push-registration';
@@ -187,6 +189,7 @@ export type HandsfreeVoiceContextValue = {
    * speaks its own failure line and reopens listening.
    */
   turnError: string | null;
+  audioStatus?: GateAudioStatus;
   /** The last Gate turn state the Gate reported, or null before the first turn. */
   turnState: GateCallBanner['turnState'];
   /**
@@ -418,6 +421,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   // operator is waiting for the call to end.
   const gateDeviceRef = useRef<{ deviceId: string } | null>(null);
   const gateReconnectingRef = useRef(false);
+  const [gateReconnecting, setGateReconnecting] = useState(false);
+  // A terminal event may follow the first attach frame before the Start
+  // promise has returned. It is still a failed start, not a completed call.
+  const gateStartFailedRef = useRef(false);
   // An optimistic Gate mute, the mute it asked for, and the banner it replaced.
   // The Gate's own `phase` frame is the authority — but only one that REFLECTS
   // the request: until such a frame arrives (or refuses to) the fold is
@@ -437,7 +444,13 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   // bridge, which on the A54 dropped a live link's attach frames and failed
   // three calls in a row. Handed to each proof, never read during render.
   const nativeGateFrames = useCallback(
-    (): number => moduleRef.current?.gateMediaFramesReceived?.() ?? 0,
+    (): number => {
+      try {
+        return moduleRef.current?.gateMediaFramesReceived?.() ?? 0;
+      } catch {
+        return 0;
+      }
+    },
     [],
   );
 
@@ -693,7 +706,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       void latest.current.reloadHistory();
       return;
     }
-    dispatch({ type: 'end' });
+    dispatch({ type: 'gate-ended', reason: appEndReasonForGate(effect.reason) });
   }, [dispatch]);
 
   const clearGateApprovalTimer = useCallback(() => {
@@ -878,6 +891,17 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
           }
         }
         const next = reduceGateCall(gateBannerRef.current, effective);
+        // The Gate may replay a phase from before a notification mute, even
+        // after its opening probe has proved the socket is back. Never paint
+        // Listening over a mic the phone actually has off.
+        if ((parsed?.t === 'phase' || parsed?.t === 'call') && next.state.phase !== 'ended') {
+          const captureMuted = module.isMuted?.();
+          if (captureMuted === true) next.state = { ...next.state, phase: 'muted', muted: true };
+          else if (gateReconnectingRef.current && captureMuted === false && next.state.phase === 'muted') {
+            next.state = { ...next.state, phase: 'opening', muted: false };
+          }
+        }
+        if (next.state.capturePaused && !gateBannerRef.current.capturePaused) level.value = 0;
         gateBannerRef.current = next.state;
         setGateBanner(next.state);
         if (effective !== frame && typeof effective !== 'string') trackGateApproval(effective);
@@ -890,7 +914,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       // voiceSessionId. Spend that window re-opening the media socket — and count
       // an attempt as re-attached only once the Gate is proved to be on it —
       // instead of ending an otherwise healthy call.
-      const attemptReconnect = async (frame: string) => {
+      const attemptReconnect = async () => {
         const grant = gateGrantRef.current;
         const gateway = latest.current.activeGateway;
         const rejoined = grant && gateway?.url
@@ -901,7 +925,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
               startGateMedia: (options) => moduleRef.current?.startGateMedia(options) ?? Promise.resolve(false),
               lastSeq: gateLastSeqRef.current,
               armLinkProof: () => gateLinkRef.current.arm(),
-              proveLink: (budgetMs) => gateLinkRef.current.prove(budgetMs, nativeGateFrames),
+              proveLink: async (budgetMs) => {
+                const proof = await gateLinkRef.current.prove(budgetMs, nativeGateFrames);
+                return nativeGateFrames() < 0 ? 'failed' : proof;
+              },
               isAborted: () =>
                 endingRef.current || !gateModeRef.current || gateGrantRef.current !== grant,
               // Spend the window the Gate itself advertised — it may hold the
@@ -916,17 +943,14 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         // must not clear the flag a newer loop is using, and it must not
         // dispatch `linkLost` into the call that replaced it.
         const superseded = gateGrantRef.current !== grant;
-        if (!superseded) gateReconnectingRef.current = false;
+        if (!superseded) {
+          gateReconnectingRef.current = false;
+          setGateReconnecting(false);
+        }
         if (rejoined) return;
         if (endingRef.current || superseded || !gateModeRef.current) return;
-        // The window ran out with no Gate on the link. That is the end of the
-        // call, with its own reason: folding the socket frame would end it as
-        // `user` and report a dropped link as the operator's own walk-away.
-        if (isGateSocketGone(frame)) {
-          dispatch({ type: 'linkLost' });
-          return;
-        }
-        fold(frame);
+        // The window ran out with no Gate on the link.
+        dispatch({ type: 'linkLost' });
       };
       // The first frames of each subscription are logged: a start that fails
       // its link proof says from the log whether any frame reached JS at all.
@@ -950,12 +974,21 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
           // socket deaths: the Gate's first word on this link is what makes it
           // real, and its refusal is what makes it dead.
           gateLinkRef.current.observe(event.frame);
+          if (sessionRef.current.phase === 'starting' && isGateTerminalFrame(event.frame)) {
+            gateStartFailedRef.current = true;
+            return;
+          }
           if (isRetryableSocketFailure(event.frame)) {
             // A reconnect attempt that fails emits the same frame again; only
             // the first one starts a reconnect, the rest are swallowed.
             if (gateReconnectingRef.current || endingRef.current || !gateGrantRef.current) return;
             gateReconnectingRef.current = true;
-            void attemptReconnect(event.frame);
+            setGateReconnecting(true);
+            level.value = 0;
+            const next = { ...gateBannerRef.current, capturePaused: false, playbackGap: false };
+            gateBannerRef.current = next;
+            setGateBanner(next);
+            void attemptReconnect();
             return;
           }
           fold(event.frame);
@@ -1027,6 +1060,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     gateSessionIdRef.current = undefined;
     gateGrantRef.current = null;
     gateReconnectingRef.current = false;
+    setGateReconnecting(false);
     setEngineInfo(null);
     const module = moduleRef.current;
     moduleRef.current = null;
@@ -1510,6 +1544,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     gateGrantRef.current = null;
     gateDeviceRef.current = null;
     gateReconnectingRef.current = false;
+    setGateReconnecting(false);
     moduleRef.current = null;
     targetRef.current = null;
     threadRef.current = undefined;
@@ -1556,6 +1591,8 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       gateSeqGapRef.current = 0;
       gateDeviceRef.current = null;
       gateReconnectingRef.current = false;
+      setGateReconnecting(false);
+      gateStartFailedRef.current = false;
       gateBannerRef.current = INITIAL_GATE_CALL;
       setGateBanner(INITIAL_GATE_CALL);
 
@@ -1648,7 +1685,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         // stack. This is what makes the start honest: it waits for the Gate's
         // first frame on that socket, so a link that never comes up fails the
         // start instead of reporting a call that can hear nothing.
-        proveLink: (budgetMs) => gateLinkRef.current.prove(budgetMs, nativeGateFrames),
+        proveLink: async (budgetMs) => {
+          const proof = await gateLinkRef.current.prove(budgetMs, nativeGateFrames);
+          return gateStartFailedRef.current || nativeGateFrames() < 0 ? 'failed' : proof;
+        },
       }).finally(() => budget.dispose());
 
       if (attempt.result === 'start-timed-out') {
@@ -1686,12 +1726,11 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         ...(attempt.grant.fellBackFrom ? { reason: attempt.grant.reason } : {}),
       });
 
-      if (sessionRef.current.phase !== 'starting') {
-        // End was tapped while the start was still opening. The Gate session
-        // and the native microphone/socket were opened after teardown had
-        // already looked for them, so neither is stopped by the teardown that
-        // ran: cancel this exact start id here, or a call the operator ended
-        // keeps the microphone and foreground service live with no owner.
+      const mediaFailed = gateStartFailedRef.current || nativeGateFrames() < 0;
+      if (mediaFailed || sessionRef.current.phase !== 'starting') {
+        // End or a fatal link failure won the race against Start. Cancel this
+        // exact attempt or the microphone, foreground service and Gate grant
+        // could outlive the start that opened them.
         cancelNativeSession(module, startId);
         refuseGateStart();
         try {
@@ -1704,8 +1743,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         } catch {
           // the session's own idle close ends it if this never lands
         }
-        logHandsfreeStart({ result: 'call-torn-down-while-starting', transport: 'gate' });
-        return { result: 'call-torn-down-while-starting' };
+        const result = mediaFailed ? 'media-start-failed' : 'call-torn-down-while-starting';
+        logHandsfreeStart({ result, transport: 'gate' });
+        return { result };
       }
       dispatch({ type: 'started', startedAtMs: Date.now() });
       return { result: 'started' };
@@ -1912,6 +1952,11 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   // still in flight has already muted the microphone, so the banner says so
   // before the phase itself reaches `muted`.
   const muted = phase === 'muted' || (!gateLive && session.muteIntent === true);
+  const audioStatus: GateAudioStatus | undefined = !gateLive ? undefined
+    : gateReconnecting ? 'reconnecting'
+    : gateBanner.capturePaused && !muted ? 'capture-paused'
+    : gateBanner.playbackGap ? 'playback-gap'
+    : undefined;
   const partial = gateLive ? gateBanner.partial : session.partial;
   // The one transport decision, shared by the offer below and the start path
   // the screen hands to `start`. A phone preference is always phone; otherwise
@@ -1954,6 +1999,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       // The Gate's own account of the turn. Both are call-scoped: outside a live
       // Gate call there is no turn to report, and the banner draws nothing.
       turnError: gateLive ? gateBanner.turnError : null,
+      audioStatus,
       turnState: gateLive ? gateBanner.turnState : null,
       approval: gateLive ? gateBanner.approval : null,
       approvalBusy,
@@ -1991,6 +2037,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       partial,
       gateLive,
       gateBanner.turnError,
+      audioStatus,
       gateBanner.turnState,
       gateBanner.approval,
       approvalBusy,

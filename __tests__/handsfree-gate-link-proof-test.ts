@@ -36,6 +36,8 @@ const target = {
 const ready = '{"t":"ready","engine":"local"}';
 const socketFailed =
   '{"t":"error","code":"socket_failed","message":"Expected HTTP 101","fatal":true}';
+const mediaFailed =
+  '{"t":"error","code":"media_failed","message":"The phone could not open call audio.","fatal":true}';
 
 /** A probe with no frames arriving unless a test says so. */
 function quietProbe() {
@@ -84,6 +86,31 @@ describe('the probe', () => {
     const probe = createGateLinkProbe();
     const proving = probe.prove(10_000);
     probe.observe(socketFailed);
+    await expect(proving).resolves.toBe('failed');
+  });
+
+  test.each([
+    mediaFailed,
+    '{"t":"error","code":"engine_open_failed","message":"engine failed","fatal":true}',
+    '{"t":"ended","reason":"gate-restart"}',
+  ])('a terminal frame is not proof of a working link: %s', async (frame) => {
+    const probe = createGateLinkProbe();
+    const proving = probe.prove(100);
+    probe.observe(frame);
+    await expect(proving).resolves.toBe('failed');
+
+    probe.arm();
+    probe.observe(ready);
+    probe.observe(frame);
+    probe.observe(ready);
+    await expect(probe.prove(100)).resolves.toBe('failed');
+  });
+
+  test('a local pressure notice does not prove a socket opened', async () => {
+    const probe = createGateLinkProbe();
+    const proving = probe.prove(100);
+    probe.observe('{"t":"error","code":"capture_backpressure","message":"","fatal":false}');
+    probe.observe(mediaFailed);
     await expect(proving).resolves.toBe('failed');
   });
 
@@ -162,6 +189,16 @@ describe('the probe', () => {
       expect(warnings).toEqual([
         '[handsfree-gate] link proven by the native socket; no Gate frame reached JS',
       ]);
+    });
+
+    test('a terminal native link still fails when the bridge drops the error', async () => {
+      jest.useFakeTimers();
+      let native = 0;
+      const probe = createGateLinkProbe({ nativeFramesReceived: () => native });
+      const proving = probe.prove(10_000);
+      native = -1;
+      await jest.advanceTimersByTimeAsync(250);
+      await expect(proving).resolves.toBe('failed');
     });
 
     // The provider hands the reader to each proof, since it reads a ref that

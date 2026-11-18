@@ -49,7 +49,7 @@ export declare class HandsfreeVoiceModule extends NativeModule<HandsfreeVoiceMod
   stopSession(options?: { startId?: string }): Promise<void>;
   /**
    * Open the Gate media socket for a Gate-powered call: raw PCM up, PCM and
-   * JSON frames down. Answers false when the context or options are unusable.
+   * JSON frames down. Answers false if the options or phone audio cannot open.
    */
   startGateMedia(options: HandsfreeGateMediaOptions): Promise<boolean>;
   /** Send one phone → Gate control frame (`mute` | `skip` | `bargein` | `end`). */
@@ -58,7 +58,7 @@ export declare class HandsfreeVoiceModule extends NativeModule<HandsfreeVoiceMod
   stopGateMedia(): Promise<void>;
   /**
    * How many Gate frames the media socket opened last has read, counted on the
-   * native side. It proves the Gate is on the link without relying on the
+   * native side (-1 if it failed). It proves the Gate is on the link without relying on the
    * `gate` event reaching JS. Absent on iOS and on builds that predate it.
    */
   gateMediaFramesReceived?(): number;

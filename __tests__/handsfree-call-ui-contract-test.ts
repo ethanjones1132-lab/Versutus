@@ -287,6 +287,17 @@ describe('an ended or refused call explains itself', () => {
     expect(handsfreeStartResultCopy('identity-unavailable')).toMatch(/device identity/i);
   });
 
+  test.each([
+    ['gate-restart', 'The call ended because Versutus Gate restarted on your computer.'],
+    ['link-lost', 'The call ended because the audio link to the PC dropped.'],
+    ['engine-failed', 'The call ended because the voice engine on your computer stopped working.'],
+    ['media-failed', 'The call ended because this phone couldn’t record or play call audio.'],
+    ['backpressure', 'The call ended because the audio connection couldn’t keep up.'],
+    ['gate-ended', 'Your computer ended the call.'],
+  ] as const)('explains %s in one sentence', (reason, copy) => {
+    expect(handsfreeEndReasonCopy(reason)).toBe(copy);
+  });
+
   test('the chat screen reopens the sheet with the reason when a call ends on its own', () => {
     expect(screen).toContain('handsfreeEndReasonCopy(handsfreeLastEndReason)');
     expect(screen).toMatch(/\[handsfreeCallsEnded, handsfreeLastEndReason\]/);

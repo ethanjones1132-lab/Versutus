@@ -323,18 +323,21 @@ export function reduceVoiceSession(state, event) {
   }
 
   switch (event.type) {
-    case 'ready':
+    case 'ready': {
       if (state.phase !== 'opening') return stay(state);
+      const phase = state.muted ? 'muted' : 'listening';
       return stay(
         {
           ...state,
-          phase: 'listening',
+          phase,
+          resumePhase: state.muted ? 'listening' : null,
           turnId: event.turnId ?? state.turnId,
           utteranceHoldMs: event.utteranceHoldMs ?? state.utteranceHoldMs,
           continuationMs: event.continuationMs ?? state.continuationMs,
         },
-        [phaseEffect('listening')],
+        state.muted ? [{ kind: 'engine.setMuted', muted: true }, phaseEffect(phase)] : [phaseEffect(phase)],
       );
+    }
 
     case 'partial': {
       // The live transcript must not freeze while a turn runs, so what is still
@@ -430,6 +433,9 @@ export function reduceVoiceSession(state, event) {
     }
 
     case 'mute': {
+      // A phone can attach (or resume) while the worker is still opening. Keep
+      // the requested mic state now, but don't claim the worker is ready yet.
+      if (state.phase === 'opening') return stay({ ...state, muted: true });
       if (state.phase === 'muted') return stay(state);
       // A mute from `thinking` is the one the operator reaches for most: the
       // microphone has to go off while the PC is still answering. Refusing it
@@ -453,6 +459,7 @@ export function reduceVoiceSession(state, event) {
     }
 
     case 'unmute': {
+      if (state.phase === 'opening') return stay({ ...state, muted: false });
       if (state.phase !== 'muted') return stay(state);
       // Back to whatever the mute interrupted: a reply that was playing, or a
       // turn that was still being thought about. Only a mute taken from

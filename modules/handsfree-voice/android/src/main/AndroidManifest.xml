@@ -1,8 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-  <!-- The five permissions a hands-free call needs: the microphone, the
+  <!-- The permissions a hands-free call needs: the microphone, audio routing, the
        notification that makes the session visible, and the foreground-service
        types it runs as. No phoneCall type, no boot permission. -->
   <uses-permission android:name="android.permission.RECORD_AUDIO" />
+  <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />

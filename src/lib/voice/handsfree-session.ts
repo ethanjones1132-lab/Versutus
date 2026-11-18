@@ -38,6 +38,11 @@ export type HandsfreeTerminalReason =
   | 'recognition-failed'
   | 'send-failed'
   | 'speech-failed'
+  | 'gate-restart'
+  | 'engine-failed'
+  | 'media-failed'
+  | 'backpressure'
+  | 'gate-ended'
   /**
    * The audio link to the Gate went away and could not be rejoined inside the
    * Gate's resume window. Its own reason: the call was not ended by anyone, the
@@ -87,10 +92,11 @@ export type HandsfreeEvent =
   | { type: 'interruption' }
   | { type: 'linkLost' }
   | { type: 'endRequested'; reason?: 'app-killed' }
-  | { type: 'fatalError'; reason: 'recognition-failed' | 'speech-failed' }
+  | { type: 'fatalError'; reason: 'recognition-failed' | 'speech-failed' | 'media-failed' }
   | { type: 'mute' }
   | { type: 'unmute' }
   | { type: 'end' }
+  | { type: 'gate-ended'; reason: HandsfreeTerminalReason }
   | { type: 'thread-changed' }
   | { type: 'disconnect' }
   | { type: 'stopped' };
@@ -252,6 +258,7 @@ export function reduceHandsfreeSession(
 
   // Terminal events, valid from any live phase, all take the same path.
   if (event.type === 'end') return endCall(state, 'user');
+  if (event.type === 'gate-ended') return endCall(state, event.reason);
   if (event.type === 'endRequested') {
     // The notification's End is the operator's own. The platform also ends a
     // call nobody asked to end when its foreground service dies under a live JS

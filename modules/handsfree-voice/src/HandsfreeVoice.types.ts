@@ -79,9 +79,9 @@ export type HandsfreeEndRequestedEvent = {
   reason?: string;
 };
 
-/** A recognition or synthesis failure the call cannot recover from. */
+/** An audio, recognition or synthesis failure the call cannot recover from. */
 export type HandsfreeFatalErrorEvent = {
-  reason: 'recognition-failed' | 'speech-failed';
+  reason: 'recognition-failed' | 'speech-failed' | 'media-failed';
   message?: string;
 };
 
@@ -105,9 +105,8 @@ export type HandsfreeMuteRequestEvent = {
 };
 
 /**
- * One JSON frame from the Gate media socket, forwarded verbatim. The Gate owns
- * the call loop, so the phone only reports what it sent rather than acting on
- * it; the app maps frames to banner state in `src/lib/voice/gate-call.ts`.
+ * A JSON frame from the Gate socket or a local media status/failure. The app
+ * maps frames to banner state in `src/lib/voice/gate-call.ts`.
  */
 export type HandsfreeGateEvent = {
   frame: string;
