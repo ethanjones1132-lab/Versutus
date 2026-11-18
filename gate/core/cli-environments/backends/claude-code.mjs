@@ -128,7 +128,9 @@ export function normalizeClaudeEvent(event) {
 
   if (event.type === 'result') {
     // `subtype: 'success'` still carries auth and tool failures in `result`.
-    const failed = event.is_error || /^(Failed to authenticate|API Error)/i.test(String(event.result ?? ''));
+    const failed = event.subtype !== 'success'
+      || event.is_error
+      || /^(Failed to authenticate|API Error)/i.test(String(event.result ?? ''));
     return {
       type: failed ? 'run.failed' : 'run.completed',
       payload: {
@@ -341,6 +343,7 @@ export function createClaudeCodeBackend({
     let buffer = '';
     let assembled = '';
     let failure = null;
+    let result = null;
     let sawPartialText = false;
     let sawPartialThinking = false;
     const partialToolIds = new Set();
@@ -417,9 +420,9 @@ export function createClaudeCodeBackend({
         }
       }
       if (normalized.type === 'message.delta') assembled += normalized.payload.text;
-      if (normalized.type === 'run.failed') failure = normalized.payload.text ?? 'run failed';
-      if (normalized.type === 'run.completed' && !assembled) assembled = normalized.payload.text ?? '';
-      onEvent?.(normalized);
+      if (normalized.type === 'run.failed') failure = normalized;
+      else if (normalized.type === 'run.completed') result = normalized;
+      else onEvent?.(normalized);
     };
 
     // stdout arrives as raw Buffers whose UTF-8 sequences stop at chunk
@@ -468,8 +471,30 @@ export function createClaudeCodeBackend({
     buffer += decoder.end();
     if (buffer.trim()) handle(buffer.trim());
 
-    if (failure) throw new Error(`claude-code: ${failure}`);
-    if (exitCode !== 0 && !assembled) throw new Error(`claude-code exited with code ${exitCode}`);
+    const partialText = assembled;
+    const failedResult = failure
+      ? Object.assign(new Error(`claude-code: ${failure.payload.text ?? 'run failed'}`), {
+        payload: { ...failure.payload, partialText },
+        partialText,
+      })
+      : null;
+    if (failedResult) {
+      onEvent?.({ ...failure, payload: { ...failure.payload, partialText } });
+      throw failedResult;
+    }
+    if (exitCode !== 0 || !result) {
+      const reason = exitCode !== 0
+        ? `claude-code exited with code ${exitCode}`
+        : 'claude-code exited without a successful result';
+      const error = Object.assign(new Error(reason), {
+        payload: { message: reason, partialText },
+        partialText,
+      });
+      onEvent?.({ type: 'run.failed', payload: error.payload });
+      throw error;
+    }
+    if (!assembled) assembled = result.payload.text ?? '';
+    onEvent?.(result);
     return {
       message: assembled ? { id: sessionId, role: 'assistant', content: [{ type: 'text', text: assembled }] } : null,
       text: assembled,

@@ -151,12 +151,13 @@ test('ascii-only stdout with an unterminated final line still assembles exactly'
   assert.equal(out.value.text, 'plain ascii reply', 'the final un-newlined line is handled');
 });
 
-test('a child that writes nothing resolves clean with no message and no events', async () => {
+test('a child that writes nothing without a successful result fails', async () => {
   const { events, out } = await runChunkedTurn([]);
 
-  assert.equal(out.error, undefined, `the turn completes: ${out.error?.message}`);
-  assert.deepEqual(out.value, { message: null, text: '' });
-  assert.deepEqual(events, [], 'an empty stdout emits nothing');
+  assert.equal(out.value, undefined, 'missing result is not a completed answer');
+  assert.match(out.error.message, /without a successful result/);
+  assert.deepEqual(out.error.payload, { message: out.error.message, partialText: '' });
+  assert.deepEqual(events, [{ type: 'run.failed', payload: out.error.payload }]);
 });
 
 test('a turn that ends normally cleans up: no signal listener, no kills', async () => {
