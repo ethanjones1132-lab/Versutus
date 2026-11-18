@@ -87,6 +87,7 @@ jest.mock('@/components/ui', () => ({
 
 import { createElement, type ElementType } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { Platform } from 'react-native';
 
 import { OnboardingScreen } from '@/components/onboarding/onboarding-screen';
 
@@ -436,6 +437,41 @@ describe('Gate setup commands', () => {
 
     expect(mockSetClipboard).toHaveBeenCalledWith('node gate/cli.mjs start --host 100.x.y.z');
     expect(renderer.root.findByProps({ accessibilityLabel: 'Copied start now' })).toBeTruthy();
+  });
+
+  test('web platform shows --allow-origin with exact current origin', async () => {
+    // Mock Platform.OS to simulate web platform
+    const originalPlatform = Platform.OS;
+    Platform.OS = 'web';
+    
+    // Mock window.location for web platform
+    const originalWindow = global.window;
+    // Only `origin` is read by the screen; the rest of Location is unused here.
+    global.window = {
+      ...originalWindow,
+      location: { origin: 'https://demo.example.ts.net' },
+    } as unknown as typeof global.window;
+    
+    try {
+      await mount();
+      const setup = renderer.root.findByProps({ accessibilityLabel: 'Set up the Gate' });
+      await act(async () => {
+        (setup.props as { onPress: () => void }).onPress();
+      });
+      const copy = renderer.root.findByProps({ accessibilityLabel: 'Copy start now' });
+
+      await act(async () => {
+        (copy.props as { onPress: () => void }).onPress();
+      });
+      await settle();
+
+      expect(mockSetClipboard).toHaveBeenCalledWith(
+        'node gate/cli.mjs start --allow-origin https://demo.example.ts.net'
+      );
+    } finally {
+      Platform.OS = originalPlatform;
+      global.window = originalWindow;
+    }
   });
 
   test('the Gate guide links to the public repository README section', async () => {

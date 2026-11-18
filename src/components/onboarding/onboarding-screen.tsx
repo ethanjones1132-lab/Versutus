@@ -52,6 +52,18 @@ export function OnboardingScreen() {
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
   const [showGateSetup, setShowGateSetup] = useState(false);
+  const isWeb = Platform.OS === 'web';
+  
+  const getStartCommand = () => {
+    if (isWeb) {
+      // Use window.location.origin only when available (web platform)
+      // This matches the web demo server behavior: exact-origin CORS
+      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+      return `node gate/cli.mjs start --allow-origin ${origin}`;
+    }
+    // Native platforms always use the hardcoded Tailscale command
+    return GATE_START_COMMAND;
+  };
   const [pairingPending, setPairingPending] = useState(false);
   const [tailscaleOffline, setTailscaleOffline] = useState(false);
   const connectingRef = useRef(false);
@@ -427,10 +439,10 @@ export function OnboardingScreen() {
                 />
                 <CommandRow
                   label="Start now"
-                  command={GATE_START_COMMAND}
+                  command={getStartCommand()}
                   copied={copiedCommand === 'start'}
                   borderColor={tokens.borderSubtle}
-                  onCopy={() => void copyCommand('start', GATE_START_COMMAND)}
+                  onCopy={() => void copyCommand('start', getStartCommand())}
                 />
                 <Text variant="micro" color="tertiary">
                   Optional on Windows or macOS: install the Gate as a service so it starts after sign-in.
