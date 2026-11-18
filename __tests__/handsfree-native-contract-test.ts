@@ -76,6 +76,18 @@ const service = readSource(
   'handsfreevoice',
   'HandsfreeCallService.kt',
 );
+const startAdmission = readSource(
+  'modules',
+  'handsfree-voice',
+  'android',
+  'src',
+  'main',
+  'java',
+  'com',
+  'versutus',
+  'handsfreevoice',
+  'HandsfreeStartAdmission.kt',
+);
 const swift = readSource('modules', 'handsfree-voice', 'ios', 'HandsfreeVoiceModule.swift');
 const gateMedia = readSource(
   'modules',
@@ -189,7 +201,8 @@ describe('hands-free native contract', () => {
     expect(kotlin).toContain('HandsfreeCallService.beginPendingStart(startId)');
     expect(kotlin).toContain('START_TIMEOUT_MS');
     expect(kotlin).not.toMatch(/startForegroundService\(context, intent\)\s*\n\s*promise\.resolve\("started"\)/);
-    expect(service).toMatch(/try\s*\{\s*startForegroundWithNotification\(title\)/);
+    expect(service).toContain('HandsfreeStartAdmission.admit(');
+    expect(service).toContain('startForegroundWithNotification(promotionTitle)');
     expect(service).toContain('deliverStart("unavailable")');
   });
 
@@ -234,21 +247,30 @@ describe('hands-free native contract', () => {
     expect(swift).toMatch(/self\.startAttemptId = attemptId/);
   });
 
-  it('rejects a stale service intent before it opens the microphone', () => {
-    // Ownership is checked at the top of `startSession`, before the owner
-    // field, the call state, the foreground notification and audio focus. The
-    // old check lived only in deliverStart, after the microphone was open and
-    // the owner field had already been overwritten with the stale id.
+  it('promotes each start before ownership admission and safely cleans up stale starts', () => {
+    // Android requires every delivered startForegroundService intent to
+    // promote immediately. A stale intent then removes only its temporary
+    // foreground notification; it cannot replace or stop an active call.
     const session = service.slice(
       service.indexOf('fun startSession('),
       service.indexOf('private fun deliverStart('),
     );
-    const guard = session.indexOf('ownsStartAttempt(attemptId)');
+    const promotion = session.indexOf('startForegroundWithNotification(promotionTitle)');
+    const admission = session.indexOf('owns = HandsfreeCallService::ownsStartAttempt');
     const owner = session.indexOf('noteServiceStart(attemptId)');
     const stateStart = session.indexOf('state.start()');
-    expect(guard).toBeGreaterThan(-1);
-    expect(owner).toBeGreaterThan(guard);
-    expect(stateStart).toBeGreaterThan(guard);
+    const rejected = session.indexOf('reject = {');
+    const remove = session.indexOf('ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)', rejected);
+    expect(promotion).toBeGreaterThan(-1);
+    expect(admission).toBeGreaterThan(promotion);
+    expect(owner).toBeGreaterThan(admission);
+    expect(stateStart).toBeGreaterThan(admission);
+    expect(remove).toBeGreaterThan(rejected);
+    expect(session.slice(rejected, session.indexOf('},', rejected))).toMatch(/if \(!state\.isActive\)/);
+    expect(session).toMatch(/promotionTitle = if \(state\.isActive\) notificationTitle else title/);
+    expect(startAdmission.indexOf('promote()')).toBeGreaterThan(-1);
+    expect(startAdmission.indexOf('owns(attemptId)')).toBeGreaterThan(startAdmission.indexOf('promote()'));
+    expect(startAdmission.indexOf('reject()')).toBeGreaterThan(startAdmission.indexOf('owns(attemptId)'));
   });
 
   it('expiry invalidates its originating owner, so a stale start intent is rejected', () => {

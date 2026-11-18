@@ -104,6 +104,76 @@ class HandsfreeStartOwnershipTest {
     assertEquals(null, answered)
   }
 
+  @Test
+  fun expiredActionStartPromotesThenRemovesItsTemporaryNotificationAndStops() {
+    val ownership = HandsfreeStartOwnership()
+    ownership.claim("expired")
+    assertTrue(ownership.expire("expired"))
+    val events = mutableListOf<String>()
+
+    val admitted = HandsfreeStartAdmission.admit(
+      attemptId = "expired",
+      promote = { events += "promote" },
+      owns = ownership::owns,
+      reject = { events += "remove-temporary-notification"; events += "stop-self" },
+    )
+
+    assertFalse(admitted)
+    assertEquals(
+      listOf("promote", "remove-temporary-notification", "stop-self"),
+      events,
+    )
+  }
+
+  @Test
+  fun rejectedDuplicateDoesNotStopOrDemoteAnActiveCall() {
+    val ownership = HandsfreeStartOwnership()
+    ownership.claim("expired")
+    ownership.expire("expired")
+    val activeCall = HandsfreeCallState().also { assertTrue(it.start()) }
+    val events = mutableListOf<String>()
+
+    val admitted = HandsfreeStartAdmission.admit(
+      attemptId = "expired",
+      promote = { events += "promote-existing-call-notification" },
+      owns = ownership::owns,
+      reject = {
+        if (!activeCall.isActive) {
+          events += "remove-notification"
+          events += "stop-self"
+        }
+      },
+    )
+
+    assertFalse(admitted)
+    assertTrue(activeCall.isActive)
+    assertEquals(listOf("promote-existing-call-notification"), events)
+  }
+
+  @Test
+  fun acceptedAndDuplicateStartsAreBothPromoted() {
+    val ownership = HandsfreeStartOwnership()
+    ownership.claim("call")
+    val events = mutableListOf<String>()
+
+    val first = HandsfreeStartAdmission.admit(
+      attemptId = "call",
+      promote = { events += "promote" },
+      owns = ownership::owns,
+      reject = { throw AssertionError("accepted start rejected") },
+    )
+    val duplicate = HandsfreeStartAdmission.admit(
+      attemptId = "call",
+      promote = { events += "promote" },
+      owns = ownership::owns,
+      reject = { throw AssertionError("duplicate start rejected") },
+    )
+
+    assertTrue(first)
+    assertTrue(duplicate)
+    assertEquals(listOf("promote", "promote"), events)
+  }
+
   // Bug B: a module cleanup queues a keyed teardown that re-checks the service
   // owner when it executes. The old cleanup must not end the service a newer
   // retry has already booted.

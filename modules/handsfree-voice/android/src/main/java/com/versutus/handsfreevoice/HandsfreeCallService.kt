@@ -220,22 +220,56 @@ class HandsfreeCallService : Service() {
     cmdStartId: Int = 0,
     openUrl: String? = null,
   ): Boolean {
-    // Ownership is checked FIRST. A stale ACTION_START intent — one the module
-    // already abandoned, or a retry superseded while it sat queued — must touch
-    // nothing: not the service's owner field, not the call state, not the
-    // foreground notification, not audio focus. The old check lived only in
-    // `deliverStart`, by which point the microphone and audio session were
-    // already open and the owner field had already been overwritten with the
-    // stale id, starving the newer attempt's answer. `stopSelf(cmdStartId)` is
-    // start-id safe: if a newer ACTION_START is already queued, the service is
-    // kept for it.
-    if (attemptId != null && !HandsfreeCallService.ownsStartAttempt(attemptId)) {
-      if (!state.isActive && cmdStartId != 0) stopSelf(cmdStartId)
+    // Every startForegroundService delivery must be promoted before ownership
+    // admission. For a duplicate while a call is active, promote its canonical
+    // notification rather than replacing that call's title or state.
+    val promotionTitle = if (state.isActive) notificationTitle else title
+    try {
+      val admitted = HandsfreeStartAdmission.admit(
+        attemptId = attemptId,
+        promote = {
+          startForegroundWithNotification(promotionTitle)
+          foregroundStarted = true
+        },
+        owns = HandsfreeCallService::ownsStartAttempt,
+        reject = {
+          // Rejected starts remove only their temporary notification. A stale
+          // delivery must never stop or demote a call that is already active.
+          if (!state.isActive) {
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            foregroundStarted = false
+            if (cmdStartId != 0) stopSelf(cmdStartId) else stopSelf()
+          }
+        },
+      )
+      if (!admitted) return false
+    } catch (error: Exception) {
+      // Android 14+ may refuse a microphone service the app is not eligible
+      // for. A failed duplicate promotion must not tear down an active call.
+      Log.w(TAG, "foreground start refused", error)
+      if (attemptId != null) {
+        HandsfreeCallService.deliverPendingStart(
+          attemptId,
+          if (state.isActive) "started" else "unavailable",
+        )
+      }
+      if (!state.isActive) {
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        foregroundStarted = false
+        if (cmdStartId != 0) stopSelf(cmdStartId) else stopSelf()
+      }
       return false
     }
     HandsfreeCallService.noteServiceStart(attemptId)
     if (!state.start()) {
-      deliverStart(if (state.isActive) "started" else "unavailable")
+      if (state.isActive) {
+        deliverStart("started")
+      } else {
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        foregroundStarted = false
+        deliverStart("unavailable")
+        if (cmdStartId != 0) stopSelf(cmdStartId) else stopSelf()
+      }
       return false
     }
     HandsfreeGateMediaOwner.beginCall()
@@ -252,19 +286,9 @@ class HandsfreeCallService : Service() {
     // the call timer counts real call time.
     callStartedAtMs = System.currentTimeMillis()
     thinking = false
-    try {
-      startForegroundWithNotification(title)
-      foregroundStarted = true
-    } catch (error: Exception) {
-      // Android 14+ refuses a microphone service the app is not eligible for
-      // (ForegroundServiceStartNotAllowedException / SecurityException). An
-      // uncaught throw here would kill the process; it is reported instead.
-      Log.w(TAG, "foreground start refused", error)
-      state.requestEnd("start-refused")
-      deliverStart("unavailable")
-      stopSelf()
-      return false
-    }
+    // Refresh the promoted placeholder with the call's canonical initial state
+    // after ownership has been admitted, without promoting a second time.
+    postNotification()
     requestAudioFocus()
     deliverStart("started")
     return true
