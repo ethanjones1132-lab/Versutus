@@ -452,21 +452,105 @@ export function reconcileInterruptedMessages(
   return changed ? next : [...current];
 }
 
+/** Text as the reload comparisons read it: trimmed and case-folded. */
+function comparableText(text: string): string {
+  return text.trim().toLowerCase();
+}
+
+/** The Gate turn a bubble belongs to, from the field or its `run-` key. */
+function bubbleTurnId(message: ChatMessage): string | undefined {
+  if (message.turnId) return message.turnId;
+  return message.id.startsWith('run-') ? message.id.slice('run-'.length) : undefined;
+}
+
+/**
+ * The user line this bubble is the reply to, when it directly follows one.
+ *
+ * A reply comes after its user line and any system notes raised around it.
+ * Another bubble in between means this is not that turn's direct reply, so
+ * nothing is attributed rather than guessing.
+ */
+function precedingUserTurn(
+  previous: readonly ChatMessage[],
+  index: number,
+): ChatMessage | undefined {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const candidate = previous[i];
+    if (candidate.role === 'user') return candidate;
+    if (candidate.role !== 'system') return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Whether reloaded history already holds the finished reply to this bubble's turn.
+ *
+ * Identity comes first: a bubble carrying the Gate's turn id is answered when a
+ * finished assistant row of that same turn is in history, whatever either side's
+ * words are. History as the Gate returns it carries no turn id, so the words are
+ * the fallback:
+ *  - a bubble that streamed text is answered by a reply starting with it;
+ *  - an empty bubble streamed nothing to compare. It is answered when the user
+ *    line it directly replies to is in history with an assistant row after it.
+ *
+ * An empty bubble with no reply in history is a turn that genuinely has not
+ * finished — the offline/restart recovery path — and still restores.
+ */
+function answeredInHistory(
+  history: readonly ChatMessage[],
+  previous: readonly ChatMessage[],
+  index: number,
+  message: ChatMessage,
+): boolean {
+  const turnId = bubbleTurnId(message);
+  if (turnId) {
+    const sameTurn = history.filter(
+      (candidate) => candidate.role === 'assistant' && bubbleTurnId(candidate) === turnId,
+    );
+    if (sameTurn.length > 0) return sameTurn.some((candidate) => !candidate.interrupted);
+  }
+  const text = comparableText(message.text);
+  if (text.length > 0) {
+    return history.some(
+      (candidate) =>
+        candidate.role === 'assistant' &&
+        !candidate.interrupted &&
+        comparableText(candidate.text).startsWith(text),
+    );
+  }
+  const question = precedingUserTurn(previous, index);
+  const asked = question ? comparableText(question.text) : '';
+  if (!asked) return false;
+  // The newest history line with those words is the one this bubble replies
+  // to: a line typed again later would raise its own bubble, not this one.
+  let line = -1;
+  for (let i = 0; i < history.length; i += 1) {
+    const candidate = history[i];
+    if (candidate.role === 'user' && comparableText(candidate.text) === asked) line = i;
+  }
+  if (line < 0) return false;
+  return history
+    .slice(line + 1)
+    .some((candidate) => candidate.role === 'assistant' && !candidate.interrupted);
+}
+
 /**
  * After a history reload on reconnect, bring back any interrupted bubbles that
  * have not yet been persisted to gateway history so the user can retry them.
+ *
+ * A bubble whose turn history already answered is dropped: restoring it beside
+ * that reply would show the answer twice, with a Send again button under the
+ * stale copy. An empty bubble is included in that — it streamed nothing, so it
+ * cannot be matched by text; its turn is identified by its turn id, or by the
+ * user line it replies to.
  */
 export function preserveInterruptedAfterReload(
   history: readonly ChatMessage[],
   previous: readonly ChatMessage[],
 ): ChatMessage[] {
-  const prefix = (text: string) => text.trim().toLowerCase();
-  const kept = history.filter((h) => h.role === 'assistant');
-  const restored = previous.filter((message) => {
+  const restored = previous.filter((message, index) => {
     if (!message.interrupted || message.role !== 'assistant') return false;
-    const p = prefix(message.text);
-    if (p.length === 0) return true;
-    return !kept.some((h) => prefix(h.text).startsWith(p));
+    return !answeredInHistory(history, previous, index, message);
   });
   if (restored.length === 0) return [...history];
   const merged = [...history, ...restored];

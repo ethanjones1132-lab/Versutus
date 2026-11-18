@@ -49,6 +49,78 @@ describe('preserveInterruptedAfterReload', () => {
     expect(result.map((item) => item.id)).toEqual(['live']);
   });
 
+  test('drops an empty interrupted bubble once history holds its turn', () => {
+    // VS-151: the turn finished while the app was away, but the bubble dropped
+    // before a single delta reached it. Restoring it would put a second
+    // assistant message for turn T on the thread, with Send again under it.
+    const previous = [
+      {
+        ...message({
+          id: 'run-turn-t',
+          text: '',
+          turnId: 'turn-t',
+          timestamp: 1_100,
+        }),
+        interrupted: true,
+      } as ChatMessage,
+    ];
+    const history = [
+      message({ id: 'h-turn-t', text: 'The settled answer.', turnId: 'turn-t', timestamp: 1_200 }),
+    ];
+
+    const result = preserveInterruptedAfterReload(history, previous);
+    const forTurn = result.filter((item) => item.role === 'assistant' && item.turnId === 'turn-t');
+
+    expect(forTurn).toHaveLength(1);
+    expect(forTurn[0].id).toBe('h-turn-t');
+    expect(forTurn[0].interrupted).toBeFalsy();
+  });
+
+  test('drops an empty interrupted bubble when its user line is answered in history', () => {
+    // History rows as the Gate returns them carry no turn id, so the bubble is
+    // attributed by the user line it directly replies to.
+    const previous = [
+      message({ id: 'u1', role: 'user', text: 'What is 6x7?', timestamp: 1_000 }),
+      { ...message({ id: 'run-live', text: '', timestamp: 1_050 }), interrupted: true } as ChatMessage,
+    ];
+    const history = [
+      message({ id: 'h-u', role: 'user', text: 'What is 6x7?', timestamp: 1_000 }),
+      message({ id: 'h-a', text: 'Forty-two.', timestamp: 1_100 }),
+    ];
+
+    const result = preserveInterruptedAfterReload(history, previous);
+
+    expect(result.map((item) => item.id)).toEqual(['h-u', 'h-a']);
+    expect(result.some((item) => item.interrupted)).toBe(false);
+  });
+
+  test('restores an empty interrupted bubble whose turn has no reply in history', () => {
+    // The offline path: the line is in history, nothing answered it, so the
+    // bubble is the only way back to the turn and must stay.
+    const previous = [
+      message({ id: 'u1', role: 'user', text: 'Offline line', timestamp: 2_000 }),
+      { ...message({ id: 'run-live', text: '', timestamp: 2_050 }), interrupted: true } as ChatMessage,
+    ];
+    const history = [message({ id: 'h-u', role: 'user', text: 'Offline line', timestamp: 2_000 })];
+
+    const result = preserveInterruptedAfterReload(history, previous);
+
+    expect(result.map((item) => item.id)).toEqual(['h-u', 'run-live']);
+    expect(result.some((item) => item.interrupted)).toBe(true);
+  });
+
+  test('restores an empty interrupted bubble whose user line history never saw', () => {
+    const previous = [
+      message({ id: 'u1', role: 'user', text: 'Sent while offline', timestamp: 2_000 }),
+      { ...message({ id: 'run-live', text: '', timestamp: 2_050 }), interrupted: true } as ChatMessage,
+    ];
+    const history = [message({ id: 'h-a', text: 'An older answer.', timestamp: 1_000 })];
+
+    const result = preserveInterruptedAfterReload(history, previous);
+
+    expect(result.map((item) => item.id)).toEqual(['h-a', 'run-live']);
+  });
+
   test('restores in timestamp order rather than appending blindly', () => {
     const previous = [
       { ...message({ id: 'live', text: 'orphan', timestamp: 1_050 }), interrupted: true } as ChatMessage,
