@@ -275,13 +275,13 @@ export function createClaudeCodeBackend({
    * view that mutated shared state would silently change the next turn taken
    * by anyone else.
    */
-  async function sendTurn(sessionId, { text, model, signal, agent } = {}, onEvent) {
+  async function sendTurn(sessionId, { text, model, signal, agent, source, voicePermissionUrl } = {}, onEvent) {
     const args = [
       '--print',
       '--output-format', 'stream-json',
       '--include-partial-messages',
       '--verbose',
-      '--permission-mode', permissionMode,
+      '--permission-mode', source === 'voice' ? 'default' : permissionMode,
       '--session-id', sessionId,
     ];
     // `--agent` selects the Claude Code agent for this turn; without it the
@@ -302,7 +302,7 @@ export function createClaudeCodeBackend({
               command: process.execPath,
               args: [PERMISSION_TOOL_PATH],
               env: {
-                GATE_PERMISSION_URL: permissionBridge.url,
+                GATE_PERMISSION_URL: voicePermissionUrl ?? permissionBridge.url,
                 GATE_PERMISSION_SECRET: permissionBridge.secret,
               },
             },
@@ -501,6 +501,21 @@ export function createClaudeCodeBackend({
     };
   }
 
+  async function sendWithApprovals(sessionId, opts, onEvent) {
+    const voice = opts.source === 'voice' ? permissionBridge?.registerVoiceTurn?.({
+      sessionId, deviceId: opts.voiceDeviceId,
+      announce: (payload) => onEvent?.({ type: 'approval.required', payload }),
+    }) : null;
+    if (opts.source === 'voice' && !voice) {
+      throw new Error('Claude Code could not open the approval channel for this call.');
+    }
+    try {
+      return await sendTurn(sessionId, { ...opts, voicePermissionUrl: voice?.url }, onEvent);
+    } finally {
+      voice?.close();
+    }
+  }
+
   /** The agent files this environment can serve; a failed scan is simply none. */
   async function agentFiles() {
     try {
@@ -672,7 +687,7 @@ export function createClaudeCodeBackend({
      * passed here — a named agent is the scoped view's turn.
      */
     async sendMessage(sessionId, opts = {}, onEvent) {
-      return sendTurn(sessionId, opts, onEvent);
+      return sendWithApprovals(sessionId, opts, onEvent);
     },
 
     /**
@@ -747,7 +762,7 @@ export function createClaudeCodeBackend({
       return {
         ...backend,
         bot: botId,
-        sendMessage: (sessionId, opts = {}, onEvent) => sendTurn(sessionId, { ...opts, agent: agent.name }, onEvent),
+        sendMessage: (sessionId, opts = {}, onEvent) => sendWithApprovals(sessionId, { ...opts, agent: agent.name }, onEvent),
       };
     },
   };

@@ -202,6 +202,7 @@ import { keyValueStorage } from '@/lib/storage/key-value';
 import { loadAppSettings } from '@/lib/settings/app-settings';
 import {
   chooseVoiceEngine,
+  supportsHandsfreeCalls,
   VOICE_CALLS_OFF_REASON,
   type VoiceEngineCapabilities,
   type VoiceEngineChoice,
@@ -602,10 +603,13 @@ export function ChatScreen() {
   const handsfree = useHandsfreeVoice();
   const {
     active: handsfreeActive,
-    canStart: canStartHandsfree,
+    canStart: providerCanStartCall,
     end: endHandsfree,
     callThreadProjection,
   } = handsfree;
+  const callPlatformSupported = supportsHandsfreeCalls(Platform.OS);
+  const callOfferHidden = !callPlatformSupported || handsfree.callsDisabled;
+  const canStartHandsfree = providerCanStartCall && !callOfferHidden;
   const [callSheetVisible, setCallSheetVisible] = useState(false);
   const [callBusy, setCallBusy] = useState(false);
   /**
@@ -1805,7 +1809,7 @@ export function ChatScreen() {
     choice: VoiceEngineChoice | null,
     preference: VoiceEnginePreference,
   ): Promise<boolean> => {
-    if (!activeGateway || !draftThread) return false;
+    if (callOfferHidden || !activeGateway || !draftThread) return false;
     if (surface.kind !== 'configurable' && surface.kind !== 'bot') return false;
     if (choice?.engine === 'none') {
       // S7/D7: a disabled Gate is a no-call state. Refuse here even if a caller
@@ -1891,7 +1895,7 @@ export function ChatScreen() {
       setCallPreparing(false);
       setCallBusy(false);
     }
-  }, [activeGateway, botVoice, adoptThreadSession, callTargetLabel, draftThread, fetchCallChatSession, handsfree, prepareCallSession, selectedBackendId, selectedBotId, surface]);
+  }, [activeGateway, botVoice, adoptThreadSession, callOfferHidden, callTargetLabel, draftThread, fetchCallChatSession, handsfree, prepareCallSession, selectedBackendId, selectedBotId, surface]);
 
   // Which open of the sheet a `voice.capabilities` answer belongs to. Opening the
   // sheet twice inside one request's latency left both reads live: the slower
@@ -1910,6 +1914,7 @@ export function ChatScreen() {
    * serves a `versutus://call` link: a link is never a tap, so it always asks.
    */
   const openCallSheet = useCallback((options?: { requireSheet?: boolean }) => {
+    if (callOfferHidden) return;
     const seq = ++callCapsReadSeqRef.current;
     // A chat with no session is no longer a reason to refuse: Start resolves it
     // (or the Gate opens it), and the sheet says "Getting this chat ready…"
@@ -1953,7 +1958,7 @@ export function ChatScreen() {
       }
       setCallSheetVisible(true);
     })();
-  }, [draftThread?.sessionId, gatewayRequest, startCallWith]);
+  }, [callOfferHidden, draftThread?.sessionId, gatewayRequest, startCallWith]);
   const openCallSheetFromLink = useCallback(
     () => openCallSheet({ requireSheet: true }),
     [openCallSheet],
@@ -1970,7 +1975,7 @@ export function ChatScreen() {
   const callEntry = params.call;
   const callEntryHandledRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (!isFocused || callEntry !== '1' || !draftThread) return undefined;
+    if (!callPlatformSupported || !isFocused || callEntry !== '1' || !draftThread) return undefined;
     if (callEntryHandledRef.current === callEntry) return undefined;
     // Marked handled when the sheet opens, not when the timer is scheduled: a
     // re-render that clears the timer before it fires must leave the link free
@@ -1980,7 +1985,7 @@ export function ChatScreen() {
       openCallSheetFromLink();
     }, 0);
     return () => clearTimeout(timer);
-  }, [isFocused, callEntry, draftThread, openCallSheetFromLink]);
+  }, [callPlatformSupported, isFocused, callEntry, draftThread, openCallSheetFromLink]);
 
   const handleChangeEngine = useCallback(() => {
     setCallPreference((current) => {
@@ -2002,7 +2007,7 @@ export function ChatScreen() {
   }, [callEngine]);
   // S7/D7: the Gate switch is a no-call state for every engine, so the sheet
   // says why and Start is never offered on a phone call in its place.
-  const callCallsOff = callEngine?.engine === 'none' || !handsfreeCallsOffered(callCapabilities);
+  const callCallsOff = handsfree.callsDisabled || callEngine?.engine === 'none' || !handsfreeCallsOffered(callCapabilities);
   const preferredEngineUnready =
     (callPreference === 'local' || callPreference === 'codex') &&
     callEngine?.fellBackFrom === callPreference;
@@ -2165,7 +2170,7 @@ export function ChatScreen() {
         ? 'live-here'
         : 'live-elsewhere'
       : 'start';
-  const handleCallHeaderPress = useCallback(() => {
+  const onCallHeaderPress = useCallback(() => {
     if (callMode === 'live-here') {
       // The banner is docked above the bottom inset; bringing the transcript
       // to its end makes the live call controls immediately visible as well.
@@ -2187,6 +2192,7 @@ export function ChatScreen() {
     }
     openCallSheet();
   }, [activeCallThreadKey, callMode, openCallSheet, scrollToLatest, selectSession, showBotSurface, showSurface]);
+  const handleCallHeaderPress = callOfferHidden ? undefined : onCallHeaderPress;
 
   const callDisabledReason = !activeGateway
     ? 'Connect to a gateway to start a hands-free call.'
@@ -2929,7 +2935,7 @@ export function ChatScreen() {
       <Screen>
         <ChatHeader
           gatewayName={settings.pcName ?? 'Versutus'}
-          onCallPress={() => undefined}
+          onCallPress={handleCallHeaderPress}
           callDisabledReason="Connect to a gateway to start a hands-free call."
         />
         <ChatEmptyState
@@ -3627,7 +3633,10 @@ export function ChatScreen() {
       />
 
       <HandsfreeCallSheet
-        visible={callSheetVisible}
+        visible={callPlatformSupported && callSheetVisible}
+        startHidden={Boolean(callCallsOff || (
+          handsfreeLastEndReason === 'voice-disabled' && callError === handsfreeEndReasonCopy('voice-disabled')
+        ))}
         label={callTargetLabel}
         busy={callBusy || callCapsLoading}
         startDisabled={callStartBlocked}

@@ -325,12 +325,13 @@ export function createHermesBackend({
       return typeof limit === 'number' ? mapped.slice(-limit) : mapped;
     },
 
-    async sendMessage(sessionId, { text, model } = {}) {
+    async sendMessage(sessionId, { text, model, source } = {}) {
       const payload = { message: text };
       if (model?.modelId) payload.model = model.modelId;
       if (model?.providerId) payload.provider = model.providerId;
       const body = await call(`/api/sessions/${encodeURIComponent(sessionId)}/chat`, {
         method: 'POST',
+        ...(source === 'voice' ? { headers: { 'X-Versutus-Turn-Source': 'voice' } } : {}),
         body: JSON.stringify(payload),
       });
 
@@ -530,6 +531,30 @@ export function createHermesBackend({
       });
     },
 
+    // Native Hermes approvals name a run AND, on the canonical gateway, a
+    // particular control in that run's execution generation. Do not use the
+    // generic chat reply shape or grant a session/permanent allowance.
+    voiceApproval(event) {
+      const { run_id: runId, request_id, prompt_id, execution_generation: generation } = event ?? {};
+      if (typeof runId !== 'string' || !runId) return null;
+      const requestId = request_id ?? prompt_id;
+      const hasIdentity = requestId !== undefined || generation !== undefined;
+      if (hasIdentity && (typeof requestId !== 'string' || !requestId
+        || !Number.isSafeInteger(generation) || generation < 0)) return null;
+      return {
+        key: JSON.stringify([runId, requestId, generation]),
+        summary: event.command || event.summary || event.description,
+        reply: (approved) => call(`/v1/runs/${encodeURIComponent(runId)}/approval`, {
+          method: 'POST',
+          signal: AbortSignal.timeout(5000),
+          body: JSON.stringify({
+            ...(hasIdentity ? { request_id: requestId, execution_generation: generation } : {}),
+            choice: approved ? 'once' : 'deny',
+          }),
+        }),
+      };
+    },
+
     /**
      * Streaming turns.
      *
@@ -549,10 +574,11 @@ export function createHermesBackend({
      *
      * Returns the raw Response: the caller owns the framing.
      */
-    async sendMessageStreaming(sessionId, { text, model, images, files } = {}, signal) {
+    async sendMessageStreaming(sessionId, { text, model, images, files, source } = {}, signal) {
       const headers = {
         'Content-Type': 'application/json',
         'X-Hermes-Session-Id': sessionId,
+        ...(source === 'voice' ? { 'X-Versutus-Turn-Source': 'voice' } : {}),
       };
       if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 

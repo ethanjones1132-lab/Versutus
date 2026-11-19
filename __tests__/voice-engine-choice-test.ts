@@ -94,17 +94,10 @@ describe('chooseVoiceEngine', () => {
     expect(choice.reason).toBeTruthy();
   });
 
-  test('iOS cannot run PC voice, so auto and a named Gate engine fall to the phone', () => {
-    // startGateMedia on iOS is a stub that resolves false. Choosing local/codex
-    // here is a call that always fails at media-start-failed.
-    const auto = chooseVoiceEngine('auto', caps(localReady, codexReady), 'ios');
-    expect(auto.engine).toBe('phone');
-    expect(auto.reason).toBeTruthy();
-
-    const named = chooseVoiceEngine('local', caps(localReady, codexReady), 'ios');
-    expect(named.engine).toBe('phone');
-    expect(named.fellBackFrom).toBe('local');
-    expect(named.reason).toBeTruthy();
+  test.each(['auto', 'local', 'codex', 'phone'] as const)('iOS does not offer Call for %s', (preference) => {
+    const choice = chooseVoiceEngine(preference, caps(localReady, codexReady), 'ios');
+    expect(choice.engine).toBe('none');
+    expect(choice.reason).toBeTruthy();
   });
 
   test('Android still prefers a ready Gate engine', () => {

@@ -18,6 +18,7 @@ import {
   type VoiceSpeechState,
 } from './voice-stream-protocol';
 import type { HandsfreeTerminalReason } from './handsfree-session';
+import { foldCallReplyDelta } from './call-reply-delta';
 
 /** Which side drives a call. `gate` means the Gate owns the loop. */
 export type HandsfreeCallTransport = 'phone' | 'gate';
@@ -39,6 +40,8 @@ export type GateCallBanner = {
   partial: string;
   /** The reply text accumulated for the banner. */
   reply: string;
+  replyCursor?: number;
+  replyTurnId?: string;
   turnState: 'sent' | 'replying' | 'done' | 'failed' | null;
   /**
    * Why the last turn died, in the Gate's own words, so the banner can say so
@@ -168,6 +171,8 @@ export function reduceGateCall(
         ...state,
         partial: '',
         recovery: frame.text,
+        ...(state.replyTurnId === frame.turnId && frame.v === 2
+          ? {} : { reply: '', replyCursor: 0, replyTurnId: undefined }),
         turnError: null,
         playbackGap: false,
         // A new committed turn is a new card: the last turn's tool does not
@@ -186,13 +191,27 @@ export function reduceGateCall(
         return stay({ ...next, phase: state.muted ? 'muted' : 'listening' });
       }
       if (frame.state === 'done') {
-        return stay({ ...next, reply: '', partial: '' }, [{ kind: 'reload-history' }]);
+        // V2 can deliver the final delta and done in the same render; keep
+        // that reply visible during playout, until phase or a new turn clears it.
+        if (frame.v === 2) return stay({ ...next, partial: '' }, [{ kind: 'reload-history' }]);
+        return stay({ ...next, reply: '', replyCursor: 0, replyTurnId: undefined, partial: '' }, [{ kind: 'reload-history' }]);
       }
       return stay(next);
     }
 
-    case 'reply':
-      return stay({ ...state, phase: state.muted ? 'muted' : 'speaking', reply: state.reply + frame.delta });
+    case 'reply': {
+      const sameTurn = state.replyTurnId === frame.turnId;
+      const folded = foldCallReplyDelta(
+        sameTurn ? state.reply : '',
+        sameTurn ? state.replyCursor ?? state.reply.length : 0,
+        frame.delta,
+        frame.offset,
+      );
+      return stay({
+        ...state, phase: state.muted ? 'muted' : 'speaking',
+        reply: folded.text, replyCursor: folded.cursor, replyTurnId: frame.turnId,
+      });
+    }
 
     case 'speech': {
       const next = {
@@ -261,6 +280,7 @@ export function appEndReasonForGate(reason: string): HandsfreeTerminalReason {
     case 'user':
     case 'thread-changed':
     case 'gate-restart':
+    case 'voice-disabled':
     case 'backpressure':
       return reason;
     case 'network':

@@ -20,12 +20,13 @@
 
 import { createElement, type ReactNode } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import {
   HANDSFREE_GRACE_MS,
   HANDSFREE_REPLY_WATCHDOG_MS,
   HANDSFREE_APPROVAL_EXPIRY_MS,
+  HANDSFREE_CAPABILITIES_REFRESH_MS,
   HandsfreeVoiceProvider,
   useHandsfreeVoice,
   type HandsfreeCallTarget,
@@ -211,7 +212,9 @@ const target: HandsfreeCallTarget = {
 
 let renderer: ReactTestRenderer | null = null;
 
+const originalPlatform = Platform.OS;
 beforeEach(async () => {
+  Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
   jest.useFakeTimers();
   mockBacking.clear();
   mockSharedLevel.value = 0;
@@ -253,6 +256,7 @@ afterEach(async () => {
     });
   }
   jest.useRealTimers();
+  Object.defineProperty(Platform, 'OS', { value: originalPlatform, configurable: true });
 });
 
 const phases = () => seen.map((value) => value.phase);
@@ -299,6 +303,19 @@ async function startLiveCall(readyFrame: string = ready): Promise<void> {
   expect(result).toBe('started');
   expect(latest().phase).toBe('listening');
 }
+
+test('a capabilities refresh closes a live call and refuses even an explicit phone start', async () => {
+  await startLiveCall();
+  mockGateway.gatewayRequest.mockResolvedValueOnce({
+    enabled: false, engines: { local: { state: 'disabled' }, codex: { state: 'disabled' } },
+  } as unknown as Awaited<ReturnType<typeof mockGateway.gatewayRequest>>);
+  await call(async () => { await jest.advanceTimersByTimeAsync(HANDSFREE_CAPABILITIES_REFRESH_MS); });
+  expect(latest().lastEndReason).toBe('voice-disabled');
+  expect(latest().canStart).toBe(false);
+  expect(handsfreeEndReasonCopy('voice-disabled')).toMatch(/turned off/);
+  await expect(latest().start({ ...target, transport: 'phone', voiceEngine: 'phone' }))
+    .resolves.toMatchObject({ result: 'voice-disabled' });
+});
 
 describe('a Gate call whose link never comes up', () => {
   test('opens a Gate call when the phone speech-availability probe throws', async () => {

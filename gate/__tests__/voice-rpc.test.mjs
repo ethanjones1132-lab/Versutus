@@ -18,6 +18,17 @@ function capabilities({ local = 'ready', codex = 'disabled' } = {}) {
 const ctx = { deviceId: 'dev-1' };
 const thread = { kind: 'bot', sessionId: 's1', botId: 'b1' };
 
+test('the global switch refuses every start even if an engine reports ready', async () => {
+  const { methods, registry } = createVoiceRpc({
+    capabilities: () => ({ ...capabilities({ codex: 'ready' })(), enabled: false }),
+  });
+  assert.equal((await methods['voice.capabilities']({}, ctx)).enabled, false);
+  for (const engine of ['auto', 'local', 'codex', 'phone']) {
+    await assert.rejects(methods['voice.session.start']({ engine, thread }, ctx), { code: 'voice_disabled' });
+  }
+  assert.equal(registry.liveCount(), 0);
+});
+
 test('every voice method requires a paired device', async () => {
   const { methods } = createVoiceRpc({ capabilities: capabilities() });
   await assert.rejects(() => methods['voice.capabilities']({}, { deviceId: null }), /paired device/);
@@ -553,4 +564,3 @@ test('a start that has not attached yet is not superseded', () => {
   assert.equal(registry.isDetached('vs-opening'), false);
   assert.equal(registry.liveForDevice('dev-1').voiceSessionId, 'vs-opening');
 });
-

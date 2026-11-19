@@ -21,7 +21,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { AppState, Platform } from 'react-native';
+import { AppState } from 'react-native';
 import type { SharedValue } from 'react-native-reanimated';
 import { useSharedValue } from 'react-native-reanimated';
 
@@ -93,7 +93,8 @@ import {
 import { beginHandsfreeCall, endHandsfreeCall, stopSpeech } from '@/lib/voice/speech';
 import {
   chooseVoiceEngine,
-  type VoiceEngineCapabilities,
+  VOICE_CALLS_OFF_REASON,
+  type VoiceCapabilitiesSnapshot,
 } from '@/lib/voice/voice-engine-choice';
 import { isStartTimeout, startDeadline } from '@/lib/voice/start-deadline';
 import {
@@ -106,6 +107,7 @@ import type { HandsfreeAvailability, HandsfreeStartOutcome } from '../../modules
 
 /** How long a silence-triggered final is held before it sends. */
 export const HANDSFREE_GRACE_MS = 600;
+export const HANDSFREE_CAPABILITIES_REFRESH_MS = 10_000;
 
 /** How long a sent turn may wait for its reply before the call fails. */
 export const HANDSFREE_REPLY_WATCHDOG_MS = 120_000;
@@ -183,6 +185,8 @@ export type HandsfreeVoiceContextValue = {
   sendingSinceMs: number | null;
   /** The live transcript of the current turn, for the banner. */
   partial: string;
+  /** The live Gate reply; the thread folds it with the same wire cursor. */
+  reply?: string;
   /**
    * Why the last Gate turn died, in the Gate's own words, or null while no turn
    * has failed. The banner names it once and the call keeps going: the Gate
@@ -223,6 +227,7 @@ export type HandsfreeVoiceContextValue = {
   engineReason?: string;
   /** Whether `start` can succeed right now. */
   canStart: boolean;
+  callsDisabled?: boolean;
   /**
    * The transport `start` will open, decided once from the stored preference
    * and the Gate's resolved engine. The Call offer and the start path share it.
@@ -326,12 +331,12 @@ function phaseConfirmsMute(phase: VoicePhase, requested: boolean): boolean {
   return requested ? phase === 'muted' : phase !== 'muted';
 }
 
-/** A capabilities answer only counts when it has the shape `chooseVoiceEngine` reads. */
-function isVoiceEngineCapabilities(value: unknown): value is VoiceEngineCapabilities {
+/** A legacy answer can name engines without a switch; explicit off needs no engine data. */
+function isVoiceEngineCapabilities(value: unknown): value is VoiceCapabilitiesSnapshot {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
-  return typeof record.enabled === 'boolean' && Boolean(record.engines)
-    && typeof record.engines === 'object';
+  return record.enabled === false
+    || (Boolean(record.engines) && typeof record.engines === 'object');
 }
 
 export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode }) {
@@ -357,7 +362,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const [nativeModuleLoaded, setNativeModuleLoaded] = useState(false);
   const [voiceCapabilities, setVoiceCapabilities] = useState<{
     gatewayId: string;
-    capabilities: VoiceEngineCapabilities;
+    capabilities: VoiceCapabilitiesSnapshot;
   } | null>(null);
   const [label, setLabel] = useState<string | undefined>(undefined);
   const [gateBanner, setGateBanner] = useState<GateCallBanner>(INITIAL_GATE_CALL);
@@ -471,6 +476,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     gatewayRequest,
     reloadHistory,
     label,
+    voiceCapabilities,
   });
   useEffect(() => {
     latest.current = {
@@ -487,6 +493,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       gatewayRequest,
       reloadHistory,
       label,
+      voiceCapabilities,
     };
   });
 
@@ -870,8 +877,8 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
           // The Gate has committed this utterance: the operator is told at
           // that moment, instead of sitting in silence until the reply starts
           // (bar F2). `final` is emitted once per committed utterance, at
-          // commit. The cue is felt, not heard — a beep here played over the
-          // one moment a call should be quiet.
+          // commit. The service plays the earcon directly; this is the
+          // matching haptic, not another sound from the JS bridge.
           if (parsed.t === 'final') void callCues.sent();
           // The first `listening` of a call is the moment it can hear. It is
           // marked once per call, so a reconnect or the listening that follows
@@ -1451,10 +1458,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
 
   const gatewayId = activeGateway?.id;
 
-  // Discard an answer when its connection goes away, before children can use it
-  // again on a same-gateway reconnect. The state guard makes this adjustment
-  // run once per stale answer rather than cascading from an effect.
-  if (voiceCapabilities && (status !== 'connected' || voiceCapabilities.gatewayId !== gatewayId || settings?.voiceEngine === 'phone')) {
+  // Do not reuse engine readiness on reconnect. Remember an explicit off for
+  // the same gateway until a new answer, so a disconnect cannot offer Call.
+  if (voiceCapabilities && (voiceCapabilities.gatewayId !== gatewayId
+    || (status !== 'connected' && voiceCapabilities.capabilities.enabled !== false))) {
     setVoiceCapabilities(null);
   }
 
@@ -1466,29 +1473,41 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   // the new gateway inherit the previous one's engine while its own request
   // is still in flight.
   useEffect(() => {
-    if (status !== 'connected' || !gatewayId || settings?.voiceEngine === 'phone') return undefined;
+    if (status !== 'connected' || !gatewayId) return undefined;
     let cancelled = false;
-    void (async () => {
+    let busy = false;
+    const refresh = async () => {
+      if (busy) return;
+      busy = true;
       try {
-        const capabilities = await gatewayRequest<VoiceEngineCapabilities>(
+        const capabilities = await gatewayRequest<unknown>(
           'voice.capabilities',
           await pushDeviceParams(),
         );
-        if (!cancelled) {
-          setVoiceCapabilities(
-            isVoiceEngineCapabilities(capabilities) ? { gatewayId, capabilities } : null,
-          );
+        if (!cancelled && isVoiceEngineCapabilities(capabilities)) {
+          setVoiceCapabilities({ gatewayId, capabilities });
+          if (capabilities.enabled === false && targetRef.current?.gatewayId === gatewayId) {
+            dispatch({ type: 'gate-ended', reason: 'voice-disabled' });
+          }
         }
       } catch {
-        // An older Gate has no voice capabilities; the choice stays unknown
-        // and a non-phone preference keeps the Gate transport it asked for.
-        if (!cancelled) setVoiceCapabilities(null);
+        // An older Gate may not answer. A failed refresh doesn't supersede
+        // an explicit disabled answer from this same gateway.
+      } finally {
+        busy = false;
       }
-    })();
+    };
+    void refresh();
+    const timer = setInterval(() => { void refresh(); }, HANDSFREE_CAPABILITIES_REFRESH_MS);
+    const subscription = AppState.addEventListener('change', (next) => {
+      if (next === 'active') void refresh();
+    });
     return () => {
       cancelled = true;
+      clearInterval(timer);
+      subscription.remove();
     };
-  }, [gatewayId, gatewayRequest, settings?.voiceEngine, status]);
+  }, [dispatch, gatewayId, gatewayRequest, status]);
 
   // A call is bound to the gateway, session and Bot it captured: any of them
   // moving ends it before another utterance can be sent into the wrong thread.
@@ -1707,6 +1726,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       }
 
       if (attempt.result !== 'started' || !attempt.grant) {
+        if (attempt.result === 'voice-disabled' && latest.current.activeGateway?.id === target.gatewayId) {
+          setVoiceCapabilities({ gatewayId: target.gatewayId, capabilities: { enabled: false } });
+        }
         refuseGateStart();
         return { result: attempt.result, detail: attempt.detail };
       }
@@ -1757,6 +1779,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     async (target: HandsfreeCallTarget): Promise<HandsfreeStartAttempt> => {
       const transport = target.transport === 'gate' ? 'gate' : 'phone';
       const snapshot = latest.current;
+      const { voiceCapabilities } = snapshot;
+      if (voiceCapabilities?.gatewayId === target.gatewayId && voiceCapabilities.capabilities.enabled === false) {
+        return { result: 'voice-disabled', detail: VOICE_CALLS_OFF_REASON };
+      }
 
       const module = await loadHandsfreeModule();
       let read: HandsfreeAvailability | null = null;
@@ -1797,6 +1823,21 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       if (!module) {
         logHandsfreeStart({ result: 'no-native-module', transport, engine: target.voiceEngine });
         return { result: 'no-native-module' };
+      }
+      // The Gate validates its own grant. Phone mode has no grant, so check the
+      // switch before requesting microphone access, after normal start policy.
+      if (decision.kind === 'phone') {
+        try {
+          const caps = await snapshot.gatewayRequest<unknown>('voice.capabilities', await pushDeviceParams());
+          if (latest.current.activeGateway?.id !== target.gatewayId) return { result: 'refused' };
+          if (isVoiceEngineCapabilities(caps) && caps.enabled === false) {
+            setVoiceCapabilities({ gatewayId: target.gatewayId, capabilities: caps });
+            return { result: 'voice-disabled', detail: VOICE_CALLS_OFF_REASON };
+          }
+        } catch {
+          // A legacy Gate or direct gateway may not offer this RPC.
+        }
+        if (latest.current.activeGateway?.id !== target.gatewayId) return { result: 'refused' };
       }
       // The OS prompt is asked before the Gate is asked for a session and before
       // any start deadline is armed. Inside the timed start a person reading the
@@ -1971,13 +2012,22 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       ? voiceCapabilities.capabilities
       : undefined;
   const gateEngine = currentCapabilities
-    ? chooseVoiceEngine(callPreference, currentCapabilities, Platform.OS).engine
+    ? chooseVoiceEngine(callPreference, currentCapabilities).engine
     : undefined;
-  const resolvedEngine = callPreference === 'phone' ? 'phone' : gateEngine;
+  const callsDisabled = voiceCapabilities?.gatewayId === gatewayId
+    && voiceCapabilities?.capabilities.enabled === false;
+  const resolvedEngine = gateEngine ?? (callPreference === 'phone' ? 'phone' : undefined);
   const transport = handsfreeTransportForCall(resolvedEngine, callPreference);
+  // Legacy frames don't drive live thread rows. Only show the banner's reply
+  // when the same Gate delta has been folded into the captured thread.
+  const liveReply = gateLive && gateBanner.replyTurnId !== undefined
+    && callProjection?.replyOffsets[gateBanner.replyTurnId] !== undefined
+    ? gateBanner.reply
+    : undefined;
   // Offered whenever a call could run on this device; what blocks it *right now*
   // is reported separately so the control never flickers with chat activity.
   const canStart =
+    !callsDisabled &&
     session.phase === 'idle' &&
     status === 'connected' &&
     Boolean(activeGateway) &&
@@ -1996,6 +2046,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       startedAtMs: session.startedAtMs,
       sendingSinceMs,
       partial,
+      reply: liveReply,
       // The Gate's own account of the turn. Both are call-scoped: outside a live
       // Gate call there is no turn to report, and the banner draws nothing.
       turnError: gateLive ? gateBanner.turnError : null,
@@ -2014,6 +2065,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       engine: engineInfo?.engine,
       engineReason: engineInfo?.reason,
       canStart,
+      callsDisabled,
       transport,
       startBlocker: handsfreeStartBlocker({
         status,
@@ -2037,6 +2089,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       partial,
       gateLive,
       gateBanner.turnError,
+      liveReply,
       audioStatus,
       gateBanner.turnState,
       gateBanner.approval,
@@ -2049,6 +2102,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       level,
       engineInfo,
       canStart,
+      callsDisabled,
       transport,
       status,
       isSending,

@@ -70,6 +70,7 @@ export function percentile(values, fraction) {
 }
 
 const words = (text) => String(text ?? '').toLowerCase().replace(/[^a-z0-9' ]+/g, ' ').split(/\s+/).filter(Boolean);
+export const referenceWordCount = (text) => words(text).length;
 
 /** Word error rate of `heard` against `said`: edits over reference words. */
 export function wordErrorRate(said, heard) {
@@ -125,24 +126,28 @@ async function loadGate(root) {
 }
 
 /** A phone: one socket, a real-time capture loop, and a log of what came back. */
-class PhoneSim {
-  constructor(url) {
+export class PhoneSim {
+  constructor(url, { token = TOKEN, onPcm, onCapture } = {}) {
     this.events = [];
     this.audio = [];
     this.queue = [];
     this.marks = [];
     this.sent = 0;
     this.running = false;
-    this.ws = new WebSocket(url, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    this.ws = new WebSocket(url, { headers: { Authorization: `Bearer ${token}` } });
     this.ws.on('message', (data, binary) => {
       const at = performance.now();
-      if (binary) this.audio.push({ at, ms: (data.length - 8) / PLAYBACK_BYTES_PER_MS });
+      if (binary) {
+        this.audio.push({ at, ms: (data.length - 8) / PLAYBACK_BYTES_PER_MS });
+        onPcm?.(data, at);
+      }
       else {
         const event = { at, ...JSON.parse(data.toString()) };
         this.events.push(event);
         this.trace?.(event);
       }
     });
+    this.onCapture = onCapture;
   }
 
   async open() {
@@ -161,7 +166,10 @@ class PhoneSim {
       const wait = due - performance.now();
       if (wait > 1) await sleep(wait);
       const next = this.queue.shift();
-      if (this.ws.readyState === WebSocket.OPEN) this.ws.send(next?.pcm ?? silence, { binary: true });
+      if (!this.running) break;
+      if (this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(next?.pcm ?? this.onCapture?.() ?? silence, { binary: true });
+      }
       if (next?.mark) next.mark(performance.now());
       frame += 1;
     }

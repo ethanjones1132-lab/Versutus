@@ -63,6 +63,7 @@ export type HandsfreeStartResult =
   | 'not-paired'
   | 'call-in-progress'
   | 'no-engine'
+  | 'voice-disabled'
   | 'insecure-media-url'
   | 'session-start-failed'
   | 'session-grant-incomplete'
@@ -107,6 +108,7 @@ export const HANDSFREE_START_FAILURES: readonly HandsfreeStartFailure[] = [
   'not-paired',
   'call-in-progress',
   'no-engine',
+  'voice-disabled',
   'insecure-media-url',
   'session-start-failed',
   'session-grant-incomplete',
@@ -251,6 +253,7 @@ export function mapGateSessionStartFailure(error: unknown): {
 } {
   const detail = errorMessage(error);
   const code = errorCode(error);
+  if (code === 'voice_disabled') return { result: 'voice-disabled', detail };
   if (code === 'invalid_request' || /thread must name a session/i.test(detail)) {
     return { result: 'no-session', detail };
   }

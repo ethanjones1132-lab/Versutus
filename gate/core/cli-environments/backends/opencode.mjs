@@ -989,7 +989,7 @@ export function createOpenCodeBackend({
    * over the transport's own wording — the caller reads the cancellation it
    * asked for, not a URL and not a cause.
    */
-  async function postPrompt(path, body, signal, major = 1, timeoutMs = readTimeoutMs) {
+  async function postPrompt(path, body, signal, major = 1, timeoutMs = readTimeoutMs, source) {
     const controller = new AbortController();
     const forwardAbort = () => controller.abort();
     let timer;
@@ -1007,7 +1007,10 @@ export function createOpenCodeBackend({
       // `call` is handed the controller rather than the caller's signal so the
       // route's ceiling and the cancellation share one request signal; the
       // timeout is named here because `call` cannot tell the two apart.
-      return await call(path, { method: 'POST', body, signal: controller.signal }, 0, major);
+      return await call(path, {
+        method: 'POST', body, signal: controller.signal,
+        ...(source === 'voice' ? { headers: { 'X-Versutus-Turn-Source': 'voice' } } : {}),
+      }, 0, major);
     } catch (error) {
       if (signal?.aborted) throw turnAbortedError();
       if (timedOut) throw routeTimeoutError(path, timeoutMs);
@@ -1412,7 +1415,7 @@ export function createOpenCodeBackend({
    * "fallback" would only double-submit a turn the server may already be
    * running.
    */
-  async function sendMessageV2(sessionId, { text, model, signal, agent } = {}) {
+  async function sendMessageV2(sessionId, { text, model, signal, agent, source } = {}) {
     const session = encodeURIComponent(sessionId);
     const turn = openTurnBus(sessionId, model, signal, 2, agent);
     // The ready wait answers to the caller's signal as well as its own ceiling:
@@ -1459,6 +1462,8 @@ export function createOpenCodeBackend({
         JSON.stringify({ text }),
         signal,
         2,
+        readTimeoutMs,
+        source,
       );
     } catch (error) {
       // v2 has no blocking fallback to double-submit: a cancelled prompt may
@@ -1598,12 +1603,12 @@ export function createOpenCodeBackend({
      * message, and one that may already have been accepted stops this session
      * through the same bounded route a Stop uses — never by submitting again.
      */
-    async sendMessage(sessionId, { text, model, signal, agent } = {}) {
+    async sendMessage(sessionId, { text, model, signal, agent, source } = {}) {
       const { major } = await serverProfile();
       if (major >= 2) {
         // The same free-only rule as v1: a Bot's turn may name only a free model.
         if (freeOnly && agent && model?.providerId) await assertFreeModel(model);
-        return sendMessageV2(sessionId, { text, model, signal, agent });
+        return sendMessageV2(sessionId, { text, model, signal, agent, source });
       }
       const body = { parts: [{ type: 'text', text }] };
       if (agent) body.agent = agent;
@@ -1632,7 +1637,7 @@ export function createOpenCodeBackend({
       try {
         // The prompt POST carries the caller's signal: a Stop that lands while
         // the route is still deciding cancels the request itself.
-        await postPrompt(`/session/${session}/prompt_async`, payload, signal, 1);
+        await postPrompt(`/session/${session}/prompt_async`, payload, signal, 1, readTimeoutMs, source);
       } catch (error) {
         // The acceptance may have reached the server before the cancel did:
         // stop this session, bounded, and report the cancellation. Never fall
@@ -1650,7 +1655,7 @@ export function createOpenCodeBackend({
         if (signal?.aborted) await stopCancelledSend(sessionId, 1, turn);
         try {
           return turnResult(
-            await postPrompt(`/session/${session}/message`, payload, signal, 1, idleMs),
+            await postPrompt(`/session/${session}/message`, payload, signal, 1, idleMs, source),
           );
         } catch (fallbackError) {
           // The blocking send was cancelled mid-flight and may still have been
@@ -1832,7 +1837,24 @@ export function createOpenCodeBackend({
         streamEvents(sessionId, onEvent, signal) {
           return backend.streamEvents(sessionId, onEvent, signal, id);
         },
+        streamVoiceEvents(sessionId, onEvent, signal) {
+          return backend.streamVoiceEvents(sessionId, onEvent, signal, id);
+        },
       };
+    },
+
+    streamVoiceEvents(sessionId, onEvent, signal, botId = null) {
+      // The native request ID is not an inbox decision ID. Advertise only an
+      // actionable card published by the bridge, with the actual Gate ID.
+      const release = permissionBridge?.watchApproval?.(({ sessionId: owner, approval }) => {
+        if (owner === sessionId && approval && !signal?.aborted) {
+          onEvent(frame('approval.required', approval));
+        }
+      });
+      const subscription = backend.streamEvents(sessionId, (event) => {
+        if (event.type !== 'approval.required') onEvent(event);
+      }, signal, botId);
+      return Object.assign(subscription.finally(() => release?.()), { ready: subscription.ready });
     },
 
     /** Read the shared bus, exposing its ready point before a turn is sent. */

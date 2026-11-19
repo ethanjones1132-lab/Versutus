@@ -24,6 +24,7 @@ export function HandsfreeCallSheet({
   label,
   busy,
   startDisabled,
+  startHidden,
   error,
   notice,
   engineLabel,
@@ -38,6 +39,7 @@ export function HandsfreeCallSheet({
   busy?: boolean;
   /** Start is offered but not tappable: host unreadiness, still loading. */
   startDisabled?: boolean;
+  startHidden?: boolean;
   /** A line beside Start while the call is being prepared, e.g. opening the chat. */
   notice?: string;
   error?: string;
@@ -63,7 +65,7 @@ export function HandsfreeCallSheet({
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scroll}>
         <Text variant="title">
-          {label ? `Start a hands-free call with ${label}?` : 'Start a hands-free call?'}
+          {startHidden ? 'Voice calls are turned off' : label ? `Start a hands-free call with ${label}?` : 'Start a hands-free call?'}
         </Text>
 
         {engineLabel ? (
@@ -117,7 +119,7 @@ export function HandsfreeCallSheet({
             }}
             style={styles.footerButton}
           />
-          <Button
+          {startHidden ? null : <Button
             label="Start call"
             onPress={async () => {
               await haptics.success();
@@ -126,7 +128,7 @@ export function HandsfreeCallSheet({
             busy={busy}
             disabled={Boolean(busy || startDisabled)}
             style={styles.footerPrimary}
-          />
+          />}
         </View>
       </ScrollView>
     </BaseSheet>

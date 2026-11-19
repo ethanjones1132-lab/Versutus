@@ -1,5 +1,6 @@
 import type { ChatMessage, ChatToolCall } from '@/lib/gateway/types';
 import type { GateVoiceFrame } from '@/lib/voice/voice-stream-protocol';
+import { foldCallReplyDelta } from './call-reply-delta';
 
 /** Slice 3 adds this frame to the wire parser; keeping its projection shape local avoids protocol changes here. */
 export type CallToolFrame = {
@@ -86,24 +87,19 @@ export function projectCallFrame(
     case 'reply': {
       const id = `voice-reply:${projection.callId}:${frame.turnId}`;
       const prior = next.messages.find((message) => message.id === id);
-      const offset = frame.offset ?? next.replyOffsets[frame.turnId] ?? prior?.text.length ?? 0;
-      // Offsets make retransmitted or overlapping deltas idempotent. A gap is
-      // left unfilled rather than inventing text the Gate did not send.
-      if (offset <= (prior?.text.length ?? 0)) {
-        const existingText = prior?.text ?? '';
-        const overlap = Math.max(0, Math.min(frame.delta.length, existingText.length - offset));
-        const suffix = frame.delta.slice(overlap);
-        if (!suffix) break;
-        const text = `${existingText.slice(0, offset + overlap)}${suffix}`;
+      const existingText = prior?.text ?? '';
+      const cursor = next.replyOffsets[frame.turnId] ?? existingText.length;
+      const folded = foldCallReplyDelta(existingText, cursor, frame.delta, frame.offset);
+      if (folded.text !== existingText) {
         next = {
           ...next,
           messages: updateMessage(next.messages, id, () => ({
             ...(prior ?? textMessage(id, frame.turnId, '', 'assistant')),
-            text,
+            text: folded.text,
             turnId: frame.turnId,
             streaming: true,
           })),
-          replyOffsets: { ...next.replyOffsets, [frame.turnId]: Math.max(offset + frame.delta.length, existingText.length) },
+          replyOffsets: { ...next.replyOffsets, [frame.turnId]: folded.cursor },
         };
       }
       break;

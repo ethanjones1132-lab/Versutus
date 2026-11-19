@@ -58,6 +58,7 @@ export type HandsfreeCallBannerState = Pick<
   | 'partial'
   | 'label'
   | 'level'
+  | 'reply'
   | 'engine'
   | 'engineReason'
   | 'muted'
@@ -87,7 +88,7 @@ export function HandsfreeCallBannerView({
   call: HandsfreeCallBannerState;
   docked?: boolean;
 }) {
-  const { phase, partial, label, level, engine, engineReason, muted, mute, unmute, skipReply, end, startedAtMs, sendingSinceMs, turnError, audioStatus, approval, approvalBusy, decideApproval } =
+  const { phase, partial, reply, label, level, engine, engineReason, muted, mute, unmute, skipReply, end, startedAtMs, sendingSinceMs, turnError, audioStatus, approval, approvalBusy, decideApproval } =
     call;
   const tokens = useTokens();
   const insets = useSafeAreaInsets();
@@ -151,8 +152,8 @@ export function HandsfreeCallBannerView({
         ? { text: turnNews, urgent: true, live: false }
         : slowTurnCopy
           ? { text: slowTurnCopy, urgent: true, live: false }
-          : partial
-            ? { text: partial, urgent: false, live: true }
+          : partial || ((speaking || muted) && reply)
+            ? { text: partial || reply, urgent: false, live: true }
             : fallbackCopy
               ? { text: fallbackCopy, urgent: false, live: false }
               : hint

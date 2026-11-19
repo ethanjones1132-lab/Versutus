@@ -210,6 +210,8 @@ export function handsfreeEndReasonCopy(reason: HandsfreeTerminalReason): string 
       return 'The call ended because the audio link to the PC dropped.';
     case 'gate-restart':
       return 'The call ended because Versutus Gate restarted on your computer.';
+    case 'voice-disabled':
+      return 'The call ended because voice calls were turned off on your computer.';
     case 'engine-failed':
       return 'The call ended because the voice engine on your computer stopped working.';
     case 'media-failed':
@@ -284,6 +286,8 @@ export function handsfreeStartResultCopy(
       return 'The PC has not approved this phone, so it will not open a call. Approve this phone on the PC, then start again.';
     case 'call-in-progress':
       return 'The PC still has a live call for this phone. End it, wait a moment, then start again.';
+    case 'voice-disabled':
+      return 'Voice calls are turned off on this PC. Turn voice back on in Versutus Gate’s voice configuration, then start again.';
     case 'no-engine':
       return withDetail(
         'The PC voice engine is not ready. Install the voice models in Settings, then start again.',

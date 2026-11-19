@@ -257,9 +257,10 @@ export function createBackendManager({
                 ? params.reason
                 : method;
             const summary = rawSummary.replace(/[\r\n\u2028\u2029]+/g, ' ').trim().slice(0, 160);
+            const threadId = typeof params.threadId === 'string' ? params.threadId : null;
             const normalized = await approvals.normalize({
               type: 'workspace_write',
-              runId: typeof params.threadId === 'string' ? params.threadId : null,
+              runId: threadId,
               environmentId: record.id,
               operation: method,
               summary,
@@ -267,10 +268,19 @@ export function createBackendManager({
 
             let ruling = normalized;
             if (normalized?.decision !== 'approve' && normalized?.decision !== 'deny') {
+              const announce = (state) => {
+                if (!threadId || !normalized?.approvalId) return;
+                fanOut(environmentId, { method: 'versutus/approval', params: {
+                  threadId, approvalId: normalized.approvalId, summary, state,
+                } });
+              };
+              announce('pending');
               const waiting = approvals.waitForDecision(normalized?.approvalId);
               let timer;
+              let expired = false;
               const timeout = new Promise((resolve, reject) => {
                 timer = setTimeout(() => {
+                  expired = true;
                   Promise.resolve(approvals.decide(normalized?.approvalId, 'deny')).then(resolve, reject);
                 }, approvalTimeoutMs);
                 timer.unref?.();
@@ -280,6 +290,7 @@ export function createBackendManager({
               } finally {
                 clearTimeout(timer);
               }
+              announce(expired ? 'expired' : ruling?.decision === 'approve' ? 'approved' : 'denied');
             }
 
             const accepts = !Array.isArray(params.availableDecisions)

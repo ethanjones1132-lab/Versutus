@@ -87,7 +87,7 @@ export function modelReport(runtime, requested) {
  *   with no terminal frame and the caller has not aborted.
  */
 async function relayStreamingTurn(upstream, {
-  onDelta, onToolCall, onApproval, onChunk, onProgress = NOOP, signal,
+  onDelta, onToolCall, onApproval, nativeApproval, onChunk, onProgress = NOOP, signal,
 }) {
   const reader = upstream.body?.getReader?.();
   if (!reader) return false;
@@ -150,6 +150,13 @@ async function relayStreamingTurn(upstream, {
     if (aborted()) return;
     try {
       const payload = JSON.parse(data);
+      if (nativeApproval && (eventType === 'approval.request'
+        || eventType === 'hermes.approval.request' || payload?.type === 'approval.request'
+        || payload?.type === 'hermes.approval.request')) {
+        const request = nativeApproval(payload.payload ?? payload);
+        if (request) onApproval(request);
+        return;
+      }
       if (eventType === 'approval.required' || payload?.type === 'approval.required') {
         onApproval(payload.payload ?? payload);
         return;
@@ -285,6 +292,7 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
   onToolCall = NOOP,
   onApproval = NOOP,
   source,
+  voiceDeviceId,
   onChunk = NOOP,
   onStage = NOOP,
   attempt,
@@ -445,6 +453,9 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
             onDelta,
             onToolCall,
             onApproval,
+            nativeApproval: source === 'voice' && typeof backend.voiceApproval === 'function'
+              ? (event) => backend.voiceApproval(event)
+              : undefined,
             onChunk,
             onProgress: () => noteActivity('the reply stream'),
             signal: controller.signal,
@@ -585,8 +596,10 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
     // The hand-off clock starts now: an event from the opening feed is already
     // the backend working, even before `sendMessage` is invoked.
     handoffAt = Date.now();
-    const subscription = typeof backend.streamEvents === 'function'
-      ? backend.streamEvents(sessionId, handleEvent, controller.signal)
+    const eventFeed = source === 'voice' && typeof backend.streamVoiceEvents === 'function'
+      ? backend.streamVoiceEvents : backend.streamEvents;
+    const subscription = typeof eventFeed === 'function'
+      ? eventFeed.call(backend, sessionId, handleEvent, controller.signal)
       : null;
     let warned = false;
     const warnTelemetry = () => {
@@ -646,9 +659,10 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
         sessionId, {
           text, model, images, files,
           ...(source === undefined ? {} : { source }),
+          ...(source === 'voice' && voiceDeviceId ? { voiceDeviceId } : {}),
           signal: controller.signal,
         },
-        typeof backend.streamEvents === 'function' ? undefined : handleEvent,
+        typeof eventFeed === 'function' ? undefined : handleEvent,
       ));
       if (result === ABORTED_OUTCOME) return ABORTED_OUTCOME;
       // The send answered, or the feed already proved the backend was working:

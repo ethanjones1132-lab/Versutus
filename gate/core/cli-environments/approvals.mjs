@@ -43,8 +43,10 @@ export class ApprovalService {
    * bag: the request carries whatever the backend sent (paths, prompts) and the
    * inbox needs only the class and the one-line summary the Gate composed.
    */
-  list() {
-    return [...this.pending.values()].map((entry) => ({
+  list({ deviceId } = {}) {
+    return [...this.pending.values()].filter((entry) => (
+      !entry.request?.voiceDeviceId || entry.request.voiceDeviceId === deviceId
+    )).map((entry) => ({
       approvalId: entry.approvalId,
       type: entry.type,
       runId: entry.request?.runId ?? null,
@@ -105,7 +107,9 @@ export class ApprovalService {
       error.code = 'invalid_approval_decision';
       throw error;
     }
-    if (entry.request?.adapterId === 'opencode' && typeof entry.request.onDecision === 'function') {
+    const replyVoiceApproval = entry.request?.replyVoiceApproval;
+    if (typeof replyVoiceApproval === 'function'
+      || (entry.request?.adapterId === 'opencode' && typeof entry.request.onDecision === 'function')) {
       if (entry.deciding) {
         const error = new Error('OpenCode permission decision is already being forwarded');
         error.status = 409;
@@ -114,7 +118,8 @@ export class ApprovalService {
       }
       entry.deciding = true;
       try {
-        await entry.request.onDecision(decision === 'approve' ? 'once' : 'reject');
+        if (typeof replyVoiceApproval === 'function') await replyVoiceApproval(decision === 'approve');
+        else await entry.request.onDecision(decision === 'approve' ? 'once' : 'reject');
       } finally {
         entry.deciding = false;
       }

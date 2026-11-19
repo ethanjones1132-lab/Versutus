@@ -194,7 +194,7 @@ jest.mock('@/context/handsfree-voice-provider', () => ({
 }));
 
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
-import { FlatList } from 'react-native';
+import { FlatList, Platform } from 'react-native';
 
 import { ChatScreen } from '@/components/chat/chat-screen';
 import * as ImagePicker from 'expo-image-picker';
@@ -384,7 +384,9 @@ function shown(): string[] {
   return out;
 }
 
+const originalPlatform = Platform.OS;
 beforeEach(() => {
+  Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
   jest.useFakeTimers();
   reset();
   jest.clearAllMocks();
@@ -406,6 +408,7 @@ afterEach(async () => {
   }
   jest.clearAllTimers();
   jest.useRealTimers();
+  Object.defineProperty(Platform, 'OS', { value: originalPlatform, configurable: true });
   await AsyncStorage.clear();
 });
 
@@ -874,6 +877,17 @@ describe('CALL-2 — a call link opens the sheet the way the button does', () =>
       codex: { state: 'ready' },
     },
   };
+
+  test('iOS hides both call entries and ignores the call link', async () => {
+    Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
+    mockRouteParams = { call: '1' };
+    await mount();
+    await openConfigurableThread();
+    expect(find('ChatHeader' as ElementType).props.onCallPress).toBeUndefined();
+    expect(find('ChatComposer' as ElementType).props.onStartCall).toBeUndefined();
+    expect(find(CALL_SHEET).props.visible).toBe(false);
+    expect(mockGateway.gatewayRequest).not.toHaveBeenCalledWith('voice.capabilities', expect.anything());
+  });
 
   test('the link reads the Gate capabilities and the stored engine before the sheet is up', async () => {
     await saveAppSettings({ voiceEngine: 'local' });

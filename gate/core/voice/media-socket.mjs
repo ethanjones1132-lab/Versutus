@@ -176,6 +176,8 @@ export function attachVoiceMediaSocket({
   audit = null,
   notifyPush = null,
   log = () => {},
+  callsEnabled,
+  switchPollMs = 1000,
   now = () => Date.now(),
   noAudioTimeoutMs = NO_AUDIO_TIMEOUT_MS,
   resumeTimeoutMs = RESUME_TIMEOUT_MS,
@@ -244,6 +246,11 @@ export function attachVoiceMediaSocket({
     if (!owns) {
       log(`voice.stream reject status=403 session=${session.voiceSessionId}`);
       rejectUpgrade(socket, 403, 'Forbidden');
+      return;
+    }
+    if (callsEnabled?.() === false) {
+      registry.end(session.voiceSessionId, 'voice-disabled');
+      rejectUpgrade(socket, 409, 'Voice Calls Disabled');
       return;
     }
     if (session.ended) {
@@ -893,7 +900,8 @@ export function attachVoiceMediaSocket({
           latestFinalTiming = null;
           log(
             `voice.utterance commit session=${session.voiceSessionId}`
-            + ` chars=${effect.chars} finals=${effect.finals}`,
+            + ` chars=${effect.chars} finals=${effect.finals} turn=${call.turnId ?? 'none'}`
+            + ` eosToCommitMs=${turnEosToCommitMs ?? 'null'}`,
           );
           break;
         case 'utterance.merge':
@@ -1113,7 +1121,7 @@ export function attachVoiceMediaSocket({
             type: 'approvalRequired',
             approvalId: approval?.approvalId,
             summary: approval?.summary ?? 'Approval needed',
-            state: 'pending',
+            state: approval?.state ?? 'pending',
           }),
           // The phone gets the tool's lifecycle, not its content: the runner's
           // detail holds arguments and output, so only a bounded name/status
@@ -1287,6 +1295,7 @@ export function attachVoiceMediaSocket({
             ));
             log(
               `voice.turn latency session=${session.voiceSessionId}`
+              + ` turn=${call.turnId ?? 'none'}`
               + ` eosToCommitMs=${turnEosToCommitMs ?? 'null'}`
               + ` decodeMs=${turnDecodeMs ?? 'null'}`
               + ` commitToFirstReplyMs=${turnFirstReplyAt ? turnFirstReplyAt - turnCommittedAt : 'null'}`
@@ -1626,6 +1635,13 @@ export function attachVoiceMediaSocket({
   wss.endAll = (reason = 'gate-restart') => {
     for (const call of [...calls.values()]) call.end(reason);
   };
+  if (callsEnabled) {
+    const switchTimer = setInterval(() => {
+      if (calls.size && callsEnabled() === false) wss.endAll('voice-disabled');
+    }, switchPollMs);
+    switchTimer.unref?.();
+    wss.once('close', () => clearInterval(switchTimer));
+  }
 
   return wss;
 }

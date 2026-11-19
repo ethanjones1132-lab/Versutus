@@ -17,7 +17,7 @@
 
 import { createElement, type ReactNode } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import {
   HandsfreeVoiceProvider,
@@ -184,7 +184,9 @@ const target: HandsfreeCallTarget = {
 let renderer: ReactTestRenderer | null = null;
 let warn: jest.SpyInstance;
 
+const originalPlatform = Platform.OS;
 beforeEach(async () => {
+  Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
   jest.useFakeTimers();
   mockBacking.clear();
   mockSharedLevel.value = 0;
@@ -212,6 +214,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  Object.defineProperty(Platform, 'OS', { value: originalPlatform, configurable: true });
   const current = renderer;
   renderer = null;
   if (current) {

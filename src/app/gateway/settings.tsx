@@ -103,6 +103,9 @@ function voiceReadiness(
   state: 'checking' | 'ready' | 'failed',
   voiceCheckError: string | null,
 ): string {
+  if (capabilities && typeof capabilities.enabled === 'boolean') {
+    if (!capabilities.enabled) return 'Gate voice is turned off on this PC.';
+  }
   if (id === 'phone') return 'Always available on this phone.';
   // A refused read never masquerades as an in-progress one: name the
   // refusal (the inline catch comment's promise) instead of spinning on
@@ -114,7 +117,6 @@ function voiceReadiness(
   }
   if (id === 'auto') return 'Follows whichever engine below is ready.';
   if (!capabilities) return 'Checking this PC…';
-  if (!capabilities.enabled) return 'Gate voice is turned off on this PC.';
   // A Gate that predates voice, or answers a partial record, may omit
   // `engines`. The rows then read "unavailable" rather than crashing Settings.
   const status = capabilities.engines?.[id];

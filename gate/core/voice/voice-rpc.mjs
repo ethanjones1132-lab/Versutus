@@ -447,6 +447,9 @@ export function createVoiceRpc({
           throw rpcError('This device already has a live voice call', 409, 'call_in_progress');
         }
         const state = decorate(capabilities());
+        if (state.enabled === false) {
+          throw rpcError('Voice calls are turned off on this PC.', 409, 'voice_disabled');
+        }
         const maxConcurrentCalls = state.limits?.maxConcurrentCalls;
         // `auto` means the Bot's own preference when it carries one (§4.9); an
         // explicit request from the phone still wins.
@@ -502,6 +505,9 @@ export function createVoiceRpc({
           // phone a named refusal and the device free, exactly as a start that
           // never happened.
           const opened = await createCallSession({ voiceSessionId, thread });
+          if (capabilities().enabled === false) {
+            throw rpcError('Voice calls are turned off on this PC.', 409, 'voice_disabled');
+          }
           if (!opened?.sessionId) {
             throw rpcError('The PC could not open a chat for this call. Try again.', 502, 'session_start_failed');
           }

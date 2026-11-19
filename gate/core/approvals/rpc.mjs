@@ -26,7 +26,7 @@ function rpcError(message, status, code) {
   return error;
 }
 
-async function decide(store, approvalId, decision, params = {}) {
+async function decide(store, approvalId, decision, params, ownerDeviceId, bootstrap) {
   const id = typeof approvalId === 'string' ? approvalId.trim() : '';
   if (!id) throw rpcError('approvalId is required', 400, 'invalid_request');
   if (!store || typeof store.decide !== 'function') {
@@ -34,6 +34,10 @@ async function decide(store, approvalId, decision, params = {}) {
   }
   const pending = store.get(id);
   if (!pending) throw rpcError(`Unknown approval "${id}"`, 404, 'unknown_approval');
+  const owner = pending.request?.voiceDeviceId;
+  if (owner && (bootstrap ? !owner.startsWith('bootstrap:') : owner !== ownerDeviceId)) {
+    throw rpcError('Approval does not belong to this device', 403, 'approval_owner_mismatch');
+  }
   if (pending.request?.adapterId === 'opencode') {
     const namedDecisions = [params.decision, params.reply].filter((value) => value !== undefined);
     const expected = decision === 'approve' ? new Set(['approve', 'once']) : new Set(['deny', 'reject']);
@@ -54,7 +58,7 @@ async function decide(store, approvalId, decision, params = {}) {
     }
   }
   const entry = await store.decide(id, decision);
-  if (pending.request?.adapterId === 'opencode' && (!entry?.approvalId || entry.reason === 'unknown approval')) {
+  if ((owner || pending.request?.adapterId === 'opencode') && (!entry?.approvalId || entry.reason === 'unknown approval')) {
     throw rpcError(`Unknown approval "${id}"`, 404, 'unknown_approval');
   }
   return { approvalId: entry.approvalId, decision: entry.decision };
@@ -63,18 +67,18 @@ async function decide(store, approvalId, decision, params = {}) {
 export function createApprovalRpc({ approvals = null } = {}) {
   const methods = {
     'approvals.pending': async (_params, ctx) => {
-      requireDevice(ctx);
-      return { approvals: typeof approvals?.list === 'function' ? approvals.list() : [] };
+      const deviceId = requireDevice(ctx);
+      return { approvals: typeof approvals?.list === 'function' ? approvals.list({ deviceId }) : [] };
     },
 
     'approval.approve': async (params = {}, ctx) => {
-      requireDevice(ctx);
-      return decide(approvals, params.approvalId, 'approve', params);
+      const deviceId = requireDevice(ctx);
+      return decide(approvals, params.approvalId, 'approve', params, deviceId, deviceId === 'bootstrap' && ctx?.bootstrap === true);
     },
 
     'approval.deny': async (params = {}, ctx) => {
-      requireDevice(ctx);
-      return decide(approvals, params.approvalId, 'deny', params);
+      const deviceId = requireDevice(ctx);
+      return decide(approvals, params.approvalId, 'deny', params, deviceId, deviceId === 'bootstrap' && ctx?.bootstrap === true);
     },
   };
 

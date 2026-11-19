@@ -4,6 +4,7 @@ import {
   projectCallFrame,
   reconcileCallThreadProjection,
 } from '@/lib/voice/call-thread-projection';
+import { INITIAL_GATE_CALL, reduceGateCall } from '@/lib/voice/gate-call';
 
 const frame = <T extends Record<string, unknown>>(t: string, seq: number, fields: T) => ({
   t,
@@ -86,5 +87,24 @@ describe('call thread projection', () => {
       { id: 'canonical-reply', role: 'assistant', text: 'Hi', turnId: 'turn-1' },
     ];
     expect(reconcileCallThreadProjection(state, completeHistory).map((message) => message.turnId)).toEqual(['turn-2']);
+  });
+
+  test('the banner and transcript keep the received suffix after a missing reply delta', () => {
+    let thread = emptyCallThreadProjection('thread-a', 'call-1');
+    let banner = INITIAL_GATE_CALL;
+    const events = [
+      frame('reply', 1, { turnId: 'turn-1', offset: 0, delta: 'Hi' }),
+      // seq 2 carried 5 characters we didn't receive.
+      frame('reply', 3, { turnId: 'turn-1', offset: 7, delta: ' there' }),
+      frame('reply', 4, { turnId: 'turn-1', offset: 12, delta: 'e!' }),
+      frame('reply', 5, { turnId: 'turn-1', offset: 14, delta: ' More.' }),
+    ];
+    for (const event of events) {
+      thread = projectCallFrame(thread, event as never);
+      banner = reduceGateCall(banner, event as never).state;
+      expect(thread.messages[0]?.text).toBe(banner.reply);
+    }
+    expect(banner.reply).toBe('Hi there! More.');
+    expect(thread.replyOffsets['turn-1']).toBe(20);
   });
 });

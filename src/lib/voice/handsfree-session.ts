@@ -39,6 +39,7 @@ export type HandsfreeTerminalReason =
   | 'send-failed'
   | 'speech-failed'
   | 'gate-restart'
+  | 'voice-disabled'
   | 'engine-failed'
   | 'media-failed'
   | 'backpressure'

@@ -9,7 +9,8 @@ import { Stack, ThemeProvider, useRouter, type ErrorBoundaryProps } from 'expo-r
 import { StatusBar } from 'expo-status-bar';
 import { NavigationBar } from 'expo-navigation-bar';
 import { useEffect, useRef } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
+import { supportsHandsfreeCalls } from '@/lib/voice/voice-engine-choice';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { AppBootstrap } from '@/components/app-bootstrap';
@@ -533,6 +534,7 @@ function GatewayDeepLinkRouter() {
     // capture (§4.4). With no Bot named the sheet belongs to whatever thread
     // is already up, which is the screen's call.
     if (target.kind === 'call') {
+      if (!supportsHandsfreeCalls(Platform.OS)) return;
       if (status !== 'connected') return;
       handledRef.current = url;
       router.navigate({ pathname: '/chat', params: { call: '1' } });

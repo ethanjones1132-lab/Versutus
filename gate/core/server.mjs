@@ -44,10 +44,11 @@ import { createPushSend } from './push-send.mjs';
 import { createPushNotifier, widgetSnapshot } from './push-notifier.mjs';
 import { createVoiceRpc } from './voice/voice-rpc.mjs';
 import { attachVoiceMediaSocket } from './voice/media-socket.mjs';
+import { mirrorVoiceApprovals } from './voice/voice-approvals.mjs';
 import { createVoiceAudit } from './voice/audit.mjs';
 import { LocalEngine, spawnVoiceWorker } from './voice/engines/local-engine.mjs';
 import { createVoiceWorkerPool } from './voice/engines/worker-pool.mjs';
-import { voicePaths, voiceStatus, installVoice, uvRunner } from './voice/runtime.mjs';
+import { voicePaths, voiceStatus, readVoiceConfig, installVoice, uvRunner } from './voice/runtime.mjs';
 import { runBackendTurn, modelReport } from './voice/turn-runner.mjs';
 import { describeTurnFailure } from './voice/turn-failure.mjs';
 import { createRoutineRegistry } from './scheduler/registry.mjs';
@@ -1549,7 +1550,9 @@ export async function resolveVoiceTurnBackend(backendManager, thread, {
  * with it an unscoped thread picks its backend the way a typed request with no
  * backendId does.
  */
-export async function runVoiceTurn(backendManager, session, text, handlers = {}, { selection, locate } = {}) {
+export async function runVoiceTurn(backendManager, session, text, handlers = {}, {
+  selection, locate, approvals, approvalTimeoutMs,
+} = {}) {
   const resolved = await resolveVoiceTurnBackend(backendManager, session?.thread, {
     signal: handlers?.signal,
     attempt: handlers?.attempt,
@@ -1565,10 +1568,21 @@ export async function runVoiceTurn(backendManager, session, text, handlers = {},
   // it the backend answers on its own default, so a call in a thread pinned to
   // one model was answered by another.
   const model = voiceThreadModel(session?.thread);
-  return runBackendTurn(resolved.backend, session?.thread?.sessionId, { text, ...(model ? { model } : {}) }, {
-    ...handlers,
-    backendId: resolved.descriptor,
+  const mirror = mirrorVoiceApprovals({
+    approvals, deviceId: session?.deviceId, onApproval: handlers.onApproval,
+    signal: handlers.signal, timeoutMs: approvalTimeoutMs,
   });
+  try {
+    return await runBackendTurn(resolved.backend, session?.thread?.sessionId, { text, ...(model ? { model } : {}) }, {
+      ...handlers,
+      source: 'voice',
+      voiceDeviceId: session?.deviceId,
+      onApproval: mirror.open,
+      backendId: resolved.descriptor,
+    });
+  } finally {
+    mirror.close();
+  }
 }
 
 /** The model a call's thread names, in the shape a typed turn carries it. */
@@ -5320,6 +5334,7 @@ export async function createGate(config = {}) {
     deviceTokens,
     tokenStore,
     registry: voiceRpc.registry,
+    callsEnabled: () => readVoiceConfig({ paths: voicePaths() }).enabled,
     log: (line) => console.log(line),
     audit: (summary) => voiceAudit.record(summary),
     createEngine: (session) => (
@@ -5330,6 +5345,7 @@ export async function createGate(config = {}) {
     runTurn: (session, text, handlers) => runVoiceTurn(backendManager, session, text, handlers, {
       selection: defaultBackendSelection,
       locate: locateCallThread,
+      approvals: environmentService.approvals,
     }),
     // A turn whose phone went away runs to the end and its reply is pushed, the
     // same notice a completed chat turn gets: the words are already in the

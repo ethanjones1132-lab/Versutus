@@ -153,22 +153,27 @@ export async function createPermissionBridge({
   timeoutMs = 120_000,
 } = {}) {
   const secret = randomBytes(16).toString('hex');
+  const voiceTurns = new Map();
 
   /** The inbox's ruling for one tool call, or a denial when it cannot be had. */
-  async function rulingFor(body) {
+  async function rulingFor(body, voice) {
     if (!approvals || typeof approvals.normalize !== 'function') {
       return { behavior: 'deny', message: DENY_MESSAGE };
     }
     const tool = toolName(body);
     const input = toolInput(body);
+    const summary = compactSummary(tool, input);
+    // Do not approve a truncated tool description from the call banner.
+    if (voice && summary.endsWith('\u2026')) return { behavior: 'deny', message: DENY_MESSAGE };
     const normalized = await approvals.normalize({
       type: 'workspace_write',
       // The session id is the run the app is showing; where the CLI sends none
       // the entry is the environment's alone, exactly as Codex's null thread is.
-      runId: body.session_id ?? body.sessionId ?? null,
+      runId: voice?.sessionId ?? body.session_id ?? body.sessionId ?? null,
+      ...(voice?.deviceId ? { voiceDeviceId: voice.deviceId } : {}),
       environmentId,
       operation: tool,
-      summary: compactSummary(tool, input),
+      summary,
     });
 
     let ruling = normalized;
@@ -177,16 +182,29 @@ export async function createPermissionBridge({
       // a denial this side makes when nobody has answered in time.
       const waiting = approvals.waitForDecision(ruling?.approvalId);
       let timer;
+      let expired = false;
+      const approvalId = ruling?.approvalId;
+      if (voice?.closed) {
+        approvals.withdraw(approvalId, DENY_MESSAGE);
+        return { behavior: 'deny', message: DENY_MESSAGE };
+      }
+      voice?.pending.add(approvalId);
+      voice?.announce({ approvalId, summary, state: 'pending' });
       const timeout = new Promise((resolve, reject) => {
         timer = setTimeout(() => {
+          expired = true;
           Promise.resolve(approvals.decide(ruling?.approvalId, 'deny')).then(resolve, reject);
-        }, timeoutMs);
+        }, voice ? Math.min(30_000, timeoutMs) : timeoutMs);
         timer.unref?.();
       });
       try {
         ruling = await Promise.race([waiting, timeout]);
       } finally {
         clearTimeout(timer);
+        voice?.pending.delete(approvalId);
+      }
+      if (!voice?.closed) {
+        voice?.announce({ approvalId, summary, state: expired ? 'expired' : ruling?.decision === 'approve' ? 'approved' : 'denied' });
       }
     }
 
@@ -210,8 +228,11 @@ export async function createPermissionBridge({
       return;
     }
     let pathname;
+    let voiceId;
     try {
-      pathname = new URL(req.url, 'http://127.0.0.1').pathname;
+      const url = new URL(req.url, 'http://127.0.0.1');
+      pathname = url.pathname;
+      voiceId = url.searchParams.get('voice');
     } catch {
       pathname = '';
     }
@@ -237,7 +258,12 @@ export async function createPermissionBridge({
         deny(res);
         return;
       }
-      answer = await rulingFor(body);
+      const voice = voiceId === null ? undefined : voiceTurns.get(voiceId);
+      if (voiceId !== null && !voice) {
+        deny(res);
+        return;
+      }
+      answer = await rulingFor(body, voice);
     } catch {
       // Too large, or an inbox that failed: still a denial, never a hang and
       // never a 500 the CLI would report as a broken tool.
@@ -273,6 +299,19 @@ export async function createPermissionBridge({
   return {
     url: `http://127.0.0.1:${port}/permission`,
     secret,
+    registerVoiceTurn({ sessionId, deviceId, announce }) {
+      const id = randomBytes(16).toString('hex');
+      const voice = { sessionId, deviceId, announce, pending: new Set(), closed: false };
+      voiceTurns.set(id, voice);
+      return {
+        url: `http://127.0.0.1:${port}/permission?voice=${id}`,
+        close() {
+          voice.closed = true;
+          voiceTurns.delete(id);
+          for (const approvalId of voice.pending) approvals.withdraw(approvalId, DENY_MESSAGE);
+        },
+      };
+    },
     close() {
       if (!server.listening) return Promise.resolve();
       return new Promise((resolve) => {

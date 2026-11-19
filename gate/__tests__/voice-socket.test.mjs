@@ -20,7 +20,7 @@ const BOOTSTRAP_SESSION = { voiceSessionId: 'vs-boot', deviceId: 'bootstrap:phon
 // The Gate's own token: a phone connected with it has no device grant.
 const BOOTSTRAP_TOKENS = { verify: async (authorization) => authorization === 'Bearer gate-own-token' };
 
-async function startMedia({ noAudioTimeoutMs = 30_000, tokenStore = null, utteranceHoldMs = 0 } = {}) {
+async function startMedia({ noAudioTimeoutMs = 30_000, tokenStore = null, utteranceHoldMs = 0, callsEnabled } = {}) {
   const registry = new VoiceSessionRegistry();
   registry.create(SESSION);
   registry.create(BOOTSTRAP_SESSION);
@@ -42,6 +42,8 @@ async function startMedia({ noAudioTimeoutMs = 30_000, tokenStore = null, uttera
     registry,
     createEngine: () => new ScriptedEngine({ text: 'from engine', framesBeforeFinal: 1 }),
     noAudioTimeoutMs,
+    callsEnabled,
+    switchPollMs: 10,
     // The scripted engine's one final is one turn, at once: a hold of 0.
     utteranceHoldMs,
   });
@@ -50,12 +52,36 @@ async function startMedia({ noAudioTimeoutMs = 30_000, tokenStore = null, uttera
   return {
     port: server.address().port,
     registry,
+    wss,
     close: () =>
       new Promise((done) => {
         wss.close(() => server.close(done));
       }),
   };
 }
+
+test('turning voice off ends an attached call and invalidates an unused grant', async (t) => {
+  let enabled = true;
+  const media = await startMedia({ callsEnabled: () => enabled });
+  t.after(() => {
+    for (const client of media.wss.clients) client.terminate();
+    return media.close();
+  });
+  const ws = new WebSocket(urlFor(media.port), { headers: { Authorization: 'Bearer tok-1' } });
+  const frames = [];
+  ws.on('message', (data, binary) => { if (!binary) frames.push(JSON.parse(data.toString())); });
+  await once(ws, 'open');
+  await waitUntil(() => frames.some((frame) => frame.t === 'ready'));
+  enabled = false;
+  await waitUntil(() => frames.some((frame) => frame.t === 'ended' && frame.reason === 'voice-disabled'));
+  assert.equal(media.registry.get('vs-1').ended, true);
+
+  media.registry.create({ ...SESSION, voiceSessionId: 'unused' });
+  const refused = new WebSocket(urlFor(media.port, 'unused'), { headers: { Authorization: 'Bearer tok-1' } });
+  const [error] = await once(refused, 'error');
+  assert.match(error.message, /409/);
+  assert.equal(media.registry.get('unused').ended, true);
+});
 
 function urlFor(port, sessionId = 'vs-1') {
   return `ws://127.0.0.1:${port}${VOICE_STREAM_PATH}?voiceSessionId=${sessionId}`;

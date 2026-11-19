@@ -11,6 +11,9 @@
 // capability at all, never a rejection into the screen; that is why the
 // provider's calls are async.
 
+import { Platform } from 'react-native';
+import { supportsHandsfreeCalls } from './voice-engine-choice';
+
 /**
  * The native call module this build carries. The entry's default export is the
  * `NativeModule` instance, so its shape is read off the export itself.
@@ -23,6 +26,9 @@ export type HandsfreeNativeModule = typeof import('../../../modules/handsfree-vo
  * offered no Call control rather than one whose tap could only fail.
  */
 export async function loadHandsfreeModule(): Promise<HandsfreeNativeModule | null> {
+  // The current call ships only on Android, regardless of whether a build
+  // happens to carry the experimental iOS native module.
+  if (!supportsHandsfreeCalls(Platform.OS)) return null;
   try {
     const module = await import('../../../modules/handsfree-voice');
     return module.default;

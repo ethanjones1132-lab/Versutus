@@ -38,13 +38,17 @@ export function createOpenCodePermissionBridge({
   // be decided — whichever way that happened (a ruling, the approval timeout's
   // deny, another client's reply, or a pending snapshot proving it gone).
   const watchers = new Set();
-  const notify = (phase, sessionId, requestId) => {
+  const approvalWatchers = new Set();
+  const notify = (phase, sessionId, requestId, approval) => {
     for (const watcher of watchers) {
       try {
         watcher({ phase, sessionId, requestId });
       } catch {
         /* a watcher must never break the approval it is watching */
       }
+    }
+    for (const watcher of approvalWatchers) {
+      try { watcher({ sessionId, approval }); } catch { /* observers do not decide */ }
     }
   };
 
@@ -73,6 +77,7 @@ export function createOpenCodePermissionBridge({
       },
       source: request.source ?? request.tool ?? null,
     };
+    const summary = [permission, context.command, ...context.resources].filter(Boolean).join(' · ').slice(0, 240);
     let normalized;
     try {
       normalized = await approvals.normalize({
@@ -85,7 +90,7 @@ export function createOpenCodePermissionBridge({
         sessionId,
         openCodeRequestId: requestId,
         operation: permission,
-        summary: [permission, context.command, ...context.resources].filter(Boolean).join(' · ').slice(0, 240),
+        summary,
         context,
         onDecision: async (reply) => {
           if (reply !== 'once' && reply !== 'reject') assertOpenCodeReply(reply);
@@ -141,12 +146,15 @@ export function createOpenCodePermissionBridge({
     }
     // The card is in the inbox and this Gate will wait for its ruling: a turn
     // on this session is not a dead turn until that wait ends.
-    notify('open', sessionId, requestId);
+    const card = { approvalId: normalized.approvalId, summary };
+    notify('open', sessionId, requestId, { ...card, state: 'pending' });
 
     const waiting = approvals.waitForDecision(normalized.approvalId);
     let timer;
+    let expired = false;
     const timeout = new Promise((resolve) => {
       timer = setTimeout(() => {
+        expired = true;
         Promise.resolve(approvals.decide(normalized.approvalId, 'deny')).then(resolve, () => resolve(null));
       }, timeoutMs);
       timer.unref?.();
@@ -158,7 +166,9 @@ export function createOpenCodePermissionBridge({
       clearTimeout(timer);
       // Whatever ended the wait, the inbox no longer accepts a decision, so a
       // turn's clock starts again from this moment.
-      notify('settle', sessionId, requestId);
+      notify('settle', sessionId, requestId, {
+        ...card, state: expired ? 'expired' : ruling?.decision === 'approve' ? 'approved' : 'denied',
+      });
     }
     if (!ruling || ruling.withdrawn) return;
     if (byNativeId.get(requestId)?.approvalId === normalized.approvalId) {
@@ -231,6 +241,10 @@ export function createOpenCodePermissionBridge({
       if (typeof watcher !== 'function') return () => {};
       watchers.add(watcher);
       return () => { watchers.delete(watcher); };
+    },
+    watchApproval(watcher) {
+      approvalWatchers.add(watcher);
+      return () => { approvalWatchers.delete(watcher); };
     },
     setReplyApproval(handler) { sendReply = handler; },
   };

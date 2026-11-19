@@ -394,8 +394,7 @@ beforeEach(async () => {
   mockRouteParams = {};
 });
 
-// The Gate engine exists on Android; iOS deliberately falls to the phone, so
-// these cases pin the platform the call bar is judged on.
+// The release offers calls only on Android.
 const devicePlatform = Platform.OS;
 beforeAll(() => {
   Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true, writable: true });
@@ -433,6 +432,7 @@ describe('a Gate with voice turned off offers no call', () => {
 
     expect(sheet().visible).toBe(true);
     expect(sheet().startDisabled).toBe(true);
+    expect(find(CALL_SHEET).props.startHidden).toBe(true);
     expect(sheet().error).toContain('turned off');
     expect(sheet().engineLabel).toBeUndefined();
     expect(mockStart).not.toHaveBeenCalled();

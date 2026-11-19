@@ -261,6 +261,7 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeou
       unsubscribe = subscribe((message) => {
         if (released) return;
         if (message?.params?.threadId && message.params.threadId !== threadId) return;
+        if (message?.method === 'versutus/approval') return; // Gate only, not upstream turn activity
         const event = normalizeCodexEvent(message);
         if (event?.type === 'message.delta') text += event.payload.text ?? '';
         else if (event?.type === 'run.completed') { finish(); return; }
@@ -282,10 +283,14 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeou
     await rpc.request('turn/interrupt', { threadId, turnId }).catch(() => undefined);
   }
 
-  function scopedHandler(sessionId, onEvent) {
+  function scopedHandler(sessionId, onEvent, { voice = false } = {}) {
     return (message) => {
       const threadId = message?.params?.threadId;
       if (sessionId && threadId && threadId !== sessionId) return;
+      if (message?.method === 'versutus/approval') {
+        if (voice && threadId === sessionId) onEvent({ type: 'approval.required', payload: message.params });
+        return;
+      }
       const normalized = normalizeCodexEvent(message);
       if (normalized) onEvent(normalized);
     };
@@ -319,11 +324,18 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeou
       return typeof limit === 'number' ? (limit === 0 ? [] : mapped.slice(-limit)) : mapped;
     },
 
-    async sendMessage(sessionId, { text, model, signal } = {}) {
+    async sendMessage(sessionId, { text, model, signal, source } = {}) {
       const params = {
         threadId: sessionId,
         cwd,
         input: [{ type: 'text', text }],
+        // A voice turn must not inherit the typed thread's writable sandbox
+        // or approval-bypass policy. Codex surfaces native escalation prompts
+        // on the same stdio connection the Gate already bridges.
+        ...(source === 'voice' ? {
+          approvalPolicy: 'on-request',
+          sandboxPolicy: { type: 'readOnly' },
+        } : {}),
       };
       if (model?.modelId) {
         params.model = model.modelId;
@@ -399,10 +411,10 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeou
     },
 
     /** Notifications are registered synchronously before the turn starts. */
-    streamEvents(sessionId, onEvent, signal) {
+    streamEvents(sessionId, onEvent, signal, options) {
       if (!subscribe) return Promise.resolve();
       return new Promise((resolve) => {
-        const handler = scopedHandler(sessionId, onEvent);
+        const handler = scopedHandler(sessionId, onEvent, options);
         const unsubscribe = subscribe(handler);
         const finish = () => {
           signal?.removeEventListener('abort', finish);
@@ -412,6 +424,10 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeou
         if (signal?.aborted) finish();
         else signal?.addEventListener('abort', finish, { once: true });
       });
+    },
+
+    streamVoiceEvents(sessionId, onEvent, signal) {
+      return backend.streamEvents(sessionId, onEvent, signal, { voice: true });
     },
 
     /**

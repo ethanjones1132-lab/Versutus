@@ -40,7 +40,7 @@ export type VoiceEngineStatus = {
 };
 
 export type VoiceEngineCapabilities = {
-  enabled: boolean;
+  enabled?: boolean;
   engines: {
     local: VoiceEngineStatus;
     codex: VoiceEngineStatus;
@@ -50,6 +50,9 @@ export type VoiceEngineCapabilities = {
   /** The most recent call error the Gate recorded, or null. */
   lastError?: string | null;
 };
+
+/** The off switch is authoritative even when no engine status came back. */
+export type VoiceCapabilitiesSnapshot = VoiceEngineCapabilities | { enabled: false };
 
 export type VoiceEngineChoice = {
   engine: ResolvedVoiceEngine;
@@ -62,25 +65,32 @@ export type VoiceEngineChoice = {
 const FALLBACK_ORDER: RunningVoiceEngine[] = ['local', 'codex', 'phone'];
 /** The one sentence for a switched-off Gate; Settings shows the same words. */
 export const VOICE_CALLS_OFF_REASON = 'Gate voice is turned off on this PC.';
-/** iOS `startGateMedia` is a stub that resolves false. PC voice cannot run there. */
-const IOS_GATE_MEDIA_REASON = 'PC voice cannot run on this phone.';
+export const CALL_PLATFORM_REASON = 'Hands-free calls are available on Android.';
 
-function statusOf(capabilities: VoiceEngineCapabilities, engine: 'local' | 'codex'): VoiceEngineStatus {
-  const status = capabilities.engines?.[engine];
+/** D1: applies even to links and to the explicit phone engine. */
+export function supportsHandsfreeCalls(platform: string): boolean {
+  return platform === 'android';
+}
+
+function statusOf(capabilities: VoiceCapabilitiesSnapshot, engine: 'local' | 'codex'): VoiceEngineStatus {
+  const status = 'engines' in capabilities ? capabilities.engines?.[engine] : undefined;
   if (!status || typeof status.state !== 'string') return { state: 'not-installed' };
   return status;
 }
 
-function isReady(capabilities: VoiceEngineCapabilities, engine: RunningVoiceEngine): boolean {
+function isReady(capabilities: VoiceCapabilitiesSnapshot, engine: RunningVoiceEngine): boolean {
   if (engine === 'phone') return true;
   return statusOf(capabilities, engine).state === 'ready';
 }
 
 export function chooseVoiceEngine(
   preference: VoiceEnginePreference,
-  capabilities: VoiceEngineCapabilities,
+  capabilities: VoiceCapabilitiesSnapshot,
   platform?: string,
 ): VoiceEngineChoice {
+  if (platform !== undefined && !supportsHandsfreeCalls(platform)) {
+    return { engine: 'none', reason: CALL_PLATFORM_REASON };
+  }
   // S7/D7: the Gate's one switch turns calls off for every engine, and it is
   // checked before the preference and before any fallback. A phone call in its
   // place is exactly the silent fallback the switch exists to stop — even when
@@ -98,16 +108,6 @@ export function chooseVoiceEngine(
 
   const requested = preference === 'auto' ? undefined : preference;
   const requestedStatus = requested ? statusOf(capabilities, requested) : undefined;
-
-  // The Gate media terminal has no iOS implementation. A ready `local` would
-  // otherwise win on auto and every call would die at media-start-failed.
-  if (platform === 'ios') {
-    return {
-      engine: 'phone',
-      ...(requested ? { fellBackFrom: requested } : {}),
-      reason: IOS_GATE_MEDIA_REASON,
-    };
-  }
 
   if (requested && isReady(capabilities, requested)) {
     return { engine: requested };

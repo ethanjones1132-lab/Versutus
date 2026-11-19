@@ -93,6 +93,9 @@ class HandsfreeCallService : Service() {
 
   private var soundPool: SoundPool? = null
   private var earconId = 0
+  private var earconReady = false
+  private var pendingEarconAtMs: Long? = null
+  private val gateCommitCue = GateCommitCue(::playCommitCueOnMain)
 
   private var audioFocusRequest: AudioFocusRequest? = null
   private var focused = false
@@ -298,6 +301,7 @@ class HandsfreeCallService : Service() {
     // after ownership has been admitted, without promoting a second time.
     postNotification()
     requestAudioFocus()
+    prepareSendEarcon()
     deliverStart("started")
     return true
   }
@@ -460,6 +464,7 @@ class HandsfreeCallService : Service() {
     override fun onGateFrame(frame: GateFrame) {
       mainHandler.post {
         if (destroyed) return@post
+        gateCommitCue.accept(frame)
         HandsfreeCallNotification.wordForGateFrame(frame)?.let { gateWord = it }
         if (frame is GateFrame.Speech) {
           if (frame.state == "start") playbackGap = false
@@ -1035,35 +1040,47 @@ class HandsfreeCallService : Service() {
   }
 
   fun playSendEarcon() {
-    mainHandler.post {
-      // The teardown released the pool; a queued earcon must not rebuild one
-      // for a call that is over.
-      if (destroyed) return@post
-      val pool = soundPool ?: run {
-        val created = SoundPool.Builder()
-          .setMaxStreams(1)
-          .setAudioAttributes(
-            AudioAttributes.Builder()
-              .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-              .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-              .build(),
-          )
-          .build()
-        soundPool = created
-        created
-      }
-      if (earconId == 0) {
-        earconId = pool.load(this, R.raw.handsfree_send_earcon, 1)
-      }
-      pool.setOnLoadCompleteListener { _, _, status ->
-        if (status == 0) {
-          // Fire-and-forget: a refused earcon is silent, never an event.
-          try {
-            pool.play(earconId, 1f, 1f, 1, 0, 1f)
-          } catch (_: Exception) {
-          }
+    mainHandler.post { playCommitCueOnMain() }
+  }
+
+  private fun prepareSendEarcon() {
+    if (destroyed || soundPool != null) return
+    try {
+      val pool = SoundPool.Builder()
+        .setMaxStreams(1)
+        .setAudioAttributes(
+          AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build(),
+        )
+        .build()
+      soundPool = pool
+      pool.setOnLoadCompleteListener { sender, sampleId, status ->
+        if (destroyed || sender !== soundPool || sampleId != earconId) return@setOnLoadCompleteListener
+        earconReady = status == 0
+        val requested = pendingEarconAtMs
+        pendingEarconAtMs = null
+        if (earconReady && requested != null && SystemClock.elapsedRealtime() - requested <= 300L) {
+          playCommitCueOnMain()
         }
       }
+      earconId = pool.load(this, R.raw.handsfree_send_earcon, 1)
+    } catch (_: Exception) {
+      // A refused cue doesn't interrupt audio or the call.
+    }
+  }
+
+  private fun playCommitCueOnMain() {
+    if (destroyed) return
+    if (!earconReady) {
+      pendingEarconAtMs = SystemClock.elapsedRealtime()
+      return
+    }
+    try {
+      val stream = soundPool?.play(earconId, 1f, 1f, 1, 0, 1f) ?: 0
+      if (stream != 0) Log.d(TAG, "call commit cue queued")
+    } catch (_: Exception) {
     }
   }
 
