@@ -5455,7 +5455,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           // (multiplex off, refused key, dead environment, spent budget), the
           // bubble shows verdict + fix instead of a raw exception dump. The
           // banner still gets the raw message for anyone who wants details.
-          batcher.cancel();
+          //
+          // Not `cancel()`: deltas from the last frame may still be in the
+          // batch, and they are text this turn already streamed. Dropping them
+          // made a failure that arrived just after a chunk look like a turn
+          // that never produced anything (VS-162). Flush first, then let
+          // `convertStreamError` keep the reply and note the failure.
+          batcher.flush();
           const shown = formatRunFailure(message) ?? message;
           setMessages((prev) => convertStreamError(prev, runId, shown, false));
           setLastError(message);

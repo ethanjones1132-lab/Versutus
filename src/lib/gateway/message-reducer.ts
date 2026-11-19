@@ -285,6 +285,13 @@ export function finalizeStreamingMessage(messages: readonly ChatMessage[], runId
  * Convert a stream failure into its final state.
  * Abort removes the placeholder (the user intended to cancel).
  * Any other error keeps the bubble so the user sees what happened.
+ *
+ * A turn that had already streamed text keeps it. That text is the operator's
+ * reply — and the journal's, since the Gate holds the same turn — so replacing
+ * it with the app's `Error: …` copy threw away a half-written answer that was
+ * still readable (VS-162). The failure goes beside it as a non-destructive
+ * system note instead. A bubble with no text has no reply to keep, so it still
+ * becomes the notice itself.
  */
 export function convertStreamError(
   messages: readonly ChatMessage[],
@@ -305,6 +312,13 @@ export function convertStreamError(
   const tools = copy[idx].toolCalls?.map((tool) =>
     tool.status === 'running' ? { ...tool, status: 'error' as const } : tool,
   );
+  // Text already on the bubble is the turn's own words. Keep them, and let the
+  // note carry the failure — `appendSystemNote` keeps it out of outgoing
+  // context, the way an error notice always was.
+  if (copy[idx].text.trim()) {
+    copy[idx] = { ...copy[idx], streaming: false, toolCalls: tools };
+    return appendSystemNote(copy, `Error: ${errorMessage}`);
+  }
   copy[idx] = {
     ...copy[idx],
     text: `Error: ${errorMessage}`,

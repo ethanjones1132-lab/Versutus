@@ -78,6 +78,25 @@ describe('message reducer regression locks', () => {
     expect(messages[0].streaming).toBe(false);
   });
 
+  test('an error after text streamed keeps the reply and notes the failure separately', () => {
+    let messages = addStreamingPlaceholder([], 'r1');
+    messages = appendStreamDelta(messages, 'r1', 'The answer was half');
+    messages = convertStreamError(messages, 'r1', 'Gateway timed out', false);
+
+    // VS-162: the streamed text is the reply — a later journal replay or
+    // history reload has to match against it — so the error never replaces it.
+    expect(messages[0].text).toBe('The answer was half');
+    expect(messages[0].streaming).toBe(false);
+    expect(messages[0].synthetic).toBeUndefined();
+
+    // The failure is its own non-destructive note, kept out of model context.
+    expect(messages).toHaveLength(2);
+    expect(messages[1].role).toBe('system');
+    expect(messages[1].id).not.toBe(messages[0].id);
+    expect(messages[1].text).toContain('Gateway timed out');
+    expect(messages[1].synthetic).toBeUndefined();
+  });
+
   test('an abort removes the placeholder', () => {
     let messages = addStreamingPlaceholder([], 'r1');
     messages = convertStreamError(messages, 'r1', 'User cancelled', true);

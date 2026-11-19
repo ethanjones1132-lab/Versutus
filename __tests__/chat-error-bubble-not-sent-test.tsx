@@ -259,6 +259,18 @@ function refusal(message: string): StreamScript {
   };
 }
 
+/**
+ * A stream that streams part of a reply and then fails, the way a backend
+ * error frame after text arrives on the phone (the transport throws the
+ * frame's message once the reader has already emitted deltas).
+ */
+function partialThenFailure(text: string, message: string): StreamScript {
+  return async (_options, onDelta) => {
+    onDelta(text);
+    throw new Error(message);
+  };
+}
+
 const observed: {
   gateway: GatewayContextValue | null;
   surface: ReturnType<typeof useChatSurface> | null;
@@ -438,5 +450,46 @@ describe('the reducer clears the marker when model output fills the bubble', () 
 
     expect(messages[0].text).toBe('the real answer');
     expect(messages[0].synthetic).toBeUndefined();
+  });
+});
+
+// VS-162. A backend can fail a chat stream after it has already streamed
+// words. Those words are the reply — the operator can read them, and the Gate's
+// journal holds the same text — so the failure must not overwrite them with the
+// app's `Error: …` copy. It lands beside them as a system note, the way every
+// other non-destructive notice does.
+describe('a backend error after text has streamed', () => {
+  test('keeps the streamed reply and surfaces the error as a separate note', async () => {
+    streamScripts = [partialThenFailure('The answer so far', 'the backend refused the turn')];
+    await mount();
+
+    expect(await send('a question')).toBe('failed');
+
+    const messages = surface().messages;
+    const reply = messages.find(
+      (message) => message.role === 'assistant' && message.text.includes('The answer so far'),
+    );
+    expect(reply).toBeDefined();
+    expect(reply?.text).toBe('The answer so far');
+    expect(reply?.streaming).toBe(false);
+    expect(reply?.text.startsWith('Error:')).toBe(false);
+
+    const note = messages.find(
+      (message) => message.role === 'system' && message.text.includes('the backend refused the turn'),
+    );
+    expect(note).toBeDefined();
+    // A note, not a rewrite of the reply.
+    expect(note?.id).not.toBe(reply?.id);
+    expect(messages.indexOf(reply!)).toBeLessThan(messages.indexOf(note!));
+
+    // The streamed reply is what the next turn is handed: the journal text
+    // survived, and the app's own error copy still never travels as a model turn.
+    expect(await send('next question')).toBe('sent');
+    const context = wire(1);
+    expect(context).toContainEqual({ role: 'assistant', content: 'The answer so far' });
+    expect(context.some(isErrorNotice)).toBe(false);
+    expect(
+      context.some((message) => rendered(message.content).includes('the backend refused the turn')),
+    ).toBe(false);
   });
 });
