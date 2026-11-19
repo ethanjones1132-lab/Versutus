@@ -155,7 +155,7 @@ export function createOpenCodePermissionBridge({
     const timeout = new Promise((resolve) => {
       timer = setTimeout(() => {
         expired = true;
-        Promise.resolve(approvals.decide(normalized.approvalId, 'deny')).then(resolve, () => resolve(null));
+        Promise.resolve(approvals.decide(normalized.approvalId, 'deny', { outcome: 'expired' })).then(resolve, () => resolve(null));
       }, timeoutMs);
       timer.unref?.();
     });

@@ -934,6 +934,23 @@ describe('a Gate approval is visible on the call, not dropped', () => {
     expect(latest().approval).toMatchObject({ approvalId: 'approval-once', state: 'approved' });
     expect(mockGateway.gatewayRequest.mock.calls.filter(([method]) => method === 'approval.approve')).toHaveLength(1);
   });
+
+  test('new Gate approval cards let the Gate own speech and expiry without a duplicate handset prompt', async () => {
+    await startLiveCall();
+    const prior = mockNative.speak.mock.calls.length;
+    await call(async () => {
+      gateFrame(thinking);
+      gateFrame('{"t":"approval","turnId":"t1","approvalId":"gate-owned","summary":"Change files?","state":"pending","gateDecision":true}');
+      await jest.advanceTimersByTimeAsync(HANDSFREE_APPROVAL_EXPIRY_MS);
+    });
+    expect(latest().approval).toMatchObject({ approvalId: 'gate-owned', state: 'pending' });
+    expect(mockNative.speak.mock.calls.length).toBe(prior);
+    expect(mockGateway.gatewayRequest).not.toHaveBeenCalledWith('approval.deny', { approvalId: 'gate-owned' });
+    await call(async () => {
+      gateFrame('{"t":"approval","turnId":"t1","approvalId":"gate-owned","summary":"Change files?","state":"expired","gateDecision":true}');
+    });
+    expect(latest().approval).toMatchObject({ approvalId: 'gate-owned', state: 'expired' });
+  });
 });
 
 describe('a Gate commit cues the operator, and the dot follows the captured voice', () => {

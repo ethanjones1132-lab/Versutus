@@ -18,6 +18,30 @@ export type ApprovalRow = {
   createdAt?: string;
 };
 
+export type GateApprovalDecision = {
+  approvalId: string;
+  requestedAt: string;
+  decidedAt: string;
+  decision: 'approved' | 'denied' | 'expired' | 'withdrawn' | 'gate-restart';
+  source: 'voice' | 'typed';
+  backend: string | null;
+  bot: string | null;
+  sessionTag: string | null;
+  actionClass: string;
+  tool: string | null;
+  summary: string;
+  decidedBy: string | null;
+  latencyMs: number;
+};
+
+export async function listApprovalDecisions(
+  client: Pick<import('@/lib/portal/adapters').PortalClient, 'rpcRequest'>,
+  limit = 50,
+): Promise<GateApprovalDecision[]> {
+  const result = await client.rpcRequest<{ decisions: GateApprovalDecision[] }>('approvals.decisions', { limit });
+  return result.decisions;
+}
+
 function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }

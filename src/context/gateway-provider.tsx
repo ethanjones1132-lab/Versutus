@@ -592,6 +592,8 @@ type GatewayContextValue = {
        * auto-send, governed by `chat-input-source`.
        */
       source?: ChatInputSource;
+      onVoiceApproval?: (approval: import('@/lib/voice/voice-stream-protocol').VoiceApprovalFrame) => void;
+      signal?: AbortSignal;
       /** Image attachments for this turn (P1); connected sends only. */
       attachments?: ChatAttachment[];
       /**
@@ -5092,7 +5094,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       existingMessageId?: string,
       source?: ChatInputSource,
       attachments?: ChatAttachment[],
-      options?: { turnId?: string },
+      options?: {
+        turnId?: string;
+        onVoiceApproval?: (approval: import('@/lib/voice/voice-stream-protocol').VoiceApprovalFrame) => void;
+        signal?: AbortSignal;
+      },
     ): Promise<SendChatInputOutcome> => {
       const trimmed = text.trim();
       const files = attachments ?? [];
@@ -5167,6 +5173,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // Declared outside the try so the catch can ask the signal itself
       // whether this failure was the user cancelling.
       const abortController = new AbortController();
+      const voiceSignal = options?.signal;
+      const abortVoiceSend = () => abortController.abort();
+      if (voiceSignal?.aborted) abortVoiceSend();
+      else voiceSignal?.addEventListener('abort', abortVoiceSend, { once: true });
       abortControllerRef.current = abortController;
       liveControllersRef.current.add(abortController);
 
@@ -5228,6 +5238,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             ...resolveSendModel(gateway, selectedBackendId, selectedBotId),
             providerId: selectedBotId ? undefined : gateway.providerId,
             signal: abortController.signal,
+            ...(isHandsfreeCallSource(source) ? { source: 'voice' as const } : {}),
+            ...(options?.onVoiceApproval ? { onVoiceApproval: options.onVoiceApproval } : {}),
             // The id minted above, so this line is the same turn on every resend.
             turnId: runId,
             // The Gate took the turn. A queued line may leave the outbox now —
@@ -5340,7 +5352,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // other bots on the roster. Failures here used to be swallowed — the
         // user believed the other bot received the handoff when it did not.
         // Every failure now surfaces as a system note in the thread.
-        if (selectedBotId && client.handoffMention && client.listBots) {
+        // A call transcript cannot start a second, unmarked turn via @mention.
+        if (!isHandsfreeCallSource(source) && selectedBotId && client.handoffMention && client.listBots) {
           let roster: PublicBot[] = [];
           let rosterLoaded = true;
           try {
@@ -5367,6 +5380,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         return 'sent';
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        // Rejected speech belongs to call recovery, not to the message history
+        // that a later typed turn could send back as its own authorized context.
+        if (isHandsfreeCallSource(source) && !accepted && existingMessageId) {
+          setMessages((prev) => prev.filter((message) => message.id !== existingMessageId));
+        }
         // A turn whose whole answer is the upstream model-ID refusal makes the
         // pinned model unusable through Hermes (2026-09-16: omen-alpha under
         // opencode-go in a Bot's catalogue). Record the verdict on this
@@ -5450,6 +5468,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           return accepted ? 'sent' : 'failed';
         }
       } finally {
+        voiceSignal?.removeEventListener('abort', abortVoiceSend);
         // On this send's own terms, like the two slots cleared below it. A send
         // whose flag was taken AWAY — a gateway switch and a disconnect hand it
         // on deliberately, so the operator can send on the gateway they moved to
@@ -6002,6 +6021,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         botId?: string;
         sessionId?: string;
         source?: ChatInputSource;
+        onVoiceApproval?: (approval: import('@/lib/voice/voice-stream-protocol').VoiceApprovalFrame) => void;
+        signal?: AbortSignal;
         attachments?: ChatAttachment[];
         /**
          * The turn this line is sent as. A queued line brings the id it was
@@ -6038,7 +6059,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // leading slash; auto-sent speech must never dispatch a command. A call
         // is never a queued line, so it brings no turn id of its own — but what
         // the send reports still says whether the turn ever left this phone.
-        return sendMessage(trimmed, options?.messageId, source);
+        return sendMessage(trimmed, options?.messageId, source, undefined, {
+          onVoiceApproval: options?.onVoiceApproval,
+          signal: options?.signal,
+        });
       }
 
       // Pre-flight guard: a stale read only declines a retryable action.

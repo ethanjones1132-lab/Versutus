@@ -9,6 +9,8 @@
  * they must be answered or the agent blocks — see jsonrpc-stdio.mjs.
  */
 
+import { restrictedVoicePrompt, TAP_GATED_VOICE_TOOLS, VOICE_POLICY_REFUSAL_CODE, VOICE_TYPED_TOOLS } from '../../voice/voice-turn-policy.mjs';
+
 const APPROVAL_METHODS = new Set([
   'execCommandApproval',
   'applyPatchApproval',
@@ -187,7 +189,7 @@ function unknownBot(id) {
  * `cwd` is the environment's workspace root: Codex scopes a thread to a
  * directory, so this is what keeps a run inside the configured workspace.
  */
-export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeoutMs = TURN_TIMEOUT_MS } = {}) {
+export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVoiceThread, turnTimeoutMs = TURN_TIMEOUT_MS } = {}) {
   const threadTurns = new Map();
 
   /** What a stopped turn rejects with: a cancellation, not a failed run. */
@@ -298,6 +300,71 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeou
 
   const backend = {
     kind: 'codex',
+    [TAP_GATED_VOICE_TOOLS]: typeof registerVoiceThread === 'function' && typeof subscribe === 'function',
+    voiceNotice: VOICE_TYPED_TOOLS,
+
+    async voiceSendMessage(sessionId, opts, onEvent) {
+      const { voiceDeviceId, voiceGate, signal } = opts;
+      const refuse = () => Object.assign(new Error('Codex could not start a separate permission-checked call.'), {
+        code: VOICE_POLICY_REFUSAL_CODE,
+      });
+      // Current Codex has no "ask for every shell command": an in-sandbox or
+      // execpolicy-allowed command can run without a request. Disable shell
+      // itself. Read-only + on-request still parks native patch operations.
+      // https://learn.chatgpt.com/docs/app-server#approvals
+      // https://learn.chatgpt.com/docs/config-file/config-reference
+      const [effective, requirements, history] = await Promise.all([
+        rpc.request('config/read', { cwd, includeLayers: false }),
+        rpc.request('configRequirements/read', {}),
+        sessionId && !voiceGate.history?.length ? backend.listMessages(sessionId, 12).catch(() => []) : [],
+      ]);
+      if (!effective?.config || !requirements || !registerVoiceThread) throw refuse();
+      const features = {
+        shell_tool: false, shell_snapshot: false, apps: false, plugins: false,
+        remote_plugin: false, hooks: false, memories: false, code_mode: false, multi_agent: false,
+        goals: false, request_permissions_tool: false, skill_mcp_dependency_install: false,
+      };
+      const managed = requirements.requirements?.featureRequirements ?? {};
+      if (Object.keys(features).some((name) => managed[name] === true)) throw refuse();
+      const mcp = effective.config.mcp_servers ?? {};
+      // Overrides merge rather than replace this table, so pin each entry off.
+      const mcp_servers = Object.fromEntries(Object.keys(mcp).map((name) => [name, { enabled: false }]));
+      signal?.throwIfAborted();
+      const opened = await rpc.request('thread/start', {
+        cwd, ephemeral: true, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'read-only',
+        config: {
+          features, mcp_servers, web_search: 'disabled', notify: [], agents: { enabled: false },
+          skills: { include_instructions: false, bundled: { enabled: false } },
+        },
+        ...(opts.model?.modelId ? { model: opts.model.modelId } : {}),
+      });
+      const id = opened?.thread?.id;
+      if (!id) throw refuse();
+      try {
+        if (opened.approvalPolicy !== 'on-request' || opened.approvalsReviewer !== 'user'
+          || opened.sandbox?.type !== 'readOnly') throw refuse();
+        const status = await rpc.request('mcpServerStatus/list', { threadId: id, limit: 1, detail: 'toolsAndAuthOnly' });
+        if (!Array.isArray(status?.data) || status.data.length || status.nextCursor) throw refuse();
+        signal?.throwIfAborted();
+        const release = registerVoiceThread(id, {
+          deviceId: voiceDeviceId, botId: voiceGate.botId, sessionId, signal,
+          announce: (payload) => onEvent?.({ type: 'approval.required', payload }),
+        });
+        const unsubscribe = subscribe(scopedHandler(id, (event) => onEvent?.(event)));
+        try {
+          return await backend.sendMessage(id, {
+            ...opts,
+            text: restrictedVoicePrompt({ history, recent: voiceGate.history, text: opts.text }),
+          });
+        } finally {
+          unsubscribe();
+          release();
+          threadTurns.delete(id);
+        }
+      } finally {
+        await rpc.request('thread/unsubscribe', { threadId: id }).catch(() => undefined);
+      }
+    },
 
     async listSessions(limit = 50) {
       const result = await rpc.request('thread/list', { limit, cwd });
@@ -353,12 +420,13 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeou
       // has even returned.
       const settled = awaitTurn(sessionId, { timeoutMs: turnTimeoutMs, signal });
       const result = await rpc.request('turn/start', params);
-      if (result?.turnId) threadTurns.set(sessionId, result.turnId);
+      const turnId = result?.turnId ?? (source === 'voice' ? result?.turn?.id : undefined);
+      if (turnId) threadTurns.set(sessionId, turnId);
       const outcome = await settled;
       if (outcome.aborted) {
         // Stop ends the phone's turn; the app-server's turn has to end with it,
         // or it keeps working into a stream nobody is reading.
-        await interruptTurn(sessionId, result?.turnId ?? threadTurns.get(sessionId));
+        await interruptTurn(sessionId, turnId ?? threadTurns.get(sessionId));
         throw stoppedTurn();
       }
       if (outcome.error) {
@@ -371,7 +439,7 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeou
         // tell the operator the model is done while it is still working — and
         // the model-health table would score the silence as a success. Stop the
         // turn and say what happened.
-        await interruptTurn(sessionId, result?.turnId ?? threadTurns.get(sessionId));
+        await interruptTurn(sessionId, turnId ?? threadTurns.get(sessionId));
         const seconds = Math.max(1, Math.round(turnTimeoutMs / 1000));
         throw new Error(
           `codex: the turn did not answer within ${seconds}s and was stopped — ` +
@@ -381,10 +449,10 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, turnTimeou
       const reply = outcome.text || result?.text || '';
       return {
         message: reply
-          ? { id: result?.turnId, role: 'assistant', content: [{ type: 'text', text: reply }] }
+          ? { id: turnId, role: 'assistant', content: [{ type: 'text', text: reply }] }
           : null,
         text: reply,
-        turnId: result?.turnId,
+        turnId,
       };
     },
 

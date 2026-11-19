@@ -1,4 +1,5 @@
 import { readChatFrames } from '@/lib/gateway/turns';
+import { VOICE_POLICY_REQUIRED } from '@/lib/gateway/chat-input-source';
 import { GatewayHttpError, isAuthRejection } from '@/lib/gateway/errors';
 import { withGetSessionsRetry } from '@/lib/gateway/get-sessions-retry';
 import { errorCodeFromHttpBody, messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
@@ -661,6 +662,7 @@ export class HermesGatewayClient {
     onDelta: (text: string) => void,
     options?: {
       model?: string;
+      source?: 'voice';
       sessionId?: string;
       signal?: AbortSignal;
       onToolCall?: (tool: import('@/lib/gateway/types').ChatToolCall) => void;
@@ -677,6 +679,7 @@ export class HermesGatewayClient {
       onSession?: (sessionId: string) => void;
     },
   ): Promise<string> {
+    if (options?.source === 'voice') throw new Error(VOICE_POLICY_REQUIRED);
     const body: Record<string, unknown> = {
       model: options?.model ?? 'hermes-agent',
       messages,

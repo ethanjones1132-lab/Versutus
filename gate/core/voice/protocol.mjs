@@ -205,6 +205,7 @@ export function parseGateFrame(value, options = {}) {
         };
         if (frame.approvalId !== undefined) approval.approvalId = requireString(frame, 'approvalId');
         if (frame.state !== undefined) approval.state = requireEnum(frame, 'state', ['pending', 'approved', 'denied', 'expired']);
+        if (frame.gateDecision === true) approval.gateDecision = true;
         return approval;
       }
       case 'error':

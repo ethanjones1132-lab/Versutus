@@ -419,7 +419,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const callProjectionRef = useRef<CallThreadProjection | null>(null);
   const gateApprovalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gateApprovalBusyRef = useRef<string | null>(null);
+  const phoneTurnRef = useRef<AbortController | null>(null);
   const gateApprovalDecisionsRef = useRef(new Map<string, 'approved' | 'denied' | 'expired'>());
+  const spokenPhoneApprovals = useRef(new Set<string>());
   // The device id this call was granted for. The Gate resolves the caller of
   // `voice.session.stop` from it, so the release at teardown names the same
   // phone the start did — without reading the secure store again while the
@@ -739,14 +741,15 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       // These existing RPCs are the only decision path. Their paired-device
       // authentication, once-only semantics and reject-only alternative remain
       // authoritative; the call never sends an implicit or reusable approval.
-      await latest.current.gatewayRequest(
+      const result = await latest.current.gatewayRequest<{ decision?: 'approve' | 'deny' }>(
         decision === 'approve' ? 'approval.approve' : 'approval.deny',
         { approvalId },
       );
       clearGateApprovalTimer();
       const current = gateBannerRef.current.approval;
       if (current?.approvalId === approvalId) {
-        const state: 'approved' | 'denied' | 'expired' = expired ? 'expired' : decision === 'approve' ? 'approved' : 'denied';
+        const state: 'approved' | 'denied' | 'expired' = expired ? 'expired'
+          : decision === 'approve' && result?.decision !== 'deny' ? 'approved' : 'denied';
         gateApprovalDecisionsRef.current.set(approvalId, state);
         const next = { ...gateBannerRef.current, approval: { ...current, state } };
         gateBannerRef.current = next;
@@ -761,6 +764,12 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const trackGateApproval = useCallback((frame: GateVoiceFrame) => {
     if (frame.t !== 'approval') {
       if (!gateBannerRef.current.approval) clearGateApprovalTimer();
+      return;
+    }
+    if (frame.gateDecision) {
+      // Current Gates play the W16 prompt over PCM and own the deadline.
+      // Legacy frames keep their handset prompt/timer for compatibility.
+      clearGateApprovalTimer();
       return;
     }
     const approvalId = frame.approvalId;
@@ -1108,6 +1117,8 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       }
       gateDeviceRef.current = null;
     } else {
+      phoneTurnRef.current?.abort();
+      phoneTurnRef.current = null;
       endHandsfreeCall();
       try {
         await module?.stopSession();
@@ -1278,12 +1289,39 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       // resolution would watch a turn that is already over. It is cleared when
       // speaking starts and on teardown.
       armWatchdog();
+      const controller = new AbortController();
+      phoneTurnRef.current = controller;
+      gateApprovalDecisionsRef.current.clear();
+      spokenPhoneApprovals.current.clear();
+      const reset = { ...gateBannerRef.current, approval: null };
+      gateBannerRef.current = reset;
+      setGateBanner(reset);
       const outcome = await latest.current.sendChatInput(text, {
         source: 'handsfree-call',
         messageId: id,
         sessionId: target?.sessionId || undefined,
         botId: target?.botId,
+        signal: controller.signal,
+        onVoiceApproval: (approval) => {
+          if (controller.signal.aborted || turnIdRef.current !== id || !approval.approvalId) return;
+          const { approvalId, turnId, summary, state = 'pending' } = approval;
+          const settled = gateApprovalDecisionsRef.current.get(approvalId);
+          const previous = gateBannerRef.current.approval;
+          if (settled || (previous?.approvalId === approvalId && previous.state === state)) return;
+          if (state !== 'pending') gateApprovalDecisionsRef.current.set(approvalId, state);
+          const next = { ...gateBannerRef.current, approval: { approvalId, turnId, summary, state } };
+          gateBannerRef.current = next;
+          setGateBanner(next);
+          const spoken = state === 'pending' && !spokenPhoneApprovals.current.has(approvalId)
+            ? 'An action needs your approval. Tap Approve or Deny on your phone.'
+            : state === 'expired' ? 'Denied, no answer.' : null;
+          if (state === 'pending') spokenPhoneApprovals.current.add(approvalId);
+          if (spoken && sessionRef.current.phase !== 'muted') {
+            void Promise.resolve(moduleRef.current?.speak({ chunks: [spoken] })).catch(() => undefined);
+          }
+        },
       });
+      if (phoneTurnRef.current === controller) phoneTurnRef.current = null;
       // A resolution for a turn the call has already left is a confirmation
       // only; it must not arm a watchdog or end a later turn.
       if (turnIdRef.current !== id) return;
@@ -2052,7 +2090,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       turnError: gateLive ? gateBanner.turnError : null,
       audioStatus,
       turnState: gateLive ? gateBanner.turnState : null,
-      approval: gateLive ? gateBanner.approval : null,
+      approval: active ? gateBanner.approval : null,
       approvalBusy,
       callThreadProjection: callProjection
         ? { threadKey: callProjection.threadKey, messages: callProjection.messages }

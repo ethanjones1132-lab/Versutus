@@ -3,6 +3,7 @@
 // OpenClaw gateways like Hermes ones. Chat flows through the OpenClaw
 // push event dialect (chat.send → chat events with delta/final/error).
 
+import { VOICE_POLICY_REQUIRED } from '@/lib/gateway/chat-input-source';
 import { OpenClawGatewayClient } from '@/lib/gateway/openclaw-client';
 import type { ChatEventPayload } from '@/lib/gateway/openclaw-types';
 import { APP_SESSION_SOURCE, extractMessageText } from '@/lib/gateway/messages';
@@ -313,6 +314,7 @@ export class OpenClawAdapterClient implements PortalClient {
     onDelta: (text: string) => void,
     options?: StreamChatOptions,
   ): Promise<string> {
+    if (options?.source === 'voice') throw new Error(VOICE_POLICY_REQUIRED);
     await this.loadOwnedSessions();
     const sessionId = options?.sessionId ?? this.currentSessionId;
     this.currentSessionId = sessionId;

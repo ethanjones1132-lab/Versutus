@@ -31,6 +31,8 @@ import { redactedLogText } from './audit.mjs';
 import { parsePhoneFrame, serializeFrame } from './protocol.mjs';
 import { describeTurnFailure } from './turn-failure.mjs';
 import { INITIAL_VOICE_SESSION, reduceVoiceSession } from './voice-session.mjs';
+import { voiceApprovalSummary } from './voice-approvals.mjs';
+import { VOICE_POLICY_REFUSAL_CODE } from './voice-turn-policy.mjs';
 
 export const VOICE_STREAM_PATH = '/v1/voice/stream';
 export const MAX_MEDIA_FRAME_BYTES = 64 * 1024;
@@ -187,6 +189,7 @@ export function attachVoiceMediaSocket({
   turnTimeoutMs = TURN_TIMEOUT_MS,
   engineOpenTimeoutMs = ENGINE_OPEN_TIMEOUT_MS,
   speculationWindowMs = SPECULATION_WINDOW_MS,
+  allowSpeculativeTurns = true,
   utteranceHoldMs = UTTERANCE_HOLD_MS,
   utteranceSettleMs = UTTERANCE_SETTLE_MS,
   continuationMs = CONTINUATION_MS,
@@ -953,8 +956,8 @@ export function attachVoiceMediaSocket({
     };
 
     const dispatch = (event) => {
-      // The phone only hears "that turn could not be completed"; the host log
-      // names the failure and its size, while the stage line above names the
+      // The phone hears Gate-written copy, never an upstream error; the host
+      // log names the failure and its size, while the stage line above names the
       // backend and step, so a wrong backend still reads differently from a
       // flaky model without the backend's words reaching disk (S3).
       if (event.type === 'replyFailed') {
@@ -1067,7 +1070,10 @@ export function attachVoiceMediaSocket({
       let turnBackend;
       const failed = (error) => {
         const failure = describeTurnFailure(error, { backend: turnBackend });
-        return { type: 'replyFailed', message: failure.message, code: failure.code };
+        return {
+          type: 'replyFailed', message: failure.message, code: failure.code,
+          ...(failure.code === VOICE_POLICY_REFUSAL_CODE ? { speech: failure.message } : {}),
+        };
       };
       // What the turn has said so far. A parked turn has no socket to deliver
       // the deltas to, so this is the only place its reply survives.
@@ -1081,6 +1087,33 @@ export function attachVoiceMediaSocket({
         // cancelled, or superseded by a newer turn, has no reply left to give.
         if (turnAbort !== controller) return;
         dispatch(event);
+      };
+      const approvalStates = new Map();
+      const announceApproval = (approval) => {
+        const approvalId = approval?.approvalId;
+        const state = approval?.state ?? 'pending';
+        const summary = voiceApprovalSummary(approval?.summary);
+        let speech;
+        if (typeof approvalId === 'string' && approvalId) {
+          const previous = approvalStates.get(approvalId);
+          // A replay cannot re-speak or reopen a card after it was settled.
+          if (previous && (previous !== 'pending' || state === 'pending')) return;
+          approvalStates.set(approvalId, state);
+          if (state === 'pending' && summary) {
+            // Use the ordinary reply's W16 path, which strips markdown and
+            // URLs in the worker before synthesis. Close an unfinished fence
+            // so it can't swallow the fixed tap instruction.
+            const action = summary.replace(/[.!?]+$/u, '');
+            const fence = (action.match(/```/g)?.length ?? 0) % 2 ? '```' : '';
+            speech = `Jarvis wants to ${action}${fence}. Tap Approve or Deny on your phone.`;
+          } else if (state === 'expired' && previous === 'pending') {
+            speech = 'Denied, no answer';
+          }
+        }
+        deliver({
+          type: 'approvalRequired', approvalId, summary: summary ?? 'Approval needed', state, speech,
+          gateDecision: approval?.gateDecision === true,
+        });
       };
       const timer = setTimeout(() => {
         timedOut = true;
@@ -1117,12 +1150,7 @@ export function attachVoiceMediaSocket({
           // The source travels with the turn so backends can apply their voice
           // approval policy without changing the shared typed-turn contract.
           source: 'voice',
-          onApproval: (approval) => deliver({
-            type: 'approvalRequired',
-            approvalId: approval?.approvalId,
-            summary: approval?.summary ?? 'Approval needed',
-            state: approval?.state ?? 'pending',
-          }),
+          onApproval: announceApproval,
           // The phone gets the tool's lifecycle, not its content: the runner's
           // detail holds arguments and output, so only a bounded name/status
           // summary crosses the wire. A running event may arrive twice (start,
@@ -1541,7 +1569,7 @@ export function attachVoiceMediaSocket({
       // the turn is committed a short settle after the final, and a turn sent
       // early and then withdrawn leaves a half-said prompt in the Bot's thread.
       if (engine.reportsHearing) return;
-      if (call.phase !== 'listening' || turnAbort || speculative) return;
+      if (!allowSpeculativeTurns || call.phase !== 'listening' || turnAbort || speculative) return;
       void startTurn(event.text, { speculative: true });
     });
     engine.on?.('userSpeechStart', () => {

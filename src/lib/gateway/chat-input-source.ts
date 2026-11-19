@@ -19,6 +19,8 @@
 /** Which surface handed text to the send path. */
 export type ChatInputSource = 'composer' | 'handsfree-call';
 
+export const VOICE_POLICY_REQUIRED = 'Use typed chat until your Gate supports approval for voice turns.';
+
 /** What a call send should do before any text leaves. */
 export type CallSendDecision = 'send' | 'offline' | 'busy';
 

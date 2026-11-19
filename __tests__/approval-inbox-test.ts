@@ -3,6 +3,7 @@ import {
   approvalInboxCopy,
   approvalRowsFromUnknown,
   batchApprovableRows,
+  listApprovalDecisions,
 } from '@/lib/gateway/approvals';
 
 jest.mock('@/lib/storage/key-value', () => ({
@@ -70,6 +71,13 @@ describe('approvalRowsFromUnknown', () => {
     expect(approvalRowsFromUnknown(null)).toEqual([]);
     expect(approvalRowsFromUnknown({ approvals: 'nope' })).toEqual([]);
   });
+});
+
+it('reads recent Gate decisions through the approval history RPC', async () => {
+  const decisions = [{ approvalId: 'a1', decision: 'denied', source: 'voice' }];
+  const rpcRequest = jest.fn().mockResolvedValue({ decisions });
+  await expect(listApprovalDecisions({ rpcRequest }, 8)).resolves.toEqual(decisions);
+  expect(rpcRequest).toHaveBeenCalledWith('approvals.decisions', { limit: 8 });
 });
 
 describe('batch approval is read-only only', () => {

@@ -65,9 +65,13 @@ export type GateVoiceFrame = (
       summary: string;
       approvalId?: string;
       state?: 'pending' | 'approved' | 'denied' | 'expired';
+      /** This Gate owns expiry and supplies the prompt audio on the media socket. */
+      gateDecision?: true;
     }
   | { t: 'error'; code: string; message: string; fatal: boolean }
   | { t: 'ended'; reason: string }) & Partial<VoiceV2Envelope>;
+
+export type VoiceApprovalFrame = Extract<GateVoiceFrame, { t: 'approval' }>;
 
 export class VoiceProtocolError extends Error {
   constructor(message: string) {
@@ -241,6 +245,7 @@ export function parseGateFrame(value: unknown, options: { callId?: string } = {}
         approval.state = requireEnum(frame, 'state', ['pending', 'approved', 'denied', 'expired']) as
           'pending' | 'approved' | 'denied' | 'expired';
       }
+      if (frame.gateDecision === true) approval.gateDecision = true;
       return withEnvelope(approval);
     }
     case 'error':

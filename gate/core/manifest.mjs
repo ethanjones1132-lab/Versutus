@@ -112,6 +112,9 @@ export function buildManifest({
     manifest: MANIFEST_SPEC,
     kind: GATE_KIND,
     name,
+    // This Gate will enforce D3 (including refusal), not silently treat a
+    // voice-marked chat request as typed chat.
+    voiceTurnPolicy: 'per-tool-tap-v1',
     transport: {
       primary: 'http',
       ...(advertisedIpv4.length > 0 ? { ipv4: advertisedIpv4 } : {}),

@@ -293,6 +293,7 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
   onApproval = NOOP,
   source,
   voiceDeviceId,
+  voiceGate,
   onChunk = NOOP,
   onStage = NOOP,
   attempt,
@@ -402,9 +403,15 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
     : Promise.race([promise, aborted]));
 
   try {
+    const voiceSend = source === 'voice' && voiceGate ? backend.voiceSendMessage : undefined;
+    if (source === 'voice' && voiceGate && backend.voiceNotice && voiceGate.announceLimits !== false) {
+      const notice = `${backend.voiceNotice} `;
+      onDelta(notice);
+      onChunk(JSON.stringify({ choices: [{ delta: { content: notice } }] }));
+    }
     // Hermes sends and streams in one POST, which does not fit the
     // subscribe-then-send shape below, so it is handled as its own path.
-    if (typeof backend.sendMessageStreaming === 'function') {
+    if (!voiceSend && typeof backend.sendMessageStreaming === 'function') {
       // A backend that cannot stream at all hands the turn to the whole-turn
       // path below, which needs this controller live. Every other ending is
       // this branch's own, and a bound still armed when the turn is over would
@@ -596,7 +603,7 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
     // The hand-off clock starts now: an event from the opening feed is already
     // the backend working, even before `sendMessage` is invoked.
     handoffAt = Date.now();
-    const eventFeed = source === 'voice' && typeof backend.streamVoiceEvents === 'function'
+    const eventFeed = voiceSend ? undefined : source === 'voice' && typeof backend.streamVoiceEvents === 'function'
       ? backend.streamVoiceEvents : backend.streamEvents;
     const subscription = typeof eventFeed === 'function'
       ? eventFeed.call(backend, sessionId, handleEvent, controller.signal)
@@ -655,11 +662,12 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
       // its exit) cannot be reclaimed by the race below: that race ends the
       // HTTP turn and leaves the agent running. Backends that take no signal
       // ignore the extra key, and their turn is still released by the race.
-      const result = await raceStop(backend.sendMessage(
+      const result = await raceStop((voiceSend ?? backend.sendMessage).call(backend,
         sessionId, {
           text, model, images, files,
           ...(source === undefined ? {} : { source }),
           ...(source === 'voice' && voiceDeviceId ? { voiceDeviceId } : {}),
+          ...(voiceGate ? { voiceGate } : {}),
           signal: controller.signal,
         },
         typeof eventFeed === 'function' ? undefined : handleEvent,

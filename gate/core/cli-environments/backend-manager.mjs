@@ -3,6 +3,8 @@ import { createStdioServer } from './stdio-server.mjs';
 import { isApprovalRequest } from './backends/codex.mjs';
 import { createPermissionBridge } from './claude-permissions.mjs';
 import { createOpenCodePermissionBridge } from './opencode-permissions.mjs';
+import { runOpenCodeVoice } from './opencode-voice.mjs';
+import { actionClass } from '../approvals/action-class.mjs';
 
 // How long a backend whose server will not start stays unretried. The first
 // cold read after a Gate restart otherwise pays the supervisor's whole start
@@ -26,6 +28,7 @@ export function createBackendManager({
   // behind them answered.
   environmentState,
   approvals,
+  voiceScratchDir,
   approvalTimeoutMs = 120_000,
   buildEnvironment,
   onDiagnostic,
@@ -68,6 +71,7 @@ export function createBackendManager({
   // the inbox never answers.
   const permissionBridges = new Map();
   const permissionBridgeOpening = new Map();
+  const codexVoiceTurns = new Map();
 
   return { get, list, describe, methodsOf, stopAll, isBackendCapable, subscribe };
 
@@ -245,6 +249,24 @@ export function createBackendManager({
         ...(isStdio ? {
           onNotification: (message) => fanOut(environmentId, message),
           onServerRequest: async ({ method, params = {} } = {}) => {
+            const threadId = typeof params.threadId === 'string' ? params.threadId : null;
+            const voice = threadId && codexVoiceTurns.get(environmentId)?.get(threadId);
+            if (voice) {
+              const kind = actionClass(method);
+              if (kind === 'credential_system') return { permissions: {}, scope: 'turn' };
+              if (!isApprovalRequest(method)) {
+                // Do not use the typed empty-result default for a voice request.
+                throw new Error('Codex request is not available on a call');
+              }
+              if (Array.isArray(params.availableDecisions) && !params.availableDecisions.includes('accept')) {
+                return { decision: 'decline' };
+              }
+              const allowed = await approvals.authorize({
+                tool: method, backendId: environmentId, botId: voice.botId, sessionId: voice.sessionId,
+                deviceId: voice.deviceId, signal: voice.signal, announce: voice.announce,
+              }).catch(() => false);
+              return { decision: allowed ? 'accept' : 'decline' };
+            }
             // An empty result grants the request. Only a method that is not an
             // approval may take it; an approval stays unanswered until a ruling.
             if (!isApprovalRequest(method)) return {};
@@ -257,7 +279,6 @@ export function createBackendManager({
                 ? params.reason
                 : method;
             const summary = rawSummary.replace(/[\r\n\u2028\u2029]+/g, ' ').trim().slice(0, 160);
-            const threadId = typeof params.threadId === 'string' ? params.threadId : null;
             const normalized = await approvals.normalize({
               type: 'workspace_write',
               runId: threadId,
@@ -281,7 +302,7 @@ export function createBackendManager({
               const timeout = new Promise((resolve, reject) => {
                 timer = setTimeout(() => {
                   expired = true;
-                  Promise.resolve(approvals.decide(normalized?.approvalId, 'deny')).then(resolve, reject);
+                  Promise.resolve(approvals.decide(normalized?.approvalId, 'deny', { outcome: 'expired' })).then(resolve, reject);
                 }, approvalTimeoutMs);
                 timer.unref?.();
               });
@@ -367,6 +388,17 @@ export function createBackendManager({
           // One connection multiplexes every thread, so the backend needs the
           // raw stream to await its own turn.
           subscribe: (handler) => subscribe(environmentId, handler),
+          ...(record.adapterId === 'codex' && approvals?.authorize ? {
+            registerVoiceThread(threadId, context) {
+              const turns = codexVoiceTurns.get(environmentId) ?? new Map();
+              turns.set(threadId, context);
+              codexVoiceTurns.set(environmentId, turns);
+              return () => {
+                turns.delete(threadId);
+                if (!turns.size) codexVoiceTurns.delete(environmentId);
+              };
+            },
+          } : {}),
           onApproval: async (runId, { approved } = {}) => {
             if (!approvals) throw new Error('codex: no approval handler is connected');
             const pending = approvals.list().filter((entry) => entry.environmentId === environmentId);
@@ -384,6 +416,12 @@ export function createBackendManager({
           credentials: backendCredentials,
           record,
           ...(opencodePermissionBridge ? { permissionBridge: opencodePermissionBridge } : {}),
+          ...(record.adapterId === 'opencode' && voiceScratchDir && approvals?.authorize ? {
+            runVoice: (sessionId, input, onEvent) => runOpenCodeVoice({
+              record, adapter, credentials, buildEnvironment, scratchDir: voiceScratchDir, sessionId, input, onEvent,
+              ...(createServer ? { serverFactory: createServer } : {}),
+            }),
+          } : {}),
         });
     backends.set(environmentId, { key, backend });
     return backend;

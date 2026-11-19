@@ -120,3 +120,16 @@ def test_speak_cleans_the_reply_before_kokoro_sees_it():
         )
     ]
     assert chunks == ["Run npm test. ", "See the docs."]
+
+
+def test_pending_approval_uses_the_same_cleanup_before_synthesis():
+    tts = SpeechSynthesizer(_synth)
+    prompt = (
+        "Jarvis wants to edit **[draft](https://example.test/draft)** with "
+        "token=[redacted]. Tap Approve or Deny on your phone."
+    )
+    chunks = [pcm.decode() for _gen, pcm in tts.speak(prompt, gen=1)]
+    assert chunks == [
+        "Jarvis wants to edit draft with token=[redacted]. ",
+        "Tap Approve or Deny on your phone.",
+    ]

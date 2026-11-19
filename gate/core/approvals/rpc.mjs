@@ -57,7 +57,7 @@ async function decide(store, approvalId, decision, params, ownerDeviceId, bootst
       }
     }
   }
-  const entry = await store.decide(id, decision);
+  const entry = await store.decide(id, decision, { deviceId: owner && bootstrap ? owner : ownerDeviceId });
   if ((owner || pending.request?.adapterId === 'opencode') && (!entry?.approvalId || entry.reason === 'unknown approval')) {
     throw rpcError(`Unknown approval "${id}"`, 404, 'unknown_approval');
   }
@@ -68,7 +68,13 @@ export function createApprovalRpc({ approvals = null } = {}) {
   const methods = {
     'approvals.pending': async (_params, ctx) => {
       const deviceId = requireDevice(ctx);
-      return { approvals: typeof approvals?.list === 'function' ? approvals.list({ deviceId }) : [] };
+      return { approvals: typeof approvals?.list === 'function'
+        ? approvals.list({ deviceId, bootstrap: ctx?.bootstrap === true }) : [] };
+    },
+
+    'approvals.decisions': async ({ limit } = {}, ctx) => {
+      requireDevice(ctx);
+      return { decisions: approvals?.recent?.(limit) ?? [] };
     },
 
     'approval.approve': async (params = {}, ctx) => {

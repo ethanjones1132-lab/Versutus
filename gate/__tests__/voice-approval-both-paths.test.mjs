@@ -2,10 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { EventEmitter, once } from 'node:events';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { WebSocket } from 'ws';
 
 import { runBackendTurn } from '../core/voice/turn-runner.mjs';
+import { mirrorVoiceApprovals } from '../core/voice/voice-approvals.mjs';
 import { VOICE_STREAM_PATH, attachVoiceMediaSocket } from '../core/voice/media-socket.mjs';
 import { parseGateFrame } from '../core/voice/protocol.mjs';
 import { VoiceSessionRegistry } from '../core/voice/voice-rpc.mjs';
@@ -17,48 +21,62 @@ import { createOpenCodePermissionBridge } from '../core/cli-environments/opencod
 import { createPermissionBridge } from '../core/cli-environments/claude-permissions.mjs';
 import { ApprovalService } from '../core/cli-environments/approvals.mjs';
 import { createApprovalRpc } from '../core/approvals/rpc.mjs';
+import { createBackendManager } from '../core/cli-environments/backend-manager.mjs';
+import { codexAdapter } from '../core/cli-environments/adapters/codex.mjs';
+import { runOpenCodeVoice, VOICE_AGENT } from '../core/cli-environments/opencode-voice.mjs';
 import { runVoiceTurn } from '../core/server.mjs';
 
 const APPROVAL = { approvalId: 'approval-1', summary: 'Run the requested command?' };
 
 for (const decision of ['approve', 'deny', 'timeout']) {
-  test(`a native Hermes streaming approval is ${decision === 'timeout' ? 'denied on the Gate deadline' : `answered by ${decision} once`}`, async () => {
+  test(`the Hermes native streaming approval mirror ${decision === 'timeout' ? 'denies on the Gate deadline' : `answers ${decision} once`}`, async (t) => {
     const observed = [];
     const upstream = [];
     const approvals = new ApprovalService();
     const { methods } = createApprovalRpc({ approvals });
+    const controller = new AbortController();
+    const mirror = mirrorVoiceApprovals({
+      approvals, deviceId: 'owner', onApproval: (entry) => observed.push(entry),
+      signal: controller.signal, timeoutMs: decision === 'timeout' ? 100 : 3000,
+    });
+    t.after(() => {
+      controller.abort();
+      mirror.close();
+    });
     let writer;
     const encoder = new TextEncoder();
     const backend = createHermesBackend({
       baseUrl: 'http://hermes.test',
       fetchImpl: async (url, init) => {
-        if (url.endsWith('/approval')) {
+        assert.equal(init.method, 'POST');
+        if (url === 'http://hermes.test/v1/runs/r1/approval') {
           upstream.push(JSON.parse(init.body));
-          setImmediate(() => {
+          if (upstream.length === 1 && writer) {
             writer.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"Done."}}]}\n\ndata: [DONE]\n\n'));
             writer.close();
-          });
+          }
           return new Response(null, { status: 204 });
         }
+        assert.equal(url, 'http://hermes.test/v1/chat/completions');
         assert.equal(init.headers['X-Versutus-Turn-Source'], 'voice');
+        assert.equal(init.headers['X-Hermes-Session-Id'], 'thread-1');
         return new Response(new ReadableStream({
-          start(controller) {
-            writer = controller;
-            controller.enqueue(encoder.encode(
-              'event: approval.request\n'
-              + 'data: {"run_id":"r1","request_id":"p1","execution_generation":2,"command":"Rename draft"}\n\n',
-            ));
+          start(stream) {
+            writer = stream;
+            const frame = 'event: approval.request\n'
+              + 'data: {"run_id":"r1","request_id":"p1","execution_generation":2,"command":"Rename draft"}\n\n';
+            // A repeated native request must not open a second card or reply.
+            stream.enqueue(encoder.encode(frame + frame));
           },
+          cancel() { writer = null; },
         }));
       },
     });
-    const running = runVoiceTurn(null, {
-      deviceId: 'owner',
-      thread: { sessionId: 'thread-1' },
-      backendLease: { backend: async () => backend },
-    }, 'rename it', {
-      onApproval: (entry) => observed.push(entry),
-    }, { approvals, approvalTimeoutMs: decision === 'timeout' ? 100 : 3000 });
+    // Exercise the legacy protocol seam directly. Typed streams don't install
+    // this mirror, and a production Hermes voice turn uses the safe-mode CLI.
+    const running = runBackendTurn(backend, 'thread-1', { text: 'rename it' }, {
+      source: 'voice', onApproval: mirror.open, signal: controller.signal,
+    });
     await until(() => observed.length > 0);
     const { approvalId, state, summary } = observed[0];
     assert.equal(state, 'pending');
@@ -67,6 +85,7 @@ for (const decision of ['approve', 'deny', 'timeout']) {
     if (decision !== 'timeout') {
       const respond = methods[`approval.${decision}`];
       await assert.rejects(respond({ approvalId }, { deviceId: 'other' }), { code: 'approval_owner_mismatch' });
+      assert.deepEqual(upstream, []);
       await respond({ approvalId }, { deviceId: 'owner' });
     }
     await until(() => upstream.length > 0);
@@ -76,6 +95,7 @@ for (const decision of ['approve', 'deny', 'timeout']) {
     }]);
     assert.equal(approvals.get(approvalId), null);
     assert.equal(observed.at(-1).state, { approve: 'approved', deny: 'denied', timeout: 'expired' }[decision]);
+    assert.equal(observed.filter((entry) => entry.state === 'pending').length, 1);
     await assert.rejects(methods['approval.approve']({ approvalId }, { deviceId: 'owner' }), { code: 'unknown_approval' });
   });
 }
@@ -173,6 +193,7 @@ test('Claude Code keeps voice prompts on the turn-scoped bridge even with a perm
   t.after(() => bridge.close());
   const SESSION = '896a9c65-7554-453a-8e20-ccf419617968';
   let childAsk;
+  let writes = 0;
   const backend = createClaudeCodeBackend({
     cwd: '.',
     claudeHome: '.',
@@ -182,15 +203,25 @@ test('Claude Code keeps voice prompts on the turn-scoped bridge even with a perm
     jobFactory: () => ({ add() {}, terminate() {} }),
     spawnImpl(_command, args) {
       assert.equal(args[args.indexOf('--permission-mode') + 1], 'default');
+      const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+      assert.deepEqual(settings.permissions.ask, ['*']);
+      assert.equal(settings.sandbox.autoAllowBashIfSandboxed, false);
+      assert.ok(args.includes('--restricted'));
+      assert.ok(args.includes('--strict-mcp-config'));
       const { env } = JSON.parse(args[args.indexOf('--mcp-config') + 1]).mcpServers['gate-permissions'];
       assert.notEqual(env.GATE_PERMISSION_URL, bridge.url);
+      assert.notEqual(env.GATE_PERMISSION_SECRET, bridge.secret);
       const child = new EventEmitter();
       child.stdout = new EventEmitter();
       child.stderr = new EventEmitter();
       childAsk = fetch(env.GATE_PERMISSION_URL, {
         method: 'POST', headers: { 'x-gate-bridge': env.GATE_PERMISSION_SECRET },
         body: JSON.stringify({ tool_name: 'Edit', input: { file: 'draft.txt' } }),
-      }).then((response) => response.json()).finally(() => {
+      }).then(async (response) => {
+        const ruling = await response.json();
+        if (ruling.behavior === 'allow') writes++;
+        return ruling;
+      }).finally(() => {
         child.stdout.emit('data', '{"type":"result","subtype":"success","result":"Done."}\n');
         child.emit('close', 0);
       });
@@ -204,11 +235,263 @@ test('Claude Code keeps voice prompts on the turn-scoped bridge even with a perm
     backendLease: { backend: () => backend },
   }, 'rename it', { onApproval: (card) => cards.push(card) }, { approvals });
   await until(() => cards.some((card) => card.state === 'pending'));
+  assert.equal(writes, 0);
   const id = cards[0].approvalId;
   await createApprovalRpc({ approvals }).methods['approval.deny']({ approvalId: id }, { deviceId: 'owner' });
   assert.equal((await childAsk).behavior, 'deny');
   assert.equal((await running).hasContent, true);
+  assert.equal(writes, 0);
+
+  const second = runVoiceTurn(null, {
+    deviceId: 'owner', thread: { sessionId: SESSION }, backendLease: { backend: () => backend },
+  }, 'rename it', { onApproval: (card) => cards.push(card) }, { approvals });
+  await until(() => cards.filter((card) => card.state === 'pending').length === 2);
+  assert.equal(writes, 0);
+  await createApprovalRpc({ approvals }).methods['approval.approve']({ approvalId: cards.at(-1).approvalId }, { deviceId: 'owner' });
+  assert.equal((await childAsk).behavior, 'allow');
+  assert.equal((await second).hasContent, true);
+  assert.equal(writes, 1);
 });
+
+test('OpenCode starts an isolated permission-configured session and parks a would-be auto-approved write', async (t) => {
+  const scratchDir = await mkdtemp(join(tmpdir(), 'vs143-opencode-'));
+  t.after(() => rm(scratchDir, { recursive: true, force: true }));
+  const approvals = new ApprovalService();
+  const writers = new Set();
+  const encoder = new TextEncoder();
+  const replies = [];
+  const approvalsSeen = [];
+  let config;
+  let writes = 0;
+  let stopped = false;
+  let finish;
+  const idle = new Promise((resolve) => { finish = resolve; });
+  const fetchImpl = async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    if (path === '/api/info') return Response.json({ version: '2.2.6' });
+    if (path === '/api/config') return Response.json({ data: config });
+    if (path === `/api/agent/${VOICE_AGENT}`) return Response.json({ data: { permissions: config.agents[VOICE_AGENT].permissions } });
+    if (path === '/api/session') {
+      assert.equal(JSON.parse(init.body).agent, VOICE_AGENT);
+      return Response.json({ data: { id: 'private' } });
+    }
+    if (path === '/api/event') return new Response(new ReadableStream({
+      start(writer) { writers.add(writer); },
+      cancel() { /* the fake private server owns writers until stop */ },
+    }));
+    if (path === '/api/session/private/agent') return new Response(null, { status: 204 });
+    if (path === '/api/session/private/prompt') {
+      assert.equal(init.headers['X-Versutus-Turn-Source'], 'voice');
+      const rule = config.agents[VOICE_AGENT].permissions.findLast((rule) => ['*', 'edit'].includes(rule.action));
+      if (rule?.effect !== 'ask') { writes++; finish(); }
+      else {
+        const event = { type: 'permission.asked', data: { sessionID: 'private', id: 'edit-1', action: 'edit' } };
+        for (const writer of writers) writer.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+      }
+      return new Response(null, { status: 204 });
+    }
+    if (path === '/api/session/private/permission/edit-1/reply') {
+      const { reply } = JSON.parse(init.body);
+      replies.push(reply);
+      if (reply === 'once') writes++;
+      finish();
+      return new Response(null, { status: 204 });
+    }
+    if (path === '/api/experimental/session/private/wait') {
+      await idle;
+      return new Response(null, { status: 204 });
+    }
+    if (path === '/api/session/private/message') {
+      return Response.json({ data: [{ type: 'assistant', time: { created: Date.now() }, content: [{ type: 'text', text: 'Done.' }] }] });
+    }
+    return new Response(null, { status: 404 });
+  };
+  const backend = createOpenCodeBackend({
+    baseUrl: 'http://typed-never-dispatched.test',
+    runVoice: (sessionId, input, onEvent) => runOpenCodeVoice({
+      sessionId, input, onEvent, record: { id: 'opencode-1' }, scratchDir, fetchImpl,
+      checkManaged: async () => {},
+      buildEnvironment: async () => ({ OPENCODE_CONFIG_CONTENT: '{"permissions":[{"effect":"allow"}]}' }),
+      serverFactory({ allowAttach, buildEnvironment }) {
+        assert.equal(allowAttach, false);
+        return {
+          isOwned: () => true,
+          async ensureRunning() {
+            const env = await buildEnvironment();
+            assert.equal(env.OPENCODE_DISABLE_PROJECT_CONFIG, '1');
+            assert.equal(env.OPENCODE_CONFIG_CONTENT, undefined);
+            assert.equal(env.OPENCODE_DB, ':memory:');
+            assert.ok(env.XDG_DATA_HOME.startsWith(scratchDir));
+            config = JSON.parse(await readFile(env.OPENCODE_CONFIG, 'utf8'));
+            return { baseUrl: 'http://isolated.test', attached: false };
+          },
+          async stop() { stopped = true; },
+        };
+      },
+    }),
+  });
+  const running = runVoiceTurn(null, {
+    deviceId: 'owner', thread: {}, backendLease: { backend: () => backend },
+  }, 'Write draft.txt', { onApproval: (card) => approvalsSeen.push(card) }, { approvals });
+  await until(() => approvalsSeen.some((card) => card.state === 'pending'));
+  assert.equal(writes, 0);
+  assert.deepEqual(replies, []);
+  await createApprovalRpc({ approvals }).methods['approval.approve']({ approvalId: approvalsSeen[0].approvalId }, { deviceId: 'owner' });
+  assert.equal((await running).hasContent, true);
+  assert.equal(writes, 1);
+  assert.deepEqual(replies, ['once']);
+  assert.equal(stopped, true);
+});
+
+test('Codex disables ungated tool classes and its app-server cannot apply a patch before the Gate reply', async () => {
+  const approvals = new ApprovalService();
+  const record = { id: 'codex-1', adapterId: 'codex', enabled: true, workspacePolicy: { defaultRoot: '.' } };
+  let writes = 0;
+  let reply;
+  const cards = [];
+  const manager = createBackendManager({
+    store: { get: async () => record }, registry: { get: () => codexAdapter }, approvals,
+    createServer({ onServerRequest, onNotification }) {
+      const rpc = { async request(method, params) {
+        if (method === 'config/read') return { config: { mcp_servers: { permissive: { enabled: true } } } };
+        if (method === 'configRequirements/read') return { requirements: null };
+        if (method === 'thread/read') return { thread: { turns: [] } };
+        if (method === 'thread/start') {
+          assert.equal(params.ephemeral, true);
+          assert.equal(params.config.features.shell_tool, false);
+          assert.equal(params.config.features.apps, false);
+          assert.equal(params.config.features.plugins, false);
+          assert.equal(params.config.features.hooks, false);
+          assert.deepEqual(params.config.mcp_servers, { permissive: { enabled: false } });
+          return { thread: { id: 'voice-thread' }, approvalPolicy: 'on-request',
+            approvalsReviewer: 'user', sandbox: { type: 'readOnly' } };
+        }
+        if (method === 'mcpServerStatus/list') return { data: [], nextCursor: null };
+        if (method === 'thread/unsubscribe') return {};
+        if (method === 'turn/start') {
+          assert.equal(params.threadId, 'voice-thread');
+          if (params.sandboxPolicy?.type !== 'readOnly') writes++;
+          else {
+            reply = await onServerRequest({ method: 'item/fileChange/requestApproval',
+              params: { threadId: 'voice-thread', turnId: 'voice-turn', itemId: 'patch-1' } });
+            if (reply.decision === 'accept') writes++;
+          }
+          onNotification({ method: 'item/agentMessage/delta', params: { threadId: 'voice-thread', delta: 'Done.' } });
+          onNotification({ method: 'turn/completed', params: { threadId: 'voice-thread', turn: { id: 'voice-turn' } } });
+          return { turn: { id: 'voice-turn' } };
+        }
+        assert.fail(`Unexpected fake Codex method: ${method}`);
+      } };
+      return { ensureRunning: async () => ({ rpc, generation: 1 }) };
+    },
+  });
+  const backend = await manager.get(record.id);
+  const running = runVoiceTurn(null, {
+    deviceId: 'owner', thread: { sessionId: 'typed-thread', model: 'fixture' },
+    backendLease: { backend: () => backend },
+  }, 'Write draft.txt', { onApproval: (card) => cards.push(card) }, { approvals });
+  await until(() => cards.some((card) => card.state === 'pending'));
+  assert.equal(reply, undefined);
+  assert.equal(writes, 0);
+  await createApprovalRpc({ approvals }).methods['approval.deny']({ approvalId: cards[0].approvalId }, { deviceId: 'owner' });
+  assert.equal((await running).hasContent, true);
+  assert.equal(writes, 0);
+  assert.deepEqual(reply, { decision: 'decline' });
+});
+
+test('Hermes keeps conversation available with the read-only CLI toolset and never sends unrestricted HTTP chat', async () => {
+  const requests = [];
+  let cliCalls = 0;
+  const backend = createHermesBackend({
+    baseUrl: 'http://hermes.test', executablePath: 'hermes', botId: 'scout',
+    fetchImpl: async (url, init) => {
+      requests.push([init.method ?? 'GET', new URL(url).pathname]);
+      return Response.json({ data: [] });
+    },
+    async runCliImpl(executable, args, { input }) {
+      cliCalls++;
+      assert.equal(executable, 'hermes');
+      // Pin the entire launch: fresh session, no file/shell tools in the
+      // allowlist, and safe mode disables configured hooks, plugins and MCP.
+      assert.deepEqual(args, [
+        '-p', 'scout', 'chat', '--safe-mode', '--quiet', '--toolsets', 'session_search',
+        '--model=model', '--provider=nous', '--query-file', '-',
+      ]);
+      assert.match(input, /Write draft\.txt/);
+      return { code: 0, stdout: 'I can discuss the change with you.' };
+    },
+  });
+  const deltas = [];
+  const result = await runVoiceTurn(null, {
+    deviceId: 'owner', thread: { sessionId: 's1', model: 'nous/model' },
+    backendLease: { backend: () => backend },
+  }, 'Write draft.txt', { onDelta: (delta) => deltas.push(delta) }, { approvals: new ApprovalService() });
+  assert.equal(result.hasContent, true);
+  assert.equal(cliCalls, 1);
+  assert.deepEqual(requests, [['GET', '/api/sessions/s1/messages']]);
+  assert.deepEqual(deltas, ['Use typed chat for actions that aren’t available in this call. ', 'I can discuss the change with you.']);
+});
+
+test('Hermes refuses voice without falling back to HTTP when the local safe-mode CLI fails', async () => {
+  let httpCalls = 0;
+  const backend = createHermesBackend({
+    baseUrl: 'http://hermes.test', executablePath: 'hermes',
+    fetchImpl: async () => {
+      httpCalls++;
+      assert.fail('no HTTP request should be made for this turn');
+    },
+    async runCliImpl(_executable, args) {
+      assert.ok(args.includes('--safe-mode'));
+      return { code: 2, stdout: '' };
+    },
+  });
+  await assert.rejects(runVoiceTurn(null, {
+    deviceId: 'owner', thread: { model: 'nous/model' },
+    backendLease: { backend: () => backend },
+  }, 'Write draft.txt', {}, { approvals: new ApprovalService() }), {
+    code: 'voice_approval_policy_unavailable',
+    message: 'Hermes could not start a read-only call. Check that this PC’s Hermes supports safe mode and the Bot’s model.',
+  });
+  assert.equal(httpCalls, 0);
+});
+
+for (const kind of ['hermes', 'opencode', 'codex', 'claude-code']) {
+  test(`${kind}: Gate refuses an unattested voice path before a permissive native turn can write`, async () => {
+    // The upstream fixture represents a configured allow/always-allow rule:
+    // no permission request, with a write as soon as the backend is invoked.
+    // The real adapters, not kind-only stubs, must not start these turns.
+    const writes = [];
+    const allowWrite = () => { writes.push('draft.txt'); throw new Error('unapproved write reached'); };
+    const backend = {
+      hermes: () => createHermesBackend({ baseUrl: 'http://hermes.test', fetchImpl: allowWrite }),
+      opencode: () => createOpenCodeBackend({ baseUrl: 'http://open.test', fetchImpl: allowWrite }),
+      codex: () => createCodexBackend({
+        subscribe: () => () => undefined,
+        rpc: { async request(method) {
+          if (method === 'turn/start') allowWrite();
+          return {};
+        } },
+      }),
+      'claude-code': () => createClaudeCodeBackend({
+        cwd: '.', claudeHome: '.', executablePath: 'claude', permissionMode: 'acceptEdits',
+        permissionBridge: { registerVoiceTurn: () => ({ url: 'http://no-bridge.test', close() {} }) },
+        spawnImpl: allowWrite,
+      }),
+    }[kind]();
+    assert.equal(backend.kind, kind);
+    const stages = [];
+    await assert.rejects(runVoiceTurn(null, {
+      deviceId: 'owner',
+      thread: { sessionId: '896a9c65-7554-453a-8e20-ccf419617968', model: 'fixture' },
+      backendLease: { backend: () => backend },
+    }, 'Write draft.txt', { onStage: (stage) => stages.push(stage.stage) }), {
+      code: 'voice_approval_policy_unavailable',
+      message: 'Use typed chat because this call can’t ask before every action.',
+    });
+    assert.deepEqual(writes, []);
+    assert.deepEqual(stages, ['resolve.start', 'resolve.ready']);
+  });
+}
 
 test('Gate approval parsing remains compatible with old and additive frame shapes', () => {
   assert.deepEqual(parseGateFrame({ t: 'approval', turnId: 't1', summary: 'Run it?' }), {

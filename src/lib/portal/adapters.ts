@@ -49,6 +49,8 @@ export interface PortalClient {
       model?: string;
       /** Owning provider, when known — disambiguates a model id declared by more than one. */
       providerId?: string;
+      /** Only an auto-sent hands-free transcript; typed messages omit this. */
+      source?: 'voice';
       sessionId?: string;
       signal?: AbortSignal;
       /** OpenAI-style tool_calls deltas when the gateway emits them. */
@@ -56,6 +58,7 @@ export interface PortalClient {
       /** Reasoning/thinking deltas streamed alongside content, when the model exposes them. */
       onReasoning?: (text: string) => void;
       onTelemetryWarning?: (message: string) => void;
+      onVoiceApproval?: (approval: import('@/lib/voice/voice-stream-protocol').VoiceApprovalFrame) => void;
       /**
        * Which model actually served the turn, once the gateway says so.
        * Backends substitute — reporting only the request would keep repeating

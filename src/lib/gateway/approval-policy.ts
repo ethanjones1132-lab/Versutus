@@ -21,6 +21,10 @@ export const APPROVAL_CLASSES = [
   'system',
   'destructive',
   'bypass',
+  'shell_exec',
+  'network_write',
+  'connector',
+  'credential_system',
   'unknown',
 ] as const;
 

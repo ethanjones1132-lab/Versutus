@@ -38,6 +38,7 @@ export function createNativeServer({
   fetchImpl = fetch,
   startTimeoutMs = DEFAULT_START_TIMEOUT_MS,
   onDiagnostic,
+  allowAttach = true,
 } = {}) {
   let handle = null;
   let starting = null;
@@ -90,7 +91,7 @@ export function createNativeServer({
       throw new Error(`Adapter "${adapter?.adapterId ?? 'unknown'}" does not expose a native server.`);
     }
 
-    const attachedUrl = await findReachable(descriptor);
+    const attachedUrl = allowAttach ? await findReachable(descriptor) : null;
     if (attachedUrl) {
       owned = false;
       handle = { baseUrl: attachedUrl, attached: true };
@@ -104,7 +105,7 @@ export function createNativeServer({
     // must never trigger a second `serve` — a second instance against the
     // same data directory breaks its SQLite schema. Attach with the recovered
     // banner password when we have one, else refuse with a clear error.
-    if (typeof descriptor.detectMajor === 'function') {
+    if (allowAttach && typeof descriptor.detectMajor === 'function') {
       const occupied = await findOccupiedButUnhealthy(descriptor);
       if (occupied) {
         if (bannerPassword && (await isHealthy(occupied, descriptor))) {
@@ -121,8 +122,14 @@ export function createNativeServer({
       }
     }
 
-    const baseUrl = await spawnServer(descriptor);
     owned = true;
+    let baseUrl;
+    try {
+      baseUrl = await spawnServer(descriptor);
+    } catch (error) {
+      await stop();
+      throw error;
+    }
     handle = { baseUrl, attached: false };
     note(`started ${adapter.adapterId} at ${baseUrl}`);
     return handle;
@@ -307,7 +314,7 @@ export function createNativeServer({
       if (exited !== null) {
         throw new Error(`${adapter.adapterId} server exited with code ${exited} before becoming reachable.`);
       }
-      const fallbackPort = port || descriptor.defaultPort;
+      const fallbackPort = port || (allowAttach ? descriptor.defaultPort : null);
       const target = announced ?? (fallbackPort ? `http://127.0.0.1:${fallbackPort}` : null);
       if (target && (await isHealthy(target, descriptor))) return target;
       await Promise.race([delay(POLL_INTERVAL_MS), spawnFailed]);

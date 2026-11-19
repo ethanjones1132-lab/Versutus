@@ -37,10 +37,14 @@ function jsonResponse(body: unknown, status = 200) {
   } as unknown as Response;
 }
 
-function clientWithEndpoints(endpoints: Record<string, string>) {
+function clientWithEndpoints(endpoints: Record<string, string>, supportsVoicePolicy = false) {
   const identity: GatewayIdentity = {
     ...IDENTITY,
-    manifest: { ...IDENTITY.manifest!, endpoints },
+    manifest: {
+      ...IDENTITY.manifest!,
+      endpoints,
+      ...(supportsVoicePolicy ? { voiceTurnPolicy: 'per-tool-tap-v1' as const } : {}),
+    },
   };
   return new ManifestClient(PROFILE, identity, {});
 }
@@ -282,6 +286,65 @@ describe('ManifestClient.streamChat', () => {
   const realFetch = globalThis.fetch;
   afterEach(() => {
     (globalThis as { fetch: unknown }).fetch = realFetch;
+  });
+
+  test('posts the voice marker only on the phone-engine send', async () => {
+    const bodies: unknown[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((_input: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      });
+      return Promise.resolve({ ok: true, status: 200, body } as unknown as Response);
+    });
+    const client = clientWithEndpoints({ chat: '/v1/chat/completions' }, true);
+    const messages = [{ role: 'user', content: 'Write draft.txt' }];
+    await client.streamChat(messages, () => undefined, { model: 'm', source: 'voice' });
+    await client.streamChat(messages, () => undefined, { model: 'm' });
+    expect(bodies).toEqual([
+      { messages, model: 'm', stream: true, source: 'voice' },
+      { messages, model: 'm', stream: true },
+    ]);
+  });
+
+  test('does not send a transcript or start Gate media on an older Gate', async () => {
+    const fetchMock = jest.fn();
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({
+      chat: '/v1/chat/completions',
+      capabilitiesRpc: '/v1/capabilities/rpc',
+    });
+    await expect(client.streamChat([{ role: 'user', content: 'Write draft.txt' }], () => undefined, {
+      model: 'm',
+      source: 'voice',
+    })).rejects.toMatchObject({ code: 'voice_approval_policy_unavailable' });
+    await expect(client.rpcRequest('voice.session.start', {}))
+      .rejects.toMatchObject({ code: 'voice_approval_policy_unavailable' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test('delivers additive approval frames to a phone voice turn but not typed chat', async () => {
+    const approval = { t: 'approval', turnId: 't1', approvalId: 'approval-1', summary: 'Change files?', state: 'pending', gateDecision: true };
+    (globalThis as { fetch: unknown }).fetch = jest.fn(() => {
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(
+            `data: ${JSON.stringify({ choices: [], voiceApproval: approval })}\n\ndata: [DONE]\n\n`,
+          ));
+          controller.close();
+        },
+      });
+      return Promise.resolve({ ok: true, status: 200, body } as unknown as Response);
+    });
+    const client = clientWithEndpoints({ chat: '/v1/chat/completions' }, true);
+    const onVoiceApproval = jest.fn();
+    await client.streamChat([{ role: 'user', content: 'write' }], () => undefined, { model: 'm', source: 'voice', onVoiceApproval });
+    await client.streamChat([{ role: 'user', content: 'write' }], () => undefined, { model: 'm', onVoiceApproval });
+    expect(onVoiceApproval).toHaveBeenCalledTimes(1);
+    expect(onVoiceApproval).toHaveBeenCalledWith(approval);
   });
 
   test('streams normalized SSE deltas from the manifest-declared chat endpoint', async () => {
@@ -697,7 +760,7 @@ describe('rpcRequest against a gate advertising capabilitiesRpc', () => {
     });
     (globalThis as { fetch: unknown }).fetch = fetchMock;
 
-    const client = clientWithEndpoints({ health: '/health', capabilitiesRpc: '/v1/capabilities/rpc' });
+    const client = clientWithEndpoints({ health: '/health', capabilitiesRpc: '/v1/capabilities/rpc' }, true);
     client.setBackendId('hermes-local');
     await client.rpcRequest('device.list');
     await client.rpcRequest('voice.session.start', { text: 'hi' });

@@ -22,6 +22,9 @@ const SUMMARY_LIMIT = 160;
 /** How long an oversized body may keep draining before the denial is sent anyway. */
 const DRAIN_LIMIT_MS = 1_000;
 const DENY_MESSAGE = 'Denied from the Versutus approval inbox';
+const bridges = new WeakSet();
+
+export function isPermissionBridge(bridge) { return bridges.has(bridge); }
 
 /**
  * Whether a peer address is this machine.
@@ -162,18 +165,21 @@ export async function createPermissionBridge({
     }
     const tool = toolName(body);
     const input = toolInput(body);
-    const summary = compactSummary(tool, input);
-    // Do not approve a truncated tool description from the call banner.
-    if (voice && summary.endsWith('\u2026')) return { behavior: 'deny', message: DENY_MESSAGE };
+    if (voice) {
+      const allowed = await approvals.authorize({
+        tool, backendId: environmentId, botId: voice.botId, sessionId: voice.sessionId,
+        deviceId: voice.deviceId, signal: voice.controller.signal, announce: voice.announce,
+      });
+      return allowed ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: DENY_MESSAGE };
+    }
     const normalized = await approvals.normalize({
       type: 'workspace_write',
       // The session id is the run the app is showing; where the CLI sends none
       // the entry is the environment's alone, exactly as Codex's null thread is.
-      runId: voice?.sessionId ?? body.session_id ?? body.sessionId ?? null,
-      ...(voice?.deviceId ? { voiceDeviceId: voice.deviceId } : {}),
+      runId: body.session_id ?? body.sessionId ?? null,
       environmentId,
       operation: tool,
-      summary,
+      summary: compactSummary(tool, input),
     });
 
     let ruling = normalized;
@@ -182,29 +188,17 @@ export async function createPermissionBridge({
       // a denial this side makes when nobody has answered in time.
       const waiting = approvals.waitForDecision(ruling?.approvalId);
       let timer;
-      let expired = false;
       const approvalId = ruling?.approvalId;
-      if (voice?.closed) {
-        approvals.withdraw(approvalId, DENY_MESSAGE);
-        return { behavior: 'deny', message: DENY_MESSAGE };
-      }
-      voice?.pending.add(approvalId);
-      voice?.announce({ approvalId, summary, state: 'pending' });
       const timeout = new Promise((resolve, reject) => {
         timer = setTimeout(() => {
-          expired = true;
-          Promise.resolve(approvals.decide(ruling?.approvalId, 'deny')).then(resolve, reject);
-        }, voice ? Math.min(30_000, timeoutMs) : timeoutMs);
+          Promise.resolve(approvals.decide(approvalId, 'deny', { outcome: 'expired' })).then(resolve, reject);
+        }, timeoutMs);
         timer.unref?.();
       });
       try {
         ruling = await Promise.race([waiting, timeout]);
       } finally {
         clearTimeout(timer);
-        voice?.pending.delete(approvalId);
-      }
-      if (!voice?.closed) {
-        voice?.announce({ approvalId, summary, state: expired ? 'expired' : ruling?.decision === 'approve' ? 'approved' : 'denied' });
       }
     }
 
@@ -218,11 +212,6 @@ export async function createPermissionBridge({
     // and the caller must hold the secret this bridge minted. The body is only
     // drained, never parsed, so a refused caller learns nothing by sending one.
     if (!isLoopbackAddress(req.socket.remoteAddress)) {
-      req.resume();
-      send(res, 403, { error: 'forbidden' });
-      return;
-    }
-    if (req.headers['x-gate-bridge'] !== secret) {
       req.resume();
       send(res, 403, { error: 'forbidden' });
       return;
@@ -241,6 +230,14 @@ export async function createPermissionBridge({
       send(res, 404, { error: 'not found' });
       return;
     }
+    const voice = voiceId === null ? undefined : voiceTurns.get(voiceId);
+    // A voice child never gets the credential for the typed endpoint.
+    if (req.headers['x-gate-bridge'] !== (voiceId === null ? secret : voice?.secret)
+      || (voiceId !== null && !voice)) {
+      req.resume();
+      send(res, 403, { error: 'forbidden' });
+      return;
+    }
 
     let answer;
     try {
@@ -255,11 +252,6 @@ export async function createPermissionBridge({
         return;
       }
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
-        deny(res);
-        return;
-      }
-      const voice = voiceId === null ? undefined : voiceTurns.get(voiceId);
-      if (voiceId !== null && !voice) {
         deny(res);
         return;
       }
@@ -296,23 +288,30 @@ export async function createPermissionBridge({
   server.unref?.();
 
   const { port } = server.address();
-  return {
+  const bridge = {
     url: `http://127.0.0.1:${port}/permission`,
     secret,
-    registerVoiceTurn({ sessionId, deviceId, announce }) {
+    registerVoiceTurn({ sessionId, deviceId, botId, announce, signal }) {
       const id = randomBytes(16).toString('hex');
-      const voice = { sessionId, deviceId, announce, pending: new Set(), closed: false };
+      const controller = new AbortController();
+      const voice = { sessionId, deviceId, botId, announce, controller, secret: randomBytes(16).toString('hex') };
+      const abort = () => controller.abort();
+      if (signal?.aborted) abort();
+      else signal?.addEventListener('abort', abort, { once: true });
       voiceTurns.set(id, voice);
       return {
         url: `http://127.0.0.1:${port}/permission?voice=${id}`,
+        secret: voice.secret,
         close() {
-          voice.closed = true;
+          signal?.removeEventListener('abort', abort);
           voiceTurns.delete(id);
-          for (const approvalId of voice.pending) approvals.withdraw(approvalId, DENY_MESSAGE);
+          abort();
         },
       };
     },
     close() {
+      for (const voice of voiceTurns.values()) voice.controller.abort();
+      voiceTurns.clear();
       if (!server.listening) return Promise.resolve();
       return new Promise((resolve) => {
         server.close(() => resolve());
@@ -322,4 +321,6 @@ export async function createPermissionBridge({
       });
     },
   };
+  bridges.add(bridge);
+  return bridge;
 }

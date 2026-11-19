@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createGate, runVoiceTurn } from '../core/server.mjs';
 import { DeviceTokenStore } from '../core/device-tokens.mjs';
+import { TAP_GATED_VOICE_TOOLS } from '../core/voice/voice-turn-policy.mjs';
 
 const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
 const roots = [];
@@ -233,6 +234,7 @@ test('a voice turn names resolve, send, acceptance and response in real order', 
   let sendCalls = 0;
   const backend = {
     id: 'hermes-live',
+    [TAP_GATED_VOICE_TOOLS]: true, // This fixture never executes a tool.
     sendMessage() {
       sendCalls += 1;
       return new Promise((resolve) => { releaseSend = () => resolve({ text: 'ok' }); });
@@ -323,6 +325,7 @@ test('the manifest advertises sessions only because a backend provides them', as
   const { gate } = await makeGate();
   try {
     const manifest = await (await fetch(`http://127.0.0.1:${gate.port}/.well-known/gateway.json`)).json();
+    assert.equal(manifest.voiceTurnPolicy, 'per-tool-tap-v1');
     assert.equal(manifest.capabilities.sessions, true);
     assert.equal(manifest.capabilities.tools, true);
     assert.equal(manifest.endpoints.sessions, '/v1/sessions');
@@ -338,6 +341,107 @@ test('the manifest advertises sessions only because a backend provides them', as
     assert.equal(JSON.stringify(manifest.backends).includes('workspaceRoot'), false);
     assert.equal(serialized.includes('C:\\\\ws'), false, 'the workspace path must not be published');
   } finally {
+    await gate.close();
+  }
+});
+
+test('phone voice chat is refused before dispatch, while typed chat still executes', async () => {
+  const { gate, calls } = await makeGate();
+  const chat = (path, body) => fetch(`http://127.0.0.1:${gate.port}${path}`, {
+    method: 'POST', headers: auth(gate), body: JSON.stringify(body),
+  });
+  const input = { backendId: 'stub-local', messages: [{ role: 'user', content: 'Write draft.txt' }] };
+  try {
+    for (const path of ['/v1/chat/completions', '/p/unused/v1/chat/completions']) {
+      for (const stream of [true, false]) {
+        const response = await chat(path, { ...input, stream, source: 'voice' });
+        assert.equal(response.status, 422);
+        assert.deepEqual(await response.json(), { error: {
+          code: 'voice_approval_policy_unavailable',
+          message: 'Use typed chat because this call can’t ask before every action.',
+        } });
+      }
+    }
+    assert.equal(calls.some((call) => /^(?:sendMessage|createSession)/.test(call)), false);
+    const response = await chat('/v1/chat/completions', input);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).choices[0].message.content, 'echo Write draft.txt');
+    assert.deepEqual(calls.filter((call) => call.startsWith('sendMessage')), ['sendMessage:ses_1']);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('phone voice chat relays a Gate-owned approval and the same RPC records it before the action', async () => {
+  const registry = stubRegistry([]);
+  const adapter = registry.get('stubcli');
+  const original = adapter.createBackend;
+  let ran = false;
+  adapter.createBackend = () => ({
+    ...original(),
+    [TAP_GATED_VOICE_TOOLS]: true,
+    async voiceSendMessage(sessionId, { source, voiceDeviceId, voiceGate, signal }, onEvent) {
+      assert.equal(source, 'voice');
+      const allowed = await voiceGate.approvals.authorize({
+        backendId: 'stub-local', sessionId, deviceId: voiceDeviceId, tool: 'Write', signal,
+        announce: (payload) => onEvent({ type: 'approval.required', payload }),
+      });
+      assert.equal(voiceGate.approvals.recent(1)[0].decision, 'approved');
+      ran = allowed;
+      return { text: 'Done.' };
+    },
+  });
+  const { gate } = await makeGate({ registry });
+  const origin = `http://127.0.0.1:${gate.port}`;
+  const rpc = async (method, params) => {
+    const result = await fetch(`${origin}/v1/capabilities/rpc`, {
+      method: 'POST', headers: auth(gate), body: JSON.stringify({ method, params }),
+    });
+    assert.equal(result.status, 200);
+    return (await result.json()).result;
+  };
+  let reader;
+  try {
+    const response = await fetch(`${origin}/p/unused/v1/chat/completions`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({
+        stream: true, source: 'voice', backendId: 'stub-local', sessionId: 'ses_1',
+        messages: [{ role: 'user', content: 'Write draft.txt' }],
+      }),
+    });
+    assert.equal(response.status, 200);
+    reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let received = '';
+    let approval;
+    while (!approval) {
+      const { value, done } = await reader.read();
+      assert.equal(done, false);
+      received += decoder.decode(value, { stream: true });
+      for (const value of received.split('\n\n').slice(0, -1)) {
+        const line = value.split('\n').find((line) => line.startsWith('data: '));
+        if (line) approval ??= JSON.parse(line.slice(6)).voiceApproval;
+      }
+    }
+    assert.equal(approval.state, 'pending');
+    assert.equal(approval.gateDecision, true);
+    assert.equal(ran, false);
+    assert.deepEqual((await rpc('approvals.pending', {})).approvals.map((x) => x.approvalId), [approval.approvalId]);
+    await rpc('approval.approve', { approvalId: approval.approvalId });
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      received += decoder.decode(value, { stream: true });
+    }
+    assert.match(received, /"state":"approved"/);
+    assert.match(received, /Done\./);
+    assert.equal(ran, true);
+    const { decisions } = await rpc('approvals.decisions', { limit: 1 });
+    assert.equal(decisions[0].source, 'voice');
+    assert.equal(decisions[0].approvalId, approval.approvalId);
+  } finally {
+    await reader?.cancel();
     await gate.close();
   }
 });

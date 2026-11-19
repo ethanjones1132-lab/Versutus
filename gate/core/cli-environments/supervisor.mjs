@@ -775,7 +775,7 @@ export class CliEnvironmentService {
    */
   async approve(runId, approvalId, decision) {
     const entry = this.approvals.get(approvalId);
-    if (!entry || (runId && entry.request?.runId && entry.request.runId !== runId)) {
+    if (!entry || entry.request?.voiceDeviceId || (runId && entry.request?.runId && entry.request.runId !== runId)) {
       const error = new Error(`Unknown approval "${approvalId ?? ''}"`);
       error.status = 404;
       error.code = 'unknown_approval';

@@ -545,6 +545,7 @@ export function reduceVoiceSession(state, event) {
 
     case 'replyFailed': {
       if (!replyOwed(state)) return stay(state);
+      const line = event.speech ?? FAILED_TURN_LINE;
       // A failed turn is the phone's news too; only the spoken failure line is
       // suppressed while muted.
       if (state.phase === 'muted') {
@@ -557,18 +558,18 @@ export function reduceVoiceSession(state, event) {
       // queued of it plays out and the failure line follows in the same
       // generation, rather than a new generation cutting a sentence in half.
       if (state.phase === 'speaking') {
-        return stay({ ...state, reply: `${state.reply} ${FAILED_TURN_LINE}`, spoken: `${state.reply} ${FAILED_TURN_LINE}` }, [
+        return stay({ ...state, reply: `${state.reply} ${line}`, spoken: `${state.reply} ${line}` }, [
           frameSend({ t: 'turn', turnId: state.turnId, state: 'failed', error: event.message }),
-          { kind: 'engine.speak', text: FAILED_TURN_LINE, gen: state.gen, final: true },
+          { kind: 'engine.speak', text: line, gen: state.gen, final: true },
           { kind: 'speech.close', gen: state.gen },
         ]);
       }
       const gen = state.gen + 1;
-      return stay({ ...state, phase: 'speaking', gen, reply: FAILED_TURN_LINE, spoken: FAILED_TURN_LINE }, [
+      return stay({ ...state, phase: 'speaking', gen, reply: line, spoken: line }, [
         phaseEffect('speaking'),
         frameSend({ t: 'speech', gen, state: 'start' }),
         frameSend({ t: 'turn', turnId: state.turnId, state: 'failed', error: event.message }),
-        { kind: 'engine.speak', text: FAILED_TURN_LINE, gen, final: true },
+        { kind: 'engine.speak', text: line, gen, final: true },
         { kind: 'speech.close', gen },
       ]);
     }
@@ -590,16 +591,30 @@ export function reduceVoiceSession(state, event) {
         }),
       ]);
 
-    case 'approvalRequired':
-      return stay(state, [
+    case 'approvalRequired': {
+      const effects = [
         frameSend({
           t: 'approval',
           turnId: state.turnId,
           summary: event.summary,
           ...(typeof event.approvalId === 'string' ? { approvalId: event.approvalId } : {}),
           ...(typeof event.state === 'string' ? { state: event.state } : {}),
+          ...(event.gateDecision === true ? { gateDecision: true } : {}),
         }),
-      ]);
+      ];
+      if (!event.speech || !replyOwed(state) || state.phase === 'muted') return stay(state, effects);
+      const next = state.phase === 'thinking'
+        ? { ...state, phase: 'speaking', gen: state.gen + 1 }
+        : state;
+      if (next !== state) {
+        effects.push(phaseEffect('speaking'), frameSend({ t: 'speech', gen: next.gen, state: 'start' }));
+      }
+      // This is a Gate announcement, not a Bot reply: don't append it to the
+      // reply text, offsets, push notifications or transcript. Leave the
+      // generation open for expiry and the backend's eventual reply.
+      effects.push({ kind: 'engine.speak', text: event.speech, gen: next.gen, final: false });
+      return stay(next, effects);
+    }
 
     case 'speechDone': {
       // Audio started before the mute may still be finishing. Its end is still

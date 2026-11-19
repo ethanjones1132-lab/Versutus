@@ -396,6 +396,27 @@ async function startLiveSend(text: string): Promise<() => SendChatInputOutcome |
   return () => outcome;
 }
 
+test('the phone-engine send passes source voice while a composer send omits it', async () => {
+  mockState.gateways = [profile('alpha')];
+  mockState.activeId = 'alpha';
+  await mount();
+  await act(async () => {
+    await expect(gatewayApi().sendChatInput('Write draft.txt', {
+      source: 'handsfree-call',
+      messageId: 'voice-call-1',
+    })).resolves.toBe('sent');
+  });
+  await settleStream();
+  await act(async () => {
+    await expect(gatewayApi().sendChatInput('Write draft.txt', {
+      source: 'composer',
+    })).resolves.toBe('sent');
+  });
+  expect(allStreams()).toHaveLength(2);
+  expect(allStreams()[0].source).toBe('voice');
+  expect(allStreams()[1]).not.toHaveProperty('source');
+});
+
 describe('a provider-initiated abort leaves the queued line owed', () => {
   beforeEach(async () => {
     mockState.gateways = [profile('alpha')];

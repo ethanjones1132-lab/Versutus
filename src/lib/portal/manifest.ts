@@ -144,6 +144,8 @@ export type GatewayManifest = {
   name?: string;
   version?: string;
   vendor?: string;
+  /** The Gate recognizes marked chat sends and enforces D3, including refusal. */
+  voiceTurnPolicy?: 'per-tool-tap-v1';
   auth?: GatewayManifestAuth;
   transport?: {
     primary?: 'http' | 'ws';

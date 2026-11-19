@@ -15,6 +15,7 @@ import { createChatStreamAcc, interpretChatStreamChunk } from '@/lib/gateway/cha
 import { errorCodeFromHttpBody, messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
 import { interruptedTurnCopy } from '@/lib/gateway/interrupted-copy';
 import type { HttpTransport } from '@/lib/gateway/http-transport';
+import { parseGateFrame, type VoiceApprovalFrame } from '@/lib/voice/voice-stream-protocol';
 import type { ModelReport } from '@/lib/gateway/run-failures';
 import type { ChatToolCall } from '@/lib/gateway/types';
 
@@ -67,6 +68,7 @@ export type TurnStreamCallbacks = {
   onToolCall?: (tool: ChatToolCall) => void;
   onReasoning?: (text: string) => void;
   onTelemetryWarning?: (message: string) => void;
+  onVoiceApproval?: (approval: VoiceApprovalFrame) => void;
   onModelReport?: (report: ModelReport) => void;
   /**
    * The journal seq of the frame just handled. A dropped stream re-attaches
@@ -322,6 +324,10 @@ export async function readChatFrames(args: {
         // The Gate starts a replay after `after`, but a gateway or proxy that
         // ignores the query would replay frames already rendered. Those are dropped.
         if (seq !== undefined && seq <= after) return;
+        if (callbacks.onVoiceApproval && frame && typeof frame === 'object' && 'voiceApproval' in frame) {
+          const approval = parseGateFrame(frame.voiceApproval);
+          if (approval.t === 'approval' && approval.approvalId && approval.gateDecision) callbacks.onVoiceApproval(approval);
+        }
         if (interpreted.telemetryWarning) callbacks.onTelemetryWarning?.(interpreted.telemetryWarning);
         if (interpreted.text) {
           fullText += interpreted.text;

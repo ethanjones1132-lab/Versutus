@@ -30,6 +30,8 @@ import { CliAdapterRegistry } from './cli-environments/adapter-registry.mjs';
 import { CliEnvironmentService, chatEndpointForPort } from './cli-environments/supervisor.mjs';
 import { createEnvironmentRpc, sanitizeEnvironment } from './cli-environments/rpc.mjs';
 import { createApprovalRpc } from './approvals/rpc.mjs';
+import { createDecisionLedger } from './approvals/decision-ledger.mjs';
+import { ApprovalService } from './cli-environments/approvals.mjs';
 import { createBackendManager } from './cli-environments/backend-manager.mjs';
 import { createBotGroupStore, transcriptEntriesForSend } from './cli-environments/bot-groups.mjs';
 import { createBackendRunStreams } from './cli-environments/backend-run-streams.mjs';
@@ -45,6 +47,7 @@ import { createPushNotifier, widgetSnapshot } from './push-notifier.mjs';
 import { createVoiceRpc } from './voice/voice-rpc.mjs';
 import { attachVoiceMediaSocket } from './voice/media-socket.mjs';
 import { mirrorVoiceApprovals } from './voice/voice-approvals.mjs';
+import { requireVoiceTurnPolicy, VOICE_POLICY_REFUSAL, VOICE_POLICY_REFUSAL_CODE } from './voice/voice-turn-policy.mjs';
 import { createVoiceAudit } from './voice/audit.mjs';
 import { LocalEngine, spawnVoiceWorker } from './voice/engines/local-engine.mjs';
 import { createVoiceWorkerPool } from './voice/engines/worker-pool.mjs';
@@ -351,6 +354,7 @@ async function bindDurableTurn(res, {
   detachedStallMs = DEFAULT_DETACHED_STALL_MS,
   detachedTurnLimit = DEFAULT_DETACHED_TURN_LIMIT,
   onGateStopped = null,
+  cancelOnClose = false,
 } = {}) {
   const key = turnId && inFlightTurns ? `${callerId}:${turnId}` : null;
 
@@ -538,6 +542,10 @@ async function bindDurableTurn(res, {
   }
   res.on('close', () => {
     clientDisconnected = true;
+    if (cancelOnClose && !turn?.finished) {
+      controller.abort();
+      return;
+    }
     if (!turn) {
       // A client that walks away from an unnamed turn must also stop the
       // upstream turn, or the request keeps streaming into a socket nobody is
@@ -613,6 +621,7 @@ async function streamBackendTurn(backend, sessionId, { text, model, images, file
   recordOutcome,
   healthKey,
   onGateStopped = null,
+  voiceGate = null,
 } = {}) {
   const durable = await bindDurableTurn(res, {
     callerId,
@@ -628,6 +637,7 @@ async function streamBackendTurn(backend, sessionId, { text, model, images, file
     detachedStallMs,
     detachedTurnLimit,
     onGateStopped,
+    cancelOnClose: Boolean(voiceGate),
   });
   if (durable.replayed) return null;
 
@@ -654,6 +664,14 @@ async function streamBackendTurn(backend, sessionId, { text, model, images, file
     const { hasContent, report, aborted } = await runBackendTurn(backend, sessionId, { text, model, images, files }, {
       signal: controller.signal,
       onDelta: collectDelta,
+      ...(voiceGate ? {
+        source: 'voice',
+        voiceGate,
+        voiceDeviceId: voiceGate.deviceId,
+        onApproval: (approval) => emit(JSON.stringify({
+          choices: [], voiceApproval: { t: 'approval', turnId: turnId ?? sessionId, ...approval },
+        })),
+      } : {}),
       // Tool frames are progress the Gate can see, so they re-arm the stall
       // watchdog exactly as a delta does (design 3.4).
       onToolCall: () => {
@@ -1462,6 +1480,9 @@ function concludeDurableProviderTurn(durable, outcome) {
 // without waiting for resolution to cooperate — a late resolve must run no
 // send, and touch no session, that a newer turn may now own.
 const VOICE_TURN_ABORTED = Object.freeze({ hasContent: false, aborted: true });
+// Isolated runtimes deliberately do not resume typed threads. Keep a bounded
+// memory of that call's own turns for follow-ups, never a second disk transcript.
+const restrictedCallContext = new WeakMap();
 
 function voiceBackendDescriptor(backend) {
   if (!backend || typeof backend !== 'object') return 'backend';
@@ -1564,22 +1585,40 @@ export async function runVoiceTurn(backendManager, session, text, handlers = {},
     locate,
   });
   if (resolved.aborted) return VOICE_TURN_ABORTED;
+  requireVoiceTurnPolicy(resolved.backend);
   // A spoken turn runs on the model the thread's typed turns run on. Without
   // it the backend answers on its own default, so a call in a thread pinned to
   // one model was answered by another.
   const model = voiceThreadModel(session?.thread);
+  const prior = restrictedCallContext.get(session);
+  let received = '';
   const mirror = mirrorVoiceApprovals({
     approvals, deviceId: session?.deviceId, onApproval: handlers.onApproval,
     signal: handlers.signal, timeoutMs: approvalTimeoutMs,
   });
   try {
-    return await runBackendTurn(resolved.backend, session?.thread?.sessionId, { text, ...(model ? { model } : {}) }, {
+    const outcome = await runBackendTurn(resolved.backend, session?.thread?.sessionId, { text, ...(model ? { model } : {}) }, {
       ...handlers,
       source: 'voice',
       voiceDeviceId: session?.deviceId,
+      voiceGate: {
+        approvals, botId: session?.thread?.botId ?? resolved.backend.bot ?? null,
+        history: prior?.history, announceLimits: !prior,
+      },
+      onDelta(delta) {
+        received = (received + delta).slice(-1_200);
+        handlers.onDelta?.(delta);
+      },
       onApproval: mirror.open,
       backendId: resolved.descriptor,
     });
+    if (session && outcome.hasContent && !outcome.aborted && resolved.backend.voiceNotice) {
+      restrictedCallContext.set(session, {
+        history: [...(prior?.history ?? []), { role: 'user', content: String(text ?? '').slice(-1_200) },
+          { role: 'assistant', content: received }].slice(-12),
+      });
+    }
+    return outcome;
   } finally {
     mirror.close();
   }
@@ -1816,6 +1855,7 @@ export async function createGate(config = {}) {
   const environmentService = new CliEnvironmentService({
     store: environmentStore,
     registry: environmentRegistry,
+    approvals: new ApprovalService({ ledger: createDecisionLedger({ dir: join(gateHome, 'approvals') }) }),
     // Bound credential references resolve into the CLI's environment at run
     // start — same vault the providers and backend-manager read.
     vault,
@@ -1845,6 +1885,7 @@ export async function createGate(config = {}) {
     store: environmentStore,
     registry: environmentRegistry,
     approvals: environmentService.approvals,
+    voiceScratchDir: join(gateHome, 'voice', 'scratch'),
     vault,
     environmentState: environmentService.environmentState,
     buildEnvironment: async ({ record, credentials }) =>
@@ -2406,6 +2447,60 @@ export async function createGate(config = {}) {
     }
     if (!botId) return { backend, environmentId };
     return { backend: await forBotOrThrow(backend, botId), environmentId };
+  }
+
+  /** The phone engine uses the same attested adapter path as the media socket. */
+  async function servePhoneVoiceTurn({ botId, body, res, callerId, deviceId, turnId }) {
+    try {
+      const thread = {
+        botId,
+        backendId: body.backendId,
+        sessionId: body.sessionId,
+      };
+      const located = thread.backendId || thread.botId ? thread : await locateCallThread(thread);
+      const { backend, environmentId } = await resolveConversationScopeOrThrow(located.backendId, located.botId);
+      requireVoiceTurnPolicy(backend);
+      const text = lastUserText(body.messages);
+      if (!text || lastUserImages(body.messages) || lastUserFiles(body.messages)) {
+        throw namedRefusal('A call needs a spoken message, without attachments.', 'invalid_request', 400);
+      }
+      const model = body.model ? parseQualifiedModel(body.model) : undefined;
+      const sessionId = body.sessionId ?? (await backend.createSession({ title: newVoiceCallTitle(), model })).id;
+      if (res.destroyed) return;
+      const voiceGate = {
+        approvals: environmentService.approvals,
+        botId: botId ?? backend.bot ?? null,
+        deviceId: deviceId ?? 'bootstrap:phone-chat',
+        history: Array.isArray(body.messages) ? body.messages.slice(-13, -1).filter((message) => message && (
+          message.role === 'assistant' || message.role === 'user'
+        ) && typeof message.content === 'string') : [],
+      };
+      if (body.stream === true) {
+        await streamBackendTurn(backend, sessionId, { text, model }, res, {
+          callerId, turnId, backendId: environmentId, botId, inFlightTurns, journal: turnJournal,
+          keepaliveIntervalMs, detachedTurnMaxMs, detachedStallMs, detachedTurnLimit, voiceGate,
+        });
+        return;
+      }
+      let reply = '';
+      const controller = new AbortController();
+      res.once('close', () => controller.abort());
+      const result = await runBackendTurn(backend, sessionId, { text, model }, {
+        source: 'voice', voiceGate, voiceDeviceId: voiceGate.deviceId, signal: controller.signal,
+        onDelta: (delta) => { reply += delta; },
+      });
+      if (result.aborted || res.destroyed) return;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ session_id: sessionId, choices: [{ message: { role: 'assistant', content: reply } }] }));
+    } catch (error) {
+      if (res.headersSent) return;
+      const policy = error?.code === VOICE_POLICY_REFUSAL_CODE;
+      res.writeHead(policy ? 422 : (error?.status ?? 502), { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: {
+        code: error?.code ?? 'backend_error',
+        message: error?.message ?? VOICE_POLICY_REFUSAL,
+      } }));
+    }
   }
 
   // The Hermes-dialect methods the app's command registry actually sends.
@@ -4814,6 +4909,11 @@ export async function createGate(config = {}) {
           });
           if (resumed) return;
         }
+        if (body.source === 'voice') {
+          return await servePhoneVoiceTurn({
+            botId: readBotId(url, body), body, res, callerId, deviceId: deviceGrant?.deviceId, turnId: namedTurnId,
+          });
+        }
 
         // A backend-addressed turn runs inside the native environment, which is
         // what gives it that platform's sessions, tools and approvals.
@@ -5189,6 +5289,11 @@ export async function createGate(config = {}) {
           });
           if (resumed) return;
         }
+        if (body?.source === 'voice') {
+          return await servePhoneVoiceTurn({
+            botId: readBotId(url, body), body, res, callerId, deviceId: deviceGrant?.deviceId, turnId: scopedTurnId,
+          });
+        }
         await finishProviderChat(decodeURIComponent(scopedChatMatch[1]), body ?? {}, res, callerId, scopedTurnId);
         return;
       }
@@ -5347,6 +5452,7 @@ export async function createGate(config = {}) {
       locate: locateCallThread,
       approvals: environmentService.approvals,
     }),
+    allowSpeculativeTurns: false,
     // A turn whose phone went away runs to the end and its reply is pushed, the
     // same notice a completed chat turn gets: the words are already in the
     // thread, and this is how they reach a phone that is not on the call.
@@ -5400,6 +5506,7 @@ export async function createGate(config = {}) {
       });
     },
     async close() {
+      environmentService.approvals.close();
       await routineRegistry.stopAll();
       // A coalesced index write must not be lost to a restart: a delete the
       // operator just made would otherwise live only in this process, and the

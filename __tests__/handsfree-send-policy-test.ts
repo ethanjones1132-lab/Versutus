@@ -61,7 +61,12 @@ describe('the hands-free call send path', () => {
   });
 
   test('bypasses the slash-command dispatch entirely, so a heard slash is plain text', () => {
-    expect(callBlock).toContain('sendMessage(trimmed, options?.messageId, source)');
+    expect(callBlock).toContain([
+      'return sendMessage(trimmed, options?.messageId, source, undefined, {',
+      '          onVoiceApproval: options?.onVoiceApproval,',
+      '          signal: options?.signal,',
+      '        });',
+    ].join('\n'));
     expect(callBlock).not.toContain('isSlashCommandInput');
   });
 

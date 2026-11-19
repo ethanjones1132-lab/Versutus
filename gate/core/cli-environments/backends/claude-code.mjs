@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { spawnCommand } from '../adapters/shared.mjs';
 import { scanAgentDirs } from '../claude-agents.mjs';
 import { createWindowsJob } from '../windows-job.mjs';
+import { isPermissionBridge } from '../claude-permissions.mjs';
+import { TAP_GATED_VOICE_TOOLS } from '../../voice/voice-turn-policy.mjs';
 
 /**
  * Claude Code as a chat backend.
@@ -58,6 +60,8 @@ const PERMISSION_TOOL_PATH = fileURLToPath(new URL('../claude-permission-tool.mj
 /** The MCP server name and tool the CLI is told to call for a ruling. */
 const PERMISSION_SERVER_NAME = 'gate-permissions';
 const PERMISSION_PROMPT_TOOL = `mcp__${PERMISSION_SERVER_NAME}__approve`;
+const CLAUDE_VOICE_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell'];
+export const CLAUDE_VOICE_NOTICE = 'This PC’s managed Claude settings can approve actions without asking, if configured. Use typed chat for other tools.';
 
 /** Map a transcript entry onto the app's message shape. */
 export function toGatewayMessage(entry) {
@@ -275,7 +279,10 @@ export function createClaudeCodeBackend({
    * view that mutated shared state would silently change the next turn taken
    * by anyone else.
    */
-  async function sendTurn(sessionId, { text, model, signal, agent, source, voicePermissionUrl } = {}, onEvent) {
+  async function sendTurn(sessionId, { text, model, signal, agent, source, voicePermission, voiceAgent } = {}, onEvent) {
+    if (source === 'voice' && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(sessionId)) {
+      throw new Error('Claude Code needs a valid conversation ID for this call.');
+    }
     const args = [
       '--print',
       '--output-format', 'stream-json',
@@ -286,9 +293,26 @@ export function createClaudeCodeBackend({
     ];
     // `--agent` selects the Claude Code agent for this turn; without it the
     // CLI runs as its default one, which is the built-in Bot.
-    if (agent) args.push('--agent', agent);
-    const chosen = model?.modelId ?? defaultModel;
-    if (chosen) args.push('--model', chosen);
+    if (agent && source !== 'voice') args.push('--agent', agent);
+    if (source === 'voice') {
+      // Restricted mode loads only flag and managed settings. Explicit `--tools`
+      // is required to re-enable shell in this mode. Do not load arbitrary
+      // agent frontmatter, hooks, plug-ins, or user/project MCP servers.
+      // https://code.claude.com/docs/en/cli-reference
+      args.push('--restricted', '--strict-mcp-config', '--no-chrome',
+        '--tools', CLAUDE_VOICE_TOOLS.join(','),
+        '--settings', JSON.stringify({
+          autoMemoryEnabled: false,
+          sandbox: { autoAllowBashIfSandboxed: false },
+          permissions: { ask: ['*'] },
+        }));
+      if (voiceAgent) args.push(`--append-system-prompt=${voiceAgent.prompt}`);
+    }
+    const chosen = model?.modelId ?? voiceAgent?.model ?? defaultModel;
+    if (chosen) {
+      if (source === 'voice') args.push(`--model=${chosen}`);
+      else args.push('--model', chosen);
+    }
     // Without a bridge the argv is exactly what it was before approvals
     // existed: no MCP server, no permission prompt tool, the CLI's own prompt.
     if (permissionBridge) {
@@ -302,8 +326,8 @@ export function createClaudeCodeBackend({
               command: process.execPath,
               args: [PERMISSION_TOOL_PATH],
               env: {
-                GATE_PERMISSION_URL: voicePermissionUrl ?? permissionBridge.url,
-                GATE_PERMISSION_SECRET: permissionBridge.secret,
+                 GATE_PERMISSION_URL: voicePermission?.url ?? permissionBridge.url,
+                 GATE_PERMISSION_SECRET: voicePermission?.secret ?? permissionBridge.secret,
               },
             },
           },
@@ -311,6 +335,7 @@ export function createClaudeCodeBackend({
         '--permission-prompt-tool', PERMISSION_PROMPT_TOOL,
       );
     }
+    if (source === 'voice') args.push('--');
     args.push(text ?? '');
 
     const { command, prefix } = spawnCommand(executablePath);
@@ -503,14 +528,14 @@ export function createClaudeCodeBackend({
 
   async function sendWithApprovals(sessionId, opts, onEvent) {
     const voice = opts.source === 'voice' ? permissionBridge?.registerVoiceTurn?.({
-      sessionId, deviceId: opts.voiceDeviceId,
+      sessionId, deviceId: opts.voiceDeviceId, botId: opts.botId ?? CLAUDE_CODE_BOT.id, signal: opts.signal,
       announce: (payload) => onEvent?.({ type: 'approval.required', payload }),
     }) : null;
     if (opts.source === 'voice' && !voice) {
       throw new Error('Claude Code could not open the approval channel for this call.');
     }
     try {
-      return await sendTurn(sessionId, { ...opts, voicePermissionUrl: voice?.url }, onEvent);
+      return await sendTurn(sessionId, { ...opts, voicePermission: voice }, onEvent);
     } finally {
       voice?.close();
     }
@@ -558,6 +583,8 @@ export function createClaudeCodeBackend({
 
   const backend = {
     kind: 'claude-code',
+    [TAP_GATED_VOICE_TOOLS]: isPermissionBridge(permissionBridge),
+    voiceNotice: CLAUDE_VOICE_NOTICE,
 
     async listSessions(limit = 50) {
       const files = await transcripts();
@@ -762,7 +789,15 @@ export function createClaudeCodeBackend({
       return {
         ...backend,
         bot: botId,
-        sendMessage: (sessionId, opts = {}, onEvent) => sendWithApprovals(sessionId, { ...opts, agent: agent.name }, onEvent),
+        async sendMessage(sessionId, opts = {}, onEvent) {
+          let voiceAgent;
+          if (opts.source === 'voice') {
+            const source = await readFile(agent.path, 'utf8');
+            const frontmatter = /^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
+            voiceAgent = { prompt: source.replace(frontmatter, ''), model: agent.model === 'inherit' ? undefined : agent.model };
+          }
+          return sendWithApprovals(sessionId, { ...opts, agent: agent.name, botId, voiceAgent }, onEvent);
+        },
       };
     },
   };

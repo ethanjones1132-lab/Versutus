@@ -6,6 +6,7 @@ import {
   type RoutineScope,
 } from '@/lib/gateway/activity-feed';
 import type { PublicBot } from '@/lib/gateway/bots';
+import { VOICE_POLICY_REQUIRED } from '@/lib/gateway/chat-input-source';
 import type { ChatContentPart } from '@/lib/gateway/chat-parts';
 import type { CronJob, CronRun, CronTurn } from '@/lib/gateway/cron';
 import type { BotGroupRoom, GroupReply, GroupTranscriptEntry, GroupTurnError } from '@/lib/gateway/groups';
@@ -565,11 +566,13 @@ export class ManifestClient implements PortalClient {
       model?: string;
       /** Owning provider, when known — disambiguates a model id declared by more than one. */
       providerId?: string;
+      source?: 'voice';
       sessionId?: string;
       signal?: AbortSignal;
       onToolCall?: (tool: import('@/lib/gateway/types').ChatToolCall) => void;
       onReasoning?: (text: string) => void;
       onTelemetryWarning?: (message: string) => void;
+      onVoiceApproval?: (approval: import('@/lib/voice/voice-stream-protocol').VoiceApprovalFrame) => void;
       /** Which model actually served the turn, once the Gate reports it. */
       onModelReport?: (report: import('@/lib/gateway/run-failures').ModelReport) => void;
       /** The turn id sent with the request, so a cancel can name it. */
@@ -586,6 +589,7 @@ export class ManifestClient implements PortalClient {
       onSession?: (sessionId: string) => void;
     },
   ): Promise<string> {
+    if (options?.source === 'voice') this.requireVoiceTurnPolicy();
     const path = this.requireEndpoint('chat');
     const backendId = this.backendId;
     const model = options?.model || this.defaultModelId();
@@ -593,12 +597,13 @@ export class ManifestClient implements PortalClient {
     // one does not need the app to have picked a model first. When the Gate
     // advertises backends but none was chosen, the turn goes unpinned and the
     // Gate resolves the environment — the backend still owns its default.
-    if (!model && !backendId && this.backends.length === 0) {
+    if (!model && !backendId && this.backends.length === 0 && options?.source !== 'voice') {
       throw new Error(
         `${this.identity.kindLabel} has no model selected and advertises none. Pick a model or configure a provider.`,
       );
     }
     const body: Record<string, unknown> = { messages, stream: true };
+    if (options?.source === 'voice') body.source = 'voice';
     if (model) body.model = model;
     const sentSessionId = options?.sessionId ?? this.currentSessionId;
     if (backendId || this.botId) {
@@ -614,6 +619,7 @@ export class ManifestClient implements PortalClient {
       // outright, so this only applies to the provider-routed path.
       body.providerId = options.providerId;
     }
+    if (options?.source === 'voice' && sentSessionId) body.sessionId = sentSessionId;
 
     // Named before the request so a caller can cancel the turn even if the
     // POST itself never lands. The Gate correlates the streamed chat with this
@@ -684,6 +690,7 @@ export class ManifestClient implements PortalClient {
           onToolCall: options?.onToolCall,
           onReasoning: options?.onReasoning,
           onTelemetryWarning: options?.onTelemetryWarning,
+          onVoiceApproval: options?.source === 'voice' ? options.onVoiceApproval : undefined,
           // The model asked for is what this send requested, so a report that
           // names only what ran still says what it was instead of.
           onModelReport: options?.onModelReport
@@ -1322,6 +1329,7 @@ export class ManifestClient implements PortalClient {
     params: Record<string, unknown> = {},
     options: { timeoutMs?: number } = {},
   ): Promise<T> {
+    if (method === 'voice.session.start') this.requireVoiceTurnPolicy();
     const path = this.endpoints.capabilitiesRpc;
     if (!path) {
       throw new Error(
@@ -1347,6 +1355,13 @@ export class ManifestClient implements PortalClient {
       );
     }
     return body?.result as T;
+  }
+
+  private requireVoiceTurnPolicy(): void {
+    const manifest = this.identity.manifest;
+    if (manifest?.kind !== 'versutus-gate' || manifest.voiceTurnPolicy !== 'per-tool-tap-v1') {
+      throw new GatewayRpcError(VOICE_POLICY_REQUIRED, 'voice_approval_policy_unavailable');
+    }
   }
 
   /**

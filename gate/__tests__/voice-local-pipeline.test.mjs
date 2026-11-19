@@ -7,6 +7,8 @@ import { WebSocket } from 'ws';
 
 import { VOICE_STREAM_PATH, attachVoiceMediaSocket } from '../core/voice/media-socket.mjs';
 import { VoiceSessionRegistry } from '../core/voice/voice-rpc.mjs';
+import { ApprovalService } from '../core/cli-environments/approvals.mjs';
+import { mirrorVoiceApprovals } from '../core/voice/voice-approvals.mjs';
 
 class FakeEngine extends EventEmitter {
   constructor({ autoDone = true } = {}) {
@@ -136,6 +138,64 @@ test('a final runs the Bot turn and speaks its sentences', async () => {
   ws.close();
   await once(ws, 'close');
   await media.close();
+});
+
+test('a pending voice approval speaks once, then its deadline speaks Denied, no answer', async (t) => {
+  const approvals = new ApprovalService();
+  const decisions = [];
+  const raw = 'edit **[draft](https://example.test/draft)** with token=fixture-only-secret';
+  const safe = 'edit **[draft](https://example.test/draft)** with token=[redacted]';
+  const media = await startMedia({
+    runTurn: async (session, _text, { signal, onApproval, onDelta }) => {
+      const mirror = mirrorVoiceApprovals({
+        approvals, deviceId: session.deviceId, timeoutMs: 50, signal,
+        onApproval(event) {
+          onApproval(event);
+          onApproval(event); // Both the pending and the terminal event are replayable.
+        },
+      });
+      try {
+        await new Promise((resolve) => {
+          mirror.open({
+            key: 'write-1',
+            summary: raw,
+            async reply(approved) { decisions.push(approved); resolve(); },
+          });
+        });
+        onDelta('Done.');
+        return { hasContent: true };
+      } finally {
+        mirror.close();
+      }
+    },
+  });
+  const { ws, frames, binary } = connect(media.port);
+  t.after(async () => {
+    ws.terminate();
+    await media.close();
+  });
+  await once(ws, 'open');
+  await waitUntil(() => frames.some((frame) => frame.t === 'ready'));
+  ws.send(Buffer.from([0, 0]));
+  await waitUntil(() => frames.some((frame) => frame.t === 'turn' && frame.state === 'done')
+    && frames.some((frame) => frame.t === 'speech' && frame.state === 'end'));
+
+  const cards = frames.filter((frame) => frame.t === 'approval');
+  assert.deepEqual(cards.map(({ state, summary }) => ({ state, summary })), [
+    { state: 'pending', summary: safe },
+    { state: 'expired', summary: safe },
+  ]);
+  assert.equal(cards[0].approvalId, cards[1].approvalId);
+  assert.equal(approvals.get(cards[0].approvalId), null);
+  assert.deepEqual(decisions, [false]);
+  assert.deepEqual(media.engine.spoken.map(({ text }) => text), [
+    `Jarvis wants to ${safe}. Tap Approve or Deny on your phone.`,
+    'Denied, no answer',
+    'Done.',
+  ]);
+  assert.equal(new Set(media.engine.spoken.map(({ gen }) => gen)).size, 1);
+  assert.deepEqual(frames.filter((frame) => frame.t === 'reply').map(({ delta }) => delta), ['Done.']);
+  assert.ok(binary() >= 3, 'pending, expiry and reply use the existing audio stream');
 });
 
 test('the engine hearing speech cancels the live generation', async () => {

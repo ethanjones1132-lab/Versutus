@@ -28,15 +28,20 @@ export function spawnCommand(executablePath) {
  * exit code -- callers that need a verdict (probeVersion) judge `code`
  * themselves -- and rejects only on spawn failure or timeout.
  */
-export async function runCli(executablePath, args, { timeoutMs = 5000, spawnImpl = spawn } = {}) {
+export async function runCli(executablePath, args, { timeoutMs = 5000, spawnImpl = spawn, input, signal } = {}) {
   // executablePath is a single literal filesystem path: spawnCommand/spawn use
   // it unsplit, so the existence check must too. Splitting on spaces rejected
   // valid `C:\Program Files\...` (or `/usr/local/...`) binaries as not runnable.
   await access(executablePath);
+  signal?.throwIfAborted();
   const { command, prefix } = spawnCommand(executablePath);
   return new Promise((resolve, reject) => {
     // stdin is never written; an open pipe would park a CLI that reads to EOF.
-    const child = spawnImpl(command, [...prefix, ...args], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawnImpl(command, [...prefix, ...args], {
+      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+      ...(signal ? { signal } : {}),
+    });
     const stdout = [];
     const stderr = [];
     const timer = setTimeout(() => {
@@ -57,6 +62,10 @@ export async function runCli(executablePath, args, { timeoutMs = 5000, spawnImpl
         stderr: Buffer.concat(stderr).toString('utf8').trim(),
       });
     });
+    if (input !== undefined) {
+      child.stdin.on('error', () => { /* child exit is the authoritative result */ });
+      child.stdin.end(input);
+    }
   });
 }
 
