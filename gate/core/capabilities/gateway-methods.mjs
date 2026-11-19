@@ -4,6 +4,7 @@ import {
   toCronJobView,
   toCronTurn,
 } from '../cron-view.mjs';
+import { visibleVoiceHandoffMessage } from '../voice/handoff.mjs';
 
 /**
  * Hermes-dialect RPC methods, answered by the Gate itself.
@@ -496,7 +497,7 @@ export function createGatewayMethods({
       if (!sessionId) throw new Error('sessionId is required');
       return via(getBackend, params, 'listMessages', async (b) => ({
         object: 'list',
-        data: await b.listMessages(String(sessionId), Number(params?.limit) || undefined),
+        data: (await b.listMessages(String(sessionId), Number(params?.limit) || undefined)).map(visibleVoiceHandoffMessage),
       }));
     },
 

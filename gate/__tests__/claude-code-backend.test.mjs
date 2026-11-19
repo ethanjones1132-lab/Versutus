@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
+import { createVoiceHandoff } from '../core/voice/handoff.mjs';
 
 import {
   createClaudeCodeBackend,
@@ -203,6 +204,34 @@ test('a turn binds the session id and assembles the reply', async () => {
   assert.ok(args.includes('--include-partial-messages'));
   // Approval bypass flags are prohibited (ADR 0002/0003).
   assert.ok(!args.some((a) => /dangerously|bypassPermissions|dontAsk/i.test(a)), 'must never bypass permissions');
+});
+
+test('Claude Code delivers a pending voice handoff into the original typed transcript with --resume', async () => {
+  const { home, cwd } = await makeHome([]);
+  const launches = [];
+  const backend = createClaudeCodeBackend({
+    claudeHome: home, cwd, executablePath: 'claude.exe',
+    spawnImpl: (_cmd, argv) => {
+      launches.push(argv);
+      return fakeChild([{ type: 'result', subtype: 'success', result: 'claude ok' }]);
+    },
+  });
+  const handoff = createVoiceHandoff({ gateHome: home });
+  const scope = { backend, environmentId: 'claude', sessionId: SESSION_ID };
+  await handoff.commit(scope, { user: 'voice question', assistant: 'voice answer' });
+  const send = (text, includesHandoff) => backend.sendMessage(SESSION_ID, { text, includesHandoff });
+  const succeeded = (result) => result.text === 'claude ok';
+  assert.equal((await handoff.sendTyped(scope, 'typed question', send, succeeded)).text, 'claude ok');
+  const [continued] = launches;
+  assert.equal(continued[continued.indexOf('--resume') + 1], SESSION_ID);
+  assert.ok(!continued.includes('--session-id'));
+  assert.ok(!continued.includes('--no-session-persistence'));
+  assert.match(continued.at(-1), /voice question[\s\S]+voice answer[\s\S]+typed question$/);
+  await handoff.sendTyped(scope, 'ordinary', send, succeeded);
+  const [, ordinary] = launches;
+  assert.equal(ordinary[ordinary.indexOf('--session-id') + 1], SESSION_ID);
+  assert.ok(!ordinary.includes('--resume'));
+  assert.equal(ordinary.at(-1), 'ordinary');
 });
 
 test('partial text reaches the callback once without a duplicate whole assistant message', async () => {

@@ -1192,11 +1192,9 @@ export function attachVoiceMediaSocket({
         } else {
           deliver({ type: 'replyDone' });
         }
-        // The phone is gone and the turn ran to the end anyway. The reply is
-        // already in the thread — a voice turn runs through the same backend
-        // session as the thread's typed ones — so the push is how the words
-        // reach a phone that is not on the call, and it is sent once, for the
-        // one turn that completed.
+        // The phone is gone and the turn ran to the end anyway. Continuity
+        // handles the isolated exchange separately; the push reaches the
+        // phone that is not on the call, once for the turn that completed.
         if (parkingTurn && said.trim()) {
           notifyPush?.({
             trigger: 'final-response',

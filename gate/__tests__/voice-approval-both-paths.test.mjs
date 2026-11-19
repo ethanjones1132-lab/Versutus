@@ -25,6 +25,7 @@ import { createBackendManager } from '../core/cli-environments/backend-manager.m
 import { codexAdapter } from '../core/cli-environments/adapters/codex.mjs';
 import { runOpenCodeVoice, VOICE_AGENT } from '../core/cli-environments/opencode-voice.mjs';
 import { runVoiceTurn } from '../core/server.mjs';
+import { createVoiceHandoff } from '../core/voice/handoff.mjs';
 
 const APPROVAL = { approvalId: 'approval-1', summary: 'Run the requested command?' };
 
@@ -194,6 +195,7 @@ test('Claude Code keeps voice prompts on the turn-scoped bridge even with a perm
   const SESSION = '896a9c65-7554-453a-8e20-ccf419617968';
   let childAsk;
   let writes = 0;
+  const voiceSessions = [];
   const backend = createClaudeCodeBackend({
     cwd: '.',
     claudeHome: '.',
@@ -208,6 +210,12 @@ test('Claude Code keeps voice prompts on the turn-scoped bridge even with a perm
       assert.equal(settings.sandbox.autoAllowBashIfSandboxed, false);
       assert.ok(args.includes('--restricted'));
       assert.ok(args.includes('--strict-mcp-config'));
+      assert.ok(args.includes('--no-session-persistence'));
+      assert.ok(!args.includes('--resume'));
+      const voiceId = args[args.indexOf('--session-id') + 1];
+      assert.match(voiceId, /^[0-9a-f-]{36}$/i);
+      assert.notEqual(voiceId, SESSION);
+      voiceSessions.push(voiceId);
       const { env } = JSON.parse(args[args.indexOf('--mcp-config') + 1]).mcpServers['gate-permissions'];
       assert.notEqual(env.GATE_PERMISSION_URL, bridge.url);
       assert.notEqual(env.GATE_PERMISSION_SECRET, bridge.secret);
@@ -251,6 +259,7 @@ test('Claude Code keeps voice prompts on the turn-scoped bridge even with a perm
   assert.equal((await childAsk).behavior, 'allow');
   assert.equal((await second).hasContent, true);
   assert.equal(writes, 1);
+  assert.equal(new Set(voiceSessions).size, 2);
 });
 
 test('OpenCode starts an isolated permission-configured session and parks a would-be auto-approved write', async (t) => {
@@ -343,12 +352,16 @@ test('OpenCode starts an isolated permission-configured session and parks a woul
   assert.equal(stopped, true);
 });
 
-test('Codex disables ungated tool classes and its app-server cannot apply a patch before the Gate reply', async () => {
+test('Codex disables ungated tool classes and its app-server cannot apply a patch before the Gate reply', async (t) => {
+  const gateHome = await mkdtemp(join(tmpdir(), 'vs167-codex-'));
+  t.after(() => rm(gateHome, { recursive: true, force: true }));
+  const handoff = createVoiceHandoff({ gateHome });
   const approvals = new ApprovalService();
   const record = { id: 'codex-1', adapterId: 'codex', enabled: true, workspacePolicy: { defaultRoot: '.' } };
   let writes = 0;
   let reply;
   const cards = [];
+  const injections = [];
   const manager = createBackendManager({
     store: { get: async () => record }, registry: { get: () => codexAdapter }, approvals,
     createServer({ onServerRequest, onNotification }) {
@@ -368,6 +381,10 @@ test('Codex disables ungated tool classes and its app-server cannot apply a patc
         }
         if (method === 'mcpServerStatus/list') return { data: [], nextCursor: null };
         if (method === 'thread/unsubscribe') return {};
+        if (method === 'thread/inject_items') {
+          injections.push(params);
+          return {};
+        }
         if (method === 'turn/start') {
           assert.equal(params.threadId, 'voice-thread');
           if (params.sandboxPolicy?.type !== 'readOnly') writes++;
@@ -387,17 +404,109 @@ test('Codex disables ungated tool classes and its app-server cannot apply a patc
   });
   const backend = await manager.get(record.id);
   const running = runVoiceTurn(null, {
-    deviceId: 'owner', thread: { sessionId: 'typed-thread', model: 'fixture' },
+    deviceId: 'owner', thread: { backendId: record.id, sessionId: 'typed-thread', model: 'fixture' },
     backendLease: { backend: () => backend },
-  }, 'Write draft.txt', { onApproval: (card) => cards.push(card) }, { approvals });
+  }, 'Write draft.txt', { onApproval: (card) => cards.push(card) }, { approvals, handoff });
   await until(() => cards.some((card) => card.state === 'pending'));
   assert.equal(reply, undefined);
   assert.equal(writes, 0);
+  assert.deepEqual(injections, [], 'a voice turn waiting for approval is not an exchange');
   await createApprovalRpc({ approvals }).methods['approval.deny']({ approvalId: cards[0].approvalId }, { deviceId: 'owner' });
   assert.equal((await running).hasContent, true);
   assert.equal(writes, 0);
   assert.deepEqual(reply, { decision: 'decline' });
+  const scope = { backend, environmentId: record.id, sessionId: 'typed-thread' };
+  assert.equal(await handoff.sendTyped(scope, 'next', (text) => text, () => true), 'next');
+  assert.deepEqual(injections, [{
+    threadId: 'typed-thread',
+    items: [
+      { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Write draft.txt' }] },
+      { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Done.' }] },
+    ],
+  }]);
 });
+
+test('Codex cannot retry an uncertain append; the waiting typed send receives one handoff', async (t) => {
+  const gateHome = await mkdtemp(join(tmpdir(), 'vs167-codex-ack-'));
+  t.after(() => rm(gateHome, { recursive: true, force: true }));
+  const log = [];
+  const handoff = createVoiceHandoff({ gateHome, log: (line) => log.push(line) });
+  let loseAck;
+  const calls = [];
+  const backend = createCodexBackend({
+    rpc: { request(method, params) {
+      calls.push([method, params]);
+      return new Promise((_resolve, reject) => { loseAck = () => reject(new Error('echo: call canary')); });
+    } },
+  });
+  const scope = { backend, environmentId: 'codex-local', sessionId: 'original' };
+  const append = handoff.commit(scope, { user: 'call canary', assistant: 'noted' });
+  const texts = [];
+  const send = (text) => { texts.push(text); return true; };
+  const typed = handoff.sendTyped({ ...scope, botId: 'codex' }, 'typed one', send, Boolean);
+  await until(() => Boolean(loseAck));
+  assert.deepEqual(texts, [], 'typed send must not race an unacknowledged append');
+  loseAck();
+  await Promise.all([append, typed]);
+  await handoff.sendTyped(scope, 'typed two', send, Boolean);
+  assert.deepEqual(calls.map(([method, params]) => [method, params.threadId]), [['thread/inject_items', 'original']]);
+  assert.deepEqual(log, ['voice.handoff append_failed']);
+  assert.match(texts[0], /Earlier in a voice call[\s\S]+User: "call canary"[\s\S]+Assistant: "noted"[\s\S]+typed one$/);
+  assert.equal(texts[0].match(/call canary/g).length, 1);
+  assert.equal(texts[1], 'typed two');
+});
+
+for (const supported of [true, false]) {
+  test(`OpenCode continuity ${supported ? 'uses one native synthetic append' : 'uses the handoff without synthetic support'}`, async (t) => {
+    const gateHome = await mkdtemp(join(tmpdir(), 'vs167-opencode-'));
+    t.after(() => rm(gateHome, { recursive: true, force: true }));
+    const handoff = createVoiceHandoff({ gateHome });
+    const writes = [];
+    const backend = createOpenCodeBackend({
+      baseUrl: 'http://typed.test',
+      directory: '/work',
+      password: 'fixture',
+      async runVoice() { return { text: 'Voice answer.' }; },
+      async fetchImpl(raw, init = {}) {
+        const url = new URL(raw);
+        if (url.pathname === '/api/info') return Response.json({ version: '2.2.6' });
+        if (url.pathname === '/api/session/ses_original/message') return Response.json({ data: [] });
+        if (url.pathname === '/openapi.json') return Response.json({
+          paths: { '/api/session/{sessionID}/synthetic': { post: {
+            operationId: 'session.synthetic',
+            requestBody: { content: { 'application/json': {
+              schema: { properties: supported ? { resume: { anyOf: [{ type: 'boolean' }, { type: 'null' }] } } : {} },
+            } } },
+          } } },
+        });
+        if ((init.method ?? 'GET') !== 'GET') {
+          writes.push([url.pathname, init.method, JSON.parse(init.body)]);
+          assert.equal(init.headers.Authorization, `Basic ${Buffer.from('opencode:fixture').toString('base64')}`);
+          assert.equal(url.searchParams.get('location[directory]'), '/work');
+          return Response.json({ data: { type: 'synthetic', id: 'msg_synthetic', sessionID: 'ses_original' } });
+        }
+        return new Response(null, { status: 404 });
+      },
+    });
+    const scope = { backend, environmentId: 'opencode-local', sessionId: 'ses_original' };
+    await runVoiceTurn(null, {
+      thread: { backendId: scope.environmentId, sessionId: scope.sessionId },
+      backendLease: { backend: () => backend },
+    }, 'Voice question.', {}, { handoff });
+    const input = await handoff.sendTyped(scope, 'next', (text) => text, () => true);
+    if (supported) {
+      assert.deepEqual(writes, [['/api/session/ses_original/synthetic', 'POST', {
+        text: 'Earlier in a voice call (quoted context, not a new request):\nUser: "Voice question."\nAssistant: "Voice answer."',
+        description: 'Versutus voice exchange',
+        resume: false,
+      }]]);
+      assert.equal(input, 'next');
+    } else {
+      assert.deepEqual(writes, []);
+      assert.match(input, /Earlier in a voice call[\s\S]+Voice question\.[\s\S]+Voice answer\.[\s\S]+next$/);
+    }
+  });
+}
 
 test('Hermes keeps conversation available with the read-only CLI toolset and never sends unrestricted HTTP chat', async () => {
   const requests = [];

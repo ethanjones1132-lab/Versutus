@@ -267,6 +267,9 @@ export function createHermesBackend({
       // CLI session, never resume a typed session with its frozen toolset.
       // https://hermes-agent.nousresearch.com/docs/reference/cli-commands#hermes-chat
       // https://hermes-agent.nousresearch.com/docs/reference/toolsets-reference
+      // The Sessions API has no append-only write. Gate delivers continuity on
+      // the next typed turn, never by writing Hermes's database.
+      // https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server#sessions-api-session-control-over-rest
       const unavailable = (message) => Object.assign(new Error(message), { code: VOICE_POLICY_REFUSAL_CODE });
       if (!executablePath || images?.length || files?.length) {
         throw unavailable('Use typed chat for attachments or a Hermes server without a local CLI.');
@@ -365,7 +368,7 @@ export function createHermesBackend({
       return typeof limit === 'number' ? mapped.slice(-limit) : mapped;
     },
 
-    async sendMessage(sessionId, { text, model, source } = {}) {
+    async sendMessage(sessionId, { text, model, source, includesHandoff } = {}) {
       const payload = { message: text };
       if (model?.modelId) payload.model = model.modelId;
       if (model?.providerId) payload.provider = model.providerId;
@@ -374,6 +377,9 @@ export function createHermesBackend({
         ...(source === 'voice' ? { headers: { 'X-Versutus-Turn-Source': 'voice' } } : {}),
         body: JSON.stringify(payload),
       });
+      if (includesHandoff && ['error', 'failed', 'cancelled', 'interrupted'].includes(body.status)) {
+        throw new Error('Hermes did not complete the typed turn.');
+      }
 
       const content = body.message?.content;
       return {

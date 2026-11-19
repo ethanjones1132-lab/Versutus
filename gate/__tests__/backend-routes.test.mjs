@@ -1,6 +1,6 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, copyFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, copyFile, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { createGate, runVoiceTurn } from '../core/server.mjs';
 import { DeviceTokenStore } from '../core/device-tokens.mjs';
 import { TAP_GATED_VOICE_TOOLS } from '../core/voice/voice-turn-policy.mjs';
+import { createHermesBackend } from '../core/cli-environments/backends/hermes.mjs';
 
 const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
 const roots = [];
@@ -205,7 +206,7 @@ async function makeGate({ calls = [], provider, registry, terminalSessions, envi
     paired[deviceId] = await deviceTokens.issue(deviceId, { role: 'operator', scopes: ['operator.read'] });
   }
 
-  const gate = await createGate({
+  const startGate = () => createGate({
     root,
     port: 0,
     gateHome,
@@ -220,7 +221,7 @@ async function makeGate({ calls = [], provider, registry, terminalSessions, envi
     ...(pushFetch ? { pushFetch } : {}),
     ...(gateOptions ? { ...gateOptions } : {}),
   });
-  return { gate, calls, paired };
+  return { gate: await startGate(), gateHome, startGate, calls, paired };
 }
 
 function auth(gate) {
@@ -369,6 +370,87 @@ test('phone voice chat is refused before dispatch, while typed chat still execut
     assert.deepEqual(calls.filter((call) => call.startsWith('sendMessage')), ['sendMessage:ses_1']);
   } finally {
     await gate.close();
+  }
+});
+
+test('a completed Hermes phone exchange survives a Gate restart and reaches one successful typed send', async () => {
+  const registry = stubRegistry([]);
+  const bodies = [];
+  let rejectTyped = true;
+  let storedText = null;
+  let voiceSends = 0;
+  registry.get('stubcli').createBackend = () => createHermesBackend({
+    baseUrl: 'http://hermes.test',
+    executablePath: 'hermes',
+    async runCliImpl(_name, args, { input }) {
+      assert.ok(args.includes('--safe-mode'));
+      assert.ok(!args.includes('--resume'));
+      assert.match(input, /spoken canary/);
+      voiceSends++;
+      return { code: 0, stdout: 'answer canary' };
+    },
+    async fetchImpl(raw, init = {}) {
+      const path = new URL(raw).pathname;
+      if (path === '/api/sessions/ses_1/messages') {
+        return Response.json({ data: storedText === null ? [] : [{ id: 'u1', role: 'user', content: storedText }] });
+      }
+      if (path !== '/v1/chat/completions') return new Response(null, { status: 404 });
+      assert.equal(init.headers['X-Hermes-Session-Id'], 'ses_1');
+      assert.equal(init.headers['X-Versutus-Turn-Source'], undefined);
+      bodies.push(init.body);
+      if (rejectTyped) {
+        rejectTyped = false;
+        return new Response(`data: ${JSON.stringify({ choices: [{ finish_reason: 'error' }], error: { message: init.body } })}\n\n`);
+      }
+      storedText = JSON.parse(init.body).messages[0].content;
+      return new Response('data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n');
+    },
+  });
+  const { gate, gateHome, startGate } = await makeGate({ registry });
+  const chat = (active, content, source) => fetch(`http://127.0.0.1:${active.port}/v1/chat/completions`, {
+    method: 'POST',
+    headers: auth(active),
+    body: JSON.stringify({
+      messages: [{ role: 'user', content }], backendId: 'stub-local', sessionId: 'ses_1',
+      model: 'nous/model', stream: true, ...(source ? { source } : {}),
+    }),
+  });
+  try {
+    const response = await chat(gate, 'spoken canary', 'voice');
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /answer canary/);
+    assert.equal(voiceSends, 1);
+    assert.deepEqual(bodies, [], 'the call must not write through the typed backend');
+  } finally {
+    await gate.close();
+  }
+  const directory = join(gateHome, 'voice', 'handoff');
+  assert.equal((await readdir(directory)).length, 1);
+
+  const restarted = await startGate();
+  try {
+    const failed = await (await chat(restarted, 'first typed')).text();
+    assert.match(failed, /could not complete/);
+    assert.doesNotMatch(failed, /spoken canary|answer canary/);
+    assert.equal((await readdir(directory)).length, 1, 'a refused turn does not consume the handoff');
+
+    assert.match(await (await chat(restarted, 'typed now')).text(), /"content":"ok"/);
+    for (const body of bodies) assert.match(body, /Earlier in a voice call/);
+    assert.match(storedText, /User: "spoken canary"[\s\S]+Assistant: "answer canary"[\s\S]+typed now$/);
+    assert.doesNotMatch(storedText, /Use typed chat/);
+    assert.deepEqual(await readdir(directory), []);
+
+    const history = await fetch(`http://127.0.0.1:${restarted.port}/v1/sessions/ses_1/messages?backendId=stub-local`, {
+      headers: auth(restarted),
+    });
+    assert.equal(history.status, 200);
+    assert.deepEqual((await history.json()).data[0].content, [{ type: 'text', text: 'typed now' }]);
+
+    await (await chat(restarted, 'typed again')).text();
+    assert.equal(bodies.length, 3);
+    assert.equal(bodies[2], '{"model":"model","provider":"nous","messages":[{"role":"user","content":"typed again"}],"stream":true}');
+  } finally {
+    await restarted.close();
   }
 });
 

@@ -10,6 +10,7 @@
  */
 
 import { restrictedVoicePrompt, TAP_GATED_VOICE_TOOLS, VOICE_POLICY_REFUSAL_CODE, VOICE_TYPED_TOOLS } from '../../voice/voice-turn-policy.mjs';
+import { createThreadQueue } from '../../voice/handoff.mjs';
 
 const APPROVAL_METHODS = new Set([
   'execCommandApproval',
@@ -191,6 +192,11 @@ function unknownBot(id) {
  */
 export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVoiceThread, turnTimeoutMs = TURN_TIMEOUT_MS } = {}) {
   const threadTurns = new Map();
+  // Sends share the thread until an inject needs exclusive access. Track the
+  // adapter's send, not the SSE relay: cancellation can end the relay before
+  // the adapter has finished interrupting the turn.
+  const nativeWrites = createThreadQueue();
+  const trackSend = (send) => (sessionId, options) => nativeWrites.runShared(sessionId, () => send(sessionId, options));
 
   /** What a stopped turn rejects with: a cancellation, not a failed run. */
   function stoppedTurn() {
@@ -205,13 +211,12 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVo
    * as notifications. Callers that want a complete answer (non-streaming chat)
    * need the turn awaited, so collect deltas until the terminal event.
    *
-   * Three ways out, all of which release the subscription: the terminal event,
-   * the turn's own bound, and the caller's signal — without which a Stop ended
-   * the phone's turn and left the app-server working into a bus nobody was
-   * reading for the rest of these three minutes.
+   * Terminal events, the idle bound, caller cancellation, and a failed start
+   * all release the subscription. Stop must not leave the app-server working
+   * into a bus nobody is reading for the rest of these three minutes.
    *
-   * The bound is an *idle* bound. Any notification the app-server emits for
-   * this thread is a sign of life and restarts it — a turn past three minutes
+   * The bound is an *idle* bound. Activity for this turn (or its thread as
+   * a whole) is a sign of life and restarts it — a turn past three minutes
    * that is still streaming deltas, tool output or token usage is working, and
    * treating it as silent published a fragment as the answer. A tool item the
    * app-server has opened and not finished (`item/started` … `item/completed`)
@@ -220,10 +225,14 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVo
    * nothing while it waits for that ruling. The approval wait therefore never
    * spends the turn's budget; the budget starts again when the item closes.
    */
-  function awaitTurn(threadId, { timeoutMs = TURN_TIMEOUT_MS, signal } = {}) {
-    if (!subscribe) return Promise.resolve({ text: '', completed: false });
-    return new Promise((resolve) => {
+  function watchTurn(threadId, { timeoutMs = TURN_TIMEOUT_MS, signal, requireSuccess } = {}) {
+    if (!subscribe) return { settled: Promise.resolve({ text: '', completed: false }) };
+    let identify;
+    let close;
+    const settled = new Promise((resolve) => {
       let text = '';
+      let turnId;
+      let early = [];
       // Open tool items by call id. Empty means the turn is not demonstrably
       // working, so the idle bound is what decides whether it still is.
       const openItems = new Set();
@@ -231,7 +240,9 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVo
       let released = false;
       let unsubscribe;
       const release = () => {
+        if (released) return;
         released = true;
+        early = null;
         clearTimeout(timer);
         timer = null;
         signal?.removeEventListener('abort', onAbort);
@@ -245,6 +256,7 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVo
         release();
         resolve({ text, completed: false });
       };
+      close = expire;
       // Arm the idle bound from now — unless a tool is open, which is work in
       // progress whatever the clock says. `unref` keeps an idle bound from
       // holding the process open on its own.
@@ -260,13 +272,26 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVo
         release();
         resolve({ text, completed: false, aborted: true });
       };
-      unsubscribe = subscribe((message) => {
+      const handleMessage = (message) => {
         if (released) return;
         if (message?.params?.threadId && message.params.threadId !== threadId) return;
         if (message?.method === 'versutus/approval') return; // Gate only, not upstream turn activity
+        const eventTurnId = message?.params?.turnId ?? message?.params?.turn?.id;
+        // The bus is live before turn/start returns. Replay tagged events once
+        // we can tell this turn from a concurrent send on the same thread.
+        if (early && (eventTurnId || early.length)) {
+          early.push(message);
+          return;
+        }
+        if (turnId && eventTurnId && eventTurnId !== turnId) return;
         const event = normalizeCodexEvent(message);
         if (event?.type === 'message.delta') text += event.payload.text ?? '';
-        else if (event?.type === 'run.completed') { finish(); return; }
+        else if (event?.type === 'run.completed') {
+          const status = message.params?.turn?.status;
+          finish(requireSuccess && status && status !== 'completed'
+            ? { error: 'Codex did not complete the turn.' } : {});
+          return;
+        }
         else if (event?.type === 'run.failed') { finish({ error: event.payload.error }); return; }
         // Track the approval window: an item opened and not closed covers both
         // an executing command and a command waiting on the operator's ruling.
@@ -274,10 +299,19 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVo
         if (event?.type === 'tool.started') openItems.add(itemId ?? ANONYMOUS_ITEM);
         else if (event?.type === 'tool.output') openItems.delete(itemId ?? ANONYMOUS_ITEM);
         arm();
-      });
-      if (signal?.aborted) onAbort();
+      };
+      identify = (id) => {
+        turnId = id;
+        const buffered = early;
+        early = null;
+        for (const message of buffered ?? []) handleMessage(message);
+      };
+      unsubscribe = subscribe(handleMessage);
+      if (released) unsubscribe?.();
+      else if (signal?.aborted) onAbort();
       else { signal?.addEventListener('abort', onAbort, { once: true }); arm(); }
     });
+    return { settled, identify, close };
   }
 
   /** Stop the app-server's turn; nothing else in the Gate ever interrupts one. */
@@ -302,6 +336,29 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVo
     kind: 'codex',
     [TAP_GATED_VOICE_TOOLS]: typeof registerVoiceThread === 'function' && typeof subscribe === 'function',
     voiceNotice: VOICE_TYPED_TOOLS,
+
+    appendVoiceExchange(threadId, { user, assistant }) {
+      // https://learn.chatgpt.com/docs/app-server#inject-items-into-a-thread
+      // Wire shape (including assistant output_text):
+      // https://github.com/openai/codex/blob/main/codex-rs/app-server/tests/suite/v2/thread_inject_items.rs
+      // Raw Responses messages only. This call neither runs a turn nor changes
+      // its settings. If the original is unloaded, fall back rather than
+      // resuming it from voice (resume can initialize the regular MCP servers).
+      return nativeWrites.run(threadId, async () => {
+        await nativeWrites.drain(threadId);
+        const result = await rpc.request('thread/inject_items', {
+          threadId,
+          items: [
+            { type: 'message', role: 'user', content: [{ type: 'input_text', text: user }] },
+            { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: assistant }] },
+          ],
+        }, { timeoutMs: 3_000 });
+        if (!result || typeof result !== 'object' || Array.isArray(result)) {
+          throw new Error('Codex did not acknowledge the voice append.');
+        }
+        return true;
+      });
+    },
 
     async voiceSendMessage(sessionId, opts, onEvent) {
       const { voiceDeviceId, voiceGate, signal } = opts;
@@ -391,7 +448,19 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVo
       return typeof limit === 'number' ? (limit === 0 ? [] : mapped.slice(-limit)) : mapped;
     },
 
-    async sendMessage(sessionId, { text, model, signal, source } = {}) {
+    sendMessage: trackSend(async (sessionId, { text, model, signal, source, includesHandoff } = {}) => {
+      // Only an actual typed send may load a cold thread with its normal
+      // configuration. Preserve the existing wire path when there is no handoff.
+      // https://learn.chatgpt.com/docs/app-server#start-or-resume-a-thread
+      if (source !== 'voice' && includesHandoff) {
+        const current = await rpc.request('thread/read', { threadId: sessionId });
+        if (current?.thread?.status?.type === 'notLoaded') {
+          signal?.throwIfAborted();
+          const resumed = await rpc.request('thread/resume', { threadId: sessionId, excludeTurns: true });
+          if (resumed?.thread?.id !== sessionId) throw new Error('Codex did not resume the original thread.');
+        }
+        signal?.throwIfAborted();
+      }
       const params = {
         threadId: sessionId,
         cwd,
@@ -416,12 +485,23 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVo
           if (chosen) params.model = chosen.id ?? chosen.model;
         } catch { /* preserve the CLI's own default when the catalog is unavailable */ }
       }
+      // Plain sends preserve start-then-interrupt even if Stop already arrived.
+      if (source === 'voice' || includesHandoff) signal?.throwIfAborted();
       // Subscribe before starting: the first deltas can land before turn/start
       // has even returned.
-      const settled = awaitTurn(sessionId, { timeoutMs: turnTimeoutMs, signal });
-      const result = await rpc.request('turn/start', params);
-      const turnId = result?.turnId ?? (source === 'voice' ? result?.turn?.id : undefined);
+      const { settled, identify, close } = watchTurn(sessionId, {
+        timeoutMs: turnTimeoutMs, signal, requireSuccess: source === 'voice' || includesHandoff,
+      });
+      let result;
+      try {
+        result = await rpc.request('turn/start', params);
+      } catch (error) {
+        close?.();
+        throw error;
+      }
+      const turnId = result?.turnId ?? result?.turn?.id;
       if (turnId) threadTurns.set(sessionId, turnId);
+      identify?.(turnId);
       const outcome = await settled;
       if (outcome.aborted) {
         // Stop ends the phone's turn; the app-server's turn has to end with it,
@@ -454,7 +534,7 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVo
         text: reply,
         turnId,
       };
-    },
+    }),
 
     async abort(sessionId) {
       await interruptTurn(sessionId, threadTurns.get(sessionId));

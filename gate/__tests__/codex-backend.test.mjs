@@ -175,6 +175,56 @@ test('sending a turn passes input and workspace, and records the turn for interr
   assert.equal(calls[1].params.turnId, 'tu_1', 'interrupt must target the live turn');
 });
 
+test('a native voice append waits for all active typed sends and gates later sends on that thread', async () => {
+  const handlers = new Set();
+  let acceptSecond;
+  const secondStart = new Promise((resolve) => { acceptSecond = resolve; });
+  let acknowledgeInject;
+  const injectAck = new Promise((resolve) => { acknowledgeInject = resolve; });
+  const { calls, rpc } = stubRpc({
+    'turn/start': ({ input: [{ text }] }) => text === 'second' ? secondStart : { turn: { id: text } },
+    'thread/inject_items': () => injectAck,
+  });
+  const backend = createCodexBackend({
+    rpc,
+    subscribe: (handler) => { handlers.add(handler); return () => handlers.delete(handler); },
+  });
+  const send = (text, threadId = 'th_1') => backend.sendMessage(threadId, { text, model: { modelId: 'fixture' } });
+  const complete = (id, threadId = 'th_1') => {
+    for (const handler of handlers) {
+      handler({ method: 'turn/completed', params: { threadId, turn: { id, status: 'completed' } } });
+    }
+  };
+  const requests = () => calls.map(({ method, params }) => params.input?.[0]?.text ?? method);
+
+  const first = send('first');
+  const second = send('second');
+  const appending = backend.appendVoiceExchange('th_1', { user: 'call question', assistant: 'call answer' });
+  const later = send('later');
+  const other = send('other', 'th_2');
+  await flushTurn();
+  assert.deepEqual(requests(), ['first', 'second', 'other'], 'ordinary sends start concurrently');
+
+  complete('other', 'th_2');
+  complete('first');
+  await Promise.all([first, other]);
+  acceptSecond({ turn: { id: 'second' } });
+  await flushTurn();
+  assert.deepEqual(requests(), ['first', 'second', 'other'], 'the first completion does not release the second send');
+
+  complete('second');
+  await second;
+  await flushTurn();
+  assert.deepEqual(requests(), ['first', 'second', 'other', 'thread/inject_items'], 'later sends wait for the inject acknowledgement');
+
+  acknowledgeInject({});
+  assert.equal(await appending, true);
+  await flushTurn();
+  assert.deepEqual(requests(), ['first', 'second', 'other', 'thread/inject_items', 'later']);
+  complete('later');
+  await later;
+});
+
 // turn/start only means "accepted"; the answer arrives as notifications.
 test('a turn is awaited to completion and its deltas assembled', async () => {
   let emit = () => {};

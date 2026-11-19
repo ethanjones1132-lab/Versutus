@@ -84,7 +84,7 @@ const VOICE_BACKEND_LEASE_MS = 20_000;
  */
 const VOICE_BACKEND_CALL_LEASE_MS = 30 * 60_000;
 
-/** `backendManager` → thread key → `{ backend, expiresAt }`. A WeakMap so a
+/** `backendManager` → thread key → `{ scope, expiresAt }`. A WeakMap so a
  *  manager that is replaced (a reloaded environment registry) takes its leases
  *  with it instead of handing them to whatever holds the key next. */
 const leases = new WeakMap();
@@ -118,6 +118,11 @@ export function clearVoiceBackendCache(backendManager) {
  *   `no_voice_backend` error whose message names each candidate's state
  */
 export async function resolveVoiceBackend(backendManager, thread = {}, options = {}) {
+  return (await resolveVoiceBackendScope(backendManager, thread, options))?.backend ?? null;
+}
+
+/** Keep the chosen environment alongside the backend, including default selection. */
+export async function resolveVoiceBackendScope(backendManager, thread = {}, options = {}) {
   const { now = Date.now, ttlMs = VOICE_BACKEND_LEASE_MS, selection } = options;
   const { botId, backendId } = thread ?? {};
   const key = threadKey(botId, backendId);
@@ -131,15 +136,16 @@ export async function resolveVoiceBackend(backendManager, thread = {}, options =
     // Refreshed on every hit, so a long call keeps its lease while it is
     // talking and re-resolves once it goes quiet for the full lease.
     lease.expiresAt = now() + ttlMs;
-    return lease.backend;
+    return lease.scope;
   }
 
-  const backend = await selectVoiceBackend(backendManager, { botId, backendId }, selection);
+  const picked = await selectVoiceBackend(backendManager, { botId, backendId }, selection);
+  const scope = picked?.backend ? { ...picked, botId } : null;
   // A null or thrown resolution is never cached: it names a broken environment
   // this instant, and caching it would keep the call answering `no_voice_backend`
   // for the rest of the lease after the operator fixed it.
-  if (backend) held.set(key, { backend, expiresAt: now() + ttlMs });
-  return backend;
+  if (scope) held.set(key, { scope, expiresAt: now() + ttlMs });
+  return scope;
 }
 
 /**
@@ -170,7 +176,7 @@ export async function resolveVoiceBackend(backendManager, thread = {}, options =
  * @param {{ now?: () => number, ttlMs?: number, selection?: VoiceBackendSelection,
  *   locate?: (thread: object) => Promise<object>,
  *   onResolved?: (detail: { backend: object, backendId?: string, via: string }) => void }} [options]
- * @returns {{ backend(): Promise<object | null> }}
+ * @returns {{ backend(): Promise<object | null>, scope(): { backend: object, backendId: string, botId?: string } | null }}
  */
 export function startVoiceBackendLease(backendManager, thread = {}, options = {}) {
   const {
@@ -181,14 +187,15 @@ export function startVoiceBackendLease(backendManager, thread = {}, options = {}
   const resolveOnce = async () => {
     const located = await locateVoiceThread(thread, locate);
     // A throw is a failure to remember, never to cache.
-    const found = await resolveVoiceBackend(backendManager, located.thread, { now, ttlMs, selection }).catch(() => null);
+    const scope = await resolveVoiceBackendScope(backendManager, located.thread, { now, ttlMs, selection }).catch(() => null);
+    const found = scope?.backend;
     if (found) {
       try {
         onResolved?.({ backend: found, backendId: located.thread?.backendId, via: located.via });
       } catch {
         // Telemetry is a witness, never a failure mode.
       }
-      resolved = found;
+      resolved = scope;
       // A backend that has to create the session the turn runs in (Hermes does,
       // against a state.db that is cold after any restart) is asked to prepare it
       // now, while the call has nothing to send yet. Optional on purpose: a
@@ -200,15 +207,16 @@ export function startVoiceBackendLease(backendManager, thread = {}, options = {}
           .catch(() => undefined);
       }
     }
-    return found;
+    return found ?? null;
   };
   const inFlight = () => {
     if (!pending) pending = resolveOnce();
     return pending;
   };
   return {
+    scope: () => resolved,
     async backend() {
-      if (resolved) return resolved;
+      if (resolved) return resolved.backend;
       // One resolve at a time: a turn that arrives while the call's own resolve
       // is still running waits for it rather than starting another.
       const running = inFlight();
@@ -327,7 +335,7 @@ async function selectVoiceBackend(backendManager, { botId, backendId }, selectio
       const candidate = await backendManager.get(entry.id).catch(() => null);
       if (candidate && typeof candidate.forBot === 'function') {
         try {
-          return await candidate.forBot(botId);
+          return { backend: await candidate.forBot(botId), backendId: entry.id };
         } catch {
           // try the next environment that can own the Bot
         }
@@ -342,15 +350,14 @@ async function selectVoiceBackend(backendManager, { botId, backendId }, selectio
     // (2026-09-19).
     for (const entry of await backendManager.list()) {
       const candidate = await backendManager.get(entry.id).catch(() => null);
-      if (candidate && typeof candidate.sendMessageStreaming === 'function') return candidate;
+      if (candidate && typeof candidate.sendMessageStreaming === 'function') return { backend: candidate, backendId: entry.id };
     }
   }
   const id = backendId ?? (await backendManager.list())[0]?.id;
   if (!id) return null;
   try {
     const backend = await backendManager.get(id);
-    if (botId && typeof backend?.forBot === 'function') return await backend.forBot(botId);
-    return backend;
+    return { backend: botId && typeof backend?.forBot === 'function' ? await backend.forBot(botId) : backend, backendId: id };
   } catch {
     return null;
   }
@@ -378,7 +385,7 @@ async function selectReadyVoiceBackend(backendManager, { stateOf, probe, default
   const picked = await selectDefaultBackend({ entries: [...streaming, ...rest], stateOf, probe, defaultId });
   if (!picked.id) throw noVoiceBackend(picked.body.error.message, picked.body.error.code);
   try {
-    return await backendManager.get(picked.id);
+    return { backend: await backendManager.get(picked.id), backendId: picked.id };
   } catch (error) {
     throw noVoiceBackend(
       `${picked.id} is ready but could not be attached: ${error?.message ?? error}`,

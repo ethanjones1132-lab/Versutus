@@ -87,7 +87,7 @@ export function modelReport(runtime, requested) {
  *   with no terminal frame and the caller has not aborted.
  */
 async function relayStreamingTurn(upstream, {
-  onDelta, onToolCall, onApproval, nativeApproval, onChunk, onProgress = NOOP, signal,
+  onDelta, onToolCall, onApproval, nativeApproval, onChunk, onProgress = NOOP, signal, includesHandoff,
 }) {
   const reader = upstream.body?.getReader?.();
   if (!reader) return false;
@@ -121,6 +121,7 @@ async function relayStreamingTurn(upstream, {
   let buffer = '';
   let sawContent = false;
   let terminal = false;
+  let handoffRefused = false;
 
   const aborted = () => Boolean(signal?.aborted);
 
@@ -144,6 +145,16 @@ async function relayStreamingTurn(upstream, {
       return;
     }
 
+    if (includesHandoff) {
+      let payload;
+      try { payload = JSON.parse(data); } catch { /* opaque frame */ }
+      if (payload?.error || ['error', 'cancelled'].includes(payload?.choices?.[0]?.finish_reason)) {
+        // Hermes reports refusal/cancellation in-band on an HTTP 200. Don't
+        // consume the handoff or relay diagnostics that can quote the input.
+        handoffRefused = terminal = true;
+        return;
+      }
+    }
     onChunk(data);
     // `onChunk` is a caller callback like the rest: one that aborts mid-frame
     // owns the end of the turn, and nothing it aborted may be reported after.
@@ -194,6 +205,10 @@ async function relayStreamingTurn(upstream, {
   };
 
   try {
+    const result = () => {
+      if (handoffRefused) throw new Error('The backend did not complete the typed turn.');
+      return sawContent;
+    };
     for (;;) {
       if (aborted()) return sawContent;
       // Race the read against the abort so a relay parked on a quiet stream
@@ -217,7 +232,7 @@ async function relayStreamingTurn(upstream, {
       // the socket open past its own terminator.
       if (terminal) {
         release();
-        return sawContent;
+        return result();
       }
     }
 
@@ -235,7 +250,7 @@ async function relayStreamingTurn(upstream, {
       error.cause = new Error('EOF');
       throw error;
     }
-    return sawContent;
+    return result();
   } finally {
     signal?.removeEventListener('abort', onAbort);
   }
@@ -289,11 +304,13 @@ function isStreamUnsupported(error) {
  */
 export async function runBackendTurn(backend, sessionId, { text, model, images, files } = {}, {
   onDelta = NOOP,
+  onSpokenDelta,
   onToolCall = NOOP,
   onApproval = NOOP,
   source,
   voiceDeviceId,
   voiceGate,
+  includesHandoff,
   onChunk = NOOP,
   onStage = NOOP,
   attempt,
@@ -301,6 +318,11 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
   signal,
   stallTimeoutMs = TURN_STALL_TIMEOUT_MS,
 } = {}) {
+  // Continuity observes only answer text, not the Gate's policy notice,
+  // reasoning, approvals, or tool frames.
+  const answerDelta = onSpokenDelta
+    ? (delta) => { onSpokenDelta(delta); onDelta(delta); }
+    : onDelta;
   // The caller owns the outer signal; this controller lets the runner stop the
   // event subscription once the turn is done even though it cannot abort the
   // caller's signal itself.
@@ -457,13 +479,14 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
           // and the connection under it both go away with the call.
           armStall('the reply stream');
           const relay = relayStreamingTurn(upstream, {
-            onDelta,
+            onDelta: answerDelta,
             onToolCall,
             onApproval,
             nativeApproval: source === 'voice' && typeof backend.voiceApproval === 'function'
               ? (event) => backend.voiceApproval(event)
               : undefined,
             onChunk,
+            includesHandoff,
             onProgress: () => noteActivity('the reply stream'),
             signal: controller.signal,
           });
@@ -526,7 +549,7 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
       if (event.type === 'message.delta' && event.payload?.text) {
         sawContent = true;
         streamedText += event.payload.text;
-        onDelta(event.payload.text);
+        answerDelta(event.payload.text);
         onChunk(JSON.stringify({ choices: [{ delta: { content: event.payload.text } }] }));
         return;
       }
@@ -667,7 +690,8 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
           text, model, images, files,
           ...(source === undefined ? {} : { source }),
           ...(source === 'voice' && voiceDeviceId ? { voiceDeviceId } : {}),
-          ...(voiceGate ? { voiceGate } : {}),
+           ...(voiceGate ? { voiceGate } : {}),
+           ...(includesHandoff ? { includesHandoff } : {}),
           signal: controller.signal,
         },
         typeof eventFeed === 'function' ? undefined : handleEvent,
@@ -697,12 +721,12 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
         && finalText.startsWith(streamedText)) {
         const missing = finalText.slice(streamedText.length);
         streamedText = finalText;
-        onDelta(missing);
+        answerDelta(missing);
         onChunk(JSON.stringify({ choices: [{ delta: { content: missing } }] }));
       } else if (reconcileOpenCode && !streamedText && sawContent && finalText.trim()) {
         // Tools streamed but none of the answer did: the answer is still owed.
         streamedText = finalText;
-        onDelta(finalText);
+        answerDelta(finalText);
         onChunk(JSON.stringify({ choices: [{ delta: { content: finalText } }] }));
       }
 
@@ -715,7 +739,7 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
       // dropping it -- and only when nothing streamed, so a backend that does
       // emit events is not echoed twice.
       if (!sawContent && result?.text && result.text.trim()) {
-        onDelta(result.text);
+        answerDelta(result.text);
         onChunk(JSON.stringify({ choices: [{ delta: { content: result.text } }] }));
       }
 

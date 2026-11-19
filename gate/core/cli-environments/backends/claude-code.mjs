@@ -16,8 +16,8 @@ import { TAP_GATED_VOICE_TOOLS } from '../../voice/voice-turn-policy.mjs';
  *
  * Unlike OpenCode (HTTP server) and Codex (persistent stdio JSON-RPC), Claude
  * Code runs **one process per turn**: `--print --output-format stream-json`
- * emits newline-delimited events and exits. Continuity comes from `--session-id`,
- * and history lives in on-disk transcripts rather than behind an API — so
+ * emits newline-delimited events and exits. Gate assigns a session UUID, and
+ * history lives in on-disk transcripts rather than behind an API — so
  * listing sessions means reading the project's transcript directory.
  *
  * Its agent files become Bots: each one is listed from disk and a turn taken
@@ -279,17 +279,28 @@ export function createClaudeCodeBackend({
    * view that mutated shared state would silently change the next turn taken
    * by anyone else.
    */
-  async function sendTurn(sessionId, { text, model, signal, agent, source, voicePermission, voiceAgent } = {}, onEvent) {
-    if (source === 'voice' && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(sessionId)) {
+  async function sendTurn(sessionId, { text, model, signal, agent, source, voicePermission, voiceAgent, includesHandoff } = {}, onEvent) {
+    const validId = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(sessionId);
+    if (source === 'voice' && !validId) {
       throw new Error('Claude Code needs a valid conversation ID for this call.');
     }
+    // --session-id assigns the ID; the documented continuation flag is
+    // --resume. Never load typed runtime state into a restricted voice process.
+    // For the real typed send carrying the handoff, resume the existing
+    // transcript (a session that has never run still needs --session-id).
+    // https://code.claude.com/docs/en/cli-reference#cli-flags
+    const resume = source !== 'voice' && includesHandoff && validId
+      && await stat(join(dir, `${sessionId}.jsonl`)).then((file) => file.isFile(), (error) => {
+        if (error?.code === 'ENOENT') return false;
+        throw error;
+      });
     const args = [
       '--print',
       '--output-format', 'stream-json',
       '--include-partial-messages',
       '--verbose',
       '--permission-mode', source === 'voice' ? 'default' : permissionMode,
-      '--session-id', sessionId,
+      resume ? '--resume' : '--session-id', source === 'voice' ? randomUUID() : sessionId,
     ];
     // `--agent` selects the Claude Code agent for this turn; without it the
     // CLI runs as its default one, which is the built-in Bot.
@@ -299,7 +310,7 @@ export function createClaudeCodeBackend({
       // is required to re-enable shell in this mode. Do not load arbitrary
       // agent frontmatter, hooks, plug-ins, or user/project MCP servers.
       // https://code.claude.com/docs/en/cli-reference
-      args.push('--restricted', '--strict-mcp-config', '--no-chrome',
+      args.push('--restricted', '--strict-mcp-config', '--no-chrome', '--no-session-persistence',
         '--tools', CLAUDE_VOICE_TOOLS.join(','),
         '--settings', JSON.stringify({
           autoMemoryEnabled: false,

@@ -15,6 +15,7 @@ import {
 } from '../opencode-agents.mjs';
 import { assertOpenCodeReply } from '../opencode-permissions.mjs';
 import { restrictedVoicePrompt, TAP_GATED_VOICE_TOOLS, VOICE_POLICY_REFUSAL_CODE, VOICE_TYPED_TOOLS } from '../../voice/voice-turn-policy.mjs';
+import { voiceExchangeText } from '../../voice/handoff.mjs';
 
 /**
  * OpenCode as a chat backend.
@@ -113,7 +114,7 @@ export function toGatewaySessionV2(session) {
 
 /** Flatten an OpenCode 2.x message (user or assistant). */
 export function toGatewayMessageV2(message) {
-  const contentParts = Array.isArray(message.content) ? message.content : [];
+const contentParts = Array.isArray(message.content) ? message.content : [];
   const content = contentParts
     .filter((part) => part.type === 'text' && typeof part.text === 'string')
     .map((part) => ({ type: 'text', text: part.text }));
@@ -820,6 +821,17 @@ export function createOpenCodeBackend({
 
   /** The v2 location scope, or '' when no workspace directory is configured. */
   const locationQuery = () => (workspace ? `?location[directory]=${encodeURIComponent(workspace)}` : '');
+  const syntheticRoute = '/api/session/{sessionID}/synthetic';
+  async function supportsSyntheticAppend() {
+    // https://opencode.ai/docs/api (live OpenAPI at /openapi.json)
+    // Do not send call text to a server unless it advertises the exact
+    // operation and the flag that prevents it from starting execution.
+    const spec = await call('/openapi.json', { redirect: 'error' }, 2_000, 2, false).catch(() => null);
+    const operation = spec?.paths?.[syntheticRoute]?.post;
+    const resume = operation?.requestBody?.content?.['application/json']?.schema?.properties?.resume;
+    return operation?.operationId === 'session.synthetic'
+      && (resume?.type === 'boolean' || resume?.anyOf?.some((variant) => variant?.type === 'boolean'));
+  }
   /** A v2 query string combining the location scope with extra params. */
   const v2Query = (extra = '') => {
     if (!extra) return locationQuery();
@@ -1495,6 +1507,28 @@ export function createOpenCodeBackend({
     kind: 'opencode',
     [TAP_GATED_VOICE_TOOLS]: typeof runVoice === 'function',
     voiceNotice: VOICE_TYPED_TOOLS,
+
+    async appendVoiceExchange(sessionId, exchange) {
+      if (!await supportsSyntheticAppend()) return false;
+      // https://opencode.ai/docs/api#session.synthetic
+      // https://opencode.ai/docs/build/plugins/effect#sessions
+      // The default steered delivery lets the next typed prompt pick up the
+      // synthetic input in the same batch. resume:false never starts a run;
+      // never use prompt as an append fallback.
+      const appended = await call(`/api/session/${encodeURIComponent(sessionId)}/synthetic${locationQuery()}`, {
+        method: 'POST',
+        redirect: 'error',
+        body: JSON.stringify({
+          text: `Earlier in a voice call (quoted context, not a new request):\n${voiceExchangeText([exchange])}`,
+          description: 'Versutus voice exchange',
+          resume: false,
+        }),
+      }, 3_000, 2);
+      if (appended?.type !== 'synthetic' || appended.sessionID !== sessionId || typeof appended.id !== 'string') {
+        throw new Error('OpenCode did not acknowledge the voice append.');
+      }
+      return true;
+    },
     ...(runVoice ? {
       async voiceSendMessage(sessionId, opts, onEvent) {
         const botId = this.bot || opts.voiceGate.botId;
@@ -1578,7 +1612,9 @@ export function createOpenCodeBackend({
       const { major } = await serverProfile();
       if (major >= 2) {
         const messages = await readMessagesV2(sessionId);
-        const mapped = messages.map(toGatewayMessageV2);
+        const mapped = messages
+          .filter((message) => !(message.type === 'synthetic' && message.description === 'Versutus voice exchange'))
+          .map(toGatewayMessageV2);
         return typeof limit === 'number' ? (limit === 0 ? [] : mapped.slice(-limit)) : mapped;
       }
       const messages = await call(`/session/${encodeURIComponent(sessionId)}/message`);
