@@ -19,6 +19,7 @@ jest.mock('react-native-reanimated', () => ({
   useSharedValue: () => mockSharedValue,
 }));
 
+let mockCallId = 'call-a';
 const mockGateway = {
   activeGateway: { id: 'gateway-a', url: 'http://127.0.0.1:8760', token: 'token' },
   status: 'connected' as const,
@@ -28,7 +29,7 @@ const mockGateway = {
   settings: { voiceEngine: 'local' },
   sendChatInput: jest.fn(async () => 'sent' as const),
   gatewayRequest: jest.fn(async (method: string) => method === 'voice.session.start'
-    ? { voiceSessionId: 'call-a', streamPath: '/v1/voice/stream', engine: 'local' }
+    ? { voiceSessionId: mockCallId, streamPath: '/v1/voice/stream', engine: 'local' }
     : { stopped: true }),
   reloadHistory: jest.fn(async () => undefined),
 };
@@ -62,7 +63,7 @@ const mockNative = {
   verifyLaunch: jest.fn(async () => true),
   addListener: jest.fn((name: string, listener: Listener) => {
     listeners.set(name, [...(listeners.get(name) ?? []), listener]);
-    return { remove: () => undefined };
+    return { remove: () => { listeners.set(name, (listeners.get(name) ?? []).filter((member) => member !== listener)); } };
   }),
 };
 jest.mock('@/lib/voice/handsfree-device', () => ({ loadHandsfreeModule: jest.fn(async () => mockNative) }));
@@ -93,6 +94,7 @@ beforeEach(async () => {
   listeners.clear();
   latest = undefined;
   mockMessages.messages = [];
+  mockCallId = 'call-a';
   mockGateway.currentSessionId = 'session-a';
   AppState.currentState = 'active';
   await actAsync(async () => {
@@ -109,6 +111,34 @@ afterEach(async () => {
 });
 
 describe('live call thread projection', () => {
+  test('a second call registers its grant before native delivers frame one', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      mockNative.startGateMedia.mockImplementationOnce(async () => {
+        emit({ v: 2, callId: 'call-a', seq: 1, ts: 0, t: 'call', state: 'opening' });
+        return true;
+      });
+      await actAsync(async () => expect((await latest!.start(target)).result).toBe('started'));
+      await actAsync(async () => {
+        emit({ v: 2, callId: 'call-a', seq: 2, ts: 1, t: 'call', state: 'ended', reason: 'user' });
+        await settle();
+      });
+      expect(latest!.active).toBe(false);
+      mockCallId = 'call-b';
+      mockNative.startGateMedia.mockImplementationOnce(async () => {
+        // The previous call's projection is still on screen. This must not
+        // cause us to reject the new call's first frame as foreign.
+        emit({ v: 2, callId: 'call-b', seq: 1, ts: 0, t: 'call', state: 'opening' });
+        return true;
+      });
+      await actAsync(async () => expect((await latest!.start(target)).result).toBe('started'));
+      await actAsync(() => emit({ v: 2, callId: 'call-b', seq: 2, ts: 1, t: 'phase', phase: 'listening' }));
+      expect(warn.mock.calls.flat().filter((message) => String(message).includes('frame gap'))).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   test('renders each commit and first reply immediately, then deduplicates a replay', async () => {
     await actAsync(async () => {
       const starting = latest!.start(target);

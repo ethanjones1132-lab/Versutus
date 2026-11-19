@@ -21,9 +21,6 @@ import { join } from 'node:path';
 
 import { writeFileAtomic } from '../../atomic-file.mjs';
 import { runCli } from '../adapters/shared.mjs';
-import {
-  restrictedVoicePrompt, TAP_GATED_VOICE_TOOLS, VOICE_POLICY_REFUSAL_CODE, VOICE_TYPED_TOOLS,
-} from '../../voice/voice-turn-policy.mjs';
 import { createBotArgs, ensureDistinctListenKey, validateBotId } from '../hermes-bot-create.mjs';
 import { upsertProfileDescription, withBotEditRollback } from '../hermes-bot-edit.mjs';
 import { removeModelPins } from '../hermes-config-edit.mjs';
@@ -259,45 +256,6 @@ export function createHermesBackend({
   return {
     kind: 'hermes',
     supportsContentParts: true,
-    [TAP_GATED_VOICE_TOOLS]: Boolean(executablePath),
-    voiceNotice: VOICE_TYPED_TOOLS,
-
-    async voiceSendMessage(sessionId, { text, model, signal, images, files, voiceGate } = {}) {
-      // The shared HTTP agent ignores OpenAI `tools: []`. Use a new restricted
-      // CLI session, never resume a typed session with its frozen toolset.
-      // https://hermes-agent.nousresearch.com/docs/reference/cli-commands#hermes-chat
-      // https://hermes-agent.nousresearch.com/docs/reference/toolsets-reference
-      // The Sessions API has no append-only write. Gate delivers continuity on
-      // the next typed turn, never by writing Hermes's database.
-      // https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server#sessions-api-session-control-over-rest
-      const unavailable = (message) => Object.assign(new Error(message), { code: VOICE_POLICY_REFUSAL_CODE });
-      if (!executablePath || images?.length || files?.length) {
-        throw unavailable('Use typed chat for attachments or a Hermes server without a local CLI.');
-      }
-      const [defaults, soul, history] = await Promise.all([
-        model?.modelId && model?.providerId ? null : readCall('/api/model/options', 'read the Bot model'),
-        profilesHome ? readHermesSoul(profilesHome, botId).catch(() => null) : null,
-        sessionId && !voiceGate?.history?.length ? this.listMessages(sessionId, 12).catch(() => []) : [],
-      ]);
-      const modelId = model?.modelId ?? defaults?.model ?? defaults?.current?.model;
-      const provider = model?.providerId ?? defaults?.provider ?? defaults?.current?.provider;
-      if (typeof modelId !== 'string' || !modelId || modelId === 'hermes-agent') {
-        throw unavailable('Pick a model for this Hermes Bot before calling.');
-      }
-      const args = [
-        ...(botId === 'default' ? [] : ['-p', botId]), 'chat', '--safe-mode', '--quiet',
-        '--toolsets', 'session_search', `--model=${modelId}`,
-        ...(typeof provider === 'string' && provider ? [`--provider=${provider}`] : []),
-        '--query-file', '-',
-      ];
-      const input = restrictedVoicePrompt({ history, recent: voiceGate?.history, text, soul });
-      const result = await runCliImpl(executablePath, args, { input, signal, timeoutMs: 175_000 });
-      if (result?.code !== 0) {
-        // A CLI too old to enforce this path never triggers an unrestricted retry.
-        throw unavailable('Hermes could not start a read-only call. Check that this PC’s Hermes supports safe mode and the Bot’s model.');
-      }
-      return { text: result.stdout };
-    },
 
     async listSessions(limit, { timeoutMs } = {}) {
       // Without an explicit limit Hermes serves its own default page, so a
@@ -368,17 +326,18 @@ export function createHermesBackend({
       return typeof limit === 'number' ? mapped.slice(-limit) : mapped;
     },
 
-    async sendMessage(sessionId, { text, model, source, includesHandoff } = {}) {
+    async sendMessage(sessionId, { text, model, source, includesHandoff, signal } = {}) {
       const payload = { message: text };
       if (model?.modelId) payload.model = model.modelId;
       if (model?.providerId) payload.provider = model.providerId;
       const body = await call(`/api/sessions/${encodeURIComponent(sessionId)}/chat`, {
         method: 'POST',
+        signal,
         ...(source === 'voice' ? { headers: { 'X-Versutus-Turn-Source': 'voice' } } : {}),
         body: JSON.stringify(payload),
       });
-      if (includesHandoff && ['error', 'failed', 'cancelled', 'interrupted'].includes(body.status)) {
-        throw new Error('Hermes did not complete the typed turn.');
+      if ((source === 'voice' || includesHandoff) && ['error', 'failed', 'cancelled', 'interrupted'].includes(body.status)) {
+        throw new Error('Hermes did not complete the turn.');
       }
 
       const content = body.message?.content;
@@ -589,7 +548,7 @@ export function createHermesBackend({
         || !Number.isSafeInteger(generation) || generation < 0)) return null;
       return {
         key: JSON.stringify([runId, requestId, generation]),
-        tool: typeof event.command === 'string' ? 'terminal' : undefined,
+        tool: typeof event.command === 'string' ? 'terminal' : (event.tool ?? event.tool_name),
         summary: event.command || event.summary || event.description,
         reply: (approved) => call(`/v1/runs/${encodeURIComponent(runId)}/approval`, {
           method: 'POST',

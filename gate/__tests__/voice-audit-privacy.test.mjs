@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { readdir, readFile, rm } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -23,8 +23,6 @@ import {
 } from '../core/voice/audit.mjs';
 import { VOICE_STREAM_PATH, attachVoiceMediaSocket } from '../core/voice/media-socket.mjs';
 import { VoiceSessionRegistry, createVoiceRpc } from '../core/voice/voice-rpc.mjs';
-import { createVoiceHandoff } from '../core/voice/handoff.mjs';
-import { TAP_GATED_VOICE_TOOLS } from '../core/voice/voice-turn-policy.mjs';
 import { runVoiceTurn } from '../core/server.mjs';
 
 function tempDir() {
@@ -326,16 +324,15 @@ test('a backend failure is logged by size, never by the words it failed on', asy
   assert.equal(audit[0].error, 'user');
 });
 
-test('media voice handoffs keep only committed spoken text out of the audit and Gate log', async (t) => {
+test('media voice sends into one native thread without a notice, handoff or transcript logs', async (t) => {
   const gateHome = tempDir();
   t.after(() => rm(gateHome, { force: true, recursive: true }));
-  const handoffLogs = [];
-  const handoff = createVoiceHandoff({ gateHome, log: (line) => handoffLogs.push(line) });
+  const inputs = [];
   const backend = {
     kind: 'codex',
     voiceNotice: 'Policy notice.',
-    [TAP_GATED_VOICE_TOOLS]: true,
-    async voiceSendMessage(_sessionId, { text }, onEvent) {
+    async sendMessage(sessionId, { text, source }, onEvent) {
+      inputs.push({ sessionId, text, source });
       onEvent({ type: 'tool.started', payload: { name: 'read', callId: 'tool1' } });
       onEvent({ type: 'tool.output', payload: { callId: 'tool1', output: 'tool-output-canary' } });
       if (text === 'incomplete-canary') {
@@ -346,13 +343,13 @@ test('media voice handoffs keep only committed spoken text out of the audit and 
       return { text: 'assistant-canary' };
     },
     async appendVoiceExchange() {
-      throw new Error('upstream echoed caller-canary and assistant-canary');
+      assert.fail('a native turn must not be written twice');
     },
   };
   const { ws, frames, lines, audit, engine } = await startPrivacyCall(t, {
     runTurn: (session, text, handlers) => runVoiceTurn(null, {
       ...session, thread: { ...thread, backendId: 'fixture' }, backendLease: { backend: () => backend },
-    }, text, handlers, { handoff }),
+    }, text, handlers),
   });
   engine.emit('final', { text: 'incomplete-canary' });
   await waitUntil(() => frames.some((frame) => frame.t === 'turn' && frame.state === 'failed'));
@@ -365,21 +362,15 @@ test('media voice handoffs keep only committed spoken text out of the audit and 
   await closed;
   await waitUntil(() => audit.length === 1);
 
-  const dir = join(gateHome, 'voice', 'handoff');
-  const stop = handoff.start();
-  await stop();
-  const [file] = await readdir(dir);
-  const raw = await readFile(join(dir, file), 'utf8');
-  const { exchanges } = JSON.parse(raw);
-  assert.deepEqual(exchanges.map(({ user, assistant }) => ({ user, assistant })), [
-    { user: 'caller-canary', assistant: 'assistant-canary' },
+  assert.deepEqual(inputs, [
+    { sessionId: thread.sessionId, text: 'incomplete-canary', source: 'voice' },
+    { sessionId: thread.sessionId, text: 'caller-canary', source: 'voice' },
   ]);
-  assert.doesNotMatch(raw, /tool-output|Policy notice|device-1|incomplete/);
+  assert.doesNotMatch(JSON.stringify({ frames, spoken: engine.spoken }), /Policy notice/);
   const voiceAudit = createVoiceAudit({ dir: gateHome });
   voiceAudit.record(audit[0]);
   assert.doesNotMatch(readLines(join(gateHome, 'audit.jsonl'))[0], /canary/);
-  assert.doesNotMatch(JSON.stringify({ lines, handoffLogs }), /canary/);
-  assert.deepEqual(handoffLogs, ['voice.handoff append_failed']);
+  assert.doesNotMatch(JSON.stringify(lines), /canary/);
 });
 
 test('an engine error is logged by size, never by its words', async (t) => {

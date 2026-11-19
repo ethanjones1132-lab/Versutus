@@ -99,6 +99,7 @@ import {
 import { isStartTimeout, startDeadline } from '@/lib/voice/start-deadline';
 import {
   emptyCallThreadProjection,
+  reconcileCallThreadProjection,
   projectCallFrame,
   type CallProjectionFrame,
   type CallThreadProjection,
@@ -189,8 +190,7 @@ export type HandsfreeVoiceContextValue = {
   reply?: string;
   /**
    * Why the last Gate turn died, in the Gate's own words, or null while no turn
-   * has failed. The banner names it once and the call keeps going: the Gate
-   * speaks its own failure line and reopens listening.
+   * has failed. The banner names it and the call reopens listening.
    */
   turnError: string | null;
   audioStatus?: GateAudioStatus;
@@ -198,8 +198,7 @@ export type HandsfreeVoiceContextValue = {
   turnState: GateCallBanner['turnState'];
   /**
    * A tool waiting on a human decision, as the Gate reported it. Null while
-   * none is pending. The Gate does not block the turn on this frame, so the
-   * banner has to say so or the operator never hears the ask.
+   * none is pending. The native tool is already parked while the banner asks.
    */
   approval: {
     turnId: string;
@@ -209,7 +208,7 @@ export type HandsfreeVoiceContextValue = {
   } | null;
   approvalBusy: boolean;
   /** Live Gate transcript projection, scoped to the thread captured at call start. */
-  callThreadProjection: { threadKey: string; messages: ChatMessage[] } | null;
+  callThreadProjection: Pick<CallThreadProjection, 'threadKey' | 'messages' | 'historyBeforeCall' | 'ended'> | null;
   label: string | undefined;
   reason: HandsfreeTerminalReason | undefined;
   lastEndReason?: HandsfreeTerminalReason;
@@ -712,7 +711,16 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       return;
     }
     if (effect.kind === 'reload-history') {
-      void latest.current.reloadHistory();
+      const target = targetRef.current;
+      const current = latest.current;
+      // When the Gate opened a new conversation, Chat adopts the granted ID
+      // on hang-up. An unscoped reload during the call can pick another thread
+      // and terminate the call as if the operator switched conversations.
+      if (target?.sessionId && target.sessionId === current.currentSessionId
+        && target.gatewayId === current.activeGateway?.id
+        && target.botId === (current.selectedBotId ?? undefined)) {
+        void current.reloadHistory().catch(() => undefined);
+      }
       return;
     }
     dispatch({ type: 'gate-ended', reason: appEndReasonForGate(effect.reason) });
@@ -811,7 +819,8 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         }
       };
       const fold = (frame: string) => {
-        let parsed = gateFrame(frame, gateSessionIdRef.current ?? callProjectionRef.current?.callId);
+        const registered = gateSessionIdRef.current;
+        let parsed = gateFrame(frame, registered);
         // Tool events were added to the v2 inventory in slice 3. This consumer
         // validates only the bounded fields it renders; the protocol parser
         // remains the authority for all established frames.
@@ -834,6 +843,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
           }
         }
         if (parsed && 'seq' in parsed && typeof parsed.seq === 'number' && parsed.v === 2) {
+          if (!registered) return; // A late frame from an old, unregistered link.
           if (parsed.seq <= gateLastSeqRef.current) return;
           if (parsed.seq !== gateLastSeqRef.current + 1) {
             // A frame this phone never saw — the native socket drops one it
@@ -906,6 +916,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
             clearGateMute();
           }
         }
+        // An envelope rejected above must not be reparsed without its owner by
+        // the banner reducer. Unsequenced native socket errors still parse.
+        if (!parsed) return;
         const next = reduceGateCall(gateBannerRef.current, effective);
         // The Gate may replay a phase from before a notification mute, even
         // after its opening probe has proved the socket is back. Never paint
@@ -1071,6 +1084,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     unsubscribe();
     const wasGate = gateModeRef.current;
     const gateSessionId = gateSessionIdRef.current;
+    const chatSessionId = gateGrantRef.current?.chatSessionId;
     gateModeRef.current = false;
     setGateMode(false);
     gateSessionIdRef.current = undefined;
@@ -1116,6 +1130,24 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         }
       }
       gateDeviceRef.current = null;
+      const projection = callProjectionRef.current;
+      if (projection && projection.callId === gateSessionId) {
+        const target = targetRef.current;
+        const opened = target && !target.sessionId && chatSessionId
+          ? callDraftThread({ ...target, sessionId: chatSessionId }) : undefined;
+        const ended = { ...projection, ended: true,
+          ...(opened ? { threadKey: composerDraftKey(opened) } : {}),
+        };
+        callProjectionRef.current = ended;
+        setCallProjection(ended);
+      }
+      const current = latest.current;
+      const target = targetRef.current;
+      if (target?.sessionId && current.activeGateway?.id === target.gatewayId
+        && current.currentSessionId === target.sessionId
+        && (target.surfaceKind !== 'bot' || current.selectedBotId === target.botId)) {
+        void current.reloadHistory().catch(() => undefined);
+      }
     } else {
       phoneTurnRef.current?.abort();
       phoneTurnRef.current = null;
@@ -1734,6 +1766,27 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         // retry's session, and a sync throw or rejection is swallowed so it
         // cannot strand the start or leak an unhandled rejection.
         cancelStartSession: (startId) => cancelNativeSession(module, startId),
+        registerGrant: (grant) => {
+          if (targetRef.current !== target || sessionRef.current.phase !== 'starting') return false;
+          gateSessionIdRef.current = grant.voiceSessionId;
+          gateGrantRef.current = grant;
+          const thread = threadRef.current;
+          if (thread) {
+            const key = composerDraftKey(thread);
+            const history = latest.current.messages;
+            const prior = callProjectionRef.current;
+            const carry = prior?.threadKey === key ? reconcileCallThreadProjection(prior, history) : [];
+            const projection = {
+              ...emptyCallThreadProjection(key, grant.voiceSessionId),
+              messages: carry,
+              historyBeforeCall: carry.length && prior?.historyBeforeCall
+                ? prior.historyBeforeCall : new Set(history.map((message) => message.id)),
+            };
+            callProjectionRef.current = projection;
+            setCallProjection(projection);
+          }
+          return true;
+        },
         startGateMedia: (options) => module.startGateMedia(options),
         // Armed before the socket is opened, so the Gate's own attach frames
         // prove the link even when they land before `proveLink` runs.
@@ -1771,16 +1824,6 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         return { result: attempt.result, detail: attempt.detail };
       }
 
-      gateSessionIdRef.current = attempt.grant.voiceSessionId;
-      gateGrantRef.current = attempt.grant;
-      if (threadRef.current && !callProjectionRef.current) {
-        const projection = emptyCallThreadProjection(
-          composerDraftKey(threadRef.current),
-          attempt.grant.voiceSessionId,
-        );
-        callProjectionRef.current = projection;
-        setCallProjection(projection);
-      }
       setEngineInfo({
         engine: attempt.grant.engine ?? 'local',
         ...(attempt.grant.fellBackFrom ? { reason: attempt.grant.reason } : {}),
@@ -1808,7 +1851,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         return { result };
       }
       dispatch({ type: 'started', startedAtMs: Date.now() });
-      return { result: 'started' };
+      return {
+        result: 'started',
+        ...(attempt.grant.chatSessionId ? { chatSessionId: attempt.grant.chatSessionId } : {}),
+      };
     },
     [abandonGateStart, clearGateApprovalTimer, dispatch, nativeGateFrames, refuseGateStart, subscribeGate],
   );

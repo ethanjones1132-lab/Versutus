@@ -14,7 +14,6 @@ import {
   validateBotId,
 } from '../opencode-agents.mjs';
 import { assertOpenCodeReply } from '../opencode-permissions.mjs';
-import { restrictedVoicePrompt, TAP_GATED_VOICE_TOOLS, VOICE_POLICY_REFUSAL_CODE, VOICE_TYPED_TOOLS } from '../../voice/voice-turn-policy.mjs';
 import { voiceExchangeText } from '../../voice/handoff.mjs';
 
 /**
@@ -786,7 +785,6 @@ export function createOpenCodeBackend({
   // The Gate only ever serves free models here (ADR 0016).
   freeOnly = true,
   permissionBridge,
-  runVoice,
   writeFile = writeFileAtomic,
   readText = (path) => readFile(path, 'utf8'),
   removeFile = unlink,
@@ -1505,8 +1503,6 @@ export function createOpenCodeBackend({
 
   const backend = {
     kind: 'opencode',
-    [TAP_GATED_VOICE_TOOLS]: typeof runVoice === 'function',
-    voiceNotice: VOICE_TYPED_TOOLS,
 
     async appendVoiceExchange(sessionId, exchange) {
       if (!await supportsSyntheticAppend()) return false;
@@ -1528,47 +1524,6 @@ export function createOpenCodeBackend({
         throw new Error('OpenCode did not acknowledge the voice append.');
       }
       return true;
-    },
-    ...(runVoice ? {
-      async voiceSendMessage(sessionId, opts, onEvent) {
-        const botId = this.bot || opts.voiceGate.botId;
-        const [agent, history] = await Promise.all([
-          botId ? botAgent(botId) : null,
-          sessionId && !opts.voiceGate.history?.length ? backend.listMessages(sessionId, 12).catch(() => []) : [],
-        ]);
-        const model = opts.model ?? (agent?.model?.providerID && agent.model.modelID
-          ? { providerId: agent.model.providerID, modelId: agent.model.modelID } : undefined);
-        if (freeOnly && botId && model?.providerId) await assertFreeModel(model);
-        const text = restrictedVoicePrompt({ history, recent: opts.voiceGate.history, text: opts.text, soul: agent?.prompt });
-        return runVoice(sessionId, { ...opts, text, model, voiceGate: { ...opts.voiceGate, botId } }, onEvent);
-      },
-    } : {}),
-
-    async verifyVoicePermissions(agent, expected, blocked) {
-      const { major } = await serverProfile();
-      const refusal = () => Object.assign(new Error('OpenCode did not confirm the call’s permission policy.'), {
-        code: VOICE_POLICY_REFUSAL_CODE,
-      });
-      if (major !== 2) throw refusal();
-      const [info, config] = await Promise.all([
-        call(`/api/agent/${encodeURIComponent(agent)}${locationQuery()}`, {}, readTimeoutMs, 2),
-        call(`/api/config${locationQuery()}`, {}, readTimeoutMs, 2),
-      ]);
-      const permissions = info?.permissions;
-      const matches = (actual, wanted) => actual?.action === wanted.action
-        && actual.resource === wanted.resource && actual.effect === wanted.effect;
-      if (!Array.isArray(permissions) || permissions.length < expected.length
-        || !permissions.slice(-expected.length).every((actual, index) => matches(actual, expected[index]))) throw refusal();
-      // Accept either policy spelling. Fail closed on a newer override, on a
-      // server which dropped the settings, or on any configured plug-in/MCP set.
-      const policies = config?.policies;
-      const absent = (value) => !value || Object.keys(value).length === 0;
-      if (!Array.isArray(policies) || config.formatter !== false || config.snapshots !== false
-        || !absent(config.plugins) || !absent(config.mcp?.servers)
-        || policies.some((p) => p?.effect === 'allow' && ['mcp.use', 'plugin.use', 'skill.use', 'integration.use'].includes(p.action))
-        || !blocked.slice(0, 3).every((p, i) => policies.some((actual) => matches(actual, p) || matches(actual, blocked[i + 3])))) {
-        throw refusal();
-      }
     },
 
     async listSessions() {
@@ -1684,7 +1639,20 @@ export function createOpenCodeBackend({
      * message, and one that may already have been accepted stops this session
      * through the same bounded route a Stop uses — never by submitting again.
      */
-    async sendMessage(sessionId, { text, model, signal, agent, source } = {}) {
+    async sendMessage(sessionId, options = {}) {
+      const { source, voiceDeviceId, voiceGate, signal, agent } = options;
+      if (source !== 'voice') return backend.sendNativeMessage(sessionId, options);
+      const release = permissionBridge?.registerVoiceTurn?.(sessionId, {
+        deviceId: voiceDeviceId, botId: agent ?? voiceGate?.botId, signal, timeoutMs: voiceGate?.timeoutMs,
+      });
+      try {
+        return await backend.sendNativeMessage(sessionId, options);
+      } finally {
+        release?.();
+      }
+    },
+
+    async sendNativeMessage(sessionId, { text, model, signal, agent, source } = {}) {
       const { major } = await serverProfile();
       if (major >= 2) {
         // The same free-only rule as v1: a Bot's turn may name only a free model.
@@ -1919,22 +1887,22 @@ export function createOpenCodeBackend({
           return backend.streamEvents(sessionId, onEvent, signal, id);
         },
         streamVoiceEvents(sessionId, onEvent, signal) {
-          return backend.streamVoiceEvents(sessionId, onEvent, signal, id);
+          return backend.streamVoiceEvents(sessionId, onEvent, signal, { voiceGate: { botId: id } });
         },
       };
     },
 
-    streamVoiceEvents(sessionId, onEvent, signal, botId = null) {
+    streamVoiceEvents(sessionId, onEvent, signal, { voiceGate } = {}) {
       // The native request ID is not an inbox decision ID. Advertise only an
       // actionable card published by the bridge, with the actual Gate ID.
       const release = permissionBridge?.watchApproval?.(({ sessionId: owner, approval }) => {
-        if (owner === sessionId && approval && !signal?.aborted) {
+        if (owner === sessionId && approval?.gateDecision && !signal?.aborted) {
           onEvent(frame('approval.required', approval));
         }
       });
       const subscription = backend.streamEvents(sessionId, (event) => {
         if (event.type !== 'approval.required') onEvent(event);
-      }, signal, botId);
+      }, signal, voiceGate?.botId ?? null);
       return Object.assign(subscription.finally(() => release?.()), { ready: subscription.ready });
     },
 

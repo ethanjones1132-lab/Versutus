@@ -2,6 +2,8 @@
 
 Written 2026-11-07 against `master` 428593b. This is the bar the hands-free call is held to before it ships as beta and before it is called released. Every claim about the code cites file:line on that commit. **VERIFIED** means there is evidence (a test run, a log, or code that settles the question with no runtime dependency). **FAILING** means the code as written cannot meet the requirement. **UNKNOWN** means nobody has measured it.
 
+**2026-11-19 decision:** [Native call parity](2026-11-19-native-call-parity.md) supersedes D3 and the all-side-effects interpretation of S6. A call keeps the typed session and its permission settings. The Gate surfaces and records the backend’s permission requests; it does not promise a request for a tool the backend allows without asking.
+
 Evidence collected for this document (read-only):
 - `node --test gate/__tests__/voice-*.test.mjs`: 258 pass, 0 fail (2026-11-07).
 - `npm run test:voice-worker`: 85 pass (2026-11-07).

@@ -31,6 +31,8 @@ export function createOpenCodePermissionBridge({
   let sequence = 0;
   const seenAt = new Map();
   const resolvedDuringOpen = new Set();
+  const voiceTurns = new Map();
+  const voiceRequests = new Map();
   let sendReply = replyApproval;
   // Turns watch a card's lifetime: a turn whose approval is still open for a
   // decision is working, not silent, so its idle bound must not run. Watchers
@@ -52,12 +54,32 @@ export function createOpenCodePermissionBridge({
     }
   };
 
+  async function askedInVoice(voice, sessionId, requestId, tool) {
+    if (voice.seen.has(requestId)) return;
+    voice.seen.add(requestId);
+    const remote = new AbortController();
+    voiceRequests.set(requestId, { sessionId, remote });
+    try {
+      const allowed = await approvals.authorize({
+        tool, backendId: backendId ?? environmentId, botId: voice.botId, sessionId,
+        deviceId: voice.deviceId, timeoutMs: voice.timeoutMs, requireDecision: true,
+        signal: AbortSignal.any([voice.signal, remote.signal]),
+        announce: (card) => notify(card.state === 'pending' ? 'open' : 'settle', sessionId, requestId, card),
+      }).catch(() => false);
+      if (!remote.signal.aborted) await sendReply?.(sessionId, requestId, allowed ? 'once' : 'reject');
+    } finally {
+      voiceRequests.delete(requestId);
+    }
+  }
+
   async function asked(event, botId = null) {
     const request = event?.properties ?? event?.data ?? {};
     const sessionId = request.sessionID;
     const requestId = request.id;
     if (typeof sessionId !== 'string' || typeof requestId !== 'string'
       || byNativeId.has(requestId) || openingIds.has(requestId)) return;
+    const voice = voiceTurns.get(sessionId);
+    if (voice) return askedInVoice(voice, sessionId, requestId, request.action ?? request.permission ?? 'unknown');
     openingIds.set(requestId, sessionId);
     seenAt.set(requestId, ++sequence);
 
@@ -181,6 +203,8 @@ export function createOpenCodePermissionBridge({
     const properties = event?.properties ?? event?.data ?? {};
     const requestId = properties.requestID;
     if (typeof requestId !== 'string') return;
+    const voice = voiceRequests.get(requestId);
+    if (voice && voice.sessionId === properties.sessionID) voice.remote.abort();
     if (openingIds.get(requestId) === properties.sessionID) {
       resolvedDuringOpen.add(requestId);
       return;
@@ -231,6 +255,20 @@ export function createOpenCodePermissionBridge({
     replied,
     reconcile,
     mark,
+    registerVoiceTurn(sessionId, context) {
+      if (!approvals?.authorize) return () => {};
+      const controller = new AbortController();
+      const voice = {
+        ...context,
+        signal: context.signal ? AbortSignal.any([context.signal, controller.signal]) : controller.signal,
+        seen: new Set(),
+      };
+      voiceTurns.set(sessionId, voice);
+      return () => {
+        if (voiceTurns.get(sessionId) === voice) voiceTurns.delete(sessionId);
+        controller.abort();
+      };
+    },
     /**
      * Follow every card's lifetime. The listener gets `{ phase, sessionId,
      * requestId }` with phase `open` once the inbox accepts a decision and

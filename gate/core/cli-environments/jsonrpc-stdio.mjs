@@ -81,7 +81,9 @@ export function createStdioJsonRpc({ child, onNotification, onServerRequest, onD
       const waiter = pending.get(message.id);
       if (!waiter) return;
       pending.delete(message.id);
-      if (message.error) waiter.reject(new Error(message.error.message ?? 'app-server error'));
+      if (message.error) waiter.reject(Object.assign(new Error(message.error.message ?? 'app-server error'), {
+        rpcCode: message.error.code,
+      }));
       else waiter.resolve(message.result);
       return;
     }

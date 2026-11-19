@@ -15,12 +15,10 @@ import {
   startVoiceBackendLease,
 } from '../core/voice/voice-backend.mjs';
 import { describeTurnFailure } from '../core/voice/turn-failure.mjs';
-import { TAP_GATED_VOICE_TOOLS } from '../core/voice/voice-turn-policy.mjs';
 
 function backendNamed(kind, sent = []) {
   return {
     kind,
-    [TAP_GATED_VOICE_TOOLS]: true, // Only echoes text; no tools.
     async sendMessage(sessionId, input) {
       sent.push({ kind, sessionId, text: input.text, model: input.model });
       return { text: `answered by ${kind}` };

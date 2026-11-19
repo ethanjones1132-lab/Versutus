@@ -7,11 +7,12 @@ export const VOICE_APPROVAL_DEADLINE_MS = 30_000;
 const groups = new Map(Object.entries({
   read: ['read', 'glob', 'grep', 'read_file', 'search_files', 'session_search'],
   workspace_write: ['edit', 'write', 'multiedit', 'notebookedit', 'write_file', 'patch',
-    'apply_patch', 'applypatchapproval', 'filechangerequestapproval', 'item/filechange/requestapproval'],
+    'fs.write', 'file.write', 'apply_patch', 'applypatchapproval', 'filechangerequestapproval', 'item/filechange/requestapproval'],
   shell_exec: ['bash', 'powershell', 'shell', 'terminal', 'execute_code', 'exec',
-    'execcommandapproval', 'commandexecutionrequestapproval', 'item/commandexecution/requestapproval'],
+    'shell.exec', 'execcommandapproval', 'commandexecutionrequestapproval', 'item/commandexecution/requestapproval'],
   network_write: ['webfetch', 'websearch', 'web_search', 'web_extract', 'browser_exec', 'network_write'],
-  connector: ['mcp', 'plugin', 'connector', 'app', 'opencode_list_mcp_resources', 'opencode_read_mcp_resource'],
+  connector: ['mcp', 'mcp.use', 'plugin', 'plugin.use', 'connector', 'app', 'integration.use',
+    'opencode_list_mcp_resources', 'opencode_read_mcp_resource'],
   credential_system: ['credential', 'system', 'install', 'update', 'destructive', 'bypass',
     'host_write', 'external_directory', 'permissionsrequestapproval', 'item/permissions/requestapproval'],
 }).flatMap(([kind, names]) => names.map((name) => [name, kind])));

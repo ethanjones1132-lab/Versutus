@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url';
 
 import { createGate, runVoiceTurn } from '../core/server.mjs';
 import { DeviceTokenStore } from '../core/device-tokens.mjs';
-import { TAP_GATED_VOICE_TOOLS } from '../core/voice/voice-turn-policy.mjs';
 import { createHermesBackend } from '../core/cli-environments/backends/hermes.mjs';
 
 const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
@@ -235,7 +234,6 @@ test('a voice turn names resolve, send, acceptance and response in real order', 
   let sendCalls = 0;
   const backend = {
     id: 'hermes-live',
-    [TAP_GATED_VOICE_TOOLS]: true, // This fixture never executes a tool.
     sendMessage() {
       sendCalls += 1;
       return new Promise((resolve) => { releaseSend = () => resolve({ text: 'ok' }); });
@@ -346,64 +344,51 @@ test('the manifest advertises sessions only because a backend provides them', as
   }
 });
 
-test('phone voice chat is refused before dispatch, while typed chat still executes', async () => {
+test('phone voice uses the typed send even when the backend does not expose permission hooks', async () => {
   const { gate, calls } = await makeGate();
   const chat = (path, body) => fetch(`http://127.0.0.1:${gate.port}${path}`, {
     method: 'POST', headers: auth(gate), body: JSON.stringify(body),
   });
-  const input = { backendId: 'stub-local', messages: [{ role: 'user', content: 'Write draft.txt' }] };
+  const input = { backendId: 'stub-local', sessionId: 'ses_1', messages: [{ role: 'user', content: 'Write draft.txt' }] };
   try {
     for (const path of ['/v1/chat/completions', '/p/unused/v1/chat/completions']) {
       for (const stream of [true, false]) {
         const response = await chat(path, { ...input, stream, source: 'voice' });
-        assert.equal(response.status, 422);
-        assert.deepEqual(await response.json(), { error: {
-          code: 'voice_approval_policy_unavailable',
-          message: 'Use typed chat because this call can’t ask before every action.',
-        } });
+        assert.equal(response.status, 200);
+        assert.match(await response.text(), /echo Write draft.txt/);
       }
     }
-    assert.equal(calls.some((call) => /^(?:sendMessage|createSession)/.test(call)), false);
     const response = await chat('/v1/chat/completions', input);
     assert.equal(response.status, 200);
     assert.equal((await response.json()).choices[0].message.content, 'echo Write draft.txt');
-    assert.deepEqual(calls.filter((call) => call.startsWith('sendMessage')), ['sendMessage:ses_1']);
+    assert.deepEqual(calls.filter((call) => call.startsWith('sendMessage')), Array(5).fill('sendMessage:ses_1'));
   } finally {
     await gate.close();
   }
 });
 
-test('a completed Hermes phone exchange survives a Gate restart and reaches one successful typed send', async () => {
+test('a completed Hermes phone exchange is native, survives Gate restart and does not alter typed input', async () => {
   const registry = stubRegistry([]);
   const bodies = [];
-  let rejectTyped = true;
-  let storedText = null;
-  let voiceSends = 0;
+  const rows = [];
   registry.get('stubcli').createBackend = () => createHermesBackend({
     baseUrl: 'http://hermes.test',
     executablePath: 'hermes',
-    async runCliImpl(_name, args, { input }) {
-      assert.ok(args.includes('--safe-mode'));
-      assert.ok(!args.includes('--resume'));
-      assert.match(input, /spoken canary/);
-      voiceSends++;
-      return { code: 0, stdout: 'answer canary' };
-    },
+    runCliImpl() { assert.fail('voice must not launch Hermes'); },
     async fetchImpl(raw, init = {}) {
       const path = new URL(raw).pathname;
       if (path === '/api/sessions/ses_1/messages') {
-        return Response.json({ data: storedText === null ? [] : [{ id: 'u1', role: 'user', content: storedText }] });
+        return Response.json({ data: rows });
       }
       if (path !== '/v1/chat/completions') return new Response(null, { status: 404 });
       assert.equal(init.headers['X-Hermes-Session-Id'], 'ses_1');
-      assert.equal(init.headers['X-Versutus-Turn-Source'], undefined);
-      bodies.push(init.body);
-      if (rejectTyped) {
-        rejectTyped = false;
-        return new Response(`data: ${JSON.stringify({ choices: [{ finish_reason: 'error' }], error: { message: init.body } })}\n\n`);
-      }
-      storedText = JSON.parse(init.body).messages[0].content;
-      return new Response('data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n');
+      const source = init.headers['X-Versutus-Turn-Source'];
+      bodies.push([source, JSON.parse(init.body)]);
+      const content = JSON.parse(init.body).messages[0].content;
+      const answer = source === 'voice' ? 'answer canary' : 'ok';
+      rows.push({ id: `${rows.length}`, role: 'user', content },
+        { id: `${rows.length + 1}`, role: 'assistant', content: answer });
+      return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}\n\ndata: [DONE]\n\n`);
     },
   });
   const { gate, gateHome, startGate } = await makeGate({ registry });
@@ -419,36 +404,27 @@ test('a completed Hermes phone exchange survives a Gate restart and reaches one 
     const response = await chat(gate, 'spoken canary', 'voice');
     assert.equal(response.status, 200);
     assert.match(await response.text(), /answer canary/);
-    assert.equal(voiceSends, 1);
-    assert.deepEqual(bodies, [], 'the call must not write through the typed backend');
+    assert.equal(bodies.length, 1);
   } finally {
     await gate.close();
   }
   const directory = join(gateHome, 'voice', 'handoff');
-  assert.equal((await readdir(directory)).length, 1);
+  const handoffs = async () => readdir(directory).catch((error) => { if (error.code === 'ENOENT') return []; throw error; });
+  assert.deepEqual(await handoffs(), []);
 
   const restarted = await startGate();
   try {
-    const failed = await (await chat(restarted, 'first typed')).text();
-    assert.match(failed, /could not complete/);
-    assert.doesNotMatch(failed, /spoken canary|answer canary/);
-    assert.equal((await readdir(directory)).length, 1, 'a refused turn does not consume the handoff');
-
     assert.match(await (await chat(restarted, 'typed now')).text(), /"content":"ok"/);
-    for (const body of bodies) assert.match(body, /Earlier in a voice call/);
-    assert.match(storedText, /User: "spoken canary"[\s\S]+Assistant: "answer canary"[\s\S]+typed now$/);
-    assert.doesNotMatch(storedText, /Use typed chat/);
-    assert.deepEqual(await readdir(directory), []);
+    assert.deepEqual(await handoffs(), []);
 
     const history = await fetch(`http://127.0.0.1:${restarted.port}/v1/sessions/ses_1/messages?backendId=stub-local`, {
       headers: auth(restarted),
     });
     assert.equal(history.status, 200);
-    assert.deepEqual((await history.json()).data[0].content, [{ type: 'text', text: 'typed now' }]);
-
-    await (await chat(restarted, 'typed again')).text();
-    assert.equal(bodies.length, 3);
-    assert.equal(bodies[2], '{"model":"model","provider":"nous","messages":[{"role":"user","content":"typed again"}],"stream":true}');
+    assert.deepEqual((await history.json()).data.map((row) => row.content[0].text),
+      ['spoken canary', 'answer canary', 'typed now', 'ok']);
+    assert.deepEqual(bodies, [['voice', { model: 'model', provider: 'nous', messages: [{ role: 'user', content: 'spoken canary' }], stream: true }],
+      [undefined, { model: 'model', provider: 'nous', messages: [{ role: 'user', content: 'typed now' }], stream: true }]]);
   } finally {
     await restarted.close();
   }
@@ -461,8 +437,8 @@ test('phone voice chat relays a Gate-owned approval and the same RPC records it 
   let ran = false;
   adapter.createBackend = () => ({
     ...original(),
-    [TAP_GATED_VOICE_TOOLS]: true,
-    async voiceSendMessage(sessionId, { source, voiceDeviceId, voiceGate, signal }, onEvent) {
+    streamEvents: undefined,
+    async sendMessage(sessionId, { source, voiceDeviceId, voiceGate, signal }, onEvent) {
       assert.equal(source, 'voice');
       const allowed = await voiceGate.approvals.authorize({
         backendId: 'stub-local', sessionId, deviceId: voiceDeviceId, tool: 'Write', signal,

@@ -186,7 +186,7 @@ import {
 } from '@/lib/voice/handsfree-call-copy';
 import { adoptedCallSessionId } from '@/lib/voice/call-session';
 import { handsfreeStartBlockerCopy } from '@/lib/voice/handsfree-start-policy';
-import { callProjectionForThread } from '@/lib/voice/call-thread-projection';
+import { mergeCallThreadTranscript } from '@/lib/voice/call-thread-projection';
 import {
   grantHandsfreeConsent,
   HANDSFREE_CONSENT_STORAGE_KEY,
@@ -1180,16 +1180,12 @@ export function ChatScreen() {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
-  const visibleCallProjection = useMemo(() =>
-    callProjectionForThread(
+  const transcriptMessages = useMemo(() =>
+    mergeCallThreadTranscript(
       callThreadProjection,
       draftThread ? composerDraftKey(draftThread) : undefined,
       messages,
     ), [callThreadProjection, draftThread, messages]);
-  const transcriptMessages = useMemo(
-    () => visibleCallProjection.length ? [...messages, ...visibleCallProjection] : messages,
-    [messages, visibleCallProjection],
-  );
 
   // Every surface change funnels through here so the screen-local backends
   // section cannot outlive the configurable thread it belongs to (rook
@@ -1865,7 +1861,7 @@ export function ChatScreen() {
         // next typed message continues it rather than opening a second thread.
         // It is adopted when the call is no longer live — see the effect above.
         if (!callSessionId) {
-          void fetchCallChatSession(activeGateway.id).then((returned) => {
+          void (attempt.chatSessionId ? Promise.resolve(attempt.chatSessionId) : fetchCallChatSession(activeGateway.id)).then((returned) => {
             const adopt = adoptedCallSessionId({ sent: callSessionId, returned });
             if (adopt) setPendingCallSession(adopt);
           });

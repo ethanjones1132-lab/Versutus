@@ -125,7 +125,7 @@ test('a finished reply closes its generation; the phase waits for the speech to 
   assert.equal(heard.state.phase, 'listening');
 });
 
-test('a reply that fails part-way keeps what it said and adds the failure line in the same generation', () => {
+test('a reply that fails part-way keeps actual Bot speech, not a Gate failure utterance', () => {
   const thinking = run([{ type: 'final', text: 'Hi.' }, { type: 'holdElapsed', nowMs: 0 }], listening());
   const replying = run([{ type: 'replyDelta', text: 'It started well. ' }], thinking.state);
   const gen = replying.state.gen;
@@ -134,7 +134,7 @@ test('a reply that fails part-way keeps what it said and adds the failure line i
   assert.equal(failed.state.gen, gen, 'no new generation cuts the sentence in half');
   assert.equal(failed.effects.some((effect) => effect.kind === 'engine.cancelSpeech'), false);
   const spoken = failed.effects.find((effect) => effect.kind === 'engine.speak');
-  assert.equal(spoken.gen, gen);
+  assert.ok(!spoken || spoken.text === 'It started well. ');
   assert.deepEqual(failed.effects.at(-1), { kind: 'speech.close', gen });
   const frame = failed.effects.find((effect) => effect.kind === 'send' && effect.frame.t === 'turn').frame;
   assert.equal(frame.state, 'failed');

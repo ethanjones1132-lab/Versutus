@@ -32,7 +32,6 @@ import { parsePhoneFrame, serializeFrame } from './protocol.mjs';
 import { describeTurnFailure } from './turn-failure.mjs';
 import { INITIAL_VOICE_SESSION, reduceVoiceSession } from './voice-session.mjs';
 import { voiceApprovalSummary } from './voice-approvals.mjs';
-import { VOICE_POLICY_REFUSAL_CODE } from './voice-turn-policy.mjs';
 
 export const VOICE_STREAM_PATH = '/v1/voice/stream';
 export const MAX_MEDIA_FRAME_BYTES = 64 * 1024;
@@ -1072,7 +1071,6 @@ export function attachVoiceMediaSocket({
         const failure = describeTurnFailure(error, { backend: turnBackend });
         return {
           type: 'replyFailed', message: failure.message, code: failure.code,
-          ...(failure.code === VOICE_POLICY_REFUSAL_CODE ? { speech: failure.message } : {}),
         };
       };
       // What the turn has said so far. A parked turn has no socket to deliver
@@ -1192,8 +1190,7 @@ export function attachVoiceMediaSocket({
         } else {
           deliver({ type: 'replyDone' });
         }
-        // The phone is gone and the turn ran to the end anyway. Continuity
-        // handles the isolated exchange separately; the push reaches the
+        // The reply already lives in the native thread; the push reaches the
         // phone that is not on the call, once for the turn that completed.
         if (parkingTurn && said.trim()) {
           notifyPush?.({
@@ -1555,6 +1552,11 @@ export function attachVoiceMediaSocket({
       // Outbound speech is traffic too: a call the phone is listening to has not
       // gone silent, so its reservation lease must not lapse mid-reply.
       registry.markActivity(session.voiceSessionId);
+      if (event.gen === call.gen && !ended && Number.isFinite(event.queueMs) && Number.isFinite(event.synthMs)) {
+        log(`voice.tts session=${session.voiceSessionId} turn=${call.turnId ?? 'none'}`
+          + ` gen=${event.gen} workerQueueMs=${event.queueMs} synthToPcmMs=${event.synthMs}`
+          + ` effectToWorkerPcmMs=${turnSentenceAt ? now() - turnSentenceAt : 'null'}`);
+      }
       queuePlayout(event.pcm, event.gen);
     });
     // The engine finished synthesising one sentence. That is not the reply

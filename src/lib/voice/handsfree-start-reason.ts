@@ -79,6 +79,7 @@ export type HandsfreeStartFailure = Exclude<HandsfreeStartResult, 'started'>;
 export type HandsfreeStartAttempt = {
   result: HandsfreeStartResult;
   detail?: string;
+  chatSessionId?: string;
 };
 
 export type HandsfreeStartCopyContext = {

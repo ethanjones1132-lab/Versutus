@@ -105,22 +105,23 @@ test('mute and unmute pass through the engine', () => {
   assert.ok(back.effects.some((e) => e.kind === 'engine.setMuted' && e.muted === false));
 });
 
-test('a failed turn speaks a short line and returns to listening', () => {
+test('a failed turn reports to the banner and returns to listening without a synthetic answer', () => {
   const thinking = run([{ type: 'final', text: 'x' }], listening());
   const failed = run([{ type: 'replyFailed', message: 'boom' }], thinking.state);
-  assert.equal(failed.state.phase, 'speaking');
-  assert.ok(failed.effects.some((e) => e.kind === 'engine.speak'));
+  assert.equal(failed.state.phase, 'listening');
+  assert.ok(!failed.effects.some((e) => e.kind === 'engine.speak'));
   assert.ok(failed.effects.some((e) => e.kind === 'send' && e.frame.t === 'turn' && e.frame.state === 'failed'));
 
   const done = run([{ type: 'speechDone', gen: failed.state.gen }], failed.state);
   assert.equal(done.state.phase, 'listening');
 });
 
-test('an empty turn also speaks the failure line rather than hanging', () => {
+test('an empty turn reports failure without a synthetic reply or hanging', () => {
   const thinking = run([{ type: 'final', text: 'x' }], listening());
   const empty = run([{ type: 'replyDone' }], thinking.state);
-  assert.equal(empty.state.phase, 'speaking');
-  assert.ok(empty.effects.some((e) => e.kind === 'engine.speak'));
+  assert.equal(empty.state.phase, 'listening');
+  assert.ok(!empty.effects.some((e) => e.kind === 'engine.speak'));
+  assert.ok(empty.effects.some((e) => e.kind === 'send' && e.frame.t === 'turn' && e.frame.state === 'failed'));
 });
 
 test('end from the phone ends the call exactly once', () => {

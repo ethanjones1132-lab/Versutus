@@ -13,8 +13,7 @@ export const claudeCodeAdapter = {
 
   /**
    * Claude Code has no long-lived server: `--print` runs one process per turn
-   * and exits, with `--session-id` providing continuity and on-disk transcripts
-   * providing history. Nothing to supervise between turns.
+   * and exits. Its native transcript, not the process, carries continuity.
    */
   server: { transport: 'per-turn' },
 

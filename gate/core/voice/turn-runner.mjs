@@ -87,7 +87,7 @@ export function modelReport(runtime, requested) {
  *   with no terminal frame and the caller has not aborted.
  */
 async function relayStreamingTurn(upstream, {
-  onDelta, onToolCall, onApproval, nativeApproval, onChunk, onProgress = NOOP, signal, includesHandoff,
+  onDelta, onToolCall, onApproval, nativeApproval, onChunk, onProgress = NOOP, signal, includesHandoff, source,
 }) {
   const reader = upstream.body?.getReader?.();
   if (!reader) return false;
@@ -121,7 +121,7 @@ async function relayStreamingTurn(upstream, {
   let buffer = '';
   let sawContent = false;
   let terminal = false;
-  let handoffRefused = false;
+  let upstreamRefused = false;
 
   const aborted = () => Boolean(signal?.aborted);
 
@@ -145,31 +145,35 @@ async function relayStreamingTurn(upstream, {
       return;
     }
 
-    if (includesHandoff) {
-      let payload;
-      try { payload = JSON.parse(data); } catch { /* opaque frame */ }
+    let payload;
+    try { payload = JSON.parse(data); } catch { /* opaque frame */ }
+    if (includesHandoff || source === 'voice') {
       if (payload?.error || ['error', 'cancelled'].includes(payload?.choices?.[0]?.finish_reason)) {
         // Hermes reports refusal/cancellation in-band on an HTTP 200. Don't
         // consume the handoff or relay diagnostics that can quote the input.
-        handoffRefused = terminal = true;
+        upstreamRefused = terminal = true;
         return;
       }
+    }
+    const approvalType = (type) => type === 'approval.request' || type === 'hermes.approval.request';
+    if (nativeApproval && [eventType, payload?.type, payload?.event].some(approvalType)) {
+      // Only the normalized Gate card is sent to the phone, never raw tool input.
+      const request = nativeApproval({ ...payload, ...payload.payload });
+      if (request) onApproval(request);
+      return;
     }
     onChunk(data);
     // `onChunk` is a caller callback like the rest: one that aborts mid-frame
     // owns the end of the turn, and nothing it aborted may be reported after.
     if (aborted()) return;
     try {
-      const payload = JSON.parse(data);
-      if (nativeApproval && (eventType === 'approval.request'
-        || eventType === 'hermes.approval.request' || payload?.type === 'approval.request'
-        || payload?.type === 'hermes.approval.request')) {
-        const request = nativeApproval(payload.payload ?? payload);
-        if (request) onApproval(request);
-        return;
-      }
       if (eventType === 'approval.required' || payload?.type === 'approval.required') {
         onApproval(payload.payload ?? payload);
+        return;
+      }
+      if (eventType === 'hermes.tool.progress' || payload?.type === 'hermes.tool.progress') {
+        const tool = payload?.tool ?? payload?.name;
+        if (typeof tool === 'string') onToolCall({ name: tool, callId: payload.call_id });
         return;
       }
       const choice = payload?.choices?.[0];
@@ -206,7 +210,7 @@ async function relayStreamingTurn(upstream, {
 
   try {
     const result = () => {
-      if (handoffRefused) throw new Error('The backend did not complete the typed turn.');
+      if (upstreamRefused) throw new Error('The backend did not complete the turn.');
       return sawContent;
     };
     for (;;) {
@@ -304,7 +308,6 @@ function isStreamUnsupported(error) {
  */
 export async function runBackendTurn(backend, sessionId, { text, model, images, files } = {}, {
   onDelta = NOOP,
-  onSpokenDelta,
   onToolCall = NOOP,
   onApproval = NOOP,
   source,
@@ -318,11 +321,7 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
   signal,
   stallTimeoutMs = TURN_STALL_TIMEOUT_MS,
 } = {}) {
-  // Continuity observes only answer text, not the Gate's policy notice,
-  // reasoning, approvals, or tool frames.
-  const answerDelta = onSpokenDelta
-    ? (delta) => { onSpokenDelta(delta); onDelta(delta); }
-    : onDelta;
+  const answerDelta = onDelta;
   // The caller owns the outer signal; this controller lets the runner stop the
   // event subscription once the turn is done even though it cannot abort the
   // caller's signal itself.
@@ -425,15 +424,9 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
     : Promise.race([promise, aborted]));
 
   try {
-    const voiceSend = source === 'voice' && voiceGate ? backend.voiceSendMessage : undefined;
-    if (source === 'voice' && voiceGate && backend.voiceNotice && voiceGate.announceLimits !== false) {
-      const notice = `${backend.voiceNotice} `;
-      onDelta(notice);
-      onChunk(JSON.stringify({ choices: [{ delta: { content: notice } }] }));
-    }
     // Hermes sends and streams in one POST, which does not fit the
     // subscribe-then-send shape below, so it is handled as its own path.
-    if (!voiceSend && typeof backend.sendMessageStreaming === 'function') {
+    if (typeof backend.sendMessageStreaming === 'function') {
       // A backend that cannot stream at all hands the turn to the whole-turn
       // path below, which needs this controller live. Every other ending is
       // this branch's own, and a bound still armed when the turn is over would
@@ -487,6 +480,7 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
               : undefined,
             onChunk,
             includesHandoff,
+            source,
             onProgress: () => noteActivity('the reply stream'),
             signal: controller.signal,
           });
@@ -621,16 +615,16 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
       }
     };
 
-    // Stdio/HTTP backends subscribe before sending. Claude Code is one
-    // process per turn and delivers events through sendMessage's callback.
+    // Stdio/HTTP backends subscribe before sending. Claude Code delivers
+    // events through the callback of the currently submitted input.
     // The hand-off clock starts now: an event from the opening feed is already
     // the backend working, even before `sendMessage` is invoked.
     handoffAt = Date.now();
-    const eventFeed = voiceSend ? undefined : source === 'voice' && typeof backend.streamVoiceEvents === 'function'
-      ? backend.streamVoiceEvents : backend.streamEvents;
-    const subscription = typeof eventFeed === 'function'
-      ? eventFeed.call(backend, sessionId, handleEvent, controller.signal)
-      : null;
+    const voiceFeed = source === 'voice' && typeof backend.streamVoiceEvents === 'function';
+    const eventFeed = voiceFeed ? backend.streamVoiceEvents : backend.streamEvents;
+    const subscription = voiceFeed
+      ? backend.streamVoiceEvents(sessionId, handleEvent, controller.signal, { voiceDeviceId, voiceGate })
+      : typeof eventFeed === 'function' ? backend.streamEvents(sessionId, handleEvent, controller.signal) : null;
     let warned = false;
     const warnTelemetry = () => {
       if (warned || controller.signal.aborted) return;
@@ -685,7 +679,7 @@ export async function runBackendTurn(backend, sessionId, { text, model, images, 
       // its exit) cannot be reclaimed by the race below: that race ends the
       // HTTP turn and leaves the agent running. Backends that take no signal
       // ignore the extra key, and their turn is still released by the race.
-      const result = await raceStop((voiceSend ?? backend.sendMessage).call(backend,
+      const result = await raceStop(backend.sendMessage(
         sessionId, {
           text, model, images, files,
           ...(source === undefined ? {} : { source }),

@@ -171,6 +171,8 @@ def test_synthetic_speech_becomes_a_final_then_spoken_sentences():
     audio = [params for method, params in events if method == "voice.speechAudio"]
     assert {params["gen"] for params in audio} == {1}
     assert audio[0]["chunk"]["sampleRate"] == 24000
+    assert audio[0]["queueMs"] >= 0
+    assert audio[0]["synthMs"] >= 0
 
 
 class EchoCountingVad:

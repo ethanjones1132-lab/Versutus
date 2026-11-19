@@ -47,7 +47,6 @@ import { createPushNotifier, widgetSnapshot } from './push-notifier.mjs';
 import { createVoiceRpc } from './voice/voice-rpc.mjs';
 import { attachVoiceMediaSocket } from './voice/media-socket.mjs';
 import { mirrorVoiceApprovals } from './voice/voice-approvals.mjs';
-import { requireVoiceTurnPolicy, VOICE_POLICY_REFUSAL, VOICE_POLICY_REFUSAL_CODE } from './voice/voice-turn-policy.mjs';
 import { createVoiceAudit } from './voice/audit.mjs';
 import { createVoiceHandoff, visibleVoiceHandoffMessage } from './voice/handoff.mjs';
 import { LocalEngine, spawnVoiceWorker } from './voice/engines/local-engine.mjs';
@@ -662,7 +661,12 @@ async function streamBackendTurn(backend, sessionId, { text, model, images, file
   };
 
   let stopped = false;
-  let spoken = '';
+  const mirror = voiceGate && mirrorVoiceApprovals({
+    ...voiceGate, sessionId, backendId, signal: controller.signal,
+    onApproval: (approval) => emit(JSON.stringify({
+      choices: [], voiceApproval: { t: 'approval', turnId: turnId ?? sessionId, ...approval },
+    })),
+  });
   try {
     const scope = { backend, environmentId: backendId, botId, sessionId };
     const send = (input, includesHandoff) => runBackendTurn(backend, sessionId, { text: input, model, images, files }, {
@@ -673,10 +677,7 @@ async function streamBackendTurn(backend, sessionId, { text, model, images, file
         source: 'voice',
         voiceGate,
         voiceDeviceId: voiceGate.deviceId,
-        ...(handoff ? { onSpokenDelta: (delta) => { spoken += delta; } } : {}),
-        onApproval: (approval) => emit(JSON.stringify({
-          choices: [], voiceApproval: { t: 'approval', turnId: turnId ?? sessionId, ...approval },
-        })),
+        onApproval: mirror.open,
       } : {}),
       // Tool frames are progress the Gate can see, so they re-arm the stall
       // watchdog exactly as a delta does (design 3.4).
@@ -705,9 +706,6 @@ async function streamBackendTurn(backend, sessionId, { text, model, images, file
     // not answer", with advice to pick another model. The caller stopped it, so
     // the only thing left to say is that the stream is over.
     stopped = aborted === true || controller.signal.aborted;
-    if (voiceGate && handoff && successful(outcome) && !backendUpstreamRefusal(spoken)) {
-      void handoff.commit(scope, { user: text, assistant: spoken });
-    }
 
     // What this turn says about the model. Nothing is recorded for a turn the
     // caller ended or walked away from — Stop, a dropped phone, or the Gate's
@@ -767,6 +765,7 @@ async function streamBackendTurn(backend, sessionId, { text, model, images, file
     // the cancel route, a Gate ending through endByGate). A named turn still
     // open here was stopped by the phone.
     if (turn && !turn.finished && (stopped || controller.signal.aborted)) endTurn('cancelled');
+    mirror?.close();
     stopKeepalive();
     durable.finishStream();
   }
@@ -1498,7 +1497,6 @@ function concludeDurableProviderTurn(durable, outcome) {
 const VOICE_TURN_ABORTED = Object.freeze({ hasContent: false, aborted: true });
 // Isolated runtimes deliberately do not resume typed threads. Keep a bounded
 // memory of that call's own turns for follow-ups, never a second disk transcript.
-const restrictedCallContext = new WeakMap();
 
 function voiceBackendDescriptor(backend) {
   if (!backend || typeof backend !== 'object') return 'backend';
@@ -1591,7 +1589,7 @@ export async function resolveVoiceTurnBackend(backendManager, thread, {
  * backendId does.
  */
 export async function runVoiceTurn(backendManager, session, text, handlers = {}, {
-  selection, locate, approvals, approvalTimeoutMs, handoff,
+  selection, locate, approvals, approvalTimeoutMs,
 } = {}) {
   const resolved = await resolveVoiceTurnBackend(backendManager, session?.thread, {
     signal: handlers?.signal,
@@ -1604,53 +1602,28 @@ export async function runVoiceTurn(backendManager, session, text, handlers = {},
     locate,
   });
   if (resolved.aborted) return VOICE_TURN_ABORTED;
-  requireVoiceTurnPolicy(resolved.backend);
   // A spoken turn runs on the model the thread's typed turns run on. Without
   // it the backend answers on its own default, so a call in a thread pinned to
   // one model was answered by another.
   const model = voiceThreadModel(session?.thread);
-  const prior = restrictedCallContext.get(session);
-  let received = '';
-  let spoken = '';
+  const voiceGate = {
+    approvals, backendId: resolved.scope.backendId,
+    botId: session?.thread?.botId ?? resolved.backend.bot ?? null,
+    sessionId: session?.thread?.sessionId,
+    timeoutMs: approvalTimeoutMs,
+  };
   const mirror = mirrorVoiceApprovals({
-    approvals, deviceId: session?.deviceId, onApproval: handlers.onApproval,
-    signal: handlers.signal, timeoutMs: approvalTimeoutMs,
+    ...voiceGate, deviceId: session?.deviceId, onApproval: handlers.onApproval, signal: handlers.signal,
   });
   try {
-    const outcome = await runBackendTurn(resolved.backend, session?.thread?.sessionId, { text, ...(model ? { model } : {}) }, {
+    return await runBackendTurn(resolved.backend, session?.thread?.sessionId, { text, ...(model ? { model } : {}) }, {
       ...handlers,
       source: 'voice',
       voiceDeviceId: session?.deviceId,
-      voiceGate: {
-        approvals, botId: session?.thread?.botId ?? resolved.backend.bot ?? null,
-        history: prior?.history, announceLimits: !prior,
-      },
-      onDelta(delta) {
-        received = (received + delta).slice(-1_200);
-        handlers.onDelta?.(delta);
-      },
-      ...(handoff ? { onSpokenDelta: (delta) => { spoken += delta; } } : {}),
+      voiceGate,
       onApproval: mirror.open,
       backendId: resolved.descriptor,
     });
-    if (session && outcome.hasContent && !outcome.aborted && resolved.backend.voiceNotice) {
-      restrictedCallContext.set(session, {
-        history: [...(prior?.history ?? []), { role: 'user', content: String(text ?? '').slice(-1_200) },
-          { role: 'assistant', content: received }].slice(-12),
-      });
-    }
-    if (handoff && outcome.hasContent && !outcome.aborted && !handlers.signal?.aborted
-      && !backendUpstreamRefusal(spoken)) {
-      // Production disables speculative turns. Enqueue before the reply is
-      // marked done, so the next typed turn waits for append or handoff.
-      void handoff.commit({
-        backend: resolved.backend,
-        environmentId: resolved.scope.backendId,
-        botId: resolved.scope.botId,
-        sessionId: session?.thread?.sessionId,
-      }, { user: text, assistant: spoken });
-    }
-    return outcome;
   } finally {
     mirror.close();
   }
@@ -1770,6 +1743,9 @@ export async function createGate(config = {}) {
     // and the shutdown without a python, a GPU or twenty seconds of model load.
     voicePool = null,
     voiceWarmStart = true,
+    // In-process diagnostics can feed a final transcript into the actual
+    // engine. This is not a wire command and cannot be enabled by a client.
+    observeVoiceEngine,
     // The turn journal and where it lives (docs/design/durable-turns.md 3.2).
     // Injected whole, or by directory, so a test can watch a restart recover
     // what the previous process left running without waiting for one.
@@ -1917,7 +1893,6 @@ export async function createGate(config = {}) {
     store: environmentStore,
     registry: environmentRegistry,
     approvals: environmentService.approvals,
-    voiceScratchDir: join(gateHome, 'voice', 'scratch'),
     vault,
     environmentState: environmentService.environmentState,
     buildEnvironment: async ({ record, credentials }) =>
@@ -2482,7 +2457,7 @@ export async function createGate(config = {}) {
     return { backend: await forBotOrThrow(backend, botId), environmentId };
   }
 
-  /** The phone engine uses the same attested adapter path as the media socket. */
+  /** The phone engine uses the same native adapter path as the media socket. */
   async function servePhoneVoiceTurn({ botId, body, res, callerId, deviceId, turnId }) {
     try {
       const thread = {
@@ -2492,7 +2467,6 @@ export async function createGate(config = {}) {
       };
       const located = thread.backendId || thread.botId ? thread : await locateCallThread(thread);
       const { backend, environmentId } = await resolveConversationScopeOrThrow(located.backendId, located.botId);
-      requireVoiceTurnPolicy(backend);
       const text = lastUserText(body.messages);
       if (!text || lastUserImages(body.messages) || lastUserFiles(body.messages)) {
         throw namedRefusal('A call needs a spoken message, without attachments.', 'invalid_request', 400);
@@ -2504,41 +2478,37 @@ export async function createGate(config = {}) {
         approvals: environmentService.approvals,
         botId: botId ?? backend.bot ?? null,
         deviceId: deviceId ?? 'bootstrap:phone-chat',
-        history: Array.isArray(body.messages) ? body.messages.slice(-13, -1).filter((message) => message && (
-          message.role === 'assistant' || message.role === 'user'
-        ) && typeof message.content === 'string') : [],
       };
       if (body.stream === true) {
         await streamBackendTurn(backend, sessionId, { text, model }, res, {
           callerId, turnId, backendId: environmentId, botId: located.botId, inFlightTurns, journal: turnJournal,
-          keepaliveIntervalMs, detachedTurnMaxMs, detachedStallMs, detachedTurnLimit, voiceGate, handoff: voiceHandoff,
+          keepaliveIntervalMs, detachedTurnMaxMs, detachedStallMs, detachedTurnLimit, voiceGate,
         });
         return;
       }
       let reply = '';
-      let spoken = '';
       const controller = new AbortController();
       res.once('close', () => controller.abort());
-      const result = await runBackendTurn(backend, sessionId, { text, model }, {
-        source: 'voice', voiceGate, voiceDeviceId: voiceGate.deviceId, signal: controller.signal,
-        onDelta: (delta) => { reply += delta; },
-        onSpokenDelta: (delta) => { spoken += delta; },
-      });
-      if (result.aborted || res.destroyed) return;
-      if (result.hasContent && !backendUpstreamRefusal(spoken)) {
-        void voiceHandoff.commit({ backend, environmentId, botId: located.botId, sessionId }, {
-          user: text, assistant: spoken,
+      const mirror = mirrorVoiceApprovals({ ...voiceGate, sessionId, backendId: environmentId, signal: controller.signal });
+      let result;
+      try {
+        result = await runBackendTurn(backend, sessionId, { text, model }, {
+          source: 'voice', voiceGate, voiceDeviceId: voiceGate.deviceId, signal: controller.signal,
+          onDelta: (delta) => { reply += delta; },
+          onApproval: mirror.open,
         });
+      } finally {
+        mirror.close();
       }
+      if (result.aborted || res.destroyed) return;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ session_id: sessionId, choices: [{ message: { role: 'assistant', content: reply } }] }));
     } catch (error) {
       if (res.headersSent) return;
-      const policy = error?.code === VOICE_POLICY_REFUSAL_CODE;
-      res.writeHead(policy ? 422 : (error?.status ?? 502), { 'Content-Type': 'application/json' });
+      res.writeHead(error?.status ?? 502, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: {
         code: error?.code ?? 'backend_error',
-        message: error?.message ?? VOICE_POLICY_REFUSAL,
+        message: error?.message ?? 'The backend could not answer this call.',
       } }));
     }
   }
@@ -5492,16 +5462,17 @@ export async function createGate(config = {}) {
     callsEnabled: () => readVoiceConfig({ paths: voicePaths() }).enabled,
     log: (line) => console.log(line),
     audit: (summary) => voiceAudit.record(summary),
-    createEngine: (session) => (
-      session.engine === 'local' && !scriptedEngineEnabled()
+    createEngine: (session) => {
+      const engine = session.engine === 'local' && !scriptedEngineEnabled()
         ? new LocalEngine({ paths: voicePaths(), pool: voiceWorkerPool, log: (line) => console.log(line) })
-        : new ScriptedEngine()
-    ),
+        : new ScriptedEngine();
+      observeVoiceEngine?.(session, engine);
+      return engine;
+    },
     runTurn: (session, text, handlers) => runVoiceTurn(backendManager, session, text, handlers, {
       selection: defaultBackendSelection,
       locate: locateCallThread,
       approvals: environmentService.approvals,
-      handoff: voiceHandoff,
     }),
     allowSpeculativeTurns: false,
     // A turn whose phone went away runs to the end and its reply is pushed, the
@@ -5602,8 +5573,6 @@ export async function createGate(config = {}) {
       // listener goes away — with the background retention sweep settled too, so
       // nothing is still touching the turns directory after this returns.
       await turnJournal.close();
-      // End media turns before draining commits: isolated exchanges that
-      // completed before shutdown must not be lost with the socket.
       voiceMedia.endAll?.('gate-restart');
       voiceMedia.close();
       try {
@@ -5618,9 +5587,8 @@ export async function createGate(config = {}) {
           });
         });
       } finally {
-        // HTTP voice can also enqueue an exchange. Close admission before
-        // taking the final snapshot of pending commits.
         await closeVoiceHandoff();
+        await backendManager.stopAll();
       }
     },
   };

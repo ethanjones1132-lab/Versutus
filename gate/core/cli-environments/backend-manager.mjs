@@ -3,8 +3,6 @@ import { createStdioServer } from './stdio-server.mjs';
 import { isApprovalRequest } from './backends/codex.mjs';
 import { createPermissionBridge } from './claude-permissions.mjs';
 import { createOpenCodePermissionBridge } from './opencode-permissions.mjs';
-import { runOpenCodeVoice } from './opencode-voice.mjs';
-import { actionClass } from '../approvals/action-class.mjs';
 
 // How long a backend whose server will not start stays unretried. The first
 // cold read after a Gate restart otherwise pays the supervisor's whole start
@@ -28,7 +26,6 @@ export function createBackendManager({
   // behind them answered.
   environmentState,
   approvals,
-  voiceScratchDir,
   approvalTimeoutMs = 120_000,
   buildEnvironment,
   onDiagnostic,
@@ -180,8 +177,8 @@ export function createBackendManager({
     }
     const adapter = registry.get(record.adapterId);
 
-    // A per-turn CLI has nothing to supervise between turns: the backend spawns
-    // a process per message and history lives on disk.
+    // A per-turn CLI owns its processes inside the adapter. There is no HTTP
+    // or JSON-RPC supervisor to construct here.
     if (adapter.server?.transport === 'per-turn') {
       const cached = backends.get(environmentId);
       if (cached) return cached.backend;
@@ -251,21 +248,23 @@ export function createBackendManager({
           onServerRequest: async ({ method, params = {} } = {}) => {
             const threadId = typeof params.threadId === 'string' ? params.threadId : null;
             const voice = threadId && codexVoiceTurns.get(environmentId)?.get(threadId);
-            if (voice) {
-              const kind = actionClass(method);
-              if (kind === 'credential_system') return { permissions: {}, scope: 'turn' };
-              if (!isApprovalRequest(method)) {
-                // Do not use the typed empty-result default for a voice request.
-                throw new Error('Codex request is not available on a call');
-              }
-              if (Array.isArray(params.availableDecisions) && !params.availableDecisions.includes('accept')) {
-                return { decision: 'decline' };
-              }
+            const accepts = !Array.isArray(params.availableDecisions)
+              || params.availableDecisions.includes('accept');
+            if (voice && isApprovalRequest(method)) {
               const allowed = await approvals.authorize({
                 tool: method, backendId: environmentId, botId: voice.botId, sessionId: voice.sessionId,
-                deviceId: voice.deviceId, signal: voice.signal, announce: voice.announce,
+                deviceId: voice.deviceId, signal: voice.signal, timeoutMs: voice.timeoutMs, requireDecision: true,
+                announce: (payload) => fanOut(environmentId, {
+                  method: 'versutus/approval', params: { ...payload, threadId },
+                }),
               }).catch(() => false);
-              return { decision: allowed ? 'accept' : 'decline' };
+              if (method === 'item/permissions/requestApproval' || method === 'permissionsRequestApproval') {
+                return { permissions: allowed ? (params.permissions ?? {}) : {}, scope: 'turn' };
+              }
+              if (method === 'execCommandApproval' || method === 'applyPatchApproval') {
+                return { decision: allowed ? 'approved' : 'denied' };
+              }
+              return { decision: allowed && accepts ? 'accept' : 'decline' };
             }
             // An empty result grants the request. Only a method that is not an
             // approval may take it; an approval stays unanswered until a ruling.
@@ -314,8 +313,6 @@ export function createBackendManager({
               announce(expired ? 'expired' : ruling?.decision === 'approve' ? 'approved' : 'denied');
             }
 
-            const accepts = !Array.isArray(params.availableDecisions)
-              || params.availableDecisions.includes('accept');
             return { decision: ruling?.decision === 'approve' && accepts ? 'accept' : 'decline' };
           },
         } : {}),
@@ -389,14 +386,20 @@ export function createBackendManager({
           // raw stream to await its own turn.
           subscribe: (handler) => subscribe(environmentId, handler),
           ...(record.adapterId === 'codex' && approvals?.authorize ? {
-            registerVoiceThread(threadId, context) {
-              const turns = codexVoiceTurns.get(environmentId) ?? new Map();
-              turns.set(threadId, context);
-              codexVoiceTurns.set(environmentId, turns);
-              return () => {
-                turns.delete(threadId);
-                if (!turns.size) codexVoiceTurns.delete(environmentId);
-              };
+             registerVoiceThread(threadId, context) {
+               const turns = codexVoiceTurns.get(environmentId) ?? new Map();
+               const controller = new AbortController();
+               const voice = {
+                 ...context,
+                 signal: context.signal ? AbortSignal.any([context.signal, controller.signal]) : controller.signal,
+               };
+               turns.set(threadId, voice);
+               codexVoiceTurns.set(environmentId, turns);
+               return () => {
+                 if (turns.get(threadId) === voice) turns.delete(threadId);
+                 if (!turns.size && codexVoiceTurns.get(environmentId) === turns) codexVoiceTurns.delete(environmentId);
+                 controller.abort();
+               };
             },
           } : {}),
           onApproval: async (runId, { approved } = {}) => {
@@ -416,12 +419,6 @@ export function createBackendManager({
           credentials: backendCredentials,
           record,
           ...(opencodePermissionBridge ? { permissionBridge: opencodePermissionBridge } : {}),
-          ...(record.adapterId === 'opencode' && voiceScratchDir && approvals?.authorize ? {
-            runVoice: (sessionId, input, onEvent) => runOpenCodeVoice({
-              record, adapter, credentials, buildEnvironment, scratchDir: voiceScratchDir, sessionId, input, onEvent,
-              ...(createServer ? { serverFactory: createServer } : {}),
-            }),
-          } : {}),
         });
     backends.set(environmentId, { key, backend });
     return backend;
@@ -503,7 +500,7 @@ export function createBackendManager({
   }
 
   async function stopAll() {
-    for (const server of servers.values()) await server.stop().catch(() => undefined);
+    for (const server of servers.values()) await Promise.resolve(server.stop?.()).catch(() => undefined);
     servers.clear();
     // A bridge still being opened belongs to an environment this stop has just
     // forgotten; await it first, so its listener is closed rather than leaked

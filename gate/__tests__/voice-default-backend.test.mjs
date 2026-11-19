@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 
 import { resolveVoiceBackend } from '../core/voice/voice-backend.mjs';
 import { runVoiceTurn } from '../core/server.mjs';
-import { TAP_GATED_VOICE_TOOLS } from '../core/voice/voice-turn-policy.mjs';
 
 // Issue #1 follow-up: a spoken turn on an unscoped thread took the first
 // environment that could stream a turn, running or not. On the Mac that was a
@@ -30,7 +29,6 @@ function readinessManager(methods = {
       if (!methods[id]) throw new Error(`unknown backend ${id}`);
       const backend = {
         id,
-        [TAP_GATED_VOICE_TOOLS]: true, // Only echoes text; no tools.
         sendMessage: async () => ({ text: id }),
       };
       if (methods[id].has('forBot')) backend.forBot = async (botId) => ({ id: `${id}:${botId}` });

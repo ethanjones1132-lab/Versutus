@@ -425,7 +425,7 @@ class VoicePipeline:
             self._speech_gen = gen
             self._synth_gate = True
             self._set_playback_gate()
-            self._synth_jobs.append((gen, text))
+            self._synth_jobs.append((gen, text, time.monotonic()))
             idle = self._synth_worker is None
         # Only spawned when nobody is serving the queue: the sentences of one
         # reply are spoken one after another, never on top of each other.
@@ -454,10 +454,10 @@ class VoicePipeline:
                     if not self._synth_jobs:
                         self._synth_worker = None
                         return
-                    gen, text = self._synth_jobs.pop(0)
+                    gen, text, queued_at = self._synth_jobs.pop(0)
                     self._running_gen = gen
                 try:
-                    self._speak_one(gen, text)
+                    self._speak_one(gen, text, queued_at)
                 finally:
                     self._running_gen = None
                 with self._synth_lock:
@@ -474,18 +474,22 @@ class VoicePipeline:
                 if self._synth_worker is me:
                     self._synth_worker = None
 
-    def _speak_one(self, gen, text):
+    def _speak_one(self, gen, text, queued_at):
         epoch = self._epoch
+        started_at = time.monotonic()
+        first = True
         try:
             for chunk_gen, pcm in self._synth.speak(text, gen):
                 if epoch != self._epoch:
                     # open()/close() while this sentence was being generated:
                     # its audio is not the audio of the call that is running.
                     return
-                self._emit(
-                    "voice.speechAudio",
-                    {"gen": chunk_gen, "chunk": encode_chunk(pcm, OUTPUT_SAMPLE_RATE)},
-                )
+                params = {"gen": chunk_gen, "chunk": encode_chunk(pcm, OUTPUT_SAMPLE_RATE)}
+                if first:
+                    params["queueMs"] = round((started_at - queued_at) * 1000)
+                    params["synthMs"] = round((time.monotonic() - started_at) * 1000)
+                    first = False
+                self._emit("voice.speechAudio", params)
             if not self._synth.is_cancelled(gen):
                 self._emit("voice.speechDone", {"gen": gen})
         except Exception as error:  # noqa: BLE001 - a failed sentence is reported, not fatal
@@ -520,7 +524,7 @@ class VoicePipeline:
         """Stop every sentence still owed: queued ones are dropped, the running
         one is cancelled and stops at its next chunk."""
         with self._synth_lock:
-            gens = {gen for gen, _text in self._synth_jobs}
+            gens = {job[0] for job in self._synth_jobs}
             self._synth_jobs.clear()
         if self._running_gen is not None:
             gens.add(self._running_gen)
@@ -1060,8 +1064,10 @@ def _warm_models(transcribe, kokoro):
         transcribe(b"\x00\x00" * INPUT_SAMPLE_RATE, 1)
     except Exception as error:  # noqa: BLE001 - warm-up is best effort
         print(f"[versutus-voice] whisper warm-up skipped ({error})", file=sys.stderr)
+    started = time.monotonic()
     try:
         kokoro.create("Ready.", voice="af_sarah", speed=1.0, lang="en-us")
+        print(f"[versutus-voice] kokoro warm-up ms={round((time.monotonic() - started) * 1000)}", file=sys.stderr)
     except Exception as error:  # noqa: BLE001 - warm-up is best effort
         print(f"[versutus-voice] kokoro warm-up skipped ({error})", file=sys.stderr)
 

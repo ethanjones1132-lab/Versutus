@@ -70,6 +70,7 @@ class HandsfreeCallService : Service() {
   private var nextChunkIndex = 0
 
   private var tts: TextToSpeech? = null
+  private var ttsWarmAttempted = false
   private var ttsReady = false
   private var speaking = false
   /**
@@ -701,6 +702,13 @@ class HandsfreeCallService : Service() {
     endpoints.begin(listenStartedAtMs)
     try {
       engine.startListening(buildRecognizerIntent())
+      // Only the phone engine uses this recognizer. Bind its voice while the
+      // user is speaking, without holding Listening for the service callback
+      // or sending a dummy utterance to a potentially network-backed engine.
+      if (!ttsWarmAttempted) {
+        ttsWarmAttempted = true
+        runCatching { ensureTts() }.onFailure { Log.w(TAG, "phone TTS warm-up could not bind") }
+      }
       postNotification()
       scheduleTick()
     } catch (error: Exception) {
@@ -909,6 +917,11 @@ class HandsfreeCallService : Service() {
             stopBargeIn()
             emit("fatalError", mapOf("reason" to "speech-failed", "message" to "tts-init-$status"))
             end("speech-failed")
+          } else {
+            // A background warm-up must not strand the real first sentence
+            // behind a binding that already failed.
+            runCatching { tts?.shutdown() }
+            tts = null
           }
           return@post
         }

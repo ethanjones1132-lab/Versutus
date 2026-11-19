@@ -8,7 +8,6 @@ import assert from 'node:assert/strict';
 import { runVoiceTurn } from '../core/server.mjs';
 import { startVoiceBackendLease } from '../core/voice/voice-backend.mjs';
 import { createVoiceRpc } from '../core/voice/voice-rpc.mjs';
-import { TAP_GATED_VOICE_TOOLS } from '../core/voice/voice-turn-policy.mjs';
 
 // Pinned to one backend so a resolve is exactly one `get`: an unpinned Bot walks
 // the environments twice (once to find the Bot's, once for the first-listed
@@ -58,7 +57,6 @@ function speakingBackend(extra = {}) {
     sent,
     backend: {
       id: 'hermes-live',
-      [TAP_GATED_VOICE_TOOLS]: true, // Only echoes text; no tools.
       async sendMessage(_sessionId, { text }) {
         sent.push(text);
         return { text: 'answered' };

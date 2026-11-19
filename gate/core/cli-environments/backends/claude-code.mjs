@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn } from 'node:child_process';
+import { statSync } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -8,17 +9,13 @@ import { fileURLToPath } from 'node:url';
 import { spawnCommand } from '../adapters/shared.mjs';
 import { scanAgentDirs } from '../claude-agents.mjs';
 import { createWindowsJob } from '../windows-job.mjs';
-import { isPermissionBridge } from '../claude-permissions.mjs';
-import { TAP_GATED_VOICE_TOOLS } from '../../voice/voice-turn-policy.mjs';
 
 /**
  * Claude Code as a chat backend.
  *
- * Unlike OpenCode (HTTP server) and Codex (persistent stdio JSON-RPC), Claude
- * Code runs **one process per turn**: `--print --output-format stream-json`
- * emits newline-delimited events and exits. Gate assigns a session UUID, and
- * history lives in on-disk transcripts rather than behind an API — so
- * listing sessions means reading the project's transcript directory.
+ * Claude Code runs one `--print` process per turn, emitting newline-delimited
+ * events. Both voice and typed turns use the same native transcript; a new
+ * conversation binds the Gate's reserved UUID and an existing one resumes it.
  *
  * Its agent files become Bots: each one is listed from disk and a turn taken
  * as that Bot passes `--agent <name>`, which is how the CLI selects it.
@@ -60,8 +57,9 @@ const PERMISSION_TOOL_PATH = fileURLToPath(new URL('../claude-permission-tool.mj
 /** The MCP server name and tool the CLI is told to call for a ruling. */
 const PERMISSION_SERVER_NAME = 'gate-permissions';
 const PERMISSION_PROMPT_TOOL = `mcp__${PERMISSION_SERVER_NAME}__approve`;
-const CLAUDE_VOICE_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell'];
-export const CLAUDE_VOICE_NOTICE = 'This PC’s managed Claude settings can approve actions without asking, if configured. Use typed chat for other tools.';
+// Normally `close` follows `exit` once the final stdout bytes have drained.
+// A descendant retaining the pipe must not hold a dead turn open forever.
+const EXIT_DRAIN_MS = 1_000;
 
 /** Map a transcript entry onto the app's message shape. */
 export function toGatewayMessage(entry) {
@@ -234,14 +232,9 @@ export function createClaudeCodeBackend({
     return false;
   }
 
-  /**
-   * The turn in flight, so `abort()` has something to stop.
-   *
-   * A per-turn backend has no pipe to drop and no server to interrupt: the turn
-   * *is* the process, so this is the only handle that can end one. Held as a
-   * slot rather than a stack because a turn is the only one that can be running.
-   */
-  let inflight = null;
+  // A separate handle per process: independent typed sends do not queue
+  // behind each other, and stopping one conversation must not kill another.
+  const inflight = new Set();
 
   /** What a stopped turn rejects with: a cancellation, not a failed run. */
   function stoppedError() {
@@ -272,91 +265,57 @@ export function createClaudeCodeBackend({
   }
 
   /**
-   * One turn: a single `claude --print` process, assembled from its stream.
+   * Assemble one `claude --print` turn from its own output stream. A result
+   * alone is not terminal: wait for the child and drain its stdout.
    *
    * `agent` is passed in rather than held on the backend. The backend serves
    * every Bot on this environment, so the choice belongs to the turn — a scoped
    * view that mutated shared state would silently change the next turn taken
    * by anyone else.
    */
-  async function sendTurn(sessionId, { text, model, signal, agent, source, voicePermission, voiceAgent, includesHandoff } = {}, onEvent) {
+  async function sendTurn(sessionId, { text, model, signal, agent, source, voicePermission, includesHandoff } = {}, onEvent) {
+    // A transcript with history must be resumed whichever channel sends next.
+    // An empty reservation still binds the UUID as before. Check synchronously
+    // so all listeners attach with the launch, before the child can write.
     const validId = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(sessionId);
-    if (source === 'voice' && !validId) {
-      throw new Error('Claude Code needs a valid conversation ID for this call.');
-    }
-    // --session-id assigns the ID; the documented continuation flag is
-    // --resume. Never load typed runtime state into a restricted voice process.
-    // For the real typed send carrying the handoff, resume the existing
-    // transcript (a session that has never run still needs --session-id).
-    // https://code.claude.com/docs/en/cli-reference#cli-flags
-    const resume = source !== 'voice' && includesHandoff && validId
-      && await stat(join(dir, `${sessionId}.jsonl`)).then((file) => file.isFile(), (error) => {
-        if (error?.code === 'ENOENT') return false;
-        throw error;
-      });
+    const transcript = validId ? statSync(join(dir, `${sessionId}.jsonl`), { throwIfNoEntry: false }) : null;
+    const resume = transcript?.isFile() && (transcript.size > 0 || includesHandoff);
     const args = [
       '--print',
       '--output-format', 'stream-json',
       '--include-partial-messages',
       '--verbose',
-      '--permission-mode', source === 'voice' ? 'default' : permissionMode,
-      resume ? '--resume' : '--session-id', source === 'voice' ? randomUUID() : sessionId,
+      '--permission-mode', permissionMode,
+      resume ? '--resume' : '--session-id', sessionId,
     ];
-    // `--agent` selects the Claude Code agent for this turn; without it the
-    // CLI runs as its default one, which is the built-in Bot.
-    if (agent && source !== 'voice') args.push('--agent', agent);
-    if (source === 'voice') {
-      // Restricted mode loads only flag and managed settings. Explicit `--tools`
-      // is required to re-enable shell in this mode. Do not load arbitrary
-      // agent frontmatter, hooks, plug-ins, or user/project MCP servers.
-      // https://code.claude.com/docs/en/cli-reference
-      args.push('--restricted', '--strict-mcp-config', '--no-chrome', '--no-session-persistence',
-        '--tools', CLAUDE_VOICE_TOOLS.join(','),
-        '--settings', JSON.stringify({
-          autoMemoryEnabled: false,
-          sandbox: { autoAllowBashIfSandboxed: false },
-          permissions: { ask: ['*'] },
-        }));
-      if (voiceAgent) args.push(`--append-system-prompt=${voiceAgent.prompt}`);
-    }
-    const chosen = model?.modelId ?? voiceAgent?.model ?? defaultModel;
-    if (chosen) {
-      if (source === 'voice') args.push(`--model=${chosen}`);
-      else args.push('--model', chosen);
-    }
-    // Without a bridge the argv is exactly what it was before approvals
-    // existed: no MCP server, no permission prompt tool, the CLI's own prompt.
+    if (agent) args.push('--agent', agent);
+    const chosen = model?.modelId ?? defaultModel;
+    if (chosen) args.push('--model', chosen);
     if (permissionBridge) {
-      args.push(
-        '--mcp-config', JSON.stringify({
-          mcpServers: {
-            [PERMISSION_SERVER_NAME]: {
-              type: 'stdio',
-              // The same Node that runs the Gate runs the tool: it needs no
-              // PATH lookup and no shell, and the CLI is told the exact script.
-              command: process.execPath,
-              args: [PERMISSION_TOOL_PATH],
-              env: {
-                 GATE_PERMISSION_URL: voicePermission?.url ?? permissionBridge.url,
-                 GATE_PERMISSION_SECRET: voicePermission?.secret ?? permissionBridge.secret,
-              },
+      args.push('--mcp-config', JSON.stringify({
+        mcpServers: {
+          [PERMISSION_SERVER_NAME]: {
+            type: 'stdio',
+            command: process.execPath,
+            args: [PERMISSION_TOOL_PATH],
+            env: {
+              GATE_PERMISSION_URL: voicePermission?.url ?? permissionBridge.url,
+              GATE_PERMISSION_SECRET: voicePermission?.secret ?? permissionBridge.secret,
             },
           },
-        }),
-        '--permission-prompt-tool', PERMISSION_PROMPT_TOOL,
-      );
+        },
+      }), '--permission-prompt-tool', PERMISSION_PROMPT_TOOL);
     }
     if (source === 'voice') args.push('--');
     args.push(text ?? '');
 
     const { command, prefix } = spawnCommand(executablePath);
     const child = spawnImpl(command, [...prefix, ...args], { cwd, windowsHide: true });
-    // A job per turn, not per backend: a stop must take the tools this turn
-    // spawned with it, and must never reach a pid an earlier turn registered.
     const job = jobFactory();
     job.add(child);
-    const turn = { cancelled: false, stopped: null };
-    inflight = turn;
+    const turn = { sessionId, cancelled: false, stopped: null };
+    inflight.add(turn);
+    let exited = false;
     /**
      * Kill the tree, then reject — in that order. Stop is a promise to the
      * operator that the agent stops working in the workspace, so a rejection
@@ -370,13 +329,12 @@ export function createClaudeCodeBackend({
       if (turn.cancelled) return turn.stopped;
       turn.cancelled = true;
       turn.stopped = Promise.resolve()
-        .then(() => job.terminate())
+        .then(() => { if (!exited) return job.terminate(); })
         .catch(() => undefined)
         .then(() => reject(stoppedError()));
       return turn.stopped;
     };
 
-    let buffer = '';
     let assembled = '';
     let failure = null;
     let result = null;
@@ -461,29 +419,42 @@ export function createClaudeCodeBackend({
       else onEvent?.(normalized);
     };
 
-    // stdout arrives as raw Buffers whose UTF-8 sequences stop at chunk
-    // boundaries: a multi-byte code point split between two reads decoded
-    // through String(chunk) as U+FFFD on both sides, corrupting the JSON
-    // line before it was parsed. The decoder holds the incomplete tail back
-    // until the bytes that finish it arrive; a string chunk passes through
-    // unchanged.
     const decoder = new StringDecoder('utf8');
-    child.stdout?.on('data', (chunk) => {
+    let buffer = '';
+    const onData = (chunk) => {
+      if (turn.cancelled) return;
       buffer += decoder.write(chunk);
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
       for (const line of lines) if (line.trim()) handle(line.trim());
-    });
-
-    let onAbort = null;
-    let exitCode;
+    };
+    let onAbort;
+    let onExit;
+    let onClose;
+    let drainTimer;
+    let outcome;
     try {
-      exitCode = await new Promise((resolve, reject) => {
+      outcome = await new Promise((resolve, reject) => {
         // A cancelled turn settles as a cancellation however its child dies:
-        // the exit code of a process that was killed is not the turn's
-        // outcome, and neither is a stdin error on the way down.
-        child.on('error', (error) => { if (!turn.cancelled) reject(error); });
-        child.on('close', (code) => { if (!turn.cancelled) resolve(code); });
+        // the exit code of a process that was killed is not the turn's outcome.
+        child.on('error', (error) => { if (!turn.cancelled) resolve({ error }); });
+        onExit = (code) => {
+          exited = true;
+          if (turn.cancelled) return;
+          drainTimer = setTimeout(() => {
+            resolve({ code, drainTimedOut: true });
+            child.stdout?.destroy?.();
+            child.stderr?.destroy?.();
+          }, EXIT_DRAIN_MS);
+        };
+        onClose = (code) => {
+          exited = true;
+          if (!turn.cancelled) resolve({ code });
+        };
+        child.once('exit', onExit);
+        child.once('close', onClose);
+        child.stdout?.on('data', onData);
+        child.stderr?.resume?.();
         // `signal` is how the runner hands the turn's cancellation down: the
         // runner's own race settles the HTTP turn, but only this kills the
         // agent still reading the workspace and calling the vendor.
@@ -499,15 +470,26 @@ export function createClaudeCodeBackend({
       // hundreds of turns would otherwise stack listeners on it, and a late
       // abort would try to kill a process that already exited.
       if (onAbort) signal.removeEventListener('abort', onAbort);
-      if (inflight === turn) inflight = null;
+      clearTimeout(drainTimer);
+      if (onExit) child.off('exit', onExit);
+      if (onClose) child.off('close', onClose);
+      child.stdout?.off('data', onData);
+      inflight.delete(turn);
     }
-    // The last line's end was never announced, and any multi-byte sequence
-    // the child left incomplete on death must still be flushed before the
-    // final line is decoded and handled.
+    // `close` follows stdout, including an unterminated final JSON line.
+    // Flush bytes already received on the error path too.
     buffer += decoder.end();
     if (buffer.trim()) handle(buffer.trim());
 
     const partialText = assembled;
+    if (outcome.error) {
+      const error = Object.assign(outcome.error, {
+        payload: { message: outcome.error.message, partialText },
+        partialText,
+      });
+      onEvent?.({ type: 'run.failed', payload: error.payload });
+      throw error;
+    }
     const failedResult = failure
       ? Object.assign(new Error(`claude-code: ${failure.payload.text ?? 'run failed'}`), {
         payload: { ...failure.payload, partialText },
@@ -518,10 +500,11 @@ export function createClaudeCodeBackend({
       onEvent?.({ ...failure, payload: { ...failure.payload, partialText } });
       throw failedResult;
     }
-    if (exitCode !== 0 || !result) {
-      const reason = exitCode !== 0
-        ? `claude-code exited with code ${exitCode}`
-        : 'claude-code exited without a successful result';
+    if (outcome.code !== 0 || outcome.drainTimedOut || !result) {
+      const reason = outcome.code !== 0
+        ? `claude-code exited with code ${outcome.code}`
+        : outcome.drainTimedOut ? 'claude-code exited without closing its output'
+          : 'claude-code exited without a successful result';
       const error = Object.assign(new Error(reason), {
         payload: { message: reason, partialText },
         partialText,
@@ -538,13 +521,12 @@ export function createClaudeCodeBackend({
   }
 
   async function sendWithApprovals(sessionId, opts, onEvent) {
+    if (opts.source === 'voice' && opts.signal?.aborted) throw stoppedError();
     const voice = opts.source === 'voice' ? permissionBridge?.registerVoiceTurn?.({
-      sessionId, deviceId: opts.voiceDeviceId, botId: opts.botId ?? CLAUDE_CODE_BOT.id, signal: opts.signal,
+      sessionId, deviceId: opts.voiceDeviceId, botId: opts.botId ?? opts.voiceGate?.botId ?? CLAUDE_CODE_BOT.id,
+      signal: opts.signal, timeoutMs: opts.voiceGate?.timeoutMs,
       announce: (payload) => onEvent?.({ type: 'approval.required', payload }),
-    }) : null;
-    if (opts.source === 'voice' && !voice) {
-      throw new Error('Claude Code could not open the approval channel for this call.');
-    }
+    }) : undefined;
     try {
       return await sendTurn(sessionId, { ...opts, voicePermission: voice }, onEvent);
     } finally {
@@ -594,8 +576,6 @@ export function createClaudeCodeBackend({
 
   const backend = {
     kind: 'claude-code',
-    [TAP_GATED_VOICE_TOOLS]: isPermissionBridge(permissionBridge),
-    voiceNotice: CLAUDE_VOICE_NOTICE,
 
     async listSessions(limit = 50) {
       const files = await transcripts();
@@ -720,7 +700,7 @@ export function createClaudeCodeBackend({
     },
 
     /**
-     * One process per turn; `--session-id` is what makes it a conversation.
+     * Run one turn on the native conversation.
      * The built-in Bot runs as the CLI's default agent, so no `--agent` is
      * passed here — a named agent is the scoped view's turn.
      */
@@ -729,15 +709,16 @@ export function createClaudeCodeBackend({
     },
 
     /**
-     * Stop the turn in flight. A per-turn backend has nothing to drop but the
-     * process, so this terminates it; between turns there is nothing to stop.
+     * Stop the turn in flight. Terminate the current process tree and resume
+     * the same native transcript on the next send.
      *
      * It resolves only once that kill has completed: the caller of this method
      * is told the agent has stopped, and the Job Object terminate is what makes
      * that true.
      */
-    async abort() {
-      await inflight?.cancel?.();
+    async abort(sessionId) {
+      const turn = Array.from(inflight).findLast((active) => !sessionId || active.sessionId === sessionId);
+      await turn?.cancel?.();
     },
 
     async replyApproval() {
@@ -801,13 +782,7 @@ export function createClaudeCodeBackend({
         ...backend,
         bot: botId,
         async sendMessage(sessionId, opts = {}, onEvent) {
-          let voiceAgent;
-          if (opts.source === 'voice') {
-            const source = await readFile(agent.path, 'utf8');
-            const frontmatter = /^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
-            voiceAgent = { prompt: source.replace(frontmatter, ''), model: agent.model === 'inherit' ? undefined : agent.model };
-          }
-          return sendWithApprovals(sessionId, { ...opts, agent: agent.name, botId, voiceAgent }, onEvent);
+          return sendWithApprovals(sessionId, { ...opts, agent: agent.name, botId }, onEvent);
         },
       };
     },

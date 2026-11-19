@@ -169,6 +169,7 @@ export async function createPermissionBridge({
       const allowed = await approvals.authorize({
         tool, backendId: environmentId, botId: voice.botId, sessionId: voice.sessionId,
         deviceId: voice.deviceId, signal: voice.controller.signal, announce: voice.announce,
+        timeoutMs: voice.timeoutMs, requireDecision: true,
       });
       return allowed ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: DENY_MESSAGE };
     }
@@ -291,15 +292,16 @@ export async function createPermissionBridge({
   const bridge = {
     url: `http://127.0.0.1:${port}/permission`,
     secret,
-    registerVoiceTurn({ sessionId, deviceId, botId, announce, signal }) {
+    registerVoiceTurn({ sessionId, deviceId, botId, announce, signal, timeoutMs }) {
       const id = randomBytes(16).toString('hex');
       const controller = new AbortController();
-      const voice = { sessionId, deviceId, botId, announce, controller, secret: randomBytes(16).toString('hex') };
       const abort = () => controller.abort();
       if (signal?.aborted) abort();
       else signal?.addEventListener('abort', abort, { once: true });
-      voiceTurns.set(id, voice);
-      return {
+      const voice = {
+        sessionId, deviceId, botId, announce, timeoutMs, controller, secret: randomBytes(16).toString('hex'),
+      };
+      const scope = {
         url: `http://127.0.0.1:${port}/permission?voice=${id}`,
         secret: voice.secret,
         close() {
@@ -308,10 +310,11 @@ export async function createPermissionBridge({
           abort();
         },
       };
+      voiceTurns.set(id, { ...voice, close: scope.close });
+      return scope;
     },
     close() {
-      for (const voice of voiceTurns.values()) voice.controller.abort();
-      voiceTurns.clear();
+      for (const voice of voiceTurns.values()) voice.close();
       if (!server.listening) return Promise.resolve();
       return new Promise((resolve) => {
         server.close(() => resolve());

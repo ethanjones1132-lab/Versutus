@@ -13,7 +13,6 @@
 // The backend's own text still rides along as `details` for whoever wants it,
 // but it is never the headline.
 
-import { VOICE_POLICY_REFUSAL, VOICE_POLICY_REFUSAL_CODE } from './voice-turn-policy.mjs';
 
 const BACKEND_LABELS = Object.freeze({
   'claude-code': 'Claude Code',
@@ -194,10 +193,6 @@ export function describeTurnFailure(error, { backend } = {}) {
   const code = typeof error?.code === 'string' ? error.code : '';
   const status = Number.isFinite(error?.status) ? error.status : 0;
   const text = typeof error?.message === 'string' ? error.message : '';
-
-  if (code === VOICE_POLICY_REFUSAL_CODE) {
-    return { code, message: VOICE_POLICY_REFUSAL };
-  }
 
   // The Gate's own refusal already says which environments it tried and why.
   if (code === 'no_voice_backend') {

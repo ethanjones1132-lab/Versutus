@@ -275,7 +275,10 @@ export class LocalEngine extends EventEmitter {
     else if (method === 'voice.earlyEnd') this.emit('earlyEnd', { text: params.text });
     else if (method === 'voice.speechAudio') {
       const chunk = params.chunk ?? {};
-      this.emit('speechAudio', { gen: params.gen, pcm: Buffer.from(chunk.data ?? '', 'base64') });
+      this.emit('speechAudio', {
+        gen: params.gen, pcm: Buffer.from(chunk.data ?? '', 'base64'),
+        queueMs: params.queueMs, synthMs: params.synthMs,
+      });
     } else if (method === 'voice.speechDone') this.emit('speechDone', { gen: params.gen });
     else if (method === 'voice.userSpeechStart') this.emit('userSpeechStart', { gen: params.gen });
     else if (method === 'voice.hearing') this.emit('hearing', { active: Boolean(params.active) });

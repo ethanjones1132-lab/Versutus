@@ -11,8 +11,8 @@ export function voiceApprovalSummary(value) {
 }
 
 // A native prompt already parked upstream. Deliver it through the same
-// permission layer; attestation is checked before reaching the turn runner.
-export function mirrorVoiceApprovals({ approvals, deviceId, onApproval, signal, timeoutMs = 30_000 }) {
+// permission layer.
+export function mirrorVoiceApprovals({ approvals, deviceId, backendId, botId, sessionId, onApproval, signal, timeoutMs }) {
   const seen = new Set();
   const controller = new AbortController();
   const close = () => {
@@ -27,20 +27,21 @@ export function mirrorVoiceApprovals({ approvals, deviceId, onApproval, signal, 
       if (!controller.signal.aborted) onApproval?.(request);
       return;
     }
-    if (seen.has(request.key)) return;
-    seen.add(request.key);
+    if (request.key !== undefined) {
+      if (seen.has(request.key)) return;
+      seen.add(request.key);
+    }
     const summary = voiceApprovalSummary(request.summary);
-    // Don't offer Approve for an action whose full description won't fit.
-    if (!approvals?.authorize || !deviceId || controller.signal.aborted || !summary) {
+    if (!approvals?.authorize || !deviceId || controller.signal.aborted) {
       await request.reply(false);
       return;
     }
 
     const allowed = await approvals.authorize({
-      tool: request.tool, deviceId, timeoutMs, signal: controller.signal,
+      tool: request.tool, deviceId, backendId, botId, sessionId, timeoutMs, signal: controller.signal,
       // Legacy native cards expose a redacted summary. It is never persisted;
       // the ledger uses the fixed tool/class summary in all cases.
-      legacySummary: summary, announce: onApproval,
+      legacySummary: summary ?? undefined, announce: onApproval, requireDecision: true,
     }).catch(() => false);
     await request.reply(allowed && !controller.signal.aborted);
   }

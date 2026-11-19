@@ -23,6 +23,9 @@ export type CallThreadProjection = {
   lastSeq: number;
   messages: ChatMessage[];
   replyOffsets: Record<string, number>;
+  /** Native IDs visible before opening the socket; identical old turns aren't evidence. */
+  historyBeforeCall?: ReadonlySet<string>;
+  ended?: boolean;
 };
 
 export function emptyCallThreadProjection(
@@ -170,32 +173,112 @@ export function projectCallFrame(
 }
 
 /** Canonical rows replace optimistic voice rows once history identifies their turn. */
+function matchCallHistory(
+  projection: Pick<CallThreadProjection, 'messages' | 'historyBeforeCall' | 'ended'>,
+  history: readonly ChatMessage[],
+): Map<string, number> {
+  const positions = new Map<string, number>();
+  const key = (turnId: string, role: ChatMessage['role']) => JSON.stringify([turnId, role]);
+  history.forEach((row, index) => positions.set(key(row.turnId ?? row.id, row.role), index));
+  const baseline = projection.historyBeforeCall;
+  // A page fetched during the call can contain IDs we had never seen, but
+  // those on the older side of the baseline are not new call messages.
+  let anchor = history.length - 1;
+  while (anchor >= 0 && !baseline?.has(history[anchor].id)) anchor -= 1;
+  const native = baseline
+    ? history.slice(anchor + 1)
+    : [];
+  const persisted = new Map<string, number>();
+  let nextUser = 0;
+  for (const live of projection.messages) {
+    if (live.role !== 'user') continue;
+    const index = native.findIndex((row, at) => at >= nextUser && row.role === 'user' && row.text.trim() === live.text.trim());
+    if (index < 0) continue;
+    persisted.set(live.id, anchor + index + 1);
+    let end = index + 1;
+    while (end < native.length && native[end].role !== 'user') end += 1;
+    nextUser = end;
+    const answer = projection.messages.find((row) => row.id === live.id.replace(/^voice:/, 'voice-reply:'));
+    // Backend IDs are not Gate turn IDs. Once the utterance is located in the
+    // post-start native history, prefer its reply on settlement (including a
+    // reply suffix recovered after a frame gap). Keep a still-streaming answer.
+    let replyAt = end - 1;
+    while (replyAt > index && (native[replyAt].role !== 'assistant' || !native[replyAt].text.trim())) replyAt -= 1;
+    if (answer && (!answer.streaming || projection.ended) && replyAt > index) {
+      persisted.set(answer.id, anchor + 1 + replyAt);
+    }
+  }
+  const seenUserRows = new Set(projection.messages.filter((row) => row.role === 'user').map((row) => row.id));
+  const claimed = new Set(persisted.values());
+  if (baseline && projection.ended) {
+    for (const live of projection.messages) {
+      // If the committed frame itself was dropped, history can still heal an
+      // unambiguous full reply. Do not consume an old or repeated answer.
+      if (!live.id.startsWith('voice-reply:') || seenUserRows.has(live.id.replace(/^voice-reply:/, 'voice:'))
+        || !live.text.trim()) continue;
+      const candidates = native.flatMap((row, index) => row.role === 'assistant' && row.text.trim() === live.text.trim()
+        && !claimed.has(anchor + 1 + index) ? [anchor + 1 + index] : []);
+      if (candidates.length === 1) {
+        persisted.set(live.id, candidates[0]);
+        claimed.add(candidates[0]);
+      }
+    }
+  }
+  for (const live of projection.messages) {
+    // Authoritative stable turn identity, when the backend supplies it, wins.
+    const position = live.turnId ? positions.get(key(live.turnId, live.role)) : undefined;
+    if (position !== undefined) persisted.set(live.id, position);
+  }
+  return persisted;
+}
+
+function transientAfterCall(message: ChatMessage, ended?: boolean) {
+  return ended && (message.id.startsWith('voice-end:') || message.id.startsWith('voice-approval:')
+    || (message.id.startsWith('voice-reply:') && !message.text.trim()));
+}
+
 export function reconcileCallThreadProjection(
-  projection: CallThreadProjection,
+  projection: Pick<CallThreadProjection, 'messages' | 'historyBeforeCall' | 'ended'>,
   history: readonly ChatMessage[],
 ): ChatMessage[] {
-  const canonicalRoles = new Map<string, Set<ChatMessage['role']>>();
-  for (const message of history) {
-    const turnId = message.turnId ?? message.id;
-    const roles = canonicalRoles.get(turnId) ?? new Set<ChatMessage['role']>();
-    roles.add(message.role);
-    canonicalRoles.set(turnId, roles);
+  const matched = matchCallHistory(projection, history);
+  return projection.messages.filter((message) => !matched.has(message.id) && !transientAfterCall(message, projection.ended));
+}
+
+/** Keep a locally projected row at its original place if a later row has already persisted. */
+export function mergeCallThreadTranscript(
+  projection: Pick<CallThreadProjection, 'threadKey' | 'messages' | 'historyBeforeCall' | 'ended'> | null,
+  threadKey: string | undefined,
+  history: ChatMessage[],
+): ChatMessage[] {
+  if (!projection || !threadKey || projection.threadKey !== threadKey) return history;
+  const matched = matchCallHistory(projection, history);
+  const inserts = new Map<number, ChatMessage[]>();
+  let next = history.length;
+  for (let i = projection.messages.length - 1; i >= 0; i -= 1) {
+    const row = projection.messages[i];
+    const index = matched.get(row.id);
+    if (index !== undefined) next = index;
+    else if (!transientAfterCall(row, projection.ended)) {
+      const group = inserts.get(next) ?? [];
+      group.push(row);
+      inserts.set(next, group);
+    }
   }
-  return projection.messages.filter((message) => !message.turnId || !canonicalRoles.get(message.turnId)?.has(message.role));
+  if (!inserts.size) return history;
+  const out = history.flatMap((row, index) => {
+    const before = inserts.get(index);
+    return before ? [...before.reverse(), row] : [row];
+  });
+  return out.concat(inserts.get(history.length)?.reverse() ?? []);
 }
 
 /** A route can consume call rows only while it is showing the call's captured thread. */
 export function callProjectionForThread(
-  projection: { threadKey: string; messages: ChatMessage[] } | null,
+  projection: Pick<CallThreadProjection, 'threadKey' | 'messages' | 'historyBeforeCall' | 'ended'> | null,
   threadKey: string | undefined,
   history: readonly ChatMessage[],
 ): ChatMessage[] {
   if (!projection || !threadKey || projection.threadKey !== threadKey) return [];
-  return reconcileCallThreadProjection({
-    threadKey,
-    callId: '',
-    lastSeq: 0,
-    messages: projection.messages,
-    replyOffsets: {},
-  }, history);
+  return reconcileCallThreadProjection(projection, history);
 }

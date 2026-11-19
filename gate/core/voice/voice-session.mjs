@@ -65,7 +65,6 @@ export const INITIAL_VOICE_SESSION = Object.freeze({
 const TURN_OUTPUT = new Set(['replyDelta', 'replyDone', 'replyFailed', 'toolUpdate', 'approvalRequired']);
 
 /** The line a failed turn speaks before the loop reopens. */
-export const FAILED_TURN_LINE = 'Sorry, that turn could not be completed.';
 
 function stay(state, effects = []) {
   return { state, effects };
@@ -519,14 +518,7 @@ export function reduceVoiceSession(state, event) {
         ]);
       }
       if (state.phase === 'thinking') {
-        const gen = state.gen + 1;
-        return stay({ ...state, phase: 'speaking', gen, reply: FAILED_TURN_LINE, spoken: FAILED_TURN_LINE }, [
-          phaseEffect('speaking'),
-          frameSend({ t: 'speech', gen, state: 'start' }),
-          frameSend({ t: 'turn', turnId: state.turnId, state: 'failed', error: 'empty turn' }),
-          { kind: 'engine.speak', text: FAILED_TURN_LINE, gen, final: true },
-          { kind: 'speech.close', gen },
-        ]);
+        return reduceVoiceSession(state, { ...event, type: 'replyFailed', message: 'The backend finished without replying.' });
       }
       // The reply's text is complete. Its speech is not: sentences are still
       // being synthesised and played, so the reply is only closed here — no
@@ -545,33 +537,28 @@ export function reduceVoiceSession(state, event) {
 
     case 'replyFailed': {
       if (!replyOwed(state)) return stay(state);
-      const line = event.speech ?? FAILED_TURN_LINE;
-      // A failed turn is the phone's news too; only the spoken failure line is
-      // suppressed while muted.
+      const failure = frameSend({ t: 'turn', turnId: state.turnId, state: 'failed', error: event.message });
       if (state.phase === 'muted') {
         return stay({ ...state, reply: '', spoken: '', resumePhase: 'listening' }, [
-          frameSend({ t: 'turn', turnId: state.turnId, state: 'failed', error: event.message }),
+          failure,
           { kind: 'speech.close', gen: state.gen },
         ]);
       }
-      // A reply that failed part-way has already said something true. What was
-      // queued of it plays out and the failure line follows in the same
-      // generation, rather than a new generation cutting a sentence in half.
+      // Finish what the Bot actually said. The failure is banner copy, not a
+      // fabricated reply, and never starts a speech generation.
       if (state.phase === 'speaking') {
-        return stay({ ...state, reply: `${state.reply} ${line}`, spoken: `${state.reply} ${line}` }, [
-          frameSend({ t: 'turn', turnId: state.turnId, state: 'failed', error: event.message }),
-          { kind: 'engine.speak', text: line, gen: state.gen, final: true },
+        const tail = state.reply.slice(state.spoken.length);
+        return stay({ ...state, spoken: state.reply }, [
+          failure,
+          ...(tail.trim() ? [{ kind: 'engine.speak', text: tail, gen: state.gen, final: true }] : []),
           { kind: 'speech.close', gen: state.gen },
         ]);
       }
-      const gen = state.gen + 1;
-      return stay({ ...state, phase: 'speaking', gen, reply: line, spoken: line }, [
-        phaseEffect('speaking'),
-        frameSend({ t: 'speech', gen, state: 'start' }),
-        frameSend({ t: 'turn', turnId: state.turnId, state: 'failed', error: event.message }),
-        { kind: 'engine.speak', text: line, gen, final: true },
-        { kind: 'speech.close', gen },
-      ]);
+      const queued = state.queued.join(' ').trim();
+      if (queued) return commitUtterance({ ...state, queued: [] }, queued, {
+        finals: state.queued.length, nowMs: event.nowMs, before: [failure],
+      });
+      return stay({ ...state, phase: 'listening', reply: '', spoken: '' }, [failure, phaseEffect('listening')]);
     }
 
     // The runner reports tool lifecycle while the turn runs. It is the turn's

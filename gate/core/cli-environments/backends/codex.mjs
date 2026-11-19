@@ -9,7 +9,6 @@
  * they must be answered or the agent blocks — see jsonrpc-stdio.mjs.
  */
 
-import { restrictedVoicePrompt, TAP_GATED_VOICE_TOOLS, VOICE_POLICY_REFUSAL_CODE, VOICE_TYPED_TOOLS } from '../../voice/voice-turn-policy.mjs';
 import { createThreadQueue } from '../../voice/handoff.mjs';
 
 const APPROVAL_METHODS = new Set([
@@ -192,11 +191,31 @@ function unknownBot(id) {
  */
 export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVoiceThread, turnTimeoutMs = TURN_TIMEOUT_MS } = {}) {
   const threadTurns = new Map();
-  // Sends share the thread until an inject needs exclusive access. Track the
-  // adapter's send, not the SSE relay: cancellation can end the relay before
-  // the adapter has finished interrupting the turn.
+  // Ordinary sends share the thread as before. An inject or a voice turn
+  // needs exclusive access: native approvals are scoped by thread, so a
+  // voice registration must not overlap an ordinary send on that thread.
+  // Track the adapter, not the relay, which can stop before the interrupt.
   const nativeWrites = createThreadQueue();
-  const trackSend = (send) => (sessionId, options) => nativeWrites.runShared(sessionId, () => send(sessionId, options));
+  const trackSend = (send) => (sessionId, options) => {
+    if (options?.source !== 'voice') {
+      return nativeWrites.runShared(sessionId, () => send(sessionId, options));
+    }
+    return nativeWrites.run(sessionId, async () => {
+      await nativeWrites.drain(sessionId);
+      return send(sessionId, options);
+    });
+  };
+  const resuming = new Map();
+
+  function resumeThread(threadId) {
+    if (!threadId) return Promise.resolve();
+    if (resuming.has(threadId)) return resuming.get(threadId);
+    const pending = Promise.resolve().then(() => rpc.request('thread/resume', { threadId, excludeTurns: true })).then((resumed) => {
+      if (resumed?.thread?.id !== threadId) throw new Error('Codex did not resume the original thread.');
+    }).finally(() => resuming.delete(threadId));
+    resuming.set(threadId, pending);
+    return pending;
+  }
 
   /** What a stopped turn rejects with: a cancellation, not a failed run. */
   function stoppedTurn() {
@@ -334,8 +353,9 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVo
 
   const backend = {
     kind: 'codex',
-    [TAP_GATED_VOICE_TOOLS]: typeof registerVoiceThread === 'function' && typeof subscribe === 'function',
-    voiceNotice: VOICE_TYPED_TOOLS,
+    // Preload while the call opens, without changing any thread settings.
+    // A fresh app-server doesn't have conversations that predate its pipe.
+    ensureSession: resumeThread,
 
     appendVoiceExchange(threadId, { user, assistant }) {
       // https://learn.chatgpt.com/docs/app-server#inject-items-into-a-thread
@@ -358,69 +378,6 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVo
         }
         return true;
       });
-    },
-
-    async voiceSendMessage(sessionId, opts, onEvent) {
-      const { voiceDeviceId, voiceGate, signal } = opts;
-      const refuse = () => Object.assign(new Error('Codex could not start a separate permission-checked call.'), {
-        code: VOICE_POLICY_REFUSAL_CODE,
-      });
-      // Current Codex has no "ask for every shell command": an in-sandbox or
-      // execpolicy-allowed command can run without a request. Disable shell
-      // itself. Read-only + on-request still parks native patch operations.
-      // https://learn.chatgpt.com/docs/app-server#approvals
-      // https://learn.chatgpt.com/docs/config-file/config-reference
-      const [effective, requirements, history] = await Promise.all([
-        rpc.request('config/read', { cwd, includeLayers: false }),
-        rpc.request('configRequirements/read', {}),
-        sessionId && !voiceGate.history?.length ? backend.listMessages(sessionId, 12).catch(() => []) : [],
-      ]);
-      if (!effective?.config || !requirements || !registerVoiceThread) throw refuse();
-      const features = {
-        shell_tool: false, shell_snapshot: false, apps: false, plugins: false,
-        remote_plugin: false, hooks: false, memories: false, code_mode: false, multi_agent: false,
-        goals: false, request_permissions_tool: false, skill_mcp_dependency_install: false,
-      };
-      const managed = requirements.requirements?.featureRequirements ?? {};
-      if (Object.keys(features).some((name) => managed[name] === true)) throw refuse();
-      const mcp = effective.config.mcp_servers ?? {};
-      // Overrides merge rather than replace this table, so pin each entry off.
-      const mcp_servers = Object.fromEntries(Object.keys(mcp).map((name) => [name, { enabled: false }]));
-      signal?.throwIfAborted();
-      const opened = await rpc.request('thread/start', {
-        cwd, ephemeral: true, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'read-only',
-        config: {
-          features, mcp_servers, web_search: 'disabled', notify: [], agents: { enabled: false },
-          skills: { include_instructions: false, bundled: { enabled: false } },
-        },
-        ...(opts.model?.modelId ? { model: opts.model.modelId } : {}),
-      });
-      const id = opened?.thread?.id;
-      if (!id) throw refuse();
-      try {
-        if (opened.approvalPolicy !== 'on-request' || opened.approvalsReviewer !== 'user'
-          || opened.sandbox?.type !== 'readOnly') throw refuse();
-        const status = await rpc.request('mcpServerStatus/list', { threadId: id, limit: 1, detail: 'toolsAndAuthOnly' });
-        if (!Array.isArray(status?.data) || status.data.length || status.nextCursor) throw refuse();
-        signal?.throwIfAborted();
-        const release = registerVoiceThread(id, {
-          deviceId: voiceDeviceId, botId: voiceGate.botId, sessionId, signal,
-          announce: (payload) => onEvent?.({ type: 'approval.required', payload }),
-        });
-        const unsubscribe = subscribe(scopedHandler(id, (event) => onEvent?.(event)));
-        try {
-          return await backend.sendMessage(id, {
-            ...opts,
-            text: restrictedVoicePrompt({ history, recent: voiceGate.history, text: opts.text }),
-          });
-        } finally {
-          unsubscribe();
-          release();
-          threadTurns.delete(id);
-        }
-      } finally {
-        await rpc.request('thread/unsubscribe', { threadId: id }).catch(() => undefined);
-      }
     },
 
     async listSessions(limit = 50) {
@@ -448,16 +405,18 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVo
       return typeof limit === 'number' ? (limit === 0 ? [] : mapped.slice(-limit)) : mapped;
     },
 
-    sendMessage: trackSend(async (sessionId, { text, model, signal, source, includesHandoff } = {}) => {
-      // Only an actual typed send may load a cold thread with its normal
-      // configuration. Preserve the existing wire path when there is no handoff.
-      // https://learn.chatgpt.com/docs/app-server#start-or-resume-a-thread
-      if (source !== 'voice' && includesHandoff) {
+    sendMessage: trackSend(async (sessionId, { text, model, signal, source, includesHandoff, voiceDeviceId, voiceGate } = {}) => {
+      const voice = source === 'voice';
+      if (voice) {
+        signal?.throwIfAborted();
+        await resuming.get(sessionId)?.catch(() => {});
+        signal?.throwIfAborted();
+      }
+      if (includesHandoff) {
         const current = await rpc.request('thread/read', { threadId: sessionId });
         if (current?.thread?.status?.type === 'notLoaded') {
           signal?.throwIfAborted();
-          const resumed = await rpc.request('thread/resume', { threadId: sessionId, excludeTurns: true });
-          if (resumed?.thread?.id !== sessionId) throw new Error('Codex did not resume the original thread.');
+          await resumeThread(sessionId);
         }
         signal?.throwIfAborted();
       }
@@ -465,13 +424,6 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVo
         threadId: sessionId,
         cwd,
         input: [{ type: 'text', text }],
-        // A voice turn must not inherit the typed thread's writable sandbox
-        // or approval-bypass policy. Codex surfaces native escalation prompts
-        // on the same stdio connection the Gate already bridges.
-        ...(source === 'voice' ? {
-          approvalPolicy: 'on-request',
-          sandboxPolicy: { type: 'readOnly' },
-        } : {}),
       };
       if (model?.modelId) {
         params.model = model.modelId;
@@ -486,54 +438,65 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe, registerVo
         } catch { /* preserve the CLI's own default when the catalog is unavailable */ }
       }
       // Plain sends preserve start-then-interrupt even if Stop already arrived.
-      if (source === 'voice' || includesHandoff) signal?.throwIfAborted();
+      if (voice || includesHandoff) signal?.throwIfAborted();
       // Subscribe before starting: the first deltas can land before turn/start
       // has even returned.
       const { settled, identify, close } = watchTurn(sessionId, {
-        timeoutMs: turnTimeoutMs, signal, requireSuccess: source === 'voice' || includesHandoff,
+        timeoutMs: turnTimeoutMs, signal, requireSuccess: voice || includesHandoff,
       });
-      let result;
+      let release;
       try {
-        result = await rpc.request('turn/start', params);
-      } catch (error) {
+        if (voice) {
+          release = registerVoiceThread?.(sessionId, {
+            deviceId: voiceDeviceId, botId: voiceGate?.botId, sessionId, signal,
+            timeoutMs: voiceGate?.timeoutMs,
+          });
+        }
+        let result;
+        try {
+          result = await rpc.request('turn/start', params);
+        } catch (error) {
+          // Resume only after an explicit pre-admission missing-thread response.
+          // A timeout or lost response could already have committed the input.
+          if (!voice || (error?.rpcCode ?? error?.code) !== -32600
+            || !/^(thread not found|thread .* (not found|is not loaded))\b/i.test(error.message)) throw error;
+          signal?.throwIfAborted();
+          await resumeThread(sessionId);
+          signal?.throwIfAborted();
+          result = await rpc.request('turn/start', params);
+        }
+        const turnId = result?.turnId ?? result?.turn?.id;
+        if (turnId) threadTurns.set(sessionId, turnId);
+        identify?.(turnId);
+        const outcome = await settled;
+        if (outcome.aborted) {
+          await interruptTurn(sessionId, turnId ?? threadTurns.get(sessionId));
+          throw stoppedTurn();
+        }
+        if (outcome.error) {
+          throw new Error(typeof outcome.error === 'string' ? outcome.error : JSON.stringify(outcome.error));
+        }
+        if (!outcome.completed) {
+          // A silent stream fragment is not a completed answer.
+          await interruptTurn(sessionId, turnId ?? threadTurns.get(sessionId));
+          const seconds = Math.max(1, Math.round(turnTimeoutMs / 1000));
+          throw new Error(
+            `codex: the turn did not answer within ${seconds}s and was stopped — ` +
+            'ask again, or try a model that is not still working',
+          );
+        }
+        const reply = outcome.text || result?.text || '';
+        return {
+          message: reply
+            ? { id: turnId, role: 'assistant', content: [{ type: 'text', text: reply }] }
+            : null,
+          text: reply,
+          turnId,
+        };
+      } finally {
         close?.();
-        throw error;
+        release?.();
       }
-      const turnId = result?.turnId ?? result?.turn?.id;
-      if (turnId) threadTurns.set(sessionId, turnId);
-      identify?.(turnId);
-      const outcome = await settled;
-      if (outcome.aborted) {
-        // Stop ends the phone's turn; the app-server's turn has to end with it,
-        // or it keeps working into a stream nobody is reading.
-        await interruptTurn(sessionId, turnId ?? threadTurns.get(sessionId));
-        throw stoppedTurn();
-      }
-      if (outcome.error) {
-        throw new Error(typeof outcome.error === 'string' ? outcome.error : JSON.stringify(outcome.error));
-      }
-      if (!outcome.completed) {
-        // The turn never reached `turn/completed` and said nothing for the whole
-        // idle bound, so the text so far is a fragment of a turn the app-server
-        // may still be running. Publishing it with `finish_reason: stop` would
-        // tell the operator the model is done while it is still working — and
-        // the model-health table would score the silence as a success. Stop the
-        // turn and say what happened.
-        await interruptTurn(sessionId, turnId ?? threadTurns.get(sessionId));
-        const seconds = Math.max(1, Math.round(turnTimeoutMs / 1000));
-        throw new Error(
-          `codex: the turn did not answer within ${seconds}s and was stopped — ` +
-          'ask again, or try a model that is not still working',
-        );
-      }
-      const reply = outcome.text || result?.text || '';
-      return {
-        message: reply
-          ? { id: turnId, role: 'assistant', content: [{ type: 'text', text: reply }] }
-          : null,
-        text: reply,
-        turnId,
-      };
     }),
 
     async abort(sessionId) {

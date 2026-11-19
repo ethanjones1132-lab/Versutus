@@ -84,6 +84,8 @@ export type OpenGateVoiceSessionInput = {
     /** The attempt this media link belongs to; the native side keys on it. */
     startId: string;
   }) => Promise<boolean>;
+  /** Install the exact call owner before the native socket can emit frame one. */
+  registerGrant?: (grant: GateVoiceGrant) => boolean;
   /**
    * Marks the link about to be opened so the proof below can use a frame the
    * Gate sends while `startGateMedia` is still resolving. Without it, a link
@@ -332,19 +334,21 @@ export async function openGateVoiceSession(
     try {
       // Arm before the socket exists: every frame on it then belongs to this
       // proof, including one that arrives before `proveLink` is called.
-      input.armLinkProof?.();
-      started = await deadline.guard(
-        'the audio link',
-        input.startGateMedia({
-          url: withVoiceProtocol(toMediaUrl(input.gatewayUrl, parsed.streamPath), 2),
-          token: input.gatewayToken,
-          voiceSessionId: parsed.voiceSessionId,
-          // The media link belongs to this attempt. The native side refuses a
-          // delayed start for an abandoned attempt, so it can never stop or
-          // replace the socket a newer retry owns.
-          startId,
-        }),
-      );
+      if (input.registerGrant?.(parsed) !== false) {
+        input.armLinkProof?.();
+        started = await deadline.guard(
+          'the audio link',
+          input.startGateMedia({
+            url: withVoiceProtocol(toMediaUrl(input.gatewayUrl, parsed.streamPath), 2),
+            token: input.gatewayToken,
+            voiceSessionId: parsed.voiceSessionId,
+            // The media link belongs to this attempt. The native side refuses a
+            // delayed start for an abandoned attempt, so it can never stop or
+            // replace the socket a newer retry owns.
+            startId,
+          }),
+        );
+      }
     } catch (error) {
       if (isStartTimeout(error)) throw error;
       started = false;

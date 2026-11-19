@@ -71,10 +71,10 @@ export class ApprovalService {
 
   /** Called before dispatch (or while a native tool request is parked). */
   async authorize({ tool, external, backendId, botId, sessionId, deviceId, signal, announce,
-    timeoutMs = VOICE_APPROVAL_DEADLINE_MS, legacySummary } = {}) {
+    timeoutMs = VOICE_APPROVAL_DEADLINE_MS, legacySummary, requireDecision = false } = {}) {
     if (this.closed || signal?.aborted) return false;
     const kind = actionClass(tool, { external });
-    if (kind !== 'read' && !deviceId) return false;
+    if ((requireDecision || kind !== 'read') && !deviceId) return false;
     const summary = legacySummary ?? safeActionSummary(kind, tool);
     const entry = this.open(kind, {
       voiceDeviceId: deviceId, backendId, environmentId: backendId, botId,
@@ -82,7 +82,7 @@ export class ApprovalService {
     }, { strict: true, kind });
     const { approvalId } = entry;
     if (!approvalId) return false;
-    if (kind === 'read') return this.settle(entry, 'approved').decision === 'approve';
+    if (!requireDecision && kind === 'read') return this.settle(entry, 'approved').decision === 'approve';
     const budget = Math.min(VOICE_APPROVAL_DEADLINE_MS, Math.max(0, timeoutMs));
     entry.deadline = Date.parse(entry.createdAt) + budget;
     const waiting = this.waitForDecision(approvalId);

@@ -1,6 +1,7 @@
 import type { ChatMessage } from '@/lib/gateway/types';
 import {
   emptyCallThreadProjection,
+  mergeCallThreadTranscript,
   projectCallFrame,
   reconcileCallThreadProjection,
 } from '@/lib/voice/call-thread-projection';
@@ -87,6 +88,44 @@ describe('call thread projection', () => {
       { id: 'canonical-reply', role: 'assistant', text: 'Hi', turnId: 'turn-1' },
     ];
     expect(reconcileCallThreadProjection(state, completeHistory).map((message) => message.turnId)).toEqual(['turn-2']);
+  });
+
+  test('post-call transcript uses native rows exactly once and in order despite unrelated IDs and a reply gap', () => {
+    const before: ChatMessage[] = [
+      { id: 'old-u', role: 'user', text: 'Repeat' },
+      { id: 'old-a', role: 'assistant', text: 'Yes.' },
+    ];
+    let state = { ...emptyCallThreadProjection('thread-a', 'call-1'), historyBeforeCall: new Set(before.map((row) => row.id)) };
+    const events = [
+      frame('final', 1, { turnId: 'turn-1', text: 'Repeat' }),
+      frame('reply', 2, { turnId: 'turn-1', offset: 0, delta: 'Yes.' }),
+      frame('turn', 3, { turnId: 'turn-1', state: 'done' }),
+      frame('final', 4, { turnId: 'turn-2', text: 'Next?' }),
+      frame('reply', 6, { turnId: 'turn-2', offset: 9, delta: 'again.' }),
+      frame('turn', 7, { turnId: 'turn-2', state: 'done' }),
+      frame('call', 8, { state: 'ended' }),
+    ];
+    for (const event of events) {
+      state = { ...projectCallFrame(state, event as never), historyBeforeCall: state.historyBeforeCall };
+    }
+    expect(reconcileCallThreadProjection(state, before).slice(0, 2).map((row) => row.text)).toEqual(['Repeat', 'Yes.']);
+    const native: ChatMessage[] = [
+      ...before,
+      { id: 'new-u', role: 'user', text: 'Repeat' },
+      { id: 'new-a', role: 'assistant', text: 'Yes.' },
+      { id: 'last-u', role: 'user', text: 'Next?' },
+      { id: 'last-a', role: 'assistant', text: 'Can you try again.' },
+    ];
+    const transcript = mergeCallThreadTranscript({ ...state, ended: true }, 'thread-a', native);
+    expect(transcript.map(({ role, text }) => [role, text])).toEqual([
+      ['user', 'Repeat'], ['assistant', 'Yes.'], ['user', 'Repeat'], ['assistant', 'Yes.'],
+      ['user', 'Next?'], ['assistant', 'Can you try again.'],
+    ]);
+    // A first turn that's genuinely not in native history still goes before
+    // the second turn, rather than being appended as a late exchange.
+    const missingFirst = [...before, ...native.slice(-2)];
+    expect(mergeCallThreadTranscript({ ...state, ended: true }, 'thread-a', missingFirst).map((row) => row.text))
+      .toEqual(['Repeat', 'Yes.', 'Repeat', 'Yes.', 'Next?', 'Can you try again.']);
   });
 
   test('the banner and transcript keep the received suffix after a missing reply delta', () => {
