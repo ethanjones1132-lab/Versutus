@@ -86,7 +86,7 @@
     "verify:config": "tsx ./scripts/verify-config.mts",
     "coverage:ratchet": "tsx ./scripts/coverage-ratchet.mts",
     "test": "jest --runInBand && npm run test:gate",
-    "test:coverage": "jest --coverage --maxWorkers=4",
+    "test:coverage": "jest --coverage --maxWorkers=2",
     "test:gate": "cd gate && node --import ./__tests__/fixtures/isolate-credential-vault.mjs --test \"__tests__/*.test.mjs\" \"../scripts/__tests__/*.test.mjs\"",
     "test:voice-worker": "node gate/voice-worker/run-tests.mjs",
     "voice:replay": "node scripts/voice-replay-host.mjs",
