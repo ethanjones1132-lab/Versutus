@@ -86,6 +86,7 @@ test('install refuses a stalled model download instead of waiting forever', asyn
     installVoice({
       paths,
       runUv: async () => {},
+      probePackages: () => ({}),
       fetch: () => new Promise(() => {}),
       lock,
       downloadTimeoutMs: 50,

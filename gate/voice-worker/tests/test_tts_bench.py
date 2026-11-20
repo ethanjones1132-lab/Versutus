@@ -1,5 +1,6 @@
 """Benchmark accounting and selection without running a model."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +15,21 @@ def test_default_uses_live_settings_while_legacy_candidates_keep_their_threads()
     assert tts_bench.candidate_config("first-phrase", {}) == TtsConfig()
     assert tts_bench.candidate_config("baseline", {}).intraThreads == 0
     assert tts_bench.candidate_config("cpu-8", {}).intraThreads == 8
+
+
+@pytest.mark.parametrize("provider", ["cpu", "cuda"])
+def test_explicit_provider_candidates_only_change_the_provider(provider):
+    assert tts_bench.candidate_config(provider, {}) == replace(TtsConfig(), provider=provider)
+
+
+def test_default_can_measure_its_cpu_fallback_but_explicit_cuda_cannot():
+    profile = {
+        "model": "kokoro-v1.0.onnx",
+        "providers": ["CPUExecutionProvider"],
+        "fallbacks": ["CUDAExecutionProvider unavailable"],
+    }
+    assert tts_bench.matches_profile(TtsConfig(), profile)
+    assert not tts_bench.matches_profile(TtsConfig(provider="cuda"), profile)
 
 
 def test_simulated_playback_counts_real_underrun_not_onset(monkeypatch):

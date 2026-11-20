@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from versutus_voice.kokoro import (
+    CUDA_ARENA_BYTES,
     KokoroSynthesizer,
     TtsConfig,
     last_tts_latency,
@@ -15,7 +16,7 @@ from versutus_voice.kokoro import (
     read_tts_config,
     record_tts_latency,
 )
-from versutus_voice.server import VoicePipeline, _warm_models
+from versutus_voice.server import VoicePipeline, _warm_models, force_cpu
 from versutus_voice.tts import SpeechSynthesizer, WARMUP_TEXT, first_phrase_chunks
 
 
@@ -42,33 +43,41 @@ class FakeOrt:
                                              ORT_ENABLE_EXTENDED="extended", ORT_ENABLE_ALL="all")
     SessionOptions = FakeOptions
 
-    def __init__(self, available=("CPUExecutionProvider",), silent_fallback=False):
+    def __init__(self, available=("CPUExecutionProvider",), silent_fallback=False, cuda_load_error=False):
         self.available = available
         self.calls = []
         self.silent_fallback = silent_fallback
+        self.cuda_load_error = cuda_load_error
+        self.preloads = 0
 
     def get_available_providers(self):
         return self.available
 
     def preload_dlls(self, directory):
         assert directory == ""
+        self.preloads += 1
 
     def InferenceSession(self, path, *, sess_options, providers):
-        actual = ["CPUExecutionProvider"] if self.silent_fallback else providers
+        actual = [p[0] if isinstance(p, tuple) else p for p in providers]
+        if self.silent_fallback:
+            actual = ["CPUExecutionProvider"]
         session = FakeSession(actual)
         self.calls.append((Path(path).name, sess_options, providers, session))
+        if self.cuda_load_error and actual[0] == "CUDAExecutionProvider":
+            raise RuntimeError("missing CUDA driver")
         return session
 
 
 class FakeKokoro:
-    def __init__(self):
+    def __init__(self, session=None):
         self.calls = []
+        self.session = session
 
     @classmethod
     def from_session(cls, session, path):
         assert session.fallback_disabled
         assert Path(path).name == "voices-v1.0.bin"
-        return cls()
+        return cls(session)
 
     def create(self, text, **options):
         self.calls.append((text, options))
@@ -95,6 +104,7 @@ def test_default_profile_matches_measured_cpu_settings(tmp_path, monkeypatch):
 
     assert name == "kokoro-v1.0.onnx"
     assert providers == ["CPUExecutionProvider"]
+    assert config.provider == "auto"
     assert config.voice == "af_sarah"
     assert config.warmup == "idle" and config.idleSeconds == 120
     assert speech.chunk_words == 8 and not speech.chunk_all
@@ -121,7 +131,7 @@ def test_config_selects_model_and_session_options(tmp_path, monkeypatch):
     monkeypatch.setattr("versutus_voice.kokoro.os.cpu_count", lambda: 16)
     models = model_dir(tmp_path, int8=True)
     (tmp_path / "voice.json").write_text(json.dumps({"tts": {
-        "model": "int8", "chunkWords": 8, "intraThreads": 4, "interThreads": 2,
+        "model": "int8", "provider": "cpu", "chunkWords": 8, "intraThreads": 4, "interThreads": 2,
         "graphOptimization": "extended", "cpuArena": False, "memoryPattern": False, "spinning": False,
         "idleSeconds": True,  # not a valid integer setting
     }}), encoding="utf-8")
@@ -159,6 +169,110 @@ def test_missing_cuda_or_silent_cuda_init_failure_falls_back(tmp_path):
         assert list(speech.speak("CPU fallback.", 1))
 
 
+@pytest.mark.parametrize("limit", [CUDA_ARENA_BYTES, 1024**3])
+def test_auto_selects_cuda_after_warmup_and_passes_arena_options(tmp_path, limit):
+    models = model_dir(tmp_path)
+    ort = FakeOrt(("CUDAExecutionProvider", "CPUExecutionProvider"))
+    config = TtsConfig.from_mapping({"provider": "auto", "gpuMemLimit": limit, "warmup": "off"})
+    speech = load_kokoro_speech(models, config, ort=ort, kokoro_cls=FakeKokoro)
+    assert len(ort.calls) == 1 and ort.preloads == 1
+    assert ort.calls[0][2] == [
+        ("CUDAExecutionProvider", {
+            "arena_extend_strategy": "kSameAsRequested", "gpu_mem_limit": limit, "cudnn_conv_algo_search": "HEURISTIC",
+        }),
+        "CPUExecutionProvider",
+    ]
+    assert speech.startup_warmup_ms is not None
+    assert speech.synthesize.profile()["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    assert speech.synthesize.profile()["fallbacks"] == []
+
+
+@pytest.mark.parametrize(("failure", "reason", "attempts"), [
+    ("missing", "CUDAExecutionProvider unavailable", 1),
+    ("load", "load failed: RuntimeError (missing CUDA driver)", 2),
+    ("warm-up", "warm-up failed: RuntimeError (synthetic CUDA failure)", 2),
+])
+def test_auto_fallback_uses_tuned_cpu(tmp_path, monkeypatch, failure, reason, attempts):
+    monkeypatch.setattr("versutus_voice.kokoro.os.cpu_count", lambda: 16)
+    models = model_dir(tmp_path)
+    available = ("CPUExecutionProvider",) if failure == "missing" else ("CUDAExecutionProvider", "CPUExecutionProvider")
+    ort = FakeOrt(available, cuda_load_error=failure == "load")
+
+    class Kokoro(FakeKokoro):
+        def create(self, text, **options):
+            if self.session.get_providers()[0] == "CUDAExecutionProvider":
+                raise RuntimeError("synthetic CUDA failure")
+            return super().create(text, **options)
+
+    speech = load_kokoro_speech(models, ort=ort, kokoro_cls=Kokoro)
+    profile = speech.synthesize.profile()
+    assert profile["requested"]["provider"] == "auto"
+    assert profile["providers"] == ["CPUExecutionProvider"]
+    assert len(profile["fallbacks"]) == 1 and reason in profile["fallbacks"][0]
+    assert len(ort.calls) == attempts
+    _, options, providers, _ = ort.calls[-1]
+    assert providers == ["CPUExecutionProvider"]
+    assert options.intra_op_num_threads == 4 and options.inter_op_num_threads == 1
+    assert options.execution_mode == "sequential" and options.graph_optimization_level == "extended"
+    assert options.enable_cpu_mem_arena and options.enable_mem_pattern
+    assert getattr(options, "session.intra_op.allow_spinning") == "0"
+    assert getattr(options, "session.inter_op.allow_spinning") == "0"
+    assert speech.prime() >= 0
+
+
+def test_startup_warms_whisper_before_auto_kokoro_without_priming_twice(tmp_path):
+    models = model_dir(tmp_path)
+    ort = FakeOrt(("CUDAExecutionProvider", "CPUExecutionProvider"))
+    config = TtsConfig()
+    events = []
+
+    class Kokoro(FakeKokoro):
+        def create(self, text, **options):
+            events.append(text)
+            return super().create(text, **options)
+
+    speech = _warm_models(
+        lambda *_: events.append("whisper"),
+        lambda: load_kokoro_speech(models, config, ort=ort, kokoro_cls=Kokoro),
+        config,
+    )
+    assert speech.startup_warmup_ms is not None
+    assert events == ["whisper", *first_phrase_chunks(WARMUP_TEXT, config.chunkWords)]
+
+
+def test_auto_reports_later_cpu_fallback_and_retries_only_the_failed_phrase(tmp_path):
+    models = model_dir(tmp_path)
+    ort = FakeOrt(("CUDAExecutionProvider", "CPUExecutionProvider"))
+    profiles = []
+    calls = []
+
+    class Kokoro(FakeKokoro):
+        def create(self, text, **options):
+            provider = self.session.get_providers()[0]
+            calls.append((text, provider))
+            if text == "Fail on CUDA." and provider == "CUDAExecutionProvider":
+                raise RuntimeError("synthetic CUDA failure")
+            return super().create(text, **options)
+
+    speech = load_kokoro_speech(models, ort=ort, kokoro_cls=Kokoro, on_profile_change=profiles.append)
+    calls.clear()
+    assert list(speech.speak("It works. Fail on CUDA.", 1))
+    assert calls == [
+        ("It works. ", "CUDAExecutionProvider"), ("Fail on CUDA.", "CUDAExecutionProvider"),
+        ("Fail on CUDA.", "CPUExecutionProvider"),
+    ]
+    assert profiles == [speech.synthesize.profile()]
+    assert profiles[0]["providers"] == ["CPUExecutionProvider"]
+    assert "inference failed" in profiles[0]["fallbacks"][0]
+
+
+def test_force_cpu_marker_is_opt_in(tmp_path):
+    models = model_dir(tmp_path)
+    assert not force_cpu(models)
+    (tmp_path / "force-cpu").touch()
+    assert force_cpu(models)
+
+
 def test_latency_snapshot_only_applies_to_the_matching_profile(tmp_path):
     models = model_dir(tmp_path)
     (tmp_path / "voice.json").write_text('{"tts":{"chunkWords":0}}', encoding="utf-8")
@@ -181,7 +295,7 @@ def test_startup_and_idle_open_warm_the_real_call_adapter_and_voice_without_emit
         synthesizer=speech, emit=lambda *event: events.append(event), spawn=work.append,
         tts_config=config,
     )
-    _warm_models(lambda _pcm, _beam: None, speech, config)
+    _warm_models(lambda _pcm, _beam: None, lambda: speech, config)
     expected = list(first_phrase_chunks(WARMUP_TEXT, 8))
     assert len(expected) > 1
     assert [text for text, _ in kokoro.calls] == expected

@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from .audio import INPUT_SAMPLE_RATE
-from .kokoro import TtsConfig, load_kokoro_speech
+from .kokoro import MODELS, PROVIDERS, TtsConfig, load_kokoro_speech
 
 SENTENCES = {
     "short": "Yes, that should work.",
@@ -28,13 +28,15 @@ REPLY_FOLLOWUP = (
     "That way you will know which change to keep and which one to undo.",
 )
 LEGACY = {
-    "chunkWords": 0, "intraThreads": 0, "graphOptimization": "all", "spinning": True, "warmup": "off",
+    "provider": "cpu", "chunkWords": 0, "intraThreads": 0, "graphOptimization": "all",
+    "spinning": True, "warmup": "off",
 }
 TUNED = {"intraThreads": 4, "spinning": False}
 CHUNKED = {"chunkWords": 8}
 PROFILES = {
     "baseline": {},
     "default": {},
+    "cpu": {"provider": "cpu"},
     "first-phrase": {},
     "primed": {"warmup": "startup"},
     "chunks": CHUNKED,
@@ -173,9 +175,15 @@ def native_threads():
 
 
 def candidate_config(candidate, overrides):
-    live = candidate in ("default", "custom", "first-phrase")
+    live = candidate in ("default", "cpu", "cuda", "custom", "first-phrase")
     base = {} if live else LEGACY
     return TtsConfig.from_mapping({**base, **PROFILES.get(candidate, {}), **overrides}, clamp_threads=live)
+
+
+def matches_profile(config, profile):
+    return profile["model"] == MODELS[config.model] and (
+        config.provider == "auto" or profile["providers"][0] == PROVIDERS[config.provider]
+    )
 
 
 def benchmark(args, candidate):
@@ -199,16 +207,21 @@ def benchmark(args, candidate):
         if whisper_device != "cuda":
             raise RuntimeError("--with-whisper requested CUDA coexistence, but Whisper fell back to CPU")
 
-    gpu_before = gpu_memory() if args.with_whisper or config.provider == "cuda" else None
+    sample_gpu = args.with_whisper or config.provider in ("auto", "cuda")
+    gpu_before = gpu_memory() if sample_gpu else None
     threads_before = native_threads()
     started = time.perf_counter()
     chunk_all = candidate in LEGACY_CHUNK_ALL
     chunk_remainder = candidate != "first-phrase"
     speech = load_kokoro_speech(args.models_dir, config, chunk_all=chunk_all, chunk_remainder=chunk_remainder)
     load_ms = round((time.perf_counter() - started) * 1000, 1)
+    # Auto verifies CUDA during load. Count its successful probe as startup
+    # warm-up, not as cold session load, and don't prime twice.
+    auto_warmup_ms = speech.startup_warmup_ms
     chunking = "all-phrases" if chunk_all else "first-phrase+clauses" if chunk_remainder else "first-phrase"
     row = {
-        "candidate": candidate, "coldLoadMs": load_ms, "whisperDevice": whisper_device,
+        "candidate": candidate, "coldLoadMs": max(0, round(load_ms - (auto_warmup_ms or 0), 1)),
+        "whisperDevice": whisper_device,
         "logicalCpus": os.cpu_count(),
         "cpuThreads": {"intra": config.intraThreads or "ORT auto", "inter": config.interThreads,
                        "execution": "parallel" if config.interThreads > 1 else "sequential"},
@@ -216,10 +229,20 @@ def benchmark(args, candidate):
         "profile": speech.synthesize.profile(),
         "chunking": chunking if config.chunkWords else "off",
     }
-    if not row["profile"]["fallbacks"]:
-        row["startupWarmupMs"] = speech.prime() if config.warmup != "off" else None
-        row["firstSynthesis"] = measure(speech, SENTENCES["medium"])
-        if not speech.synthesize.profile()["fallbacks"]:
+    initial_provider = row["profile"]["providers"][0]
+
+    def matches_initial(profile):
+        # A CPU fallback during Auto's startup probe is a valid live result;
+        # samples that switched provider mid-run aren't a provider comparison.
+        return matches_profile(config, profile) and profile["providers"][0] == initial_provider
+
+    if matches_initial(row["profile"]):
+        row["startupWarmupMs"] = auto_warmup_ms
+        if auto_warmup_ms is None and config.warmup != "off":
+            row["startupWarmupMs"] = speech.prime()
+        if matches_initial(speech.synthesize.profile()):
+            row["firstSynthesis"] = measure(speech, SENTENCES["medium"])
+        if matches_initial(speech.synthesize.profile()):
             warm = {length: [] for length in SENTENCES}
             for _ in range(args.repeats):
                 for length, text in SENTENCES.items():
@@ -229,10 +252,10 @@ def benchmark(args, candidate):
             if args.idle_seconds:
                 row["afterIdle"] = measure_after_idle(speech, config, args.repeats, args.idle_seconds)
     row["nativeThreads"]["afterSynthesis"] = native_threads()
-    if args.with_whisper or config.provider == "cuda":
+    if sample_gpu:
         row["gpuMemory"] = {"beforeKokoro": gpu_before, "afterSynthesis": gpu_memory()}
     row["profile"] = speech.synthesize.profile()
-    if row["profile"]["fallbacks"]:
+    if not matches_initial(row["profile"]):
         for key in ("warm", "afterIdle", "playback4Sentences"):
             row.pop(key, None)
         row["status"] = "skipped (requested profile fell back)"

@@ -1,0 +1,2 @@
+# CPU-only ORT on macOS, including the requests from kokoro-onnx and faster-whisper.
+onnxruntime==1.30.0; sys_platform == "darwin"

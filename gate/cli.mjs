@@ -1033,7 +1033,9 @@ async function handleVoice(args = []) {
     return;
   }
   if (sub === 'status') {
-    console.log(JSON.stringify(voiceStatus({ paths }), null, 2));
+    const status = voiceStatus({ paths, includeRuntime: true });
+    console.log(JSON.stringify(status, null, 2));
+    if (Object.keys(status.engines.local.ortPackages ?? {}).length > 1) process.exitCode = 1;
     return;
   }
   console.error('Usage: node gate/cli.mjs voice <install [--cpu] [--tts-int8]|doctor [--tts-int8]|status>');

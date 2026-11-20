@@ -27,8 +27,9 @@ function doctorPaths() {
 
 const HEALTHY_PROBE = {
   versions: { faster_whisper: '1.2.1', kokoro_onnx: '0.6.1', onnxruntime: '1.30.0' },
+  ortPackages: { 'onnxruntime-gpu': '1.30.0' },
   vram: { usedMb: 100, totalMb: 8000 },
-  whisperCuda: { ok: true },
+  whisper: { device: 'cuda', computeType: 'int8_float16', ok: true },
   silero: { ok: true, error: null },
   smartTurn: { ok: true, error: null },
   kokoro: { ok: true, error: null },

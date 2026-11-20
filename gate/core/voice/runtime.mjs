@@ -6,7 +6,7 @@
 // exercise install and resume without touching either.
 
 import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync as nodeSpawnSync, spawn as nodeSpawn } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -144,6 +144,31 @@ export async function fetchVoiceTtsInt8({ paths, fetch: fetchImpl, log } = {}) {
   });
 }
 
+const ORT_PACKAGES = ['onnxruntime', 'onnxruntime-gpu'];
+const ORT_DIST_PROBE = String.raw`
+from importlib.metadata import PackageNotFoundError, version
+
+def ort_packages():
+    installed = {}
+    for name in ${JSON.stringify(ORT_PACKAGES)}:
+        try:
+            installed[name] = version(name)
+        except PackageNotFoundError:
+            pass
+    return installed
+`;
+
+function probeOrtPackages(python) {
+  const result = nodeSpawnSync(python, ['-I', '-c', `import json\n${ORT_DIST_PROBE}\nprint(json.dumps(ort_packages()))`], {
+    encoding: 'utf8',
+    timeout: 10_000,
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error(`could not check the voice venv's ONNX Runtime packages: ${result.error?.message || result.stderr?.trim() || 'probe failed'}`);
+  }
+  return JSON.parse(result.stdout);
+}
+
 /** Create the venv, install the lock and download the selected models. Idempotent. */
 export async function installVoice({
   paths,
@@ -154,14 +179,26 @@ export async function installVoice({
   log = console.log,
   lock,
   downloadTimeoutMs,
+  probePackages = probeOrtPackages,
+  platform = process.platform,
 } = {}) {
   mkdirSync(paths.venv, { recursive: true });
   log(`creating the venv at ${paths.venv}`);
   // `--allow-existing` keeps a second install (only new models to fetch) from
   // failing on the venv the first one created.
   await runUv(['venv', '--python', '3.12', '--allow-existing', paths.venv]);
+  const installed = probePackages(paths.python);
+  const conflicting = platform === 'darwin' ? 'onnxruntime-gpu' : 'onnxruntime';
+  if (Object.hasOwn(installed, conflicting)) {
+    // Both wheels own onnxruntime/. Removing either can break the other even
+    // when its metadata still claims it is installed. Clear both before repair.
+    log('removing conflicting ONNX Runtime packages');
+    await runUv(['pip', 'uninstall', '--python', paths.python, ...ORT_PACKAGES]);
+  }
   log('installing requirements.lock');
-  await runUv(['pip', 'install', '--python', paths.python, '-r', paths.lockFile]);
+  // The lock already resolves all dependencies with the ORT override.
+  // Re-resolving would let kokoro-onnx and faster-whisper pull CPU ORT back in.
+  await runUv(['pip', 'install', '--python', paths.python, '--no-deps', '-r', paths.lockFile]);
 
   mkdirSync(paths.models, { recursive: true });
   const modelsLock = lock ?? readModelsLock(paths);
@@ -180,6 +217,12 @@ export async function installVoice({
     });
     downloaded.push(name);
   }
+  // The platform wheel still provides CPU execution. Persist the requested
+  // runtime mode without overwriting the operator's voice.json settings.
+  // A later install without --cpu returns the venv to automatic provider selection.
+  const forceCpuMarker = join(paths.root, 'force-cpu');
+  if (cpu) writeFileSync(forceCpuMarker, '', { flag: 'a' });
+  else rmSync(forceCpuMarker, { force: true });
   return { venv: paths.venv, models: downloaded, cpu };
 }
 
@@ -252,7 +295,9 @@ export function readVoiceUsage({ paths, now = () => new Date() } = {}) {
 }
 
 /** What `voice.capabilities` reports for each engine, from the runtime and config. */
-export function voiceStatus({ paths, now, readAuthMode = readCodexAuthMode } = {}) {
+export function voiceStatus({
+  paths, now, readAuthMode = readCodexAuthMode, includeRuntime = false, probePackages = probeOrtPackages,
+} = {}) {
   const config = readVoiceConfig({ paths });
   const usage = readVoiceUsage({ paths, now });
   const off = config.enabled === false;
@@ -270,6 +315,21 @@ export function voiceStatus({ paths, now, readAuthMode = readCodexAuthMode } = {
         ? { state: 'disabled', reason: disabledReason('codex') }
         : codexRealtimeStatus(readAuthMode()),
   };
+  // The CLI asks for diagnostics. Capabilities is on a hot path and should not
+  // spawn Python just to decide whether to warm the worker or allow a call.
+  if (includeRuntime && paths && existsSync(paths.python)) {
+    try {
+      const ortPackages = probePackages(paths.python);
+      const check = ortPackageCheck(ortPackages);
+      Object.assign(engines.local, {
+        ortPackages,
+        tts: check.ok ? liveTtsStatus(paths) : null,
+        ...(!check.ok && { state: 'unavailable', reason: check.detail }),
+      });
+    } catch (error) {
+      Object.assign(engines.local, { state: 'unavailable', reason: error.message });
+    }
+  }
   return {
     enabled: !off,
     installed: engines.local.state === 'ready',
@@ -303,10 +363,34 @@ function localStatus(paths) {
   return { state: 'ready' };
 }
 
+function liveTtsStatus(paths) {
+  try {
+    const { pid, profile } = JSON.parse(readFileSync(join(paths.root, 'tts-profile.json'), 'utf8'));
+    if (!Number.isInteger(pid) || pid <= 0 || !Array.isArray(profile?.providers) || !profile.providers.length) return null;
+    process.kill(pid, 0); // only check liveness; never send a signal
+    return { ...profile, activeProvider: profile.providers[0] };
+  } catch {
+    // An old snapshot is not an active provider. No test model is loaded here.
+    return null;
+  }
+}
+
 const DOCTOR_PROBE = String.raw`
 import contextlib, json, os, subprocess, sys
-result = {"versions": {}, "vram": None, "whisperCuda": None, "error": None}
+from dataclasses import replace
+${ORT_DIST_PROBE}
+result = {"versions": {}, "vram": None, "whisper": None, "error": None, "ortPackages": ort_packages()}
+if len(result["ortPackages"]) != 1:
+    print(json.dumps(result))
+    sys.exit(0)
+
+models_dir = os.environ.get("VERSUTUS_VOICE_MODELS", "")
+cpu = False
 try:
+    from versutus_voice.server import _register_cuda_dlls, force_cpu
+
+    cpu = force_cpu(models_dir)
+    _register_cuda_dlls()
     import faster_whisper, kokoro_onnx, onnxruntime
     result["versions"] = {
         "faster_whisper": getattr(faster_whisper, "__version__", "unknown"),
@@ -324,21 +408,22 @@ try:
     result["vram"] = {"usedMb": used, "totalMb": total}
 except Exception:
     result["vram"] = None
+device, compute_type = ("cpu", "int8") if cpu or sys.platform == "darwin" else ("cuda", "int8_float16")
+result["whisper"] = {"device": device, "computeType": compute_type, "ok": False}
 try:
     from faster_whisper import WhisperModel
     names = ("config.json", "model.bin", "preprocessor_config.json", "tokenizer.json", "vocabulary.json")
-    whisper_dir = os.path.join(os.environ.get("VERSUTUS_VOICE_MODELS", ""), "whisper")
+    whisper_dir = os.path.join(models_dir, "whisper")
     missing = [name for name in names if not os.path.exists(os.path.join(whisper_dir, name))]
     if missing:
-        result["whisperCuda"] = {"ok": False, "error": "missing: " + ", ".join(missing)}
+        result["whisper"]["error"] = "missing: " + ", ".join(missing)
     else:
-        model = WhisperModel(whisper_dir, device="cuda", compute_type="int8_float16")
+        model = WhisperModel(whisper_dir, device=device, compute_type=compute_type)
         del model
-        result["whisperCuda"] = {"ok": True}
+        result["whisper"]["ok"] = True
 except Exception as error:
-    result["whisperCuda"] = {"ok": False, "error": str(error)[:300]}
+    result["whisper"]["error"] = str(error)[:300]
 
-models_dir = os.environ.get("VERSUTUS_VOICE_MODELS", "")
 # Each model is probed through the worker's own loader, in its own guard: one
 # broken model must name itself without hiding the state of the other two.
 try:
@@ -374,10 +459,12 @@ try:
     from versutus_voice.tts import WARMUP_TEXT
 
     config = read_tts_config(models_dir)
+    if cpu:
+        config = replace(config, provider="cpu")
     # ORT can print during provider selection. Keep the probe stdout JSON-only.
     with contextlib.redirect_stdout(sys.stderr):
         speaker = load_kokoro_speech(models_dir, config)
-        if config.warmup != "off":
+        if config.warmup != "off" and speaker.startup_warmup_ms is None:
             speaker.prime()
         first_ms = None
         for _, _, elapsed in speaker.timed_audio(WARMUP_TEXT, None):
@@ -392,6 +479,18 @@ except Exception as error:
     result["kokoro"] = {"ok": False, "error": str(error)[:300]}
 print(json.dumps(result))
 `;
+
+function ortPackageCheck(packages) {
+  const installed = Object.entries(packages ?? {});
+  const detail = installed.map(([name, version]) => `${name}==${version}`).join(', ');
+  if (installed.length > 1) {
+    return { name: 'ort', ok: false, detail: `both ${detail} are installed and share files; run voice install to repair the venv` };
+  }
+  if (installed.length === 0) {
+    return { name: 'ort', ok: false, detail: 'no ONNX Runtime distribution found; run voice install' };
+  }
+  return { name: 'ort', ok: true, detail };
+}
 
 /**
  * One named check for a model the worker loads. A probe that did not report the
@@ -413,7 +512,7 @@ function kokoroCheck(probe) {
   if (!check.ok || !probe.profile) return check;
   const { profile, probeFirstPcmMs, lastLive } = probe;
   const config = profile.requested;
-  const actual = (value) => `${value.model} via ${value.providers.join('+')}`;
+  const actual = (value) => `${value.model} via ${value.providers[0]}`;
   const last = Number.isFinite(lastLive?.synthToFirstPcmMs)
     ? `${lastLive.synthToFirstPcmMs} ms via ${actual(lastLive.profile)} (${new Date(lastLive.measuredAtUnixMs).toISOString()})`
     : 'not measured for this profile';
@@ -424,8 +523,12 @@ function kokoroCheck(probe) {
     + ` chunking=${config.chunkWords > 0 ? 'first-phrase+clauses' : 'off'}`
     + (config.warmup === 'idle' && config.idleSeconds != null ? ` idleSeconds=${config.idleSeconds}` : '')
     + `; probe first PCM ${probeFirstPcmMs} ms; last live first PCM ${last}`
-    + (profile.fallbacks.length ? `; fallback: ${profile.fallbacks.join('; ')}` : '');
-  return { ...check, profile, probeFirstPcmMs, lastLive };
+    + describeFallbacks(profile);
+  return { ...check, activeProvider: profile.providers[0], profile, probeFirstPcmMs, lastLive };
+}
+
+function describeFallbacks(profile) {
+  return profile.fallbacks?.length ? `; fallback: ${profile.fallbacks.join('; ')}` : '';
 }
 
 /**
@@ -463,6 +566,9 @@ export function voiceDoctor({ paths, spawnSync = nodeSpawnSync, env = process.en
     checks.push({ name: 'probe', ok: false, detail: firstLine || 'probe returned invalid JSON' });
     return { ok: false, checks };
   }
+  const ortCheck = ortPackageCheck(info.ortPackages);
+  checks.push(ortCheck);
+  if (!ortCheck.ok) return { ok: false, checks };
   checks.push({ name: 'imports', ok: !info.error, detail: info.error ?? JSON.stringify(info.versions) });
   try {
     const lock = readModelsLock(paths);
@@ -483,12 +589,14 @@ export function voiceDoctor({ paths, spawnSync = nodeSpawnSync, env = process.en
     checks.push({ name: 'models', ok: false, detail: error.message });
   }
   checks.push({ name: 'cuda', ok: Boolean(info.vram), detail: info.vram ? `${info.vram.usedMb}/${info.vram.totalMb} MB` : 'no NVIDIA GPU' });
-  if (info.whisperCuda == null) {
-    checks.push({ name: 'whisper', ok: false, detail: 'the CUDA load probe did not run' });
-  } else if (info.whisperCuda.ok) {
-    checks.push({ name: 'whisper', ok: true, detail: 'whisper loads on CUDA (int8_float16)' });
+  if (info.whisper == null) {
+    checks.push({ name: 'whisper', ok: false, detail: 'the Whisper load probe did not run' });
   } else {
-    checks.push({ name: 'whisper', ok: false, detail: `CUDA load failed: ${info.whisperCuda.error ?? 'unknown error'}; run voice install` });
+    const { device, computeType, ok, error } = info.whisper;
+    const detail = ok
+      ? `whisper loads on ${device.toUpperCase()} (${computeType})`
+      : `${device.toUpperCase()} load failed: ${error ?? 'unknown error'}; run voice install`;
+    checks.push({ name: 'whisper', ok, detail });
   }
   // The three models a call cannot do without are probed by name: a call with
   // no Silero, no Smart Turn (the degraded "pause is a turn" judge) or no
@@ -498,6 +606,10 @@ export function voiceDoctor({ paths, spawnSync = nodeSpawnSync, env = process.en
     modelLoadCheck('smartTurn', 'Smart Turn', 'smart turn loads (not the pause-is-a-turn fallback)', info.smartTurn),
     kokoroCheck(info.kokoro),
   );
+  const live = liveTtsStatus(paths);
+  if (live) {
+    checks.push({ name: 'kokoroLive', ok: true, detail: `${live.activeProvider}${describeFallbacks(live)}` });
+  }
   log(JSON.stringify(checks));
 
   const status = voiceStatus({ paths });

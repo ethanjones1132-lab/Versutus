@@ -86,7 +86,7 @@ test('installVoice runs uv and downloads every locked model, and a failure rejec
   };
 
   await assert.rejects(
-    installVoice({ paths, cpu: true, runUv, fetch: fetchImpl }),
+    installVoice({ paths, cpu: true, runUv, fetch: fetchImpl, probePackages: () => ({}) }),
     /uv install failed/,
   );
   assert.equal(calls[0][0], 'venv');
@@ -94,6 +94,60 @@ test('installVoice runs uv and downloads every locked model, and a failure rejec
   assert.ok(calls[0].includes('--allow-existing'), 'a second install must not fail on the existing venv');
   assert.equal(fetchCalls.length, 0, 'no model download may start before the venv is installed');
 });
+
+test('voice install applies the lock without dependency resolution in a fresh venv', async () => {
+  const paths = voicePaths({ VERSUTUS_GATE_HOME: tempDir() }, 'linux');
+  const calls = [];
+  await installVoice({
+    paths, cpu: true, platform: 'linux', lock: {}, log: () => {},
+    runUv: async (args) => { calls.push(args); },
+    probePackages: (python) => { calls.push(['probe', python]); return {}; },
+  });
+  assert.deepEqual(calls, [
+    ['venv', '--python', '3.12', '--allow-existing', paths.venv],
+    ['probe', paths.python],
+    ['pip', 'install', '--python', paths.python, '--no-deps', '-r', paths.lockFile],
+  ]);
+  assert.ok(existsSync(join(paths.root, 'force-cpu')), '--cpu forces the worker to CPU without a wheel swap');
+
+  await installVoice({
+    paths, cpu: false, platform: 'linux', lock: {}, log: () => {},
+    runUv: async () => {}, probePackages: () => ({}),
+  });
+  assert.ok(!existsSync(join(paths.root, 'force-cpu')), 'an install without --cpu returns to automatic provider selection');
+});
+
+for (const installed of [
+  { onnxruntime: '1.30.0' },
+  { onnxruntime: '1.30.0', 'onnxruntime-gpu': '1.30.0' },
+]) {
+  test(`voice install repairs ${Object.keys(installed).join(' + ')} and the next install leaves GPU ORT in place`, async () => {
+    const paths = voicePaths({ VERSUTUS_GATE_HOME: tempDir() }, 'linux');
+    const calls = [];
+    let packages = installed;
+    const options = {
+      paths, platform: 'linux', lock: {}, log: () => {},
+      probePackages: () => packages,
+      runUv: async (args) => {
+        calls.push(args);
+        if (args[1] === 'uninstall') packages = {};
+        if (args[1] === 'install') {
+          assert.equal(packages.onnxruntime, undefined, 'CPU ORT has to be absent before installing GPU ORT');
+          packages = { 'onnxruntime-gpu': '1.30.0' };
+        }
+      },
+    };
+    const venv = ['venv', '--python', '3.12', '--allow-existing', paths.venv];
+    const applyLock = ['pip', 'install', '--python', paths.python, '--no-deps', '-r', paths.lockFile];
+    await installVoice(options);
+    assert.deepEqual(calls, [
+      venv, ['pip', 'uninstall', '--python', paths.python, 'onnxruntime', 'onnxruntime-gpu'], applyLock,
+    ]);
+    calls.length = 0;
+    await installVoice(options);
+    assert.deepEqual(calls, [venv, applyLock]);
+  });
+}
 
 test('a per-engine switch turns only that engine off, and the kill switch turns all off', () => {
   const dir = tempDir();
@@ -205,7 +259,7 @@ test('install fetches optional weights even though readiness does not need them'
     };
   };
 
-  await installVoice({ paths, runUv: async () => {}, fetch: fetchImpl, lock });
+  await installVoice({ paths, runUv: async () => {}, fetch: fetchImpl, lock, probePackages: () => ({}) });
 
   assert.ok(fetched.includes('https://example/whisper'), 'the optional STT weights are fetched');
   assert.ok(existsSync(join(paths.models, 'whisper', 'model.bin')));
@@ -219,7 +273,7 @@ test('the int8 graph is only fetched when explicitly requested', async () => {
     url: 'https://example/int8', sha256: sha256(bytes), optional: true, optIn: true,
   } } };
   const fake = {
-    paths, lock, runUv: async () => {}, log: () => {},
+    paths, lock, runUv: async () => {}, log: () => {}, probePackages: () => ({}),
     fetch: async () => ({ ok: true, status: 200, body: Readable.from([bytes]) }),
   };
   assert.deepEqual((await installVoice(fake)).models, []);
@@ -240,13 +294,18 @@ function doctorPaths() {
   return paths;
 }
 
-function doctorSpawn({ whisperCuda = { ok: true }, vram = { usedMb: 100, totalMb: 8000 } } = {}) {
+function doctorSpawn({
+  whisper = { device: 'cuda', computeType: 'int8_float16', ok: true },
+  vram = { usedMb: 100, totalMb: 8000 },
+  ortPackages = { 'onnxruntime-gpu': '1.30.0' },
+} = {}) {
   return () => ({
     status: 0,
     stdout: JSON.stringify({
       versions: { faster_whisper: '1.2.1', kokoro_onnx: '0.6.1', onnxruntime: '1.30.0' },
+      ortPackages,
       vram,
-      whisperCuda,
+      whisper,
       // The probe also loads the three call models; this fixture stands for a
       // healthy host. voice-doctor-models.test.mjs covers each one failing.
       silero: { ok: true, error: null },
@@ -261,13 +320,53 @@ test('voiceDoctor is ok when Whisper loads on CUDA', () => {
   const report = voiceDoctor({ paths: doctorPaths(), spawnSync: doctorSpawn(), log: () => {} });
   const whisper = report.checks.find((check) => check.name === 'whisper');
   assert.equal(whisper.ok, true);
+  assert.match(report.checks.find((check) => check.name === 'ort').detail, /onnxruntime-gpu==1.30.0/);
   assert.equal(report.ok, true);
+});
+
+test('voiceDoctor is ok when the CPU install mode loads Whisper on CPU', () => {
+  const report = voiceDoctor({
+    paths: doctorPaths(),
+    spawnSync: doctorSpawn({ whisper: { device: 'cpu', computeType: 'int8', ok: true }, vram: null }),
+    log: () => {},
+  });
+  assert.match(report.checks.find((check) => check.name === 'whisper').detail, /loads on CPU/);
+  assert.equal(report.ok, true);
+});
+
+test('voiceDoctor fails with a repair hint when both ONNX Runtime wheels are present', () => {
+  const ortPackages = { onnxruntime: '1.30.0', 'onnxruntime-gpu': '1.30.0' };
+  const report = voiceDoctor({ paths: doctorPaths(), spawnSync: doctorSpawn({ ortPackages }), log: () => {} });
+  const ort = report.checks.find((check) => check.name === 'ort');
+  assert.equal(ort.ok, false);
+  assert.match(ort.detail, /both onnxruntime==1.30.0, onnxruntime-gpu==1.30.0/);
+  assert.match(ort.detail, /voice install/);
+  assert.equal(report.ok, false);
+});
+
+test('detailed voice status names the live provider, its fallback and the installed ORT wheel', () => {
+  const paths = doctorPaths();
+  const profile = { providers: ['CPUExecutionProvider'], fallbacks: ['CUDAExecutionProvider unavailable'] };
+  writeFileSync(join(paths.root, 'tts-profile.json'), JSON.stringify({ pid: process.pid, profile }));
+  const ortPackages = { 'onnxruntime-gpu': '1.30.0' };
+  const opts = { paths, includeRuntime: true, probePackages: () => ortPackages };
+  const local = voiceStatus(opts).engines.local;
+  assert.deepEqual(local.ortPackages, ortPackages);
+  assert.deepEqual(local.tts, { activeProvider: 'CPUExecutionProvider', ...profile });
+  const broken = voiceStatus({
+    ...opts, probePackages: () => ({ ...ortPackages, onnxruntime: '1.30.0' }),
+  }).engines.local;
+  assert.equal(broken.state, 'unavailable');
+  assert.match(broken.reason, /voice install/);
+  assert.equal(broken.tts, null);
 });
 
 test('voiceDoctor fails naming whisper when the CUDA load fails', () => {
   const report = voiceDoctor({
     paths: doctorPaths(),
-    spawnSync: doctorSpawn({ whisperCuda: { ok: false, error: 'Library cublas64_12.dll is not found' } }),
+    spawnSync: doctorSpawn({
+      whisper: { device: 'cuda', ok: false, error: 'Library cublas64_12.dll is not found' },
+    }),
     log: () => {},
   });
   const whisper = report.checks.find((check) => check.name === 'whisper');

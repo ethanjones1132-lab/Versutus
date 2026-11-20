@@ -2,9 +2,10 @@
 # requirements.lock (the full transitive lock) is captured in M5 Task 5.2.
 faster-whisper==1.2.1
 kokoro-onnx==0.6.1
-onnxruntime==1.30.0
+onnxruntime==1.30.0; sys_platform == "darwin"
+onnxruntime-gpu[cuda,cudnn]==1.30.0; sys_platform != "darwin"
 numpy
 soundfile
-nvidia-cublas-cu12==12.9.2.10
-nvidia-cudnn-cu12==9.26.0.51
+nvidia-cublas-cu12==12.9.2.10; sys_platform != "darwin"
+nvidia-cudnn-cu12==9.26.0.51; sys_platform != "darwin"
 pytest

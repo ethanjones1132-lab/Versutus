@@ -1017,15 +1017,20 @@ def load_smart_turn(models_dir):
     return TurnJudge(is_complete=is_complete)
 
 
+def force_cpu(models_dir):
+    return (Path(models_dir).parent / "force-cpu").is_file()
+
+
 def build_default_pipeline(emit, models_dir, cpu=False):
     """The real pipeline. Smart Turn falls back to 'a pause is a turn' when absent."""
     from contextlib import redirect_stdout
     from dataclasses import replace
 
-    from .kokoro import load_kokoro_speech, read_tts_config, record_tts_latency
+    from .kokoro import load_kokoro_speech, read_tts_config, record_tts_latency, record_tts_profile
     from .stt import PartialTranscriber
     from .vad import VadSegmenter
 
+    cpu = cpu or force_cpu(models_dir)
     whisper = load_whisper(models_dir, cpu=cpu)
 
     def transcribe(pcm, beam_size):
@@ -1049,10 +1054,17 @@ def build_default_pipeline(emit, models_dir, cpu=False):
     config = read_tts_config(models_dir)
     if cpu:
         config = replace(config, provider="cpu")
+
+    def report_profile(profile):
+        record_tts_profile(models_dir, profile)
+
+    def load_speech():
+        return load_kokoro_speech(models_dir, config, on_profile_change=report_profile)
+
     # ORT may print to stdout when it cannot initialize a provider. Stdout on
     # the worker is reserved for RPC, even before voice.ready.
     with redirect_stdout(sys.stderr):
-        speech = load_kokoro_speech(models_dir, config)
+        speech = _warm_models(transcribe, load_speech, config)
     turn = load_smart_turn(models_dir)
     if turn is None:
         # Degraded: without Smart Turn a silence ends the turn. `voice doctor`
@@ -1073,13 +1085,13 @@ def build_default_pipeline(emit, models_dir, cpu=False):
         record_tts=lambda synth_ms: record_tts_latency(models_dir, speech.synthesize.profile(), synth_ms),
     )
     pipeline.whisper_device = whisper_device()
-    with redirect_stdout(sys.stderr):
-        _warm_models(transcribe, speech, config)
-    print(f"[versutus-voice] kokoro profile={json.dumps(speech.synthesize.profile())}", file=sys.stderr)
+    profile = speech.synthesize.profile()
+    report_profile(profile)
+    print(f"[versutus-voice] kokoro profile={json.dumps(profile)}", file=sys.stderr)
     return pipeline
 
 
-def _warm_models(transcribe, speech, config):
+def _warm_models(transcribe, load_speech, config):
     """Pay each model's first-inference cost before a call can.
 
     A model's first run allocates and compiles: measured on this host the
@@ -1090,12 +1102,19 @@ def _warm_models(transcribe, speech, config):
     that fails is not a reason not to start: the call would have paid the same
     cost, and a model that is really broken says so on its first real use.
     """
+    # Warm Whisper before auto Kokoro validates CUDA, so Whisper allocates its
+    # working memory first. A failed CUDA validation then leaves Kokoro on CPU.
     try:
         transcribe(b"\x00\x00" * INPUT_SAMPLE_RATE, 1)
     except Exception as error:  # noqa: BLE001 - warm-up is best effort
         print(f"[versutus-voice] whisper warm-up skipped ({error})", file=sys.stderr)
+    speech = load_speech()
     if config.warmup != "off":
-        _warm_tts(speech, "startup")
+        if speech.startup_warmup_ms is None:
+            _warm_tts(speech, "startup")
+        else:
+            print(f"[versutus-voice] kokoro warm-up stage=startup ms={speech.startup_warmup_ms}", file=sys.stderr)
+    return speech
 
 
 def _warm_tts(speech, stage):

@@ -150,6 +150,7 @@ class SpeechSynthesizer:
         self.chunk_remainder = chunk_remainder
         self.clock = clock
         self.last_used = float("-inf")
+        self.startup_warmup_ms = None  # set by loaders that prime during provider selection
         self._cancelled = set()
 
     def cancel(self, gen):

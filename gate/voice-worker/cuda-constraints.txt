@@ -1,0 +1,8 @@
+# CUDA 13 libraries verified alongside Whisper's existing CUDA 12 libraries.
+nvidia-cublas==13.10.0.20
+nvidia-cuda-runtime==13.5.37
+nvidia-cuda-nvrtc==13.5.37
+nvidia-cufft==12.5.0.14
+nvidia-curand==10.4.5.25
+nvidia-nvjitlink==13.5.37
+nvidia-cudnn-cu13==9.28.1.4
