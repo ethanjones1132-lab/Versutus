@@ -211,6 +211,23 @@ test('install fetches optional weights even though readiness does not need them'
   assert.ok(existsSync(join(paths.models, 'whisper', 'model.bin')));
 });
 
+test('the int8 graph is only fetched when explicitly requested', async () => {
+  const paths = voicePaths({ VERSUTUS_GATE_HOME: tempDir() }, 'linux');
+  const asset = 'kokoro-v1.0.int8.onnx';
+  const bytes = Buffer.from('int8-weights');
+  const lock = { models: { [asset]: {
+    url: 'https://example/int8', sha256: sha256(bytes), optional: true, optIn: true,
+  } } };
+  const fake = {
+    paths, lock, runUv: async () => {}, log: () => {},
+    fetch: async () => ({ ok: true, status: 200, body: Readable.from([bytes]) }),
+  };
+  assert.deepEqual((await installVoice(fake)).models, []);
+  assert.equal(existsSync(join(paths.models, asset)), false);
+  assert.deepEqual((await installVoice({ ...fake, ttsInt8: true })).models, [asset]);
+  assert.equal(existsSync(join(paths.models, asset)), true);
+});
+
 function doctorPaths() {
   const dir = tempDir();
   const paths = voicePaths({ VERSUTUS_GATE_HOME: dir }, 'linux');

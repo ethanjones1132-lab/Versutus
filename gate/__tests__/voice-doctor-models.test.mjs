@@ -56,6 +56,28 @@ test('voice doctor passes when Silero VAD, Smart Turn and Kokoro all load', () =
   assert.equal(report.ok, true);
 });
 
+test('doctor names the active TTS profile, fallback and the last live measurement', () => {
+  const profile = {
+    model: 'kokoro-v1.0.onnx', providers: ['CPUExecutionProvider'], fallbacks: ['CUDAExecutionProvider unavailable'],
+    requested: {
+      provider: 'cuda', model: 'full', voice: 'af_sarah', warmup: 'idle', chunkWords: 8,
+      intraThreads: 4, interThreads: 1, graphOptimization: 'all', cpuArena: true, memoryPattern: true, spinning: false,
+    },
+  };
+  const lastLive = { profile, synthToFirstPcmMs: 711, measuredAtUnixMs: 1795132800000 };
+  const report = voiceDoctor({
+    paths: doctorPaths(), log: () => {},
+    spawnSync: probeSpawn({ ...HEALTHY_PROBE, kokoro: { ok: true, profile, lastLive, probeFirstPcmMs: 605 } }),
+  });
+  const kokoro = checkNamed(report, 'kokoro');
+  assert.equal(kokoro.ok, true);
+  assert.match(kokoro.detail, /CPUExecutionProvider voice=af_sarah chunkWords=8 warmup=idle intra=4 inter=1/);
+  assert.match(kokoro.detail, /execution=sequential chunking=first-phrase/);
+  assert.match(kokoro.detail, /probe first PCM 605 ms; last live first PCM 711 ms/);
+  assert.match(kokoro.detail, /fallback: CUDAExecutionProvider unavailable/);
+  assert.deepEqual(kokoro.lastLive, lastLive);
+});
+
 test('one model failing names itself while the other two still report', () => {
   let spawns = 0;
   const report = voiceDoctor({

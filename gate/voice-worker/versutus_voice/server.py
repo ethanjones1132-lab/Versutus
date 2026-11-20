@@ -79,6 +79,8 @@ class VoicePipeline:
         emit,
         min_utterance_ms=0,
         spawn=None,
+        tts_config=None,
+        record_tts=None,
     ):
         self._vad = vad
         self._min_utterance_bytes = int(INPUT_SAMPLE_RATE * 2 * min_utterance_ms / 1000)
@@ -86,6 +88,8 @@ class VoicePipeline:
         self._transcriber = transcriber
         self._turn = turn_judge
         self._synth = synthesizer
+        self._tts_config = tts_config
+        self._record_tts = record_tts
         self._emit = emit
         # Synthesis runs on its own thread so the mic keeps streaming while
         # the PC speaks: barge-in hears the operator mid-sentence, and the
@@ -101,6 +105,7 @@ class VoicePipeline:
         self._synth_worker = None
         self._synth_lock = threading.Lock()
         self._running_gen = None
+        self._warm_pending = False
         # Recognition jobs and their worker flag. Whisper costs hundreds of ms
         # per decode; run inline it stalled the audio loop, so barge-in was
         # unheard and speech boundaries were judged late (VOW-4).
@@ -132,9 +137,8 @@ class VoicePipeline:
         self._synth_speaking = False
         self._speech_gen = None
         # Whether the phone is still playing a reply, as the Gate's pacer says.
-        # Synthesis runs about three times faster than speech, so "the PC has
-        # finished generating" is seconds earlier than "the loudspeaker is
-        # quiet": the echo gate and the barge-in window follow the loudspeaker.
+        # Synthesis can finish before the loudspeaker is quiet: the echo gate
+        # and barge-in window follow playback, not the worker's queue.
         self._playout = False
         # Whether synthesis itself wants the VAD's playback gate up.
         self._synth_gate = False
@@ -158,7 +162,20 @@ class VoicePipeline:
         self._reset()
         self._session = (params or {}).get("voiceSessionId")
         self._call_started_ms = time.time() * 1000.0
+        if self._tts_config is not None:
+            if self._tts_is_idle():
+                with self._synth_lock:
+                    self._warm_pending = True
+                    idle = self._synth_worker is None
+                if idle:
+                    # Do not hold the open acknowledgment or microphone for
+                    # this. Reuse the synthesis lane; never run two inferences.
+                    self._spawn(self._drain_speech)
+            return {"ok": True, "ttsChunkWords": self._synth.chunk_words}
         return {"ok": True}
+
+    def _tts_is_idle(self):
+        return self._tts_config is not None and self._tts_config.should_prime_after_idle(self._synth)
 
     def close(self, params):
         # The process stays warm across calls, so ending one ends all of its
@@ -414,6 +431,11 @@ class VoicePipeline:
         params = params or {}
         gen = int(params.get("gen", 0))
         text = str(params.get("text", ""))
+        tts_id = params.get("ttsId")
+        split_opening = params.get("splitOpening", True) is True
+        opening_words = params.get("openingPrefixWords")
+        if type(opening_words) is not int or not 6 <= opening_words <= 10:
+            opening_words = 0
         # While the PC speaks, the mic hears the loudspeaker too: the phone's
         # AEC eats most of it, but what leaks through must not open speech, or
         # the Bot would barge in on itself. The VAD gates harder until the
@@ -425,10 +447,10 @@ class VoicePipeline:
             self._speech_gen = gen
             self._synth_gate = True
             self._set_playback_gate()
-            self._synth_jobs.append((gen, text, time.monotonic()))
+            self._synth_jobs.append((gen, text, time.monotonic(), tts_id, self._epoch, split_opening, opening_words))
             idle = self._synth_worker is None
-        # Only spawned when nobody is serving the queue: the sentences of one
-        # reply are spoken one after another, never on top of each other.
+        # The lane renders in order but never waits for phone playback: it can
+        # start the next sentence while the pacer is still sending the last one.
         if idle:
             self._spawn(self._drain_speech)
         return {"ok": True}
@@ -451,13 +473,23 @@ class VoicePipeline:
         try:
             while True:
                 with self._synth_lock:
-                    if not self._synth_jobs:
+                    if self._synth_jobs:
+                        job = self._synth_jobs.pop(0)
+                        self._running_gen = job[0]
+                        self._warm_pending = False  # real speech takes priority
+                    elif self._warm_pending:
+                        self._warm_pending = False
+                        job = None
+                    else:
                         self._synth_worker = None
                         return
-                    gen, text, queued_at = self._synth_jobs.pop(0)
-                    self._running_gen = gen
+                if job is None:
+                    if self._session is not None and self._tts_is_idle():
+                        _warm_tts(self._synth, "idle")
+                    continue
+                gen = job[0]
                 try:
-                    self._speak_one(gen, text, queued_at)
+                    self._speak_one(*job)
                 finally:
                     self._running_gen = None
                 with self._synth_lock:
@@ -474,26 +506,36 @@ class VoicePipeline:
                 if self._synth_worker is me:
                     self._synth_worker = None
 
-    def _speak_one(self, gen, text, queued_at):
-        epoch = self._epoch
-        started_at = time.monotonic()
-        first = True
+    def _speak_one(self, gen, text, queued_at, tts_id, epoch, split_opening, opening_words):
+        def stale():
+            return epoch != self._epoch
+
+        queue_ms = round((time.monotonic() - queued_at) * 1000)
+        job = {"ttsId": tts_id} if tts_id is not None else {}
+        last_synth_ms = None
         try:
-            for chunk_gen, pcm in self._synth.speak(text, gen):
-                if epoch != self._epoch:
+            audio = self._synth.timed_audio(
+                text, gen, stale=stale, split_opening=split_opening, opening_prefix_words=opening_words,
+            )
+            for pcm, sentence, synth_ms in audio:
+                if stale():
                     # open()/close() while this sentence was being generated:
                     # its audio is not the audio of the call that is running.
                     return
-                params = {"gen": chunk_gen, "chunk": encode_chunk(pcm, OUTPUT_SAMPLE_RATE)}
-                if first:
-                    params["queueMs"] = round((started_at - queued_at) * 1000)
-                    params["synthMs"] = round((time.monotonic() - started_at) * 1000)
-                    first = False
+                params = {"gen": gen, "chunk": encode_chunk(pcm, OUTPUT_SAMPLE_RATE)}
+                if synth_ms is not None:
+                    # A speak can batch multiple completed sentences. For the
+                    # later ones, the worker wait includes earlier sentences.
+                    params.update(job, sentence=sentence, synthMs=synth_ms, queueMs=(
+                        queue_ms if sentence == 1 else
+                        max(0, round((self._synth.last_used - queued_at) * 1000) - synth_ms)
+                    ))
+                    last_synth_ms = synth_ms
                 self._emit("voice.speechAudio", params)
-            if not self._synth.is_cancelled(gen):
-                self._emit("voice.speechDone", {"gen": gen})
+            if not stale() and not self._synth.is_cancelled(gen):
+                self._emit("voice.speechDone", {"gen": gen, **job})
         except Exception as error:  # noqa: BLE001 - a failed sentence is reported, not fatal
-            if epoch != self._epoch:
+            if stale():
                 # The call ended while this sentence was being generated. The
                 # Gate restarts `gen` every call, so a speechDone {gen} from a
                 # dead call lands in the next one and ends its reply early.
@@ -505,7 +547,10 @@ class VoicePipeline:
             # A generation that never announces itself leaves the Gate in
             # "speaking" for the rest of the call, so a failed one still says
             # it is done, and this thread goes on serving later jobs.
-            self._emit("voice.speechDone", {"gen": gen})
+            self._emit("voice.speechDone", {"gen": gen, **job})
+        finally:
+            if last_synth_ms is not None and self._record_tts is not None and not stale():
+                self._record_tts(last_synth_ms)
 
     def _release(self, gen):
         """Drop the playback gate once the last sentence of a reply is done.
@@ -526,6 +571,7 @@ class VoicePipeline:
         with self._synth_lock:
             gens = {job[0] for job in self._synth_jobs}
             self._synth_jobs.clear()
+            self._warm_pending = False
         if self._running_gen is not None:
             gens.add(self._running_gen)
         for gen in gens:
@@ -910,35 +956,6 @@ class SileroScorer:
         return float(np.asarray(outputs[0]).reshape(-1)[0])
 
 
-def load_kokoro(models_dir):
-    from kokoro_onnx import Kokoro
-
-    model_path = Path(models_dir) / "kokoro-v1.0.onnx"
-    voices_path = Path(models_dir) / "voices-v1.0.bin"
-    if not model_path.exists() or not voices_path.exists():
-        raise FileNotFoundError(f"Kokoro model/voices not found under {models_dir}")
-    return Kokoro(str(model_path), str(voices_path))
-
-
-class KokoroSynthesizer:
-    """Adapts ``Kokoro.create`` to the synthesizer callable the stage expects."""
-
-    def __init__(self, kokoro, voice="af_sarah"):
-        self._kokoro = kokoro
-        self._voice = voice
-        self.sample_rate = OUTPUT_SAMPLE_RATE
-
-    def __call__(self, sentence):
-        from .audio import float32_to_pcm16
-
-        samples, rate = self._kokoro.create(sentence, voice=self._voice, speed=1.0, lang="en-us")
-        if int(rate) != OUTPUT_SAMPLE_RATE:
-            from .audio import resample_linear
-
-            samples = resample_linear(samples, int(rate), OUTPUT_SAMPLE_RATE)
-        return [float32_to_pcm16(samples)]
-
-
 SMART_TURN_MODEL = "smart-turn-v3.2-cpu.onnx"
 SMART_TURN_SECONDS = 8
 # Whisper's log-mel has n_fft=400 and hop_length=160, so 8 s is 800 frames.
@@ -1002,8 +1019,11 @@ def load_smart_turn(models_dir):
 
 def build_default_pipeline(emit, models_dir, cpu=False):
     """The real pipeline. Smart Turn falls back to 'a pause is a turn' when absent."""
+    from contextlib import redirect_stdout
+    from dataclasses import replace
+
+    from .kokoro import load_kokoro_speech, read_tts_config, record_tts_latency
     from .stt import PartialTranscriber
-    from .tts import SpeechSynthesizer
     from .vad import VadSegmenter
 
     whisper = load_whisper(models_dir, cpu=cpu)
@@ -1026,7 +1046,13 @@ def build_default_pipeline(emit, models_dir, cpu=False):
         )
         return join_spoken_segments(segments)
 
-    kokoro = load_kokoro(models_dir)
+    config = read_tts_config(models_dir)
+    if cpu:
+        config = replace(config, provider="cpu")
+    # ORT may print to stdout when it cannot initialize a provider. Stdout on
+    # the worker is reserved for RPC, even before voice.ready.
+    with redirect_stdout(sys.stderr):
+        speech = load_kokoro_speech(models_dir, config)
     turn = load_smart_turn(models_dir)
     if turn is None:
         # Degraded: without Smart Turn a silence ends the turn. `voice doctor`
@@ -1040,16 +1066,20 @@ def build_default_pipeline(emit, models_dir, cpu=False):
         vad=VadSegmenter(is_speech=SileroScorer(), start_ms=SPEECH_START_MS),
         transcriber=PartialTranscriber(transcribe),
         turn_judge=turn,
-        synthesizer=SpeechSynthesizer(KokoroSynthesizer(kokoro)),
+        synthesizer=speech,
         emit=emit,
         min_utterance_ms=MIN_UTTERANCE_MS,
+        tts_config=config,
+        record_tts=lambda synth_ms: record_tts_latency(models_dir, speech.synthesize.profile(), synth_ms),
     )
     pipeline.whisper_device = whisper_device()
-    _warm_models(transcribe, kokoro)
+    with redirect_stdout(sys.stderr):
+        _warm_models(transcribe, speech, config)
+    print(f"[versutus-voice] kokoro profile={json.dumps(speech.synthesize.profile())}", file=sys.stderr)
     return pipeline
 
 
-def _warm_models(transcribe, kokoro):
+def _warm_models(transcribe, speech, config):
     """Pay each model's first-inference cost before a call can.
 
     A model's first run allocates and compiles: measured on this host the
@@ -1064,12 +1094,15 @@ def _warm_models(transcribe, kokoro):
         transcribe(b"\x00\x00" * INPUT_SAMPLE_RATE, 1)
     except Exception as error:  # noqa: BLE001 - warm-up is best effort
         print(f"[versutus-voice] whisper warm-up skipped ({error})", file=sys.stderr)
-    started = time.monotonic()
+    if config.warmup != "off":
+        _warm_tts(speech, "startup")
+
+
+def _warm_tts(speech, stage):
     try:
-        kokoro.create("Ready.", voice="af_sarah", speed=1.0, lang="en-us")
-        print(f"[versutus-voice] kokoro warm-up ms={round((time.monotonic() - started) * 1000)}", file=sys.stderr)
+        print(f"[versutus-voice] kokoro warm-up stage={stage} ms={speech.prime()}", file=sys.stderr)
     except Exception as error:  # noqa: BLE001 - warm-up is best effort
-        print(f"[versutus-voice] kokoro warm-up skipped ({error})", file=sys.stderr)
+        print(f"[versutus-voice] kokoro warm-up stage={stage} failed ({type(error).__name__})", file=sys.stderr)
 
 
 def main(argv=None):

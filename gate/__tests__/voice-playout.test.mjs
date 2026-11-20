@@ -1,5 +1,5 @@
-// Reply audio leaves the Gate at the pace it is heard. Synthesis is about three
-// times faster than speech, so unpaced audio reached the phone in a burst: a
+// Reply audio leaves the Gate at the pace it is heard. Without pacing,
+// a rendered sentence reached the phone in a burst: a
 // long sentence overran the phone's playback queue, the call said "listening"
 // while the reply still had seconds to play, and the first sentence finishing
 // synthesis ended the whole reply. These drive a real media socket with an
@@ -12,6 +12,7 @@ import { once } from 'node:events';
 import { WebSocket } from 'ws';
 
 import { VOICE_STREAM_PATH, attachVoiceMediaSocket } from '../core/voice/media-socket.mjs';
+import { LocalEngine } from '../core/voice/engines/local-engine.mjs';
 import { VoiceSessionRegistry } from '../core/voice/voice-rpc.mjs';
 
 const SESSION = {
@@ -23,7 +24,7 @@ const SESSION = {
 
 // 24 kHz mono PCM16.
 const BYTES_PER_MS = 48;
-const pcm = (ms) => Buffer.alloc(ms * BYTES_PER_MS, 1);
+const pcm = (ms, value = 1) => Buffer.alloc(ms * BYTES_PER_MS, value);
 
 async function waitFor(predicate, timeoutMs = 3000) {
   const deadline = Date.now() + timeoutMs;
@@ -110,7 +111,7 @@ async function startCall(t, { engine, runTurn, ...options } = {}) {
   const frames = [];
   const audio = [];
   ws.on('message', (data, binary) => {
-    if (binary) audio.push({ at: Date.now(), bytes: data.length - 8 });
+    if (binary) audio.push({ at: Date.now(), bytes: data.length - 8, pcm: data.subarray(8) });
     else frames.push({ at: Date.now(), ...JSON.parse(data.toString()) });
   });
   await once(ws, 'open');
@@ -132,6 +133,111 @@ async function openTurn(engine, turn, text = 'hello') {
   engine.emit('final', { text });
   await waitFor(() => turn.handlers);
 }
+
+test('chunked Kokoro PCM reaches the phone before the complete sentence returns', async (t) => {
+  let notify;
+  const jobs = [];
+  const lease = {
+    request: async () => ({ ok: true, ttsChunkWords: 8 }),
+    onNotification: (handler) => { notify = handler; },
+    send: (method, params) => { if (method === 'voice.speak') jobs.push(params); },
+    release: () => {},
+  };
+  const engine = new LocalEngine({ pool: { lease: async () => lease } });
+  const { turn, runTurn } = controllableTurn();
+  const call = await startCall(t, { engine, runTurn, utteranceSettleMs: 0 });
+  await openTurn(engine, turn);
+
+  const text = 'I would start by trying the simplest option before changing anything else. Next sentence.';
+  turn.handlers.onDelta(text);
+  turn.release();
+  await waitFor(() => jobs.length === 1);
+  assert.equal(engine.ttsChunkWords, 8);
+  assert.equal(jobs[0].text, text);
+  assert.equal(jobs[0].splitOpening, true, 'the worker owns the cut for a complete opening sentence');
+
+  const { gen, ttsId } = jobs[0];
+  const sendPcm = (ms, timing = {}) => notify({
+    method: 'voice.speechAudio',
+    params: { gen, chunk: { data: pcm(ms).toString('base64') }, ...timing },
+  });
+  sendPcm(300, { ttsId, sentence: 1, queueMs: 0, synthMs: 75 });
+  // The worker is not allowed to finish the sentence until a real WebSocket
+  // client observes its opening phrase. Waiting for speechDone would deadlock.
+  await waitFor(() => call.audio.length > 0);
+  assert.equal(call.speech().includes('end'), false);
+  assert.match(call.lines.find((line) => line.startsWith('voice.tts ')),
+    /sentence=1 workerQueueMs=0 synthToPcmMs=75 effectToWorkerPcmMs=\d+ pcmToSendMs=\d+ effectToSendMs=\d+/);
+
+  sendPcm(200); // continuation of sentence 1, not timed as a second sentence
+  sendPcm(100, { ttsId, sentence: 2, queueMs: 95, synthMs: 25 });
+  notify({ method: 'voice.speechDone', params: { gen, ttsId } });
+  await waitFor(() => call.speech().includes('end'));
+  assert.equal(call.heardMs(), 600);
+  const timings = call.lines.filter((line) => line.startsWith('voice.tts '));
+  assert.equal(timings.length, 2);
+  assert.match(timings[1], /sentence=2 workerQueueMs=95 synthToPcmMs=25 .* pcmToSendMs=\d+/);
+});
+
+test('the local worker receives the prefix size only with the streamed continuation', async (t) => {
+  const jobs = [];
+  const lease = {
+    request: async () => ({ ok: true, ttsChunkWords: 8 }),
+    onNotification: () => {},
+    send: (method, params) => { if (method === 'voice.speak') jobs.push(params); },
+    release: () => {},
+  };
+  const engine = new LocalEngine({ pool: { lease: async () => lease } });
+  const { turn, runTurn } = controllableTurn();
+  await startCall(t, { engine, runTurn, utteranceSettleMs: 0 });
+  await openTurn(engine, turn);
+
+  const opening = 'I would start with the simplest option first, ';
+  const tail = 'and then check whether the result matches what you expected.';
+  turn.handlers.onDelta(opening);
+  await waitFor(() => jobs.length === 1);
+  turn.handlers.onDelta(tail);
+  turn.release();
+  await waitFor(() => jobs.length === 2);
+  assert.deepEqual(jobs.map(({ text, splitOpening, openingPrefixWords }) => [text, splitOpening, openingPrefixWords]), [
+    [opening, false, undefined],
+    [tail, false, 8],
+  ]);
+});
+
+test('the next sentence is submitted during playout and a late sentence does not send padding', async (t) => {
+  const engine = makeEngine();
+  const { turn, runTurn } = controllableTurn();
+  const call = await startCall(t, { engine, runTurn, playoutLeadMs: 60 });
+  await openTurn(engine, turn);
+
+  turn.handlers.onDelta('The first sentence. ');
+  await waitFor(() => engine.spoken.length === 1);
+  const { gen } = engine.spoken[0];
+  const first = pcm(700);
+  const second = pcm(100, 2);
+  const late = pcm(100, 3);
+  engine.emit('speechAudio', { gen, pcm: first });
+  engine.emit('speechDone', { gen });
+  await waitFor(() => call.audio.length > 0);
+
+  turn.handlers.onDelta('The second sentence. ');
+  await waitFor(() => engine.spoken.length === 2);
+  assert.ok(call.heardMs() < 700, 'sentence two starts before sentence one has even finished sending');
+  engine.emit('speechAudio', { gen, pcm: second });
+  engine.emit('speechDone', { gen });
+
+  turn.handlers.onDelta('The late sentence.');
+  turn.release();
+  await waitFor(() => engine.spoken.length === 3);
+  await waitFor(() => call.heardMs() >= 800);
+  await sleep(200); // exhaust the pacer's 60 ms lead plus one 100 ms frame
+  assert.equal(call.heardMs(), 800, 'no audio is sent to pad the underrun');
+  engine.emit('speechAudio', { gen, pcm: late });
+  engine.emit('speechDone', { gen });
+  await waitFor(() => call.speech().includes('end'));
+  assert.deepEqual(Buffer.concat(call.audio.map((chunk) => chunk.pcm)), Buffer.concat([first, second, late]));
+});
 
 test('a reply is not over when its first sentence has been synthesised', async (t) => {
   const engine = makeEngine();

@@ -134,6 +134,25 @@ export function openingClauseLength(text) {
   return 0;
 }
 
+/** One early opening for streamed plain prose, preferring its first natural pause. */
+export function openingPhraseLength(text, maxWords) {
+  if (!Number.isInteger(maxWords) || maxWords < 6 || maxWords > 10) return 0;
+  // Require whitespace after the last word: the next delta may finish a
+  // partial token. Leave markup intact for the worker's speech cleaner.
+  let words = 0;
+  for (const match of text.matchAll(/\S+\s+/g)) {
+    words += 1;
+    if (words < 6) continue;
+    if (words < maxWords && !/[,;:—–]['"”’)\]]*$/.test(match[0].trimEnd())) continue;
+    const end = match.index + match[0].length;
+    const prefix = text.slice(0, end);
+    if (/[`*_[\]~|<>#\n\r]|https?:\/\/|www\./i.test(prefix)) return 0;
+    if (/^\s*(?:[-+]|\d+\))\s/.test(prefix)) return 0;
+    return end;
+  }
+  return 0;
+}
+
 function sentencesOf(text) {
   const sentences = [];
   let start = 0;

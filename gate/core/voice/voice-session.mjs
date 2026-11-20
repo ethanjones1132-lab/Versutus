@@ -12,7 +12,7 @@
 // is never dropped: it merges into that turn while the turn has not answered yet,
 // and waits (`queued`) once it has.
 
-import { completeSentenceLength, openingClauseLength } from './sentences.mjs';
+import { completeSentenceLength, openingClauseLength, openingPhraseLength } from './sentences.mjs';
 
 export const VOICE_PHASES = Object.freeze([
   'opening',
@@ -48,6 +48,9 @@ export const INITIAL_VOICE_SESSION = Object.freeze({
   // one-final-one-turn behaviour, which is what a hold of 0 means.
   utteranceHoldMs: 0,
   continuationMs: 0,
+  // Engines without a Kokoro profile retain the legacy early-clause behavior.
+  ttsChunkWords: null,
+  ttsOpeningWords: 0, // already sent, not yet followed by the rest of its sentence
   // Whether the engine says the person is mid-utterance right now: speech is
   // open, a pause is still being judged, or a final is still being decoded. An
   // engine that reports it lets the hold be a short settle instead of a guess
@@ -103,22 +106,35 @@ function replyOwed(state) {
     && (state.resumePhase === 'speaking' || state.resumePhase === 'thinking');
 }
 
+function speakJob(state, text, final, splitOpening = state.spoken === '') {
+  return {
+    kind: 'engine.speak', text, gen: state.gen, final, splitOpening,
+    ...(state.ttsOpeningWords > 0 ? { openingPrefixWords: state.ttsOpeningWords } : {}),
+  };
+}
+
 /**
  * Speak the reply's newly completed sentences, in order.
  *
- * The opening of a reply is the one place a sentence is not waited for: nothing
- * has been said yet, the person is listening to silence, and synthesis costs
- * about a third of a second per second of speech, so a long first sentence is
- * seconds of dead air. Its first clause is spoken as soon as it is whole.
+ * The opening of a reply is the one place a sentence is not waited for. Gate
+ * can send a safe opening phrase early; if the first sentence is already
+ * complete, the worker instead finds the cut after cleaning its text.
  */
 function speakCompleted(state, effects) {
   const remaining = state.reply.slice(state.spoken.length);
-  const boundary = completeSentenceLength(remaining)
-    || (state.spoken === '' ? openingClauseLength(remaining) : 0);
+  let boundary = completeSentenceLength(remaining);
+  const complete = boundary > 0;
+  const opening = state.spoken === '';
+  if (!complete && opening) {
+    boundary = state.ttsChunkWords === null
+      ? openingClauseLength(remaining)
+      : openingPhraseLength(remaining, state.ttsChunkWords);
+  }
   if (boundary <= 0) return state;
   const text = remaining.slice(0, boundary);
-  effects.push({ kind: 'engine.speak', text, gen: state.gen, final: false });
-  return { ...state, spoken: state.spoken + text };
+  effects.push(speakJob(state, text, false, opening && complete));
+  const ttsOpeningWords = !complete && state.ttsChunkWords > 0 ? text.trim().split(/\s+/).length : 0;
+  return { ...state, spoken: state.spoken + text, ttsOpeningWords };
 }
 
 /**
@@ -147,6 +163,7 @@ function commitUtterance(state, text, { finals = 1, nowMs = null, before = [] } 
       reply: '',
       replyOffset: 0,
       spoken: '',
+      ttsOpeningWords: 0,
       pendingText: '',
       pendingFinals: 0,
       committedText: text,
@@ -333,6 +350,7 @@ export function reduceVoiceSession(state, event) {
           turnId: event.turnId ?? state.turnId,
           utteranceHoldMs: event.utteranceHoldMs ?? state.utteranceHoldMs,
           continuationMs: event.continuationMs ?? state.continuationMs,
+          ttsChunkWords: event.ttsChunkWords ?? state.ttsChunkWords,
         },
         state.muted ? [{ kind: 'engine.setMuted', muted: true }, phaseEffect(phase)] : [phaseEffect(phase)],
       );
@@ -502,7 +520,7 @@ export function reduceVoiceSession(state, event) {
       // sentences are marked as handled so unmuting resumes at the next one
       // rather than replaying what was said while the mic was shut.
       next = state.phase === 'muted'
-        ? { ...next, spoken: next.reply }
+        ? { ...next, spoken: next.reply, ttsOpeningWords: 0 }
         : speakCompleted(next, effects);
       return stay(next, effects);
     }
@@ -528,8 +546,8 @@ export function reduceVoiceSession(state, event) {
       const doneFrame = frameSend({ t: 'turn', turnId: state.turnId, state: 'done' });
       const closed = { kind: 'speech.close', gen: state.gen };
       if (!remaining.trim()) return stay(state, [doneFrame, closed]);
-      return stay({ ...state, spoken: state.reply }, [
-        { kind: 'engine.speak', text: remaining, gen: state.gen, final: true },
+      return stay({ ...state, spoken: state.reply, ttsOpeningWords: 0 }, [
+        speakJob(state, remaining, true),
         doneFrame,
         closed,
       ]);
@@ -548,9 +566,9 @@ export function reduceVoiceSession(state, event) {
       // fabricated reply, and never starts a speech generation.
       if (state.phase === 'speaking') {
         const tail = state.reply.slice(state.spoken.length);
-        return stay({ ...state, spoken: state.reply }, [
+        return stay({ ...state, spoken: state.reply, ttsOpeningWords: 0 }, [
           failure,
-          ...(tail.trim() ? [{ kind: 'engine.speak', text: tail, gen: state.gen, final: true }] : []),
+          ...(tail.trim() ? [speakJob(state, tail, true)] : []),
           { kind: 'speech.close', gen: state.gen },
         ]);
       }

@@ -107,3 +107,74 @@ test('chunks are slices of the reply, so joining them gives it back unchanged', 
 
   assert.equal(speechChunks(reply, 12).join(''), reply);
 });
+
+test('chunking starts on eight complete words without waiting for the sentence or splitting a token', () => {
+  const head = 'You can start by testing the existing ';
+  const deltas = [`${head}con`, 'figuration ', 'before changing anything.'];
+  const { effects } = run([
+    { type: 'ready', ttsChunkWords: 8 },
+    { type: 'final', text: 'hello' },
+    ...deltas.map((text) => ({ type: 'replyDelta', text })),
+    { type: 'replyDone' },
+  ]);
+  const spoken = effects.filter((e) => e.kind === 'engine.speak').map((e) => e.text);
+  assert.deepEqual(spoken, [`${head}configuration `, 'before changing anything.']);
+  assert.equal(spoken.join(''), deltas.join(''));
+});
+
+test('a streamed natural opening is cut once and the worker gets the prefix size with its continuation', () => {
+  const opening = 'Start by checking the new version, ';
+  const continuation = 'then check the result against the previous version before choosing what to do. ';
+  const later = 'The next sentence can be delivered all in one pass.';
+  const { effects } = run([
+    { type: 'ready', ttsChunkWords: 8 },
+    { type: 'final', text: 'hello' },
+    { type: 'replyDelta', text: `${opening}then check the ` },
+    { type: 'replyDelta', text: `${continuation.slice('then check the '.length)}${later}` },
+    { type: 'replyDone' },
+  ]);
+  const jobs = effects.filter((e) => e.kind === 'engine.speak');
+  assert.deepEqual(jobs.map((e) => e.text), [opening, continuation + later]);
+  assert.deepEqual(jobs.map((e) => e.splitOpening), [false, false]);
+  assert.deepEqual(jobs.map((e) => e.openingPrefixWords), [undefined, 6]);
+  assert.equal(jobs.map((e) => e.text).join(''), opening + continuation + later);
+});
+
+test('a final streamed tail retains the opening prefix size even without sentence punctuation', () => {
+  const opening = 'Start by checking the new version, ';
+  const tail = 'then check whether that result matches what you expected to see';
+  const { effects } = run([
+    { type: 'ready', ttsChunkWords: 8 },
+    { type: 'final', text: 'hello' },
+    { type: 'replyDelta', text: opening },
+    { type: 'replyDelta', text: tail },
+    { type: 'replyDone' },
+  ]);
+  const jobs = effects.filter((e) => e.kind === 'engine.speak');
+  assert.deepEqual(jobs.map((e) => e.text), [opening, tail]);
+  assert.deepEqual(jobs.map((e) => e.openingPrefixWords), [undefined, 6]);
+});
+
+test('explicitly disabling Kokoro chunking keeps an incomplete first sentence unsplit', () => {
+  const opening = 'Start by checking the new version, ';
+  const rest = 'then choose the simplest option.';
+  const { effects } = run([
+    { type: 'ready', ttsChunkWords: 0 },
+    { type: 'final', text: 'hello' },
+    { type: 'replyDelta', text: opening },
+    { type: 'replyDelta', text: rest },
+  ]);
+  assert.deepEqual(effects.filter((e) => e.kind === 'engine.speak').map((e) => e.text), [opening + rest]);
+});
+
+test('the bounded opening does not split open markdown links', () => {
+  const text = 'You can start by reading [the quick start guide]';
+  const { effects } = run([
+    { type: 'ready', ttsChunkWords: 8 },
+    { type: 'final', text: 'hello' },
+    { type: 'replyDelta', text },
+    { type: 'replyDelta', text: '(https://example.test) before the upgrade.' },
+  ]);
+  assert.deepEqual(effects.filter((e) => e.kind === 'engine.speak').map((e) => e.text),
+    [`${text}(https://example.test) before the upgrade.`]);
+});

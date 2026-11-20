@@ -1,6 +1,6 @@
 // ─── Installing and inspecting the PC voice runtime ──────────────────────
 // `voice install` creates the uv venv, installs `requirements.lock` and
-// downloads every model in `models.lock.json`, checking its SHA-256 and
+// downloads the selected models in `models.lock.json`, checking their SHA-256 and
 // resuming an interrupted download. `voice doctor` proves the venv, the GPU and
 // the models load. The network and the process spawns are injected so tests
 // exercise install and resume without touching either.
@@ -17,6 +17,7 @@ import { resolveGateHome } from '../paths.mjs';
 import { codexRealtimeStatus, readCodexAuthMode } from './codex-status.mjs';
 
 const WORKER_DIR = fileURLToPath(new URL('../../../gate/voice-worker', import.meta.url));
+const KOKORO_INT8 = 'kokoro-v1.0.int8.onnx';
 
 /**
  * How long a model download may wait for the server to answer before the
@@ -134,10 +135,20 @@ export function uvRunner(uvPath = process.env.VERSUTUS_UV || 'uv') {
   });
 }
 
-/** Create the venv, install the lock and download every model. Idempotent. */
+/** Fetch only the opt-in TTS asset, without changing the venv or activating it. */
+export async function fetchVoiceTtsInt8({ paths, fetch: fetchImpl, log } = {}) {
+  const entry = readModelsLock(paths).models?.[KOKORO_INT8];
+  if (!entry?.url || !entry.sha256) throw new Error(`models.lock.json does not pin ${KOKORO_INT8}`);
+  return fetchVerified({
+    url: entry.url, sha256: entry.sha256, dest: join(paths.models, KOKORO_INT8), fetchImpl, log,
+  });
+}
+
+/** Create the venv, install the lock and download the selected models. Idempotent. */
 export async function installVoice({
   paths,
   cpu = false,
+  ttsInt8 = false,
   runUv,
   fetch: fetchImpl = globalThis.fetch,
   log = console.log,
@@ -156,7 +167,9 @@ export async function installVoice({
   const modelsLock = lock ?? readModelsLock(paths);
   const downloaded = [];
   for (const [name, entry] of Object.entries(modelsLock.models ?? {})) {
+    if (entry.optIn && !(name === KOKORO_INT8 && ttsInt8)) continue;
     if (!entry.url) throw new Error(`models.lock.json has no url for ${name}`);
+    if (entry.optIn && !entry.sha256) throw new Error(`models.lock.json has no checksum for ${name}`);
     await fetchVerified({
       url: entry.url,
       sha256: entry.sha256,
@@ -291,7 +304,7 @@ function localStatus(paths) {
 }
 
 const DOCTOR_PROBE = String.raw`
-import json, os, shutil, subprocess, sys
+import contextlib, json, os, subprocess, sys
 result = {"versions": {}, "vram": None, "whisperCuda": None, "error": None}
 try:
     import faster_whisper, kokoro_onnx, onnxruntime
@@ -357,13 +370,24 @@ except Exception as error:
     result["smartTurn"] = {"ok": False, "error": str(error)[:300]}
 
 try:
-    from versutus_voice.server import KokoroSynthesizer, load_kokoro
+    from versutus_voice.kokoro import last_tts_latency, load_kokoro_speech, read_tts_config
+    from versutus_voice.tts import WARMUP_TEXT
 
-    # Speak one short sentence to a buffer. Nothing goes to an audio device:
-    # the check is that Kokoro synthesises, not that the host is audible.
-    speaker = KokoroSynthesizer(load_kokoro(models_dir))
-    pcm = b"".join(speaker("Voice check."))
-    result["kokoro"] = {"ok": bool(pcm), "error": None if pcm else "synthesised no audio"}
+    config = read_tts_config(models_dir)
+    # ORT can print during provider selection. Keep the probe stdout JSON-only.
+    with contextlib.redirect_stdout(sys.stderr):
+        speaker = load_kokoro_speech(models_dir, config)
+        if config.warmup != "off":
+            speaker.prime()
+        first_ms = None
+        for _, _, elapsed in speaker.timed_audio(WARMUP_TEXT, None):
+            if first_ms is None:
+                first_ms = elapsed
+    result["kokoro"] = {
+        "ok": first_ms is not None, "error": None if first_ms is not None else "synthesised no audio",
+        "profile": speaker.synthesize.profile(), "probeFirstPcmMs": first_ms,
+        "lastLive": last_tts_latency(models_dir, config),
+    }
 except Exception as error:
     result["kokoro"] = {"ok": False, "error": str(error)[:300]}
 print(json.dumps(result))
@@ -382,6 +406,26 @@ function modelLoadCheck(name, label, okDetail, probe) {
   // A Python exception can wrap; the CLI prints one line per check.
   const reason = String(probe.error ?? 'unknown error').replace(/\s+/g, ' ').trim();
   return { name, ok: false, detail: `${label} failed to load: ${reason}; run voice install` };
+}
+
+function kokoroCheck(probe) {
+  const check = modelLoadCheck('kokoro', 'Kokoro TTS', 'Kokoro speaks a test sentence to a buffer', probe);
+  if (!check.ok || !probe.profile) return check;
+  const { profile, probeFirstPcmMs, lastLive } = probe;
+  const config = profile.requested;
+  const actual = (value) => `${value.model} via ${value.providers.join('+')}`;
+  const last = Number.isFinite(lastLive?.synthToFirstPcmMs)
+    ? `${lastLive.synthToFirstPcmMs} ms via ${actual(lastLive.profile)} (${new Date(lastLive.measuredAtUnixMs).toISOString()})`
+    : 'not measured for this profile';
+  check.detail = `${actual(profile)} voice=${config.voice} chunkWords=${config.chunkWords} warmup=${config.warmup}`
+    + ` intra=${config.intraThreads || 'auto'} inter=${config.interThreads} opt=${config.graphOptimization}`
+    + ` arena=${config.cpuArena} memoryPattern=${config.memoryPattern} spinning=${config.spinning}`
+    + ` execution=${config.interThreads > 1 ? 'parallel' : 'sequential'}`
+    + ` chunking=${config.chunkWords > 0 ? 'first-phrase+clauses' : 'off'}`
+    + (config.warmup === 'idle' && config.idleSeconds != null ? ` idleSeconds=${config.idleSeconds}` : '')
+    + `; probe first PCM ${probeFirstPcmMs} ms; last live first PCM ${last}`
+    + (profile.fallbacks.length ? `; fallback: ${profile.fallbacks.join('; ')}` : '');
+  return { ...check, profile, probeFirstPcmMs, lastLive };
 }
 
 /**
@@ -452,7 +496,7 @@ export function voiceDoctor({ paths, spawnSync = nodeSpawnSync, env = process.en
   checks.push(
     modelLoadCheck('silero', 'Silero VAD', 'silero VAD scores a 32 ms window', info.silero),
     modelLoadCheck('smartTurn', 'Smart Turn', 'smart turn loads (not the pause-is-a-turn fallback)', info.smartTurn),
-    modelLoadCheck('kokoro', 'Kokoro TTS', 'Kokoro speaks a test sentence to a buffer', info.kokoro),
+    kokoroCheck(info.kokoro),
   );
   log(JSON.stringify(checks));
 

@@ -23,7 +23,7 @@ import { doctor } from './core/service/doctor.mjs';
 import { diagnoseBotGroupStore, diagnoseEnvironmentRecords, probeLocalGate } from './core/service/diagnostics.mjs';
 import { CredentialVault } from './core/credentials/vault.mjs';
 import { checkCredentialBackend } from './core/credentials/platform-backend.mjs';
-import { installVoice, uvRunner, voiceDoctor, voicePaths, voiceStatus } from './core/voice/runtime.mjs';
+import { fetchVoiceTtsInt8, installVoice, uvRunner, voiceDoctor, voicePaths, voiceStatus } from './core/voice/runtime.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -1013,6 +1013,7 @@ async function handleVoice(args = []) {
     const result = await installVoice({
       paths,
       cpu: args.includes('--cpu'),
+      ttsInt8: args.includes('--tts-int8'),
       runUv: uvRunner(),
       fetch: globalThis.fetch,
       log: (message) => console.log(`[voice] ${message}`),
@@ -1021,6 +1022,9 @@ async function handleVoice(args = []) {
     return;
   }
   if (sub === 'doctor') {
+    if (args.includes('--tts-int8')) {
+      await fetchVoiceTtsInt8({ paths, log: (message) => console.log(`[voice] ${message}`) });
+    }
     const report = voiceDoctor({ paths, log: (message) => console.log(`[voice] ${message}`) });
     for (const check of report.checks) {
       console.log(`${check.ok ? 'ok  ' : 'FAIL'} ${check.name}: ${check.detail}`);
@@ -1032,7 +1036,7 @@ async function handleVoice(args = []) {
     console.log(JSON.stringify(voiceStatus({ paths }), null, 2));
     return;
   }
-  console.error('Usage: node gate/cli.mjs voice <install [--cpu]|doctor|status>');
+  console.error('Usage: node gate/cli.mjs voice <install [--cpu] [--tts-int8]|doctor [--tts-int8]|status>');
   process.exit(1);
 }
 
@@ -1105,7 +1109,7 @@ async function main() {
     console.log('    disk, credential bindings resolvable in the vault).');
     console.log('    Exit code 1 when a record has a problem.');
     console.log('');
-    console.log('  voice <install [--cpu]|doctor|status>');
+    console.log('  voice <install [--cpu] [--tts-int8]|doctor [--tts-int8]|status>');
     console.log('    Install and inspect the local PC voice models (M5). install');
     console.log('    creates the uv venv and downloads the locked models; doctor');
     console.log('    checks the venv, GPU and models load; status prints the');

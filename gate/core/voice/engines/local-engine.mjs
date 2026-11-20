@@ -70,6 +70,8 @@ export class LocalEngine extends EventEmitter {
     // The worker announces `voice.hearing`, so the call does not have to guess
     // with a long hold whether the person has finished.
     this.reportsHearing = true;
+    this.reportsTtsTiming = true;
+    this.ttsChunkWords = null;
     this._paths = paths;
     this._log = log;
     this._now = now;
@@ -127,8 +129,10 @@ export class LocalEngine extends EventEmitter {
   }
 
   /** Speak `text` now if the worker can; otherwise queue it. Returns whether. */
-  speak(text, { gen, final } = {}) {
-    return this._command('speak', 'voice.speak', { gen, text, final: Boolean(final) });
+  speak(text, { gen, final, ttsId, splitOpening, openingPrefixWords } = {}) {
+    return this._command('speak', 'voice.speak', {
+      gen, text, final: Boolean(final), ttsId, splitOpening, openingPrefixWords,
+    });
   }
 
   cancelSpeech(gen) {
@@ -181,7 +185,8 @@ export class LocalEngine extends EventEmitter {
   async _openSession() {
     if (!this._lease || !this._call) return;
     const { voiceSessionId, botName } = this._call;
-    await this._lease.request('voice.open', { voiceSessionId, botName }, { timeoutMs: this._openTimeoutMs });
+    const opened = await this._lease.request('voice.open', { voiceSessionId, botName }, { timeoutMs: this._openTimeoutMs });
+    this.ttsChunkWords = opened?.ttsChunkWords ?? null;
   }
 
   _command(kind, method, params) {
@@ -277,9 +282,9 @@ export class LocalEngine extends EventEmitter {
       const chunk = params.chunk ?? {};
       this.emit('speechAudio', {
         gen: params.gen, pcm: Buffer.from(chunk.data ?? '', 'base64'),
-        queueMs: params.queueMs, synthMs: params.synthMs,
+        queueMs: params.queueMs, synthMs: params.synthMs, sentence: params.sentence, ttsId: params.ttsId,
       });
-    } else if (method === 'voice.speechDone') this.emit('speechDone', { gen: params.gen });
+    } else if (method === 'voice.speechDone') this.emit('speechDone', { gen: params.gen, ttsId: params.ttsId });
     else if (method === 'voice.userSpeechStart') this.emit('userSpeechStart', { gen: params.gen });
     else if (method === 'voice.hearing') this.emit('hearing', { active: Boolean(params.active) });
     else if (method === 'voice.utteranceOpen') this.emit('utteranceOpen', {});

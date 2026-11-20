@@ -82,11 +82,10 @@ export const UTTERANCE_HOLD_MS = 1_800;
 // Measured on a live call (2026-11-15): end of speech to commit was 4.1 s, 1.9 s
 // of it this hold stacked on the worker's own judgment.
 export const UTTERANCE_SETTLE_MS = 200;
-// How far ahead of real time reply audio is sent. Kokoro generates a sentence
-// about three times faster than it is spoken, so unpaced audio reaches the phone
-// in a burst: a long sentence overran the phone's two-second playback queue, the
-// call said "listening" while the reply still had seconds left to play, and a
-// barge-in had seconds of queued audio to throw away. Paced, the phone never
+// How far ahead of real time reply audio is sent. Once Kokoro has generated a
+// sentence, unpaced audio reaches the phone in a burst: a long sentence overran
+// the phone's two-second playback queue, the call said "listening" with seconds
+// left to play, and a barge-in had queued audio to throw away. Paced, the phone never
 // holds more than this, and the Gate knows when the last of it has been heard.
 export const PLAYOUT_LEAD_MS = 400;
 // What the phone still has to play after the Gate's own clock says the reply
@@ -383,7 +382,7 @@ export function attachVoiceMediaSocket({
     let v2ProbeFrame = null;
 
     // ─── Playout: reply audio leaves at the pace it is heard ──────────────
-    // The engine hands over a sentence of PCM as soon as it is synthesised. It
+    // The engine hands over PCM as soon as each phrase is synthesised. It
     // is queued here and sent no more than `playoutLeadMs` ahead of the phone's
     // loudspeaker, so the Gate's clock is the playback clock: `speaking` lasts
     // as long as the reply is audible, the echo gate stays up for exactly that
@@ -393,7 +392,7 @@ export function attachVoiceMediaSocket({
       queue: [],
       // When everything sent so far will have been played, on the monotonic clock.
       headAt: 0,
-      // Per generation: sentences asked of the engine and not yet answered.
+      // Per generation: speak requests not yet answered (one may batch sentences).
       owed: new Map(),
       // Generations no more will be asked of, and ones already reported done.
       closed: new Set(),
@@ -406,6 +405,23 @@ export function attachVoiceMediaSocket({
       live: false,
     };
     const clock = () => performance.now();
+    const ttsJobs = new Map();
+    let nextTtsId = 0;
+    const forgetTts = (gen) => {
+      for (const [id, job] of ttsJobs) {
+        if (job.gen === gen) ttsJobs.delete(id);
+      }
+    };
+    const logTts = (timing, sent) => {
+      if (!timing) return;
+      const at = clock();
+      log(`voice.tts session=${session.voiceSessionId} turn=${timing.turnId ?? 'none'}`
+        + ` gen=${timing.gen} job=${timing.ttsId ?? 'null'} sentence=${timing.sentence ?? 1}`
+        + ` workerQueueMs=${timing.queueMs} synthToPcmMs=${timing.synthMs}`
+        + ` effectToWorkerPcmMs=${timing.effectToPcm ?? 'null'}`
+        + ` pcmToSendMs=${sent ? Math.round(at - timing.pcmAt) : 'null'}`
+        + ` effectToSendMs=${sent && timing.effectAt != null ? Math.round(at - timing.effectAt) : 'null'}`);
+    };
 
     const setLoudspeaker = (on) => {
       if (playout.live === on) return;
@@ -431,6 +447,7 @@ export function attachVoiceMediaSocket({
         if (ended || playout.finished.has(gen)) return;
         playout.finished.add(gen);
         playout.owed.delete(gen);
+        forgetTts(gen);
         playout.closed.delete(gen);
         if (!playout.queue.length) setLoudspeaker(false);
         dispatch({ type: 'speechDone', gen });
@@ -472,6 +489,7 @@ export function attachVoiceMediaSocket({
         // reply it cancelled is never sent.
         if (head.gen !== call.gen) {
           playout.queue.shift();
+          logTts(head.timing, false);
           continue;
         }
         const at = clock();
@@ -482,15 +500,18 @@ export function attachVoiceMediaSocket({
           return;
         }
         playout.queue.shift();
+        // On underrun, resume at the next real PCM. Do not send silence to
+        // catch up to the clock or make padding eat into the phone's lead.
         playout.headAt = Math.max(playout.headAt, at) + head.ms;
         playout.audible.add(head.gen);
         setLoudspeaker(true);
-        dispatch({ type: 'speechAudio', pcm: head.pcm, gen: head.gen });
+        const sent = dispatch({ type: 'speechAudio', pcm: head.pcm, gen: head.gen });
+        logTts(head.timing, sent);
       }
       for (const gen of playout.closed) settlePlayout(gen);
     };
 
-    const queuePlayout = (pcm, gen) => {
+    const queuePlayout = (pcm, gen, timing) => {
       if (ended || !pcm?.length) return;
       // A reply that is over stays over: audio that turns up for it afterwards
       // (a sentence finished after its reply was cancelled or given up on) is
@@ -503,14 +524,14 @@ export function attachVoiceMediaSocket({
         const stop = Math.min(offset + maxBytes, pcm.length) & ~1;
         if (stop <= offset) continue;
         const chunk = pcm.subarray(offset, stop);
-        playout.queue.push({ pcm: chunk, gen, ms: chunk.length / bytesPerMs });
+        playout.queue.push({ pcm: chunk, gen, ms: chunk.length / bytesPerMs, timing: offset === 0 ? timing : null });
       }
       // The engine is alive and working on this generation.
       clearFinishTimer(gen);
       pumpPlayout();
     };
 
-    /** The engine answered one sentence it was asked for. */
+    /** The engine answered one speak request, including all of its PCM. */
     const synthesisedPlayout = (gen) => {
       const owed = playout.owed.get(gen) ?? 0;
       if (owed > 0) playout.owed.set(gen, owed - 1);
@@ -518,8 +539,13 @@ export function attachVoiceMediaSocket({
     };
 
     const cancelPlayout = (gen) => {
-      playout.queue = playout.queue.filter((chunk) => chunk.gen !== gen);
+      playout.queue = playout.queue.filter((chunk) => {
+        if (chunk.gen !== gen) return true;
+        logTts(chunk.timing, false);
+        return false;
+      });
       playout.owed.delete(gen);
+      forgetTts(gen);
       playout.closed.delete(gen);
       // A cancelled reply is over without being finished: nothing reports it.
       playout.finished.add(gen);
@@ -534,7 +560,9 @@ export function attachVoiceMediaSocket({
       playout.pumpTimer = null;
       for (const timer of playout.finishTimers.values()) clearTimeout(timer);
       playout.finishTimers.clear();
+      for (const head of playout.queue) logTts(head.timing, false);
       playout.queue.length = 0;
+      ttsJobs.clear();
     };
 
     const api = { attach, end, get ended() { return ended; } };
@@ -762,6 +790,7 @@ export function attachVoiceMediaSocket({
       // interrupted it.
       if (typeof gen === 'number' && gen !== call.gen) return;
       const maxBytes = OUTPUT_SAMPLE_RATE * OUTPUT_CHANNELS * 2 * MAX_SPEECH_CHUNK_MS / 1000;
+      let sent = false;
       for (let offset = 0; offset < pcm.length; offset += maxBytes) {
         // PCM16 samples must not be split between messages.
         const end = Math.min(offset + maxBytes, pcm.length) & ~1;
@@ -788,13 +817,17 @@ export function attachVoiceMediaSocket({
           header.writeUInt32BE(gen >>> 0, 0);
           header.writeUInt32BE(startSeq >>> 0, 4);
           ws.send(Buffer.concat([header, chunk]), { binary: true });
-        } else if (ws) ws.send(chunk, { binary: true });
-        else if (protocolVersion === 2) {
+          sent = true;
+        } else if (ws) {
+          ws.send(chunk, { binary: true });
+          sent = true;
+        } else if (protocolVersion === 2) {
           // Do not turn a disconnected link into an unbounded PCM queue. Resume
           // reports the omission before any later audio can be accepted.
           audioDropped = true;
         } else append({ pcm: chunk, gen });
       }
+      return sent;
     };
 
     const runEffect = (effect) => {
@@ -806,9 +839,8 @@ export function attachVoiceMediaSocket({
           sendFrame(effect.frame);
           break;
         case 'sendAudio':
-          sendAudio(effect.pcm, effect.gen);
-          break;
-        case 'engine.speak':
+          return sendAudio(effect.pcm, effect.gen);
+        case 'engine.speak': {
           if (!turnSentenceAt) {
             turnSentenceAt = now();
             turnGen = effect.gen;
@@ -816,8 +848,19 @@ export function attachVoiceMediaSocket({
           // Counted before the engine is asked: a scripted engine answers
           // inside the call, and its answer must find the sentence owed.
           playout.owed.set(effect.gen, (playout.owed.get(effect.gen) ?? 0) + 1);
-          engine.speak?.(effect.text, { gen: effect.gen, final: effect.final });
+          const tts = {};
+          if (engine.reportsTtsTiming) {
+            tts.ttsId = ++nextTtsId;
+            ttsJobs.set(tts.ttsId, { gen: effect.gen, turnId: call.turnId, effectAt: clock() });
+          }
+          // Submit as soon as text is ready, not at the previous sentence's
+          // playback end. The local worker serializes inference independently.
+          engine.speak?.(effect.text, {
+            gen: effect.gen, final: effect.final, splitOpening: effect.splitOpening === true, ...tts,
+            ...(effect.openingPrefixWords ? { openingPrefixWords: effect.openingPrefixWords } : {}),
+          });
           break;
+        }
         case 'engine.cancelSpeech':
           cancelPlayout(effect.gen);
           engine.cancelSpeech?.(effect.gen);
@@ -1038,7 +1081,10 @@ export function attachVoiceMediaSocket({
         phaseSince = at;
       }
       call = out.state;
-      for (const effect of out.effects) runEffect(effect);
+      let sentAudio = false;
+      for (const effect of out.effects) {
+        if (runEffect(effect) === true) sentAudio = true;
+      }
       // Every terminal path converges on `ending`; the socket's own end()
       // closes the WebSocket, frees the registry and deletes the call. Without
       // this a user hang-up left the call half-alive: the socket open, the
@@ -1046,6 +1092,7 @@ export function attachVoiceMediaSocket({
       // client happened to close the socket. `endingNow` is the re-entry
       // guard: end() dispatches the terminal event itself.
       if (call.phase === 'ending' && !ended && !endingNow) end(call.endedReason ?? 'ended');
+      return sentAudio;
     };
 
     const startTurn = async (text, { speculative: isSpeculative = false } = {}) => {
@@ -1552,16 +1599,24 @@ export function attachVoiceMediaSocket({
       // Outbound speech is traffic too: a call the phone is listening to has not
       // gone silent, so its reservation lease must not lapse mid-reply.
       registry.markActivity(session.voiceSessionId);
+      let timing = null;
       if (event.gen === call.gen && !ended && Number.isFinite(event.queueMs) && Number.isFinite(event.synthMs)) {
-        log(`voice.tts session=${session.voiceSessionId} turn=${call.turnId ?? 'none'}`
-          + ` gen=${event.gen} workerQueueMs=${event.queueMs} synthToPcmMs=${event.synthMs}`
-          + ` effectToWorkerPcmMs=${turnSentenceAt ? now() - turnSentenceAt : 'null'}`);
+        const job = ttsJobs.get(event.ttsId);
+        const pcmAt = clock();
+        timing = {
+          gen: event.gen, ttsId: event.ttsId, sentence: event.sentence, queueMs: event.queueMs, synthMs: event.synthMs,
+          pcmAt, turnId: job?.turnId ?? call.turnId, effectAt: job?.effectAt,
+          effectToPcm: job ? Math.round(pcmAt - job.effectAt) : turnSentenceAt ? now() - turnSentenceAt : null,
+        };
       }
-      queuePlayout(event.pcm, event.gen);
+      queuePlayout(event.pcm, event.gen, timing);
     });
     // The engine finished synthesising one sentence. That is not the reply
     // being over: more sentences may follow, and the phone is still playing.
-    engine.on?.('speechDone', (event) => synthesisedPlayout(event.gen));
+    engine.on?.('speechDone', (event) => {
+      ttsJobs.delete(event.ttsId);
+      synthesisedPlayout(event.gen);
+    });
     engine.on?.('hearing', (event) => dispatch({ type: 'hearing', active: Boolean(event?.active) }));
     engine.on?.('utteranceOpen', () => dispatch({ type: 'userSpeaking' }));
     engine.on?.('earlyEnd', (event) => {
@@ -1637,6 +1692,7 @@ export function attachVoiceMediaSocket({
           turnId: session.voiceSessionId,
           utteranceHoldMs: engine.reportsHearing ? utteranceSettleMs : utteranceHoldMs,
           continuationMs,
+          ttsChunkWords: engine.ttsChunkWords,
         });
         sendFrame({ t: 'ready', engine: session.engine, resumeWindowMs: resumeTimeoutMs });
         log(`voice.engine open session=${session.voiceSessionId} afterMs=${now() - trace.startedAt}`);
