@@ -181,11 +181,16 @@ test('an environment record is never absent from its directory while it is being
       await new Promise((resolve) => setImmediate(resolve));
     }
   })();
-  for (let generation = 0; generation < 300; generation += 1) {
-    await store.put({ ...record, label: `Hermes ${generation}` });
+  // A put that gives up (25 lost renames under load) must still stop the
+  // background loop, or the failed test keeps the process alive forever.
+  try {
+    for (let generation = 0; generation < 300; generation += 1) {
+      await store.put({ ...record, label: `Hermes ${generation}` });
+    }
+  } finally {
+    saving = false;
+    await watcher;
   }
-  saving = false;
-  await watcher;
 
   assert.ok(samples > 300, `the watcher never raced the writer (only ${samples} samples)`);
   assert.equal(absent, 0, `the record was absent from the directory ${absent} times mid-save`);
@@ -208,11 +213,16 @@ test('an environment never goes missing from a read while it is being saved', as
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
   })();
-  for (let generation = 0; generation < 400; generation += 1) {
-    await store.put({ ...record, label: `Hermes ${generation}` });
+  // A put that gives up (25 lost renames under load) must still stop the
+  // background loop, or the failed test keeps the process alive forever.
+  try {
+    for (let generation = 0; generation < 400; generation += 1) {
+      await store.put({ ...record, label: `Hermes ${generation}` });
+    }
+  } finally {
+    saving = false;
+    await reader;
   }
-  saving = false;
-  await reader;
 
   assert.ok(reads > 5, `the reader never raced the writer (only ${reads} reads)`);
   assert.equal(missing, 0, `the environment vanished ${missing} times mid-save`);
@@ -240,11 +250,16 @@ test("a provider's two records are never absent from their directories while the
       await new Promise((resolve) => setImmediate(resolve));
     }
   })();
-  for (let generation = 1; generation <= 300; generation += 1) {
-    await store.put({ ...provider(), label: `OpenAI ${generation}` }, providerState(generation));
+  // A put that gives up (25 lost renames under load) must still stop the
+  // background loop, or the failed test keeps the process alive forever.
+  try {
+    for (let generation = 1; generation <= 300; generation += 1) {
+      await store.put({ ...provider(), label: `OpenAI ${generation}` }, providerState(generation));
+    }
+  } finally {
+    saving = false;
+    await watcher;
   }
-  saving = false;
-  await watcher;
 
   assert.ok(samples > 300, `the watcher never raced the writer (only ${samples} samples)`);
   assert.equal(absent, 0, `a provider record was absent from its directory ${absent} times mid-save`);
@@ -272,11 +287,16 @@ test('a provider never goes missing from a read while it is being saved', async 
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
   })();
-  for (let generation = 1; generation <= 400; generation += 1) {
-    await store.put({ ...provider(), label: `OpenAI ${generation}` }, providerState(generation));
+  // A put that gives up (25 lost renames under load) must still stop the
+  // background loop, or the failed test keeps the process alive forever.
+  try {
+    for (let generation = 1; generation <= 400; generation += 1) {
+      await store.put({ ...provider(), label: `OpenAI ${generation}` }, providerState(generation));
+    }
+  } finally {
+    saving = false;
+    await reader;
   }
-  saving = false;
-  await reader;
 
   assert.ok(reads > 5, `the reader never raced the writer (only ${reads} reads)`);
   assert.equal(missing, 0, `the provider vanished ${missing} times mid-save`);
