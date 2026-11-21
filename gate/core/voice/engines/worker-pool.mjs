@@ -20,8 +20,12 @@ import { createStdioJsonRpc } from '../../cli-environments/jsonrpc-stdio.mjs';
 
 /** How long a worker may take to load its models before it is written off. */
 export const READY_TIMEOUT_MS = 180_000;
-/** How long a released worker stays warm before it gives the GPU back. */
-export const IDLE_TIMEOUT_MS = 30 * 60_000;
+/**
+ * How long a released worker keeps its models before it gives the memory
+ * back. A worker that has loaded holds about 4.7 GB of models, so this is
+ * long enough for a call-back and no longer.
+ */
+export const IDLE_TIMEOUT_MS = 10 * 60_000;
 /** How often a dead worker is respawned, then the call is given up on. */
 export const RESTART_BACKOFF_MS = [250, 500, 1000, 2000];
 export const MAX_RESTARTS = 5;
@@ -45,6 +49,10 @@ export function createVoiceWorkerPool({
   },
   cancel = (timer) => clearTimeout(timer),
   idleMs = IDLE_TIMEOUT_MS,
+  // Replace an idled worker with a fresh one at once. The worker defers its
+  // models to the first `voice.open`, so the fresh process is ready for the
+  // next call while holding none of the last one's memory.
+  respawnAfterIdle = false,
   readyTimeoutMs = READY_TIMEOUT_MS,
   backoffMs = RESTART_BACKOFF_MS,
   maxRestarts = MAX_RESTARTS,
@@ -237,6 +245,7 @@ export function createVoiceWorkerPool({
       if (held || stopped) return;
       log(`voice.worker idle afterMs=${idleMs}`);
       killWorker('idle');
+      if (respawnAfterIdle) start();
     }, idleMs);
   }
 

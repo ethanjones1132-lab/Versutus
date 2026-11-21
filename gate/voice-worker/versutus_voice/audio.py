@@ -9,7 +9,9 @@ internal type.
 
 import base64
 
-import numpy as np
+# numpy is imported inside the helpers that use it, not here: importing it
+# commits about 500 MB of OpenBLAS thread buffers, and the worker imports this
+# module at start while its models (and every numeric call) wait for a call.
 
 INPUT_SAMPLE_RATE = 16000
 OUTPUT_SAMPLE_RATE = 24000
@@ -20,17 +22,23 @@ VAD_WINDOW_SAMPLES = 576
 
 
 def pcm16_to_float32(data):
+    import numpy as np
+
     samples = np.frombuffer(data, dtype="<i2").astype(np.float32)
     return samples / 32768.0
 
 
 def float32_to_pcm16(samples):
+    import numpy as np
+
     clipped = np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0)
     return (clipped * 32767.0).astype("<i2").tobytes()
 
 
 def resample_linear(samples, src_rate, dst_rate):
     """Linear resample; enough for the 16 kHz <-> 24 kHz bridge (§4.6)."""
+    import numpy as np
+
     source = np.asarray(samples, dtype=np.float32)
     if src_rate == dst_rate or source.size == 0:
         return source

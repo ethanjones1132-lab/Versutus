@@ -723,6 +723,73 @@ class VoicePipeline:
             self._emit("voice.final", payload)
 
 
+class LazyPipeline:
+    """The worker's RPC target, with the models loaded by the first call.
+
+    Whisper, Silero, Kokoro and Smart Turn together hold about 4.7 GB. Loaded
+    at start, they sat in memory from the moment anything asked whether voice
+    was available until the Gate went down, on a PC that had no call. Here the
+    process is up and answering at once, and the first ``voice.open`` pays the
+    load: its acknowledgment is held until the pipeline can hear, which is the
+    signal the Gate already waits on before it tells the phone "listening".
+    """
+
+    def __init__(self, build):
+        self._build = build
+        self._pipeline = None
+        self._lock = threading.Lock()
+        self.whisper_device = None
+        self.load_ms = None
+
+    @property
+    def loaded(self):
+        return self._pipeline is not None
+
+    def load(self):
+        with self._lock:
+            if self._pipeline is None:
+                started = time.monotonic()
+                pipeline = self._build()
+                self.load_ms = int((time.monotonic() - started) * 1000)
+                self.whisper_device = pipeline.whisper_device
+                self._pipeline = pipeline
+                print(
+                    f"[versutus-voice] models loaded for first call loadMs={self.load_ms} device={self.whisper_device}",
+                    file=sys.stderr,
+                )
+        return self._pipeline
+
+    def open(self, params):
+        return self.load().open(params)
+
+    def close(self, params):
+        if self._pipeline is None:
+            return {"ok": True}
+        return self._pipeline.close(params)
+
+    def _delegate(self, name, params):
+        if self._pipeline is None:
+            # Only reachable out of order: the Gate sends nothing but open
+            # before open is acknowledged. Answered, never a model load.
+            return {"ok": False, "error": "voice models are not loaded; voice.open first"}
+        return getattr(self._pipeline, name)(params)
+
+    def pushAudio(self, params):
+        return self._delegate("pushAudio", params)
+
+    def speak(self, params):
+        return self._delegate("speak", params)
+
+    def cancelSpeech(self, params):
+        return self._delegate("cancelSpeech", params)
+
+    def setMuted(self, params):
+        return self._delegate("setMuted", params)
+
+    def setPlayback(self, params):
+        return self._delegate("setPlayback", params)
+
+
 class RpcServer:
     """A newline-delimited JSON-RPC 2.0 loop over the pipeline."""
 
@@ -756,18 +823,19 @@ class RpcServer:
         """A notification the pipeline sends to the Gate."""
         self._write({"jsonrpc": "2.0", "method": method, "params": params})
 
-    def announce_ready(self, device, load_ms):
-        """Say the pipeline is loaded and can hear.
+    def announce_ready(self, device, load_ms, deferred=False):
+        """Say the worker is up and will answer.
 
-        Written once, before the loop reads a line: loading Whisper, Silero,
-        Kokoro and Smart Turn takes tens of seconds, and a Gate told "listening"
-        before that hears nothing at all — the operator's first sentence was
-        recognised 17.9 s after the stream opened (VOW-1).
+        Written once, before the loop reads a line. Eager, it also means the
+        pipeline is loaded and can hear. Deferred (``models: "deferred"``), the
+        models load inside the first ``voice.open``, whose acknowledgment is
+        held until they can hear — a Gate told "listening" before the load
+        hears nothing at all (VOW-1).
         """
-        self.emit(
-            "voice.ready",
-            {"sampleRate": dict(self.sample_rate), "device": device, "loadMs": int(load_ms)},
-        )
+        params = {"sampleRate": dict(self.sample_rate), "device": device, "loadMs": int(load_ms)}
+        if deferred:
+            params["models"] = "deferred"
+        self.emit("voice.ready", params)
 
     def _respond(self, request_id, result):
         self._write({"jsonrpc": "2.0", "id": request_id, "result": result})
@@ -1131,18 +1199,32 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Versutus local voice worker")
     parser.add_argument("--models-dir", required=True)
     parser.add_argument("--cpu", action="store_true")
+    parser.add_argument(
+        "--eager",
+        action="store_true",
+        help="load every model before announcing ready, instead of on the first voice.open",
+    )
     args = parser.parse_args(argv)
 
     server = None
-    pipeline = build_default_pipeline(
-        emit=lambda method, params: server.emit(method, params),
-        models_dir=args.models_dir,
-        cpu=args.cpu,
-    )
-    server = RpcServer(pipeline, out=sys.stdout, record=False)
-    # The first thing written, before a line of stdin is read: until this
-    # arrives the worker is loading models and cannot hear anything.
-    server.announce_ready(pipeline.whisper_device, (time.monotonic() - started) * 1000)
+
+    def build():
+        return build_default_pipeline(
+            emit=lambda method, params: server.emit(method, params),
+            models_dir=args.models_dir,
+            cpu=args.cpu,
+        )
+
+    if args.eager:
+        pipeline = build()
+        server = RpcServer(pipeline, out=sys.stdout, record=False)
+        # The first thing written, before a line of stdin is read: until this
+        # arrives the worker is loading models and cannot hear anything.
+        server.announce_ready(pipeline.whisper_device, (time.monotonic() - started) * 1000)
+    else:
+        pipeline = LazyPipeline(build)
+        server = RpcServer(pipeline, out=sys.stdout, record=False)
+        server.announce_ready(None, (time.monotonic() - started) * 1000, deferred=True)
     server.serve(stdin=sys.stdin)
     return 0
 

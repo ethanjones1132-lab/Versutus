@@ -206,12 +206,95 @@ def test_ready_is_the_first_frame_a_cold_worker_writes(monkeypatch):
     monkeypatch.setattr(server_module.sys, "stdin", io.StringIO(""))
     monkeypatch.setattr(server_module.sys, "stdout", out)
 
-    assert server_module.main(["--models-dir", "models"]) == 0
+    assert server_module.main(["--models-dir", "models", "--eager"]) == 0
     frames = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
     assert [frame.get("method") for frame in frames] == ["voice.ready"]
     assert frames[0]["params"]["sampleRate"] == {"input": 16000, "output": 24000}
     assert frames[0]["params"]["device"] == "cpu"
     assert isinstance(frames[0]["params"]["loadMs"], int)
+    assert "models" not in frames[0]["params"]
+
+
+def test_a_lazy_worker_is_ready_without_loading_a_model(monkeypatch):
+    """The process is up and answering, but Whisper, Kokoro, Silero and Smart
+    Turn (about 4.7 GB) are only loaded when a call opens: an idle PC must not
+    hold a call's worth of models for a call that may never come."""
+    import io
+
+    from versutus_voice import server as server_module
+
+    builds = []
+
+    def build(emit, models_dir, cpu=False):
+        builds.append(models_dir)
+        return _pipeline([], emit=emit)
+
+    monkeypatch.setattr(server_module, "build_default_pipeline", build)
+    out = io.StringIO()
+    stdin = io.StringIO(
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "voice.describe", "params": {}}) + "\n"
+    )
+    monkeypatch.setattr(server_module.sys, "stdin", stdin)
+    monkeypatch.setattr(server_module.sys, "stdout", out)
+
+    assert server_module.main(["--models-dir", "models"]) == 0
+    frames = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+    assert frames[0]["method"] == "voice.ready"
+    assert frames[0]["params"]["models"] == "deferred"
+    assert frames[0]["params"]["device"] is None
+    assert frames[1]["result"]["ok"] is True
+    assert builds == [], "nothing asked for a call, so nothing was loaded"
+
+
+def test_starting_the_worker_does_not_import_numpy():
+    """numpy commits about 500 MB of OpenBLAS buffers on import; an idle
+    worker that has loaded no model has no use for it."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = "import sys, versutus_voice.server; print('numpy' in sys.modules)"
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == "False"
+
+
+def test_a_lazy_worker_loads_its_models_once_on_the_first_open():
+    from versutus_voice.server import LazyPipeline
+
+    builds = []
+    events = []
+
+    def build():
+        builds.append(1)
+        return _pipeline(events)
+
+    lazy = LazyPipeline(build)
+    assert lazy.loaded is False
+    assert lazy.open({"voiceSessionId": "vs-1"})["ok"] is True
+    assert lazy.loaded is True
+    assert lazy.whisper_device == "cpu"
+    assert isinstance(lazy.load_ms, int)
+    lazy.close({})
+    lazy.open({"voiceSessionId": "vs-2"})
+    assert builds == [1], "the second call reuses the loaded models"
+
+
+def test_a_lazy_worker_answers_before_open_without_loading():
+    from versutus_voice.server import LazyPipeline
+
+    builds = []
+    lazy = LazyPipeline(lambda: builds.append(1))
+    assert lazy.close({}) == {"ok": True}
+    for method in ("pushAudio", "speak", "cancelSpeech", "setMuted", "setPlayback"):
+        result = getattr(lazy, method)({})
+        assert result["ok"] is False and "not loaded" in result["error"], method
+    assert builds == []
 
 
 def test_the_ready_frame_names_the_device_whisper_loaded_on():

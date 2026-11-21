@@ -29,7 +29,7 @@ class FakeChild extends EventEmitter {
 }
 
 /** A fake worker: it says `voice.ready` only when a test tells it to. */
-function harness({ idleMs = 60_000, readyTimeoutMs = 60_000, backoffMs = [10], maxRestarts = 5, realTimers = false } = {}) {
+function harness({ idleMs = 60_000, readyTimeoutMs = 60_000, backoffMs = [10], maxRestarts = 5, realTimers = false, respawnAfterIdle = false } = {}) {
   const children = [];
   const scheduled = [];
   const lines = [];
@@ -42,6 +42,7 @@ function harness({ idleMs = 60_000, readyTimeoutMs = 60_000, backoffMs = [10], m
       return child;
     },
     idleMs,
+    respawnAfterIdle,
     readyTimeoutMs,
     backoffMs,
     maxRestarts,
@@ -226,6 +227,37 @@ test('an idle worker is stopped, and the next lease warms a new one', async () =
   const next = await leaseAndLoad(pool, children, 1);
   assert.equal(children.length, 2, 'the next call loads a worker again');
   next.release();
+});
+
+test('with respawnAfterIdle, an idled worker is replaced by a fresh one at once', async () => {
+  // The worker defers its models to the first `voice.open`, so a fresh process
+  // is ready to take a call while holding none of the last call's memory.
+  const { pool, children, scheduled, lines } = harness({ idleMs: 60_000, respawnAfterIdle: true });
+  await warmAndLoad(pool, children);
+  const { lease } = await openCall(pool, 'vs-1');
+  answer(children[0]);
+  lease.release();
+
+  fire(due(scheduled, 60_000));
+  assert.equal(children[0].killed, true, 'the loaded worker gives its memory back');
+  assert.equal(children.length, 2, 'a fresh worker is started straight away');
+  assert.equal(children[1].killed, false);
+  assert.ok(lines.some((line) => line === 'voice.worker stopped reason=idle'), lines.join('\n'));
+
+  load(children[1]);
+  const next = await pool.lease();
+  assert.equal(children.length, 2, 'the next call uses the fresh worker');
+  next.release();
+});
+
+test('without respawnAfterIdle, an idled worker is not replaced', async () => {
+  const { pool, children, scheduled } = harness({ idleMs: 60_000 });
+  await warmAndLoad(pool, children);
+  const { lease } = await openCall(pool, 'vs-1');
+  answer(children[0]);
+  lease.release();
+  fire(due(scheduled, 60_000));
+  assert.equal(children.length, 1);
 });
 
 test('a worker that never loads is written off with a named error', { timeout: 5_000 }, async (t) => {

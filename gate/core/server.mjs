@@ -2175,10 +2175,12 @@ export async function createGate(config = {}) {
   }
   environmentService.onRunEvent = notifyPush;
   // One worker for the whole Gate, spawned only when something asks for it to
-  // be warm. Sharing it is what makes a call start instantly: the models are
-  // loaded once and then kept across calls until they go idle.
+  // be warm. The process starts without its models (about 4.7 GB): the first
+  // call's `voice.open` loads them, later calls reuse them, and once they go
+  // idle the process is replaced by a fresh one that holds none.
   const voiceWorkerPool = voicePool ?? createVoiceWorkerPool({
     spawn: () => spawnVoiceWorker({ paths: voicePaths() }),
+    respawnAfterIdle: true,
     log: (line) => console.log(line),
   });
   const voiceHandoff = createVoiceHandoff({ gateHome, log: (line) => console.warn(line) });
