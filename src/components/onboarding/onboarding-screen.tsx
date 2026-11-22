@@ -15,6 +15,7 @@ import { entering } from '@/lib/motion/presets';
 import { onboardingKeyboardBehavior } from '@/lib/onboarding/keyboard-behavior';
 import { deriveWizardCta } from '@/lib/onboarding/wizard-cta';
 import { validatePcAddress } from '@/lib/onboarding/validate-pc-address';
+import { currentWebOrigin, webGateStartCommand, webUnreachableCopy } from '@/lib/gateway/web-origin';
 import { haptics } from '@/lib/haptics';
 
 const GATE_START_COMMAND = 'node gate/cli.mjs start --host 100.x.y.z';
@@ -55,14 +56,11 @@ export function OnboardingScreen() {
   const isWeb = Platform.OS === 'web';
   
   const getStartCommand = () => {
-    if (isWeb) {
-      // Use window.location.origin only when available (web platform)
-      // This matches the web demo server behavior: exact-origin CORS
-      const origin = typeof window !== 'undefined' ? window.location.origin : '';
-      return `node gate/cli.mjs start --allow-origin ${origin}`;
-    }
-    // Native platforms always use the hardcoded Tailscale command
-    return GATE_START_COMMAND;
+    if (!isWeb) return GATE_START_COMMAND;
+    // The web build is cross-origin to the Gate, so the command has to carry
+    // this page's exact origin; the Gate opts that one origin in and nothing
+    // else. `getStartCommand` never rewrites it into a wildcard.
+    return webGateStartCommand(currentWebOrigin());
   };
   const [pairingPending, setPairingPending] = useState(false);
   const [tailscaleOffline, setTailscaleOffline] = useState(false);
@@ -133,11 +131,21 @@ export function OnboardingScreen() {
           `TLS fingerprint changed for ${result.gatewayName}. Review the new fingerprint before continuing.`,
         );
       } else if (result.kind === 'unreachable') {
-        const tailnet = !result.message && isTailscaleAddress(pcAddress);
+        // Tailscale exists on the native app; a browser fetch that the Gate's
+        // origin allow-list denied is indistinguishable from any other failed
+        // fetch, so the web copy names the exact origin to allow instead of
+        // sending the operator to turn on Tailscale.
+        const tailnet = !isWeb && !result.message && isTailscaleAddress(pcAddress);
         setTailscaleOffline(tailnet);
-        setError(result.message ?? (tailnet
-          ? 'Turn on Tailscale on this phone, then try again.'
-          : 'Could not reach the gateway. Check its address and network, then try again.'));
+        if (result.message) {
+          setError(result.message);
+        } else if (isWeb) {
+          setError(webUnreachableCopy(currentWebOrigin()));
+        } else if (tailnet) {
+          setError('Turn on Tailscale on this phone, then try again.');
+        } else {
+          setError('Could not reach the gateway. Check its address and network, then try again.');
+        }
       } else {
         setError(
           'The gateway responded, but the connection did not complete. Check its API key and try again.',
@@ -428,7 +436,9 @@ export function OnboardingScreen() {
                   <Text variant="link" color="accent">Open the Gate setup guide</Text>
                 </Pressable>
                 <Text variant="caption" color="secondary">
-                  From the checkout root, install dependencies once, then start the Gate with your PC&rsquo;s Tailscale IP. Enter the same IP above.
+                  {isWeb
+                    ? 'From the checkout root, install dependencies once, then start the Gate with the allow-origin command below. Enter the address this browser uses above.'
+                    : 'From the checkout root, install dependencies once, then start the Gate with your PC&rsquo;s Tailscale IP. Enter the same IP above.'}
                 </Text>
                 <CommandRow
                   label="Install dependencies"

@@ -177,6 +177,27 @@ async function typeGatewayKey(value: string): Promise<void> {
   await settle();
 }
 
+/** Point the running page at a browser origin for the duration of one test. */
+function withWindowOrigin(origin: string): () => void {
+  const win = global.window as unknown as { location?: { origin?: string } };
+  const hadLocation = Object.prototype.hasOwnProperty.call(win, 'location');
+  const previous = win.location;
+  win.location = { origin };
+  return () => {
+    if (hadLocation) win.location = previous;
+    else delete (win as { location?: unknown }).location;
+  };
+}
+
+/** Render as the web build for the duration of one test. */
+function asWebPlatform(): () => void {
+  const previous = Platform.OS;
+  Platform.OS = 'web';
+  return () => {
+    Platform.OS = previous;
+  };
+}
+
 beforeEach(() => {
   mockGateway.probeMessage = 'no gateway found';
   mockGateway.connectionPhase = 'failed';
@@ -440,18 +461,9 @@ describe('Gate setup commands', () => {
   });
 
   test('web platform shows --allow-origin with exact current origin', async () => {
-    // Mock Platform.OS to simulate web platform
-    const originalPlatform = Platform.OS;
-    Platform.OS = 'web';
-    
-    // Mock window.location for web platform
-    const originalWindow = global.window;
-    // Only `origin` is read by the screen; the rest of Location is unused here.
-    global.window = {
-      ...originalWindow,
-      location: { origin: 'https://demo.example.ts.net' },
-    } as unknown as typeof global.window;
-    
+    const restorePlatform = asWebPlatform();
+    const restoreOrigin = withWindowOrigin('https://demo.example.ts.net');
+
     try {
       await mount();
       const setup = renderer.root.findByProps({ accessibilityLabel: 'Set up the Gate' });
@@ -469,9 +481,102 @@ describe('Gate setup commands', () => {
         'node gate/cli.mjs start --allow-origin https://demo.example.ts.net'
       );
     } finally {
-      Platform.OS = originalPlatform;
-      global.window = originalWindow;
+      restoreOrigin();
+      restorePlatform();
     }
+  });
+
+  test('web platform carries a non-default port without widening the origin', async () => {
+    const restorePlatform = asWebPlatform();
+    const restoreOrigin = withWindowOrigin('http://192.168.1.20:8090');
+
+    try {
+      await mount();
+      const setup = renderer.root.findByProps({ accessibilityLabel: 'Set up the Gate' });
+      await act(async () => {
+        (setup.props as { onPress: () => void }).onPress();
+      });
+      const copy = renderer.root.findByProps({ accessibilityLabel: 'Copy start now' });
+
+      await act(async () => {
+        (copy.props as { onPress: () => void }).onPress();
+      });
+      await settle();
+
+      expect(mockSetClipboard).toHaveBeenCalledWith(
+        'node gate/cli.mjs start --allow-origin http://192.168.1.20:8090'
+      );
+    } finally {
+      restoreOrigin();
+      restorePlatform();
+    }
+  });
+
+  test('native platforms keep the Tailscale command even when a page origin exists', async () => {
+    // The web command must be selected by the platform, not by the presence of
+    // a DOM: a native render in a web host still gets the Tailscale command.
+    const restoreOrigin = withWindowOrigin('https://demo.example.ts.net');
+
+    try {
+      await mount();
+      const setup = renderer.root.findByProps({ accessibilityLabel: 'Set up the Gate' });
+      await act(async () => {
+        (setup.props as { onPress: () => void }).onPress();
+      });
+      const copy = renderer.root.findByProps({ accessibilityLabel: 'Copy start now' });
+
+      await act(async () => {
+        (copy.props as { onPress: () => void }).onPress();
+      });
+      await settle();
+
+      expect(mockSetClipboard).toHaveBeenCalledWith('node gate/cli.mjs start --host 100.x.y.z');
+    } finally {
+      restoreOrigin();
+    }
+  });
+
+  test('an unreachable browser connection does not recommend Tailscale', async () => {
+    const restorePlatform = asWebPlatform();
+    const restoreOrigin = withWindowOrigin('http://192.168.1.20:8090');
+    mockGateway.setupFromPcAddress.mockResolvedValueOnce({ kind: 'unreachable' });
+
+    try {
+      await mount();
+      await typeAddress('100.64.1.5');
+      await act(async () => {
+        button('Connect your PC')?.onPress?.();
+      });
+      await settle();
+
+      const card = renderer.root.findByType(ERROR_CARD);
+      expect(card.props.cause).toContain('--allow-origin http://192.168.1.20:8090');
+      expect(card.props.cause).not.toMatch(/tailscale/i);
+      expect(card.props.cause).not.toMatch(/turn on/i);
+      expect(renderer.root.findAllByProps({ accessibilityLabel: 'Open Tailscale' })).toHaveLength(0);
+    } finally {
+      restoreOrigin();
+      restorePlatform();
+    }
+  });
+
+  test('an unreachable native Tailscale address still names Tailscale', async () => {
+    mockGateway.setupFromPcAddress.mockResolvedValueOnce({ kind: 'unreachable' });
+
+    await mount();
+    await typeAddress('100.64.1.5');
+    await act(async () => {
+      button('Connect your PC')?.onPress?.();
+    });
+    await settle();
+
+    const card = renderer.root.findByType(ERROR_CARD);
+    expect(card.props.cause).toBe('Turn on Tailscale on this phone, then try again.');
+    // The affordance is drawn on a nested view too, so this asserts that it is
+    // present at all, not how many nodes carry the label.
+    expect(
+      renderer.root.findAllByProps({ accessibilityLabel: 'Open Tailscale' }).length,
+    ).toBeGreaterThan(0);
   });
 
   test('the Gate guide links to the public repository README section', async () => {

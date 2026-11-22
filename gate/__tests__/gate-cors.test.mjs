@@ -143,6 +143,49 @@ test('an unlisted origin stays blind even when a list exists', async () => {
   }
 });
 
+test('the exact origin a web onboarding command names is accepted, and only it', async () => {
+  // The web build's onboarding prints `--allow-origin <window.location.origin>`
+  // for this page. The Gate must admit that one origin and keep every near
+  // miss — another port, another scheme, another host — blind.
+  const webOrigin = 'http://192.168.1.20:8090';
+  process.env.VERSUTUS_GATE_ALLOW_ORIGIN = webOrigin;
+  const gate = await makeGate();
+  try {
+    const allowed = await fetch(`${gateBase(gate)}/.well-known/gateway.json`, {
+      headers: { Origin: webOrigin },
+    });
+    assert.equal(
+      allowed.headers.get('access-control-allow-origin'),
+      webOrigin,
+      'the page origin onboarding names is admitted',
+    );
+
+    for (const other of [
+      'http://192.168.1.20:8091', // the same host on another port
+      'https://192.168.1.20:8090', // another scheme
+      'http://192.168.1.21:8090', // another host
+      'http://192.168.1.20:8090/', // a path, not an origin
+    ]) {
+      const denied = await fetch(`${gateBase(gate)}/.well-known/gateway.json`, {
+        headers: { Origin: other },
+      });
+      assert.equal(denied.headers.get('access-control-allow-origin'), null, `${other} stays blocked`);
+
+      const preflight = await fetch(`${gateBase(gate)}/.well-known/gateway.json`, {
+        method: 'OPTIONS',
+        headers: { Origin: other },
+      });
+      assert.equal(
+        preflight.headers.get('access-control-allow-origin'),
+        null,
+        `${other} is not admitted by preflight`,
+      );
+    }
+  } finally {
+    await gate.close();
+  }
+});
+
 test('webCors return contract: preflight handled, requests passed through, off is invisible', () => {
   const headers = {};
   const fakeRes = {

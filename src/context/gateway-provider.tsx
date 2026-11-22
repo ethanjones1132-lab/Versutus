@@ -16,6 +16,7 @@ import {
 import { abortAndClear } from '@/lib/gateway/abort';
 import { serverSideCancelForCommand } from '@/lib/gateway/cancel';
 import { isAuthRejection, isConnectionError, isUserAbort } from '@/lib/gateway/errors';
+import { currentWebOrigin, savedAddressUnreachableCopy } from '@/lib/gateway/web-origin';
 import { keyValueStorage } from '@/lib/storage/key-value';
 import {
   clearRecentBotShortcutsForGateway,
@@ -6792,9 +6793,15 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           setProbeMessage(message);
           return { kind: 'unreachable', message };
         }
-        const hint = categorizeProbeError(probeResult) || (probeResult?.error ? `${probeResult.error}. ` : '');
+        // A browser cannot tell an origin denial from an unreachable host, so
+        // the web copy names this page's origin instead of Tailscale; the
+        // probe classifier's "Check network/Tailscale" line is native-only.
+        const web = Platform.OS === 'web';
+        const hint = web
+          ? ''
+          : categorizeProbeError(probeResult) || (probeResult?.error ? `${probeResult.error}. ` : '');
         setProbeMessage(
-          `${hint}Saved your address, but could not reach the gateway. Make sure it is running and exposed over Tailscale or local network.`,
+          `${hint}${savedAddressUnreachableCopy({ web, origin: currentWebOrigin() })}`,
         );
         return { kind: 'unreachable' };
       }
