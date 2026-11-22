@@ -302,6 +302,63 @@ import {
   type WidgetWriteGateState,
 } from '@/lib/widget/widget-write-gate';
 import { loadWidgetResultHidden, subscribeWidgetPrivacy } from '@/lib/settings/widget-privacy';
+/**
+ * A pairing the Gate has not finished: this phone asked, the PC has not
+ * approved, and no device token exists yet.
+ */
+type PendingPairingRecord = {
+  gatewayId: string;
+  url: string;
+  requestId?: string;
+};
+
+/** Where half-finished pairing survives a relaunch. */
+const PENDING_PAIRING_KEY = 'versutus:pending-pairing';
+
+const APPROVE_ON_PC_HINT =
+  'Approve this phone on your PC. Run node gate/cli.mjs pair list on the Gate machine.';
+
+/**
+ * Write down that a saved profile is waiting for the PC's approval.
+ *
+ * The profile alone cannot say it: a token-less gateway looks the same whether
+ * it is mid-pairing or merely missing a key, and the approve instructions are
+ * tied to this pending request. Without the record, a relaunch mid-pairing
+ * marked onboarding complete and landed on Chat telling the phone to pair
+ * again.
+ */
+async function rememberPendingPairing(record: PendingPairingRecord): Promise<void> {
+  try {
+    await keyValueStorage.setItem(PENDING_PAIRING_KEY, JSON.stringify(record));
+  } catch {
+    // Best-effort: the in-memory pairing sheet is still the state on screen.
+  }
+}
+
+async function loadPendingPairing(): Promise<PendingPairingRecord | null> {
+  try {
+    const raw = await keyValueStorage.getItem(PENDING_PAIRING_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PendingPairingRecord> | null;
+    if (!parsed || typeof parsed.gatewayId !== 'string' || typeof parsed.url !== 'string') return null;
+    return {
+      gatewayId: parsed.gatewayId,
+      url: parsed.url,
+      ...(typeof parsed.requestId === 'string' ? { requestId: parsed.requestId } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function forgetPendingPairing(): Promise<void> {
+  try {
+    await keyValueStorage.removeItem(PENDING_PAIRING_KEY);
+  } catch {
+    // Best-effort, like the write: a stale marker is filtered on load.
+  }
+}
+
 export type ConnectionPhase =
   | 'idle'
   | 'booting'
@@ -1440,7 +1497,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [pairingDetails, setPairingDetails] = useState<PairingDetails | null>(null);
   const [pairingRecovery, setPairingRecovery] = useState<{
     gateway: GatewayProfile;
-    identity: GatewayIdentity;
+    /** Null for a restored pairing: resolved on the first read that needs it. */
+    identity: GatewayIdentity | null;
   } | null>(null);
   const [pendingGatewayAddressUpdate, setPendingGatewayAddressUpdate] = useState<{
     gateway: GatewayProfile;
@@ -4416,15 +4474,41 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     setNeedsOnboarding(false);
   }, []);
 
+  /**
+   * Put a pairing that a relaunch found still pending back on screen.
+   *
+   * The saved profile has no device token because the Gate has only queued
+   * this phone, so there is nothing to connect. Auto-connect would attach
+   * anonymously, fail, and land on Chat telling the operator to pair again —
+   * when the one useful thing is the approve instructions and the wait.
+   */
+  const restorePendingPairing = useCallback(
+    (gateway: GatewayProfile, record: PendingPairingRecord) => {
+      applyConnectionPhase('pairing');
+      setPairingDetails({
+        reason: 'not-paired',
+        ...(record.requestId ? { requestId: record.requestId } : {}),
+        remediationHint: APPROVE_ON_PC_HINT,
+      });
+      setNeedsOnboarding(true);
+      // The identity the signed access request needs is resolved by the poll
+      // below, on the first read that needs it — so an offline launch still
+      // shows the instructions instead of failing into an error card.
+      setPairingRecovery({ gateway, identity: null });
+    },
+    [applyConnectionPhase],
+  );
+
   const bootstrap = useCallback(async () => {
     try {
-      const [loadedSettings, repairedGateways, restoredQueueLoad, restoredRunsLoad] = await Promise.all([
+      const [loadedSettings, repairedGateways, restoredQueueLoad, restoredRunsLoad, restoredPendingPairing] = await Promise.all([
         loadAppSettings(),
         // Saved duplicates of one gateway collapse to the profile that can
         // authenticate before anything connects (profile-dedupe.ts).
         repairDuplicateGateways(),
         loadOfflineQueueFromStore(),
         loadActivityRunsFromStore(),
+        loadPendingPairing(),
       ]);
       const loadedGateways = repairedGateways.gateways;
       const activeId = repairedGateways.activeId;
@@ -4471,19 +4555,48 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const active = rosterActiveId ? (roster.find((item) => item.id === rosterActiveId) ?? null) : null;
       setActiveGateway(active);
 
-      const onboardingNeeded = needsGatewayOnboarding({
-        settings: loadedSettings,
-        savedGatewayCount: roster.length,
-      });
+      // A phone that was waiting for the PC's approval when the app closed:
+      // the profile was saved without a device token and the pending record
+      // survived, so this launch restores the approve state instead of
+      // starting a connect the Gate will refuse.
+      const pendingPairingGateway = restoredPendingPairing
+        ? roster.find((item) => item.id === restoredPendingPairing.gatewayId) ?? null
+        : null;
+      const pendingPairing =
+        restoredPendingPairing &&
+        pendingPairingGateway &&
+        !(pendingPairingGateway.token ?? '').trim()
+          ? { gateway: pendingPairingGateway, record: restoredPendingPairing }
+          : null;
+      // A token on that profile, or a profile that is gone, means the pairing
+      // is settled; the marker is stale and must not reopen the wait.
+      if (restoredPendingPairing && !pendingPairing) void forgetPendingPairing();
+
+      const onboardingNeeded =
+        needsGatewayOnboarding({
+          settings: loadedSettings,
+          savedGatewayCount: roster.length,
+        }) || pendingPairing !== null;
       setIsBootstrapped(true);
 
       if (!loadedSettings.autoConnect) {
         setNeedsOnboarding(onboardingNeeded);
-        applyConnectionPhase('idle');
+        if (pendingPairing) {
+          restorePendingPairing(pendingPairing.gateway, pendingPairing.record);
+        } else {
+          applyConnectionPhase('idle');
+        }
         return;
       }
 
       setNeedsOnboarding(onboardingNeeded);
+
+      if (pendingPairing) {
+        // Nothing to connect: the Gate holds this phone in its pending list
+        // and the poll inside the pairing sheet is what finishes the job.
+        restorePendingPairing(pendingPairing.gateway, pendingPairing.record);
+        return;
+      }
 
       const bootstrapSetupAttempt = explicitSetupAttemptRef.current;
       void runAutoConnect(loadedSettings, roster, rosterActiveId)
@@ -4521,7 +4634,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setLastError(error instanceof Error ? error.message : String(error));
       scheduleAutoRetryRef.current(30000);
     }
-  }, [runAutoConnect, applyConnectionPhase, readDeviceIdentity, applyDeviceIdentityRead, markOnboardingComplete]);
+  }, [runAutoConnect, applyConnectionPhase, readDeviceIdentity, applyDeviceIdentityRead, markOnboardingComplete, restorePendingPairing]);
 
   useEffect(() => {
     if (bootstrapStartedRef.current) return;
@@ -4531,18 +4644,21 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, [bootstrap]);
 
   const addGateway = useCallback(
-    async (input: {
-      name: string;
-      url: string;
-      kind?: GatewayProfile['kind'];
-      token?: string;
-      bootstrapToken?: string;
-      tlsFingerprint?: string;
-      sessionKey?: string;
-      sessionId?: string;
-      agentId?: string;
-      discoverySource?: GatewayProfile['discoverySource'];
-    }) => {
+    async (
+      input: {
+        name: string;
+        url: string;
+        kind?: GatewayProfile['kind'];
+        token?: string;
+        bootstrapToken?: string;
+        tlsFingerprint?: string;
+        sessionKey?: string;
+        sessionId?: string;
+        agentId?: string;
+        discoverySource?: GatewayProfile['discoverySource'];
+      },
+      options: { awaitingPairingApproval?: boolean } = {},
+    ) => {
       const observed = input.tlsFingerprint?.trim() || undefined;
       const saved = (await loadGateways()).find(
         (item) => !item.parentId && gatewayIdentityKey(item.url) === gatewayIdentityKey(input.url),
@@ -4568,15 +4684,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // manual or deep-link add saved a profile yet left needsOnboarding set,
       // and AppBootstrap bounced the user from chat back to onboarding. The
       // derived tailnet host feeds future auto-connect candidate probing.
+      //
+      // The exception is a Gate that has only queued this phone for approval:
+      // its device token does not exist yet, so onboarding stays open (and a
+      // relaunch restores the approve instructions) until the PC approves and
+      // the token is saved.
+      const awaitingPairingApproval = options.awaitingPairingApproval === true;
       const completionPatch = {
         ...onboardingCompletionForAddedGateway(input.url, settingsRef.current),
-        manualSetupPending: false,
+        ...(awaitingPairingApproval
+          ? { onboardingComplete: false, manualSetupPending: true }
+          : { manualSetupPending: false }),
       };
       const nextSettings = await saveAppSettings(completionPatch);
       settingsRef.current = nextSettings;
       setSettings(nextSettings);
       explicitSetupPendingRef.current = false;
-      setNeedsOnboarding(false);
+      setNeedsOnboarding(awaitingPairingApproval);
+      if (!awaitingPairingApproval) void forgetPendingPairing();
 
       return profile;
     },
@@ -6874,16 +6999,26 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           identity: discoveredIdentity,
         });
         if (access.status === 'pending-approval') {
-          const pendingGateway = await addGateway({
-            name: pcName,
-            url: probeResult.url,
-            kind: 'custom',
-            discoverySource: host.toLowerCase().endsWith('.ts.net') ? 'tailscale' : 'manual',
+          const pendingGateway = await addGateway(
+            {
+              name: pcName,
+              url: probeResult.url,
+              kind: 'custom',
+              discoverySource: host.toLowerCase().endsWith('.ts.net') ? 'tailscale' : 'manual',
+            },
+            // The Gate has queued this phone: no device token exists yet, so
+            // this add must not close onboarding.
+            { awaitingPairingApproval: true },
+          );
+          await rememberPendingPairing({
+            gatewayId: pendingGateway.id,
+            url: pendingGateway.url,
+            ...(access.requestId ? { requestId: access.requestId } : {}),
           });
           setPairingDetails({
             reason: 'not-paired',
             requestId: access.requestId,
-            remediationHint: 'Approve this phone on your PC. Run node gate/cli.mjs pair list on the Gate machine.',
+            remediationHint: APPROVE_ON_PC_HINT,
           });
           setPairingRecovery({ gateway: pendingGateway, identity: discoveredIdentity });
           applyConnectionPhase('pairing');
@@ -6946,6 +7081,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     if (!pairingRecovery) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // The identity the signed access request needs. A restored pairing starts
+    // with none and resolves it on the first read that needs it, so an offline
+    // launch still shows the instructions and recovers once the PC is back.
+    let identity = pairingRecovery.identity;
     const poll = async () => {
       try {
         const pairingStatus = deviceId
@@ -6966,19 +7105,49 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           timer = setTimeout(() => void poll(), 3000);
           return;
         }
+        // A restored pairing has only the profile and its URL: read the
+        // identity once and keep it for this pairing's polls.
+        if (!identity) {
+          const discovered = await identifyGateway({
+            baseUrl: pairingRecovery.gateway.url,
+            timeoutMs: 10_000,
+          });
+          if (cancelled) return;
+          if (discovered.kind !== 'custom' || !discovered.manifest?.auth?.grantPath) {
+            timer = setTimeout(() => void poll(), 3000);
+            return;
+          }
+          identity = discovered;
+        }
+        const accessIdentity = identity;
+        if (!accessIdentity) {
+          // Unreachable after the read above; keeps the call typed without a
+          // non-null assertion over a value a later edit could drop.
+          timer = setTimeout(() => void poll(), 3000);
+          return;
+        }
         const result = await requestGatewayAccess({
           baseUrl: pairingRecovery.gateway.url,
-          identity: pairingRecovery.identity,
+          identity: accessIdentity,
         });
         if (cancelled) return;
         if (result.status === 'granted' && result.token) {
           const repaired = { ...pairingRecovery.gateway, token: result.token };
           await persistGateway(repaired);
           if (cancelled) return;
+          void forgetPendingPairing();
           setPairingDetails(null);
           setPairingRecovery(null);
           applyConnectionPhase('connecting');
           await connectGatewayRef.current(repaired);
+          // Onboarding completes only here: the PC approved this phone and
+          // the device token it issued now sits on the saved profile. Not
+          // gated on this effect still owning the poll — clearing the pairing
+          // state above is what retires it, and that must not cancel the
+          // completion the approval earned.
+          if (statusRef.current === 'connected') {
+            await markOnboardingComplete();
+          }
           return;
         }
         if (result.status === 'denied') {
@@ -6994,6 +7163,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           return;
         }
         if (result.status !== 'pending-approval') {
+          if (result.status === 'token-required') {
+            void forgetPendingPairing();
+          }
           setPairingDetails({
             reason: 'not-paired',
             remediationHint: 'Approve this phone on your PC. Run node gate/cli.mjs pair list on the Gate machine. The Gate reconnects automatically after approval.',
@@ -7009,7 +7181,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [pairingRecovery, persistGateway, applyConnectionPhase, deviceId]);
+  }, [pairingRecovery, persistGateway, applyConnectionPhase, deviceId, markOnboardingComplete]);
 
   // The connect cycle the auto-retry timer and the foreground heal both ride.
   // Deliberately does NOT forgive the failure streak — only a connected phase

@@ -72,6 +72,13 @@ export function OnboardingScreen() {
     return webGateStartCommand(currentWebOrigin());
   };
   const [pairingPending, setPairingPending] = useState(false);
+  // A pairing restored from a relaunch has no local Connect tap: the provider
+  // commits the phase instead. Latch that it was shown so approval can still
+  // land the operator in Chat once the phase moves on to `connected`.
+  const [pairingShown, setPairingShown] = useState(false);
+  useEffect(() => {
+    if (pairingPending || connectionPhase === 'pairing') setPairingShown(true);
+  }, [pairingPending, connectionPhase]);
   const [tailscaleOffline, setTailscaleOffline] = useState(false);
   const connectingRef = useRef(false);
   const [retrying, setRetrying] = useState(false);
@@ -236,11 +243,12 @@ export function OnboardingScreen() {
   }, [awaitingRetryPhase, connectionPhase, probeMessage, router]);
 
   useEffect(() => {
-    if (pairingPending && connectionPhase === 'connected') {
+    if (pairingShown && connectionPhase === 'connected') {
+      setPairingShown(false);
       setPairingPending(false);
       router.replace('/(tabs)/chat');
     }
-  }, [connectionPhase, pairingPending, router]);
+  }, [connectionPhase, pairingShown, router]);
 
   return (
     <Screen>
@@ -405,6 +413,17 @@ export function OnboardingScreen() {
                 />
             )}
             {pairingPending ? (
+              deviceId ? (
+                <PairingPanel deviceId={deviceId} pairingDetails={pairingDetails} />
+              ) : (
+                <Text variant="headline">
+                  On your PC, open http://localhost:8760/pair and click Approve.
+                </Text>
+              )
+            ) : connectionPhase === 'pairing' ? (
+              // A pairing restored on launch: the phone was waiting for the
+              // PC's approval when the app closed, so the same instructions
+              // come back without the operator retyping the address.
               deviceId ? (
                 <PairingPanel deviceId={deviceId} pairingDetails={pairingDetails} />
               ) : (
