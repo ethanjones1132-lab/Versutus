@@ -232,6 +232,7 @@ export function RoutinesSection({ reloadSignal = 0 }: { reloadSignal?: number })
           <NewRoutineSheet
             visible={newOpen}
             targets={routineTargets(feed.backends, feed.routines, bots)}
+            bots={bots}
             initialBackendId={backendFilter}
             onClose={() => setNewOpen(false)}
             onCreate={(draft, scope) =>
