@@ -443,7 +443,7 @@ describe('Gate setup commands', () => {
     expect(renderer.root.findByProps({ accessibilityLabel: 'Set up the Gate' }).props['aria-expanded']).toBe(true);
   });
 
-  test('the Tailscale start command can be copied from onboarding', async () => {
+  test('the start command that can serve the pair page can be copied from onboarding', async () => {
     await mount();
     const setup = renderer.root.findByProps({ accessibilityLabel: 'Set up the Gate' });
     await act(async () => {
@@ -456,7 +456,11 @@ describe('Gate setup commands', () => {
     });
     await settle();
 
-    expect(mockSetClipboard).toHaveBeenCalledWith('node gate/cli.mjs start --host 100.x.y.z');
+    // A bind on a Tailscale address answers no loopback socket, so the pair page
+    // this same guide tells the operator to open on localhost would be refused.
+    // Every interface is the bind that reaches both the phone and that page.
+    expect(mockSetClipboard).toHaveBeenCalledWith('node gate/cli.mjs start --host 0.0.0.0 --allow-plaintext');
+    expect(mockSetClipboard).not.toHaveBeenCalledWith(expect.stringContaining('--host 100.x.y.z'));
     expect(renderer.root.findByProps({ accessibilityLabel: 'Copied start now' })).toBeTruthy();
   });
 
@@ -512,9 +516,10 @@ describe('Gate setup commands', () => {
     }
   });
 
-  test('native platforms keep the Tailscale command even when a page origin exists', async () => {
+  test('native platforms copy the loopback command even when a page origin exists', async () => {
     // The web command must be selected by the platform, not by the presence of
-    // a DOM: a native render in a web host still gets the Tailscale command.
+    // a DOM: a native render in a web host still gets the every-interface
+    // command, never this page's origin.
     const restoreOrigin = withWindowOrigin('https://demo.example.ts.net');
 
     try {
@@ -530,7 +535,8 @@ describe('Gate setup commands', () => {
       });
       await settle();
 
-      expect(mockSetClipboard).toHaveBeenCalledWith('node gate/cli.mjs start --host 100.x.y.z');
+      expect(mockSetClipboard).toHaveBeenCalledWith('node gate/cli.mjs start --host 0.0.0.0 --allow-plaintext');
+      expect(mockSetClipboard).not.toHaveBeenCalledWith(expect.stringContaining('demo.example.ts.net'));
     } finally {
       restoreOrigin();
     }

@@ -18,9 +18,18 @@ import { validatePcAddress } from '@/lib/onboarding/validate-pc-address';
 import { currentWebOrigin, webGateStartCommand, webUnreachableCopy } from '@/lib/gateway/web-origin';
 import { haptics } from '@/lib/haptics';
 
-const GATE_START_COMMAND = 'node gate/cli.mjs start --host 100.x.y.z';
-const GATE_SERVICE_COMMAND = 'node gate/cli.mjs service install --host 100.x.y.z';
-const GATE_LAN_COMMAND = 'node gate/cli.mjs start --host 0.0.0.0 --allow-plaintext';
+// One Gate process serves both ends of onboarding, and `--host` names a single
+// bind address. A bind on a Tailscale address answers the phone but nothing on
+// loopback, so http://localhost:8760/pair — which below tells the operator to
+// open, and which the pairing route only answers on a loopback socket — is
+// refused. `0.0.0.0` is the one bind that covers both: the phone still reaches
+// this PC at the Tailscale address it typed, and this PC reaches the pair page
+// on loopback. The Gate speaks plain HTTP on that bind, so the acknowledgement
+// is spelled out rather than left to the CLI's refusal.
+const GATE_START_COMMAND = 'node gate/cli.mjs start --host 0.0.0.0 --allow-plaintext';
+const GATE_SERVICE_COMMAND = 'node gate/cli.mjs service install --host 0.0.0.0 --allow-plaintext';
+const PLAINTEXT_BIND_NOTE =
+  'Listens on every PC interface and sends gateway keys without encryption. Use only on a trusted network with a firewall.';
 const GATE_DEPENDENCIES_COMMAND = 'npm install';
 const GATE_SETUP_URL = 'https://github.com/ethanjones1132-lab/Versutus#versutus-gate';
 
@@ -438,7 +447,7 @@ export function OnboardingScreen() {
                 <Text variant="caption" color="secondary">
                   {isWeb
                     ? 'From the checkout root, install dependencies once, then start the Gate with the allow-origin command below. Enter the address this browser uses above.'
-                    : 'From the checkout root, install dependencies once, then start the Gate with your PC&rsquo;s Tailscale IP. Enter the same IP above.'}
+                    : 'From the checkout root, install dependencies once, then start the Gate with the command below. It listens on every PC interface, so this PC can open the pair page at http://localhost:8760/pair and your phone can reach it at the address you enter above.'}
                 </Text>
                 <CommandRow
                   label="Install dependencies"
@@ -454,6 +463,11 @@ export function OnboardingScreen() {
                   borderColor={tokens.borderSubtle}
                   onCopy={() => void copyCommand('start', getStartCommand())}
                 />
+                {isWeb ? null : (
+                  <Text variant="micro" color="tertiary">
+                    {PLAINTEXT_BIND_NOTE}
+                  </Text>
+                )}
                 <Text variant="micro" color="tertiary">
                   Optional on Windows or macOS: install the Gate as a service so it starts after sign-in.
                 </Text>
@@ -464,16 +478,11 @@ export function OnboardingScreen() {
                   borderColor={tokens.borderSubtle}
                   onCopy={() => void copyCommand('service', GATE_SERVICE_COMMAND)}
                 />
-                <Text variant="micro" color="tertiary">
-                  Optional LAN access: listens on every PC interface and sends gateway keys without encryption. Use only on a trusted network with a firewall:
-                </Text>
-                <CommandRow
-                  label="Copy LAN command"
-                  command={GATE_LAN_COMMAND}
-                  copied={copiedCommand === 'lan'}
-                  borderColor={tokens.borderSubtle}
-                  onCopy={() => void copyCommand('lan', GATE_LAN_COMMAND)}
-                />
+                {isWeb ? (
+                  <Text variant="micro" color="tertiary">
+                    {PLAINTEXT_BIND_NOTE}
+                  </Text>
+                ) : null}
                 {copyError ? <Text variant="caption" color="statusDisconnected">{copyError}</Text> : null}
                 <Text variant="micro" color="tertiary">
                   After connecting, send a short message. If Chat has no model, open Gate setup to add a provider or connect a command-line tool.

@@ -72,9 +72,9 @@ describe('onboarding first-connection chrome', () => {
   });
 
   test('Gate setup exposes supported, copyable start commands and readiness guidance', () => {
-    expect(onboarding).toContain('node gate/cli.mjs start --host 100.x.y.z');
-    expect(onboarding).toContain('node gate/cli.mjs service install --host 100.x.y.z');
     expect(onboarding).toContain('node gate/cli.mjs start --host 0.0.0.0 --allow-plaintext');
+    expect(onboarding).toContain('node gate/cli.mjs service install --host 0.0.0.0 --allow-plaintext');
+    expect(onboarding).not.toContain('--host 100.x.y.z');
     expect(onboarding).toContain('Clipboard.setStringAsync(command)');
     expect(onboarding).toContain('sends gateway keys without encryption');
     expect(onboarding).toContain('open Gate setup to add a provider or connect a command-line tool');
