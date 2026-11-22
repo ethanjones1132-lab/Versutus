@@ -124,21 +124,105 @@ export function formatScheduleTime(hour: number, minute: number, hour12 = false)
   });
 }
 
-export function schedulePreview(cron: string, now = new Date(), hour12 = false): { description: string; nextRun: string } {
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+export function describeSchedule(cron: string, hour12 = false): string {
   const draft = scheduleDraftFromCron(cron);
   const time = formatScheduleTime(draft.hour, draft.minute, hour12);
-  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   let description: string;
   switch (draft.preset) {
     case 'daily': description = `Every day at ${time}`; break;
     case 'weekdays': description = `Weekdays at ${time}`; break;
-    case 'weekly': description = `Every week on ${days[draft.weekday]} at ${time}`; break;
+    case 'weekly': description = `Every week on ${WEEKDAYS[draft.weekday]} at ${time}`; break;
     case 'every-hours': description = `Every ${draft.intervalHours} hours`; break;
     case 'advanced': description = `Advanced schedule (${cron})`; break;
   }
+  return description;
+}
+
+export function schedulePreview(cron: string, now = new Date(), hour12 = false): { description: string; nextRun: string } {
   const next = nextCronRun(cron, now);
   return {
-    description,
+    description: describeSchedule(cron, hour12),
     nextRun: nextRunLabel(next?.toISOString() ?? '', now.getTime()) ?? 'No upcoming run found',
+  };
+}
+
+/** A clock time on the phone's own wall clock, in the app's 24-hour style. */
+function localClock(date: Date): string {
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+function localDayStart(value: Date): number {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+}
+
+/**
+ * The next run as the phone's local clock reads it: "today at 09:00",
+ * "tomorrow at 09:00", "Monday at 09:30", or a dated form further out.
+ *
+ * A route timestamp is UTC on the wire; a phone operator should never have to
+ * convert it in their head, so this always speaks the phone's own time. Null
+ * when the timestamp cannot be parsed — no invented promise.
+ */
+export function localRunTimeLabel(nextRunAt: string | null | undefined, now = Date.now()): string | null {
+  const at = Date.parse(nextRunAt ?? '');
+  if (!Number.isFinite(at)) return null;
+  const date = new Date(at);
+  const today = new Date(now);
+  // Rounding absorbs the 23/25-hour days around a daylight-saving change.
+  const days = Math.round((localDayStart(date) - localDayStart(today)) / 86_400_000);
+  const time = localClock(date);
+  if (days === 0) return `today at ${time}`;
+  if (days === 1) return `tomorrow at ${time}`;
+  if (days > 1 && days < 7) return `${WEEKDAYS[date.getDay()]} at ${time}`;
+  return `${WEEKDAYS[date.getDay()]} ${MONTHS[date.getMonth()]} ${date.getDate()} at ${time}`;
+}
+
+/** One routine's schedule as the detail sheet should read it. */
+export type RoutineScheduleView = {
+  /** The schedule in words; never a bare cron expression when it can be read. */
+  description: string | null;
+  /** The next run on the phone's clock, or null when no run can be named. */
+  nextRun: string | null;
+};
+
+/** Does this string look like the five-field expression itself, not words? */
+function looksLikeCron(value: string): boolean {
+  const fields = value.trim().split(/\s+/);
+  return fields.length === 5 && fields.every((field) => /^[\d*/,-]+$/.test(field));
+}
+
+/**
+ * The schedule and next run one routine detail row can print.
+ *
+ * The host's own `scheduleDisplay` wins when it sent one — it knows the
+ * schedule's timezone. Otherwise a readable cron is spoken in words by the
+ * same preview the picker uses, so a daily routine never shows `0 9 * * *`.
+ * A host that has not reported a next run for a preset schedule still lets the
+ * phone derive one, under the same local-time rule the picker creates with.
+ */
+export function routineScheduleView(
+  job: { schedule?: string | null; scheduleDisplay?: string | null; nextRunAt?: string | null },
+  now = new Date(),
+): RoutineScheduleView {
+  const cron = job.schedule?.trim() ?? '';
+  const display = job.scheduleDisplay?.trim() ?? '';
+  // A display that is the expression again is not words; describe it instead.
+  const hostWords = display && !looksLikeCron(display) ? display : '';
+  const expression = cron || (looksLikeCron(display) ? display : '');
+  const description = hostWords || (expression ? describeSchedule(expression) : null);
+  const confirmed = localRunTimeLabel(job.nextRunAt, now.getTime());
+  // Only a preset schedule is cheap enough to derive minute-by-minute, and an
+  // advanced expression the host did not report a next run for stays unknown
+  // rather than guessed.
+  const derived =
+    !confirmed && expression && scheduleDraftFromCron(expression).preset !== 'advanced'
+      ? nextCronRun(expression, now)
+      : null;
+  return {
+    description,
+    nextRun: confirmed ?? (derived ? localRunTimeLabel(derived.toISOString(), now.getTime()) : null),
   };
 }

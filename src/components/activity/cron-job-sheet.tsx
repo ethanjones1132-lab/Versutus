@@ -18,7 +18,9 @@ import {
   type CronJob,
   type CronRun,
 } from '@/lib/gateway/cron';
+import { formatRunFailure } from '@/lib/gateway/run-failures';
 import { parseRoutineName, routineName } from '@/lib/gateway/routine-name';
+import { routineScheduleView } from '@/lib/routines/schedule';
 // The phone-side scheduled notice a cron string maps to; a confirmed
 // pause/resume or remove keeps it in step (fire-and-forget, best-effort).
 import {
@@ -76,8 +78,14 @@ function executionError(execution: CronJob['latestExecution']): string | null {
   if (!isRecord(execution)) return null;
   const error = execution.error;
   if (error === null) return 'none recorded';
-  if (typeof error === 'string') return error.trim() || 'none recorded';
-  return null;
+  // A present error this build cannot read stays unknown rather than being
+  // dressed up as "none recorded".
+  if (typeof error !== 'string') return null;
+  const raw = error.trim();
+  if (!raw) return 'none recorded';
+  // The same classifier chat failures use (VS-127): a host state this build
+  // knows gets its verdict and fix, and text it does not know stays verbatim.
+  return formatRunFailure(raw) ?? raw;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -427,6 +435,7 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
       ? { ...displayedJobSource, botId: displayOwnerBotId }
       : displayedJobSource;
   const displayedJob = pausedOverride === null ? ownedJob : { ...ownedJob, paused: pausedOverride };
+  const scheduleView = routineScheduleView(displayedJob);
   const health = describeCronHealth(displayedJob);
   const promptLength =
     displayedJob.promptLength ?? (typeof displayedJob.prompt === 'string' ? displayedJob.prompt.length : null);
@@ -563,8 +572,8 @@ export function CronJobSheet({ job, backendId, scope, onClose, onOpenRun, onRemo
 
         <Divider />
 
-        <Row label="Schedule" value={displayedJob.scheduleDisplay ?? displayedJob.schedule} />
-        <Row label="Next run" value={displayedJob.paused ? 'Paused' : displayedJob.nextRunAt} />
+        <Row label="Schedule" value={scheduleView.description} />
+        <Row label="Next run" value={displayedJob.paused ? 'Paused' : scheduleView.nextRun} />
         <Row label="Last run" value={displayedJob.lastRunAt} />
         <Row label="Owner" value={displayedJob.botId ? `Bot: ${displayedJob.botId}` : 'the gateway itself'} />
         <Row label="Model" value={displayedJob.model ?? 'gateway default'} />

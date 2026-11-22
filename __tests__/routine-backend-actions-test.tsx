@@ -484,7 +484,9 @@ describe('a Bot-owned routine uses its proven home even when ids collide', () =>
       prompt: 'The revised prompt',
     }, { backendId: 'hermes-a', botId: 'nova' });
     expect(fields()).toHaveLength(0);
-    expect(textContent()).toContain('0 10 * * *');
+    expect(textContent().join('\n')).toContain('Every day at');
+    // The saved expression is spoken in words; the raw cron never reaches the row.
+    expect(textContent()).not.toContain('0 10 * * *');
     expect(textContent()).not.toContain('Every day at 9:00 AM EST');
     expect(textContent()).not.toContain('2026-11-15T14:00:00.000Z');
     expect(textContent()).toContain(
@@ -553,7 +555,10 @@ describe('routine detail reports latest execution separately from linked transcr
     expect(jest.requireMock('@/lib/notifications/routine-sync').syncRoutineNotification).toHaveBeenCalledWith(
       expect.objectContaining({ schedule: resumed.schedule, nextRunAt: resumed.nextRunAt, paused: false }),
     );
-    expect(textContent()).toContain(resumed.nextRunAt);
+    // The detail sheet speaks the resumed host schedule in words and the next
+    // run on the phone's clock; the raw ISO timestamp is never printed.
+    expect(textContent().join('\n')).toContain('Every week on Monday at');
+    expect(textContent()).not.toContain(resumed.nextRunAt);
     expect(button('Pause')).toBeDefined();
   });
 
@@ -702,12 +707,12 @@ describe('routine detail reports latest execution separately from linked transcr
 
     expect(mockGateway.cron.list).toHaveBeenNthCalledWith(1, { backendId: 'hermes-a', botId: 'nova' });
     expect(mockGateway.cron.list).toHaveBeenNthCalledWith(2, { backendId: 'hermes-b', botId: 'mira' });
-    expect(textContent()).toContain('0 9 * * *');
+    expect(textContent().join('\n')).toMatch(/Every day at 0?9:00/);
 
     await act(async () => { resolveOld([oldDetail]); });
     await flush();
-    expect(textContent()).toContain('0 9 * * *');
-    expect(textContent()).not.toContain('0 8 * * *');
+    expect(textContent().join('\n')).toMatch(/Every day at 0?9:00/);
+    expect(textContent().join('\n')).not.toMatch(/Every day at 0?8:00/);
   });
 
   test('the legacy backendId-only sheet scopes its full-detail read to that backend', async () => {
@@ -729,7 +734,7 @@ describe('routine detail reports latest execution separately from linked transcr
     await flush();
 
     expect(mockGateway.cron.list).toHaveBeenCalledWith({ backendId: 'hermes-b' });
-    expect(textContent()).toContain('0 9 * * *');
+    expect(textContent().join('\n')).toMatch(/Every day at 0?9:00/);
   });
 });
 
