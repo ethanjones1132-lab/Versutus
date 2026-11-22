@@ -15,6 +15,47 @@ const GLOW_W = 260;
 const GLOW_H = 180;
 
 /**
+ * A refused decision is usually about the decision — a scope or auth refusal
+ * the operator has to read the Gate's own sentence for. One refusal is not:
+ * the approval was already settled while this list still showed it (decided on
+ * another device, the run that raised it ended, the Gate's own timeout), so
+ * `approval.approve` / `approval.deny` answers 404 `unknown_approval` with
+ * `Unknown approval "<id>"`. Quoted that way the Gate's sentence reads as a bug
+ * in the operator's own tap, and the row it names is already dead.
+ */
+const SETTLED_APPROVAL_NOTICE =
+  'This request is no longer waiting — the Gate already settled it or it expired.';
+
+/** The Gate's own sentence for that one refusal, for a rejection that lost its code. */
+const UNKNOWN_APPROVAL_SENTENCE = /^Unknown approval "[^"]*"$/;
+
+/**
+ * Whether a refused decision is the "no longer waiting" outcome rather than a
+ * refusal of the decision itself.
+ *
+ * The Gate's machine-readable code decides it whenever the rejection carries
+ * one (`GatewayRpcError` from the RPC route, `GatewayHttpError` from a plain
+ * route), so an auth or scope refusal that happens to quote these words is
+ * never rewritten into the wrong story. Only an error with no code at all —
+ * a transport that dropped it — falls back to the Gate's exact sentence.
+ */
+function approvalNoLongerWaiting(caught: unknown): boolean {
+  const code = (caught as { code?: unknown } | null | undefined)?.code;
+  if (typeof code === 'string' && code.trim()) return code.trim() === 'unknown_approval';
+  if (!(caught instanceof Error)) return false;
+  return UNKNOWN_APPROVAL_SENTENCE.test(caught.message.trim());
+}
+
+/**
+ * The line a refused decision is named with: plain language for the settled
+ * case, and the Gate's own message unchanged for every other refusal.
+ */
+function refusalMessage(caught: unknown): string {
+  if (approvalNoLongerWaiting(caught)) return SETTLED_APPROVAL_NOTICE;
+  return caught instanceof Error ? caught.message : String(caught);
+}
+
+/**
  * The one thing on Activity that needs the operator is lit by whoever is
  * asking: a soft pool of the requesting Bot's crest light in the row's upper
  * left, the way the lamp lights a Bot's own thread.
@@ -61,14 +102,16 @@ export function ApprovalInbox() {
   // of moving at all.
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
   // What a batch left behind: how many rows it decided, how many the Gate
-  // refused, and the first refusal's own message. A refusal is per-row now, so
-  // the rows that failed stay in the list and can be tapped again.
+  // refused, and the first refusal's line. A refusal is per-row now, so the
+  // rows that failed stay in the list and can be tapped again.
   const [batchFailure, setBatchFailure] = useState<{ decided: number; failed: number; reason: string } | null>(null);
   // A refused Approve/Deny (single or batch) names the failure here instead
   // of vanishing: decideApproval rejects with no catch at the provider, so
   // the card catches it, keeps the still-pending rows, and says why nothing
-  // moved. A later success clears the notice.
-  const [decideError, setDecideError] = useState<string | null>(null);
+  // moved. A later success clears the notice. `settled` marks the one refusal
+  // that is not about the decision at all — the Gate had already closed this
+  // request — so the card can say so plainly and not ask for a retry.
+  const [decideError, setDecideError] = useState<{ message: string; settled: boolean } | null>(null);
   // Fail closed: a batch Approve can only cover read-only rows.
   const approvable = batchApprovableRows(pendingApprovals);
 
@@ -78,7 +121,16 @@ export function ApprovalInbox() {
       await decideApproval(approvalId, decision);
       setDecideError(null);
     } catch (caught) {
-      setDecideError(caught instanceof Error ? caught.message : String(caught));
+      const settled = approvalNoLongerWaiting(caught);
+      setDecideError({ message: refusalMessage(caught), settled });
+      if (settled) {
+        // The Gate says this id is gone, so the row the operator tapped is
+        // dead: re-read rather than leave them tapping a row already closed.
+        // Silent, like the provider's own post-decision read — the stale row
+        // must leave the list, not turn the whole inbox into a skeleton on the
+        // way out.
+        await refreshPendingApprovals({ silent: true });
+      }
     }
   };
 
@@ -96,12 +148,15 @@ export function ApprovalInbox() {
         decided += 1;
       } catch (caught) {
         // Keep going. One refusal must not leave the rows behind it undecided.
-        failures.push(caught instanceof Error ? caught.message : String(caught));
+        // A row the Gate had already settled is named in plain language, but it
+        // still counts as failed: the decision did not land.
+        failures.push(refusalMessage(caught));
       }
       setBatchProgress({ done: decided + failures.length, total: ids.length });
     }
-    // One re-read at the end, silent: the rows that refused are still pending
-    // on the Gate, so the list that lands still shows them.
+    // One re-read at the end, silent: a row refused for its own reason is still
+    // pending on the Gate, so the list that lands still shows it, while a row
+    // the Gate had already settled is gone from that same read.
     await refreshPendingApprovals({ silent: true });
     setBatchProgress(null);
     setBatchBusy(false);
@@ -116,9 +171,9 @@ export function ApprovalInbox() {
     <View style={[styles.group, { backgroundColor: tokens.stagePanel }]}>
       {decideError ? (
         <ErrorCard
-          cause={decideError}
+          cause={decideError.message}
           affected="This approval decision"
-          next="Try the decision again."
+          next={decideError.settled ? 'Nothing to decide: the Gate has already moved on.' : 'Try the decision again.'}
           onDismiss={() => setDecideError(null)}
         />
       ) : null}
