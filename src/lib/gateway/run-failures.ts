@@ -325,7 +325,7 @@ const TITLES: Record<Exclude<RunFailureKind, 'generic'>, Pick<RunFailureView, 't
   },
   empty_turn: {
     title: 'The model did not answer',
-    next: 'The session is pinned to a model whose provider could not run (often a missing login — run hermes model on the host). Pick a model from a signed-in provider; a new session opens so the next turn actually runs on it.',
+    next: 'The session is pinned to a model whose provider could not run (often a missing login on the host). Pick a model from a signed-in provider; a new session opens so the next turn actually runs on it.',
   },
 };
 

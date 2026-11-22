@@ -242,4 +242,8 @@ test('an empty turn is a model-did-not-answer verdict, not a generic connection 
   const view = describeRunFailure(raw);
   expect(view.title).toBe('The model did not answer');
   expect(view.next).toMatch(/signed-in provider/);
+  // Backend-neutral advice: whichever backend ran the turn (Codex, OpenCode,
+  // Claude Code, Hermes), the phone must never be told to run a Hermes CLI
+  // command it cannot reach.
+  expect(view.next).not.toMatch(/hermes model/i);
 });
