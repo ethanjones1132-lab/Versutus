@@ -6981,12 +6981,22 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           await connectGatewayRef.current(repaired);
           return;
         }
+        if (result.status === 'denied') {
+          // A refusal is the Gate's verdict, not a race: re-signing the same
+          // request every 3 s cannot change the answer, and it re-asks the PC
+          // owner on every tick. Keep the hint that names what was refused and
+          // stop here — filing another request is the operator's explicit
+          // act (Save & connect again), never this timer's.
+          setPairingDetails({
+            reason: 'not-paired',
+            remediationHint: `node gate/cli.mjs pair list — ${result.reason}`,
+          });
+          return;
+        }
         if (result.status !== 'pending-approval') {
           setPairingDetails({
             reason: 'not-paired',
-            remediationHint: result.status === 'denied'
-              ? `node gate/cli.mjs pair list — ${result.reason}`
-              : 'Approve this phone on your PC. Run node gate/cli.mjs pair list on the Gate machine. The Gate reconnects automatically after approval.',
+            remediationHint: 'Approve this phone on your PC. Run node gate/cli.mjs pair list on the Gate machine. The Gate reconnects automatically after approval.',
           });
         }
       } catch {
