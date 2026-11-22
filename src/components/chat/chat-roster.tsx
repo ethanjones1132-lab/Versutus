@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BotAvatar, GroupAvatar } from '@/components/chat/bot-avatar';
 import { PulsingDot, statusColor } from '@/components/connection-badge';
 import { Button, Chip, EmptyState, Icon, PressableScale, Skeleton, Text, TextField, type IconName } from '@/components/ui';
-import { BackendFilterRow } from '@/components/ui/backend-filter-row';
+import { BACKEND_FILTER_SLOT_HEIGHT, BackendFilterRow } from '@/components/ui/backend-filter-row';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import {
@@ -561,14 +561,21 @@ function ChatRosterImpl({
               Your team
             </Text>
           ) : null}
-          {backendFilters.length > 1 ? (
-            <BackendFilterRow
-              filters={backendFilters}
-              selected={activeRuntime}
-              onSelect={(runtime) => selectRuntime(runtime ?? null)}
-              accessibilityLabel="Filter Bots by backend"
-            />
-          ) : null}
+          {/* The chip row is drawn only once two runtimes are known, but its
+              box is reserved from the roster's first paint. A chip that
+              resolves after the rows are already on screen then fills its own
+              strip instead of pushing every row down under a finger already
+              reaching for a Bot (VS-135). */}
+          <View style={styles.backendFilterSlot} testID="roster-backend-filter-slot">
+            {backendFilters.length > 1 ? (
+              <BackendFilterRow
+                filters={backendFilters}
+                selected={activeRuntime}
+                onSelect={(runtime) => selectRuntime(runtime ?? null)}
+                accessibilityLabel="Filter Bots by backend"
+              />
+            ) : null}
+          </View>
         </View>
       }
       ListFooterComponent={
@@ -687,6 +694,10 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   sectionLabel: { marginTop: Spacing.two, marginBottom: Spacing.one, paddingHorizontal: Spacing.one },
+  // minHeight, not height: one resolved chip row fits the reserved box
+  // exactly, while a set that wraps on a narrow screen grows instead of
+  // painting over the rows below it.
+  backendFilterSlot: { minHeight: BACKEND_FILTER_SLOT_HEIGHT },
   member: {
     flexDirection: 'row',
     alignItems: 'center',
