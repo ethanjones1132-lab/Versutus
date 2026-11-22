@@ -68,7 +68,7 @@ test('parseModelPin reads only model.default and model.provider', () => {
   assert.deepEqual(parseModelPin(null), { default: null, provider: null });
 });
 
-test('listHermesBots includes default and every profiles/ directory', async () => {
+test('listHermesBots includes default and every live profiles/ directory', async () => {
   const home = await mkdtemp(join(tmpdir(), 'hermes-home-'));
   await writeFile(join(home, '.env'), 'API_SERVER_KEY=def-key\nOPENAI_API_KEY=sk-nope\n');
   await writeFile(join(home, 'profile.yaml'), 'display_name: Harumesu\n');
@@ -85,9 +85,20 @@ test('listHermesBots includes default and every profiles/ directory', async () =
   );
   await mkdir(join(home, 'profiles', 'silent'), { recursive: true });
   await writeFile(join(home, 'profiles', 'silent', '.env'), 'OPENAI_API_KEY=«redacted:sk-…»\n');
+  // A deleted profile whose directory the delete could not remove: Hermes wrote
+  // the tombstone, but a live listener still held the home.
+  await mkdir(join(home, 'profiles', 'retired'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'retired', '.env'), 'API_SERVER_KEY=retired-key\n');
+  await mkdir(join(home, 'profiles', '.deleted'), { recursive: true });
+  await writeFile(join(home, 'profiles', '.deleted', 'retired'), '2026-11-14T09:00:00Z\n');
 
   const bots = await listHermesBots(home);
   const byId = Object.fromEntries(bots.map((b) => [b.id, b]));
+  // The directory is still there, but the Bot is not: the roster is the live
+  // profiles alone, so a picker cannot offer a deleted Bot.
+  assert.deepEqual(bots.map((b) => b.id).sort(), ['default', 'researcher', 'silent']);
+  assert.equal(byId.retired, undefined);
+  assert.equal(await getHermesBot(home, 'retired'), null);
   assert.equal(byId.default.displayName, 'Harumesu');
   assert.equal(byId.default.listenKey, 'def-key');
   assert.equal(byId.researcher.listenKey, 'res-key');
@@ -109,6 +120,45 @@ test('listHermesBots includes default and every profiles/ directory', async () =
   assert.equal(JSON.stringify(toPublicBot(byId.default)).includes('def-key'), false);
   assert.equal(await getHermesBot(home, 'researcher').then((b) => b.listenKey), 'res-key');
   assert.equal(await getHermesBot(home, 'nope'), null);
+});
+
+test('a tombstoned profile is skipped by the roster walk', async () => {
+  // Hermes soft-deletes: it writes `profiles/.deleted/<name>` and keeps the
+  // profile directory while a listener still holds its home. `retired` carries
+  // its own listen key, so before this check it listed as a perfectly routable
+  // Bot — a deleted profile a user could still pick from the roster.
+  const home = await mkdtemp(join(tmpdir(), 'hermes-home-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=def-key\n');
+  await mkdir(join(home, 'profiles', 'researcher'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'researcher', '.env'), 'API_SERVER_KEY=res-key\n');
+  await mkdir(join(home, 'profiles', 'retired'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'retired', '.env'), 'API_SERVER_KEY=retired-key\n');
+  await mkdir(join(home, 'profiles', '.deleted'), { recursive: true });
+  await writeFile(join(home, 'profiles', '.deleted', 'retired'), '2026-11-14T09:00:00Z\n');
+
+  const bots = await listHermesBots(home);
+
+  assert.deepEqual(bots.map((bot) => bot.id).sort(), ['default', 'researcher']);
+  assert.equal(bots.some((bot) => bot.id === 'retired'), false);
+});
+
+test('a tombstoned profile does not resolve by id', async () => {
+  // The by-id lookup is the other door into the same profile directory: a
+  // deleted Bot must not come back through it either, while a live profile
+  // next door keeps resolving exactly as before.
+  const home = await mkdtemp(join(tmpdir(), 'hermes-home-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=def-key\n');
+  await mkdir(join(home, 'profiles', 'researcher'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'researcher', '.env'), 'API_SERVER_KEY=res-key\n');
+  await mkdir(join(home, 'profiles', 'retired'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'retired', '.env'), 'API_SERVER_KEY=retired-key\n');
+  await mkdir(join(home, 'profiles', '.deleted'), { recursive: true });
+  await writeFile(join(home, 'profiles', '.deleted', 'retired'), '2026-11-14T09:00:00Z\n');
+
+  assert.equal(await getHermesBot(home, 'retired'), null);
+  // A tombstone names one profile, not the whole profiles directory.
+  assert.equal((await getHermesBot(home, 'researcher'))?.listenKey, 'res-key');
+  assert.equal((await getHermesBot(home, 'default'))?.listenKey, 'def-key');
 });
 
 test('a profile copying the default listen key lists as refused, default keeps its own door', async () => {

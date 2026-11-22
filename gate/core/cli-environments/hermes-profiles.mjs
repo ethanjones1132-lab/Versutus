@@ -4,6 +4,7 @@ import {
   readdir as defaultReaddir,
   readFile as defaultReadFile,
   rename as defaultRename,
+  stat as defaultStat,
   writeFile as defaultWriteFile,
 } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -201,13 +202,41 @@ async function botAt(id, home, readFile) {
   };
 }
 
+/**
+ * Whether Hermes has deleted this profile, by the tombstone it leaves behind.
+ *
+ * `hermes profile delete` writes `profiles/.deleted/<name>` and then removes the
+ * profile directory. The two halves can come apart: while a live listener still
+ * holds the profile's home, the directory survives the delete (observed
+ * 2026-11-14, where `finishline-qa-20261114` stayed on disk after a verified
+ * tombstone). A directory is therefore not evidence the Bot still exists — the
+ * tombstone is — and its content does not matter, only that it is there.
+ *
+ * `stat` is exact where the filesystem is: on a case-sensitive filesystem the
+ * tombstone is found only under the profile's own name. NTFS and APFS resolve
+ * case-insensitively, but there a `worker-1` and a `Worker-1` profile cannot
+ * both exist in `profiles/`, so a match still names the one directory the
+ * roster knows. Any failed stat means "no tombstone": a host that has never
+ * deleted a profile pays one ENOENT per profile and nothing else.
+ */
+async function isDeletedProfile(profilesDir, name, stat) {
+  try {
+    await stat(join(profilesDir, '.deleted', name));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function listHermesBots(hermesHome, io = {}) {
   const readFile = io.readFile ?? defaultReadFile;
   const readdir = io.readdir ?? defaultReaddir;
+  const stat = io.stat ?? defaultStat;
+  const profilesDir = join(hermesHome, 'profiles');
   const bots = [await botAt('default', hermesHome, readFile)];
   let names = [];
   try {
-    names = await readdir(join(hermesHome, 'profiles'), { withFileTypes: true });
+    names = await readdir(profilesDir, { withFileTypes: true });
   } catch (error) {
     // A host that has never had a profiles directory is honestly the default
     // Bot alone, and ENOENT is the answer for it. Any other refused read is
@@ -228,7 +257,10 @@ export async function listHermesBots(hermesHome, io = {}) {
     const name = entry.name ?? entry;
     const isDir = typeof entry.isDirectory === 'function' ? entry.isDirectory() : true;
     if (!isDir || name.startsWith('.')) continue;
-    bots.push(await botAt(name, join(hermesHome, 'profiles', name), readFile));
+    // A deleted profile whose directory the delete could not remove is not a
+    // Bot any more; the roster must not offer it to pick from.
+    if (await isDeletedProfile(profilesDir, name, stat)) continue;
+    bots.push(await botAt(name, join(profilesDir, name), readFile));
   }
   return bots;
 }
@@ -309,6 +341,8 @@ export async function writeHermesMemory(hermesHome, id, name, text, io = {}) {
  * every profile on the host — once per Bot of every group turn, and again for
  * the default key. `default` is the Hermes home itself, exactly as the roster
  * models it, and an id that is not a profile directory is an unknown Bot.
+ * A tombstoned profile is unknown too: it is deleted, so an id that still has
+ * its directory must not resolve into a routable Bot.
  */
 export async function getHermesBot(hermesHome, id, io = {}) {
   if (!id) return null;
@@ -316,13 +350,15 @@ export async function getHermesBot(hermesHome, id, io = {}) {
   if (id === 'default') return botAt('default', hermesHome, readFile);
   if (typeof id !== 'string' || id.startsWith('.') || /[/\\]/.test(id)) return null;
   const readdir = io.readdir ?? defaultReaddir;
+  const stat = io.stat ?? defaultStat;
+  const profilesDir = join(hermesHome, 'profiles');
   // Matched against the entry name readdir reports, never against `stat`:
   // stat resolves case-insensitively on NTFS and APFS, so `Worker-1` would find
   // the `worker-1` profile and route to an address no Bot answers to. The roster
   // walk compared names, so a differently cased id stays an unknown id here too.
   let names = [];
   try {
-    names = await readdir(join(hermesHome, 'profiles'), { withFileTypes: true });
+    names = await readdir(profilesDir, { withFileTypes: true });
   } catch {
     return null;
   }
@@ -330,5 +366,6 @@ export async function getHermesBot(hermesHome, id, io = {}) {
   if (!entry) return null;
   const isDirectory = typeof entry.isDirectory === 'function' ? entry.isDirectory() : true;
   if (!isDirectory) return null;
-  return botAt(id, join(hermesHome, 'profiles', id), readFile);
+  if (await isDeletedProfile(profilesDir, id, stat)) return null;
+  return botAt(id, join(profilesDir, id), readFile);
 }
