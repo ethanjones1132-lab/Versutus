@@ -483,6 +483,7 @@ function LastErrorBanner({
   return (
     <Animated.View entering={entering.fadeIn.duration(Motion.duration.fast)} style={styles.bannerWrap}>
       <ErrorCard
+        title={humanized.title}
         cause={humanized.cause}
         affected={humanized.affected}
         next={humanized.next}

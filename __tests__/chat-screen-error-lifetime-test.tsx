@@ -531,6 +531,40 @@ function sentAttachments(): unknown {
 }
 
 
+describe('VS-138 — a known failure keeps its own headline in the banner', () => {
+  // The banner used to hand ErrorCard only cause/affected/next, so every
+  // failure — including a backend signed out on the operator's own PC — led
+  // with the generic "Something went wrong" eyebrow.
+  test('a backend signed out on the PC leads with the fix', async () => {
+    reset({
+      lastError:
+        'Codex on your PC is signed out. Open a terminal on the PC, run `codex login`, and sign in.',
+    });
+    await mount();
+    const card = find(ERROR_CARD).props as { title?: string; cause?: string };
+    expect(card.title).toBe('Sign in on your computer');
+    expect(card.cause).toContain('signed out');
+  });
+
+  test('a spent backend plan leads with the fix', async () => {
+    reset({
+      lastError:
+        "Claude Code has used up its plan's limit. Until it resets, pick another backend.",
+    });
+    await mount();
+    const card = find(ERROR_CARD).props as { title?: string; cause?: string };
+    expect(card.title).toBe('Switch backend or wait');
+    expect(card.cause).toContain('plan');
+  });
+
+  test('an unknown failure still says "Something went wrong"', async () => {
+    reset({ lastError: 'the sprocket sheared off' });
+    await mount();
+    const card = find(ERROR_CARD).props as { title?: string };
+    expect(card.title).toBe('Something went wrong');
+  });
+});
+
 describe('ERROR-2 — a replacement error gets its own 12 seconds', () => {
   /** A dismissible error: the humanizer reads it as an entry mistake. */
   const FIRST = 'Invalid gateway URL: alpha';

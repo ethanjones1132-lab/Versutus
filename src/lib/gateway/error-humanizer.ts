@@ -21,11 +21,37 @@ export type HumanizedError = {
 
 const MISSING_PROVIDER_CREDENTIAL_MESSAGE = 'provider has no credential to send';
 
+/**
+ * The two backend endings the operator can fix from the sentence alone
+ * (VS-127/VS-138): a backend signed out on their own PC, and one whose plan is
+ * spent. The Gate names both with a stable code and a sentence that already
+ * says the fix; the card leads with that fix instead of "Something went wrong".
+ */
+const BACKEND_SIGNED_OUT_TITLE = 'Sign in on your computer';
+const BACKEND_QUOTA_TITLE = 'Switch backend or wait';
+
 /** The Gate's machine-readable code for a refusal, when the transport kept it. */
 function errorCodeOf(error: unknown): string | undefined {
   if (typeof error !== 'object' || error === null || !('code' in error)) return undefined;
   const code = (error as { code?: unknown }).code;
   return typeof code === 'string' && code.trim() ? code.trim() : undefined;
+}
+
+/**
+ * A backend that is signed out, as the Gate writes it
+ * (gate/core/voice/turn-failure.mjs): "<who> is signed out. <the one fix>".
+ */
+function looksSignedOutBackend(message: string): boolean {
+  return /\bis signed out\b/i.test(message) && /\bsign in\b/i.test(message);
+}
+
+/**
+ * A backend whose plan is spent, as the Gate writes it: "<who> has used up its
+ * plan's limit. Until it resets, pick another backend." A bare rate limit is
+ * not this — the Gate only names a quota when it also named the reset.
+ */
+function looksSpentBackendPlan(message: string): boolean {
+  return /has used up its plan[’']?s limit/i.test(message);
 }
 
 /**
@@ -91,6 +117,43 @@ function describeChatRoutingRefusal(message: string): HumanizedError | undefined
 }
 
 /**
+ * A backend the operator can fix, named as its own headline.
+ *
+ * The typed code is the authority. A transport that keeps only the text (the
+ * chat stream flattens a failed frame to its message) still carries the Gate's
+ * own sentence, so the wording is read only when no code survived — never over
+ * a code that says something else.
+ */
+function describeBackendState(
+  error: unknown,
+  message: string,
+): HumanizedError | undefined {
+  const code = errorCodeOf(error);
+  const signedOut = code === 'backend_signed_out'
+    || (!code && looksSignedOutBackend(message));
+  if (signedOut) {
+    return {
+      title: BACKEND_SIGNED_OUT_TITLE,
+      cause: message,
+      affected: 'this backend',
+      next: 'Open a terminal on the computer that runs this backend and sign in, then retry.',
+      action: 'copy',
+    };
+  }
+  const quota = code === 'backend_quota' || (!code && looksSpentBackendPlan(message));
+  if (quota) {
+    return {
+      title: BACKEND_QUOTA_TITLE,
+      cause: message,
+      affected: 'this backend',
+      next: 'Pick a model from another backend, or wait until its limit resets.',
+      action: 'copy',
+    };
+  }
+  return undefined;
+}
+
+/**
  * Turn a raw gateway/transport error into a short, actionable surface.
  *
  * Keeps the cause/affected/next structure the UI already consumes, but maps
@@ -110,6 +173,15 @@ export function humanizeGatewayError(
   }
 
   const message = error instanceof Error ? error.message : String(error);
+
+  // A backend signed out on the operator's PC, or one whose plan is spent, is
+  // named as its own headline. The code is the authority; the Gate's sentence
+  // is the fallback for transports that drop the code (the chat stream keeps
+  // only the message). This runs before the auth/network heuristics, which
+  // would otherwise read "signed out" or a 401 quoted by a CLI as this phone's
+  // gateway token.
+  const backendState = describeBackendState(error, message);
+  if (backendState) return backendState;
 
   // The Gate refused the turn because its provider record has no credential.
   // It arrives as a 409 carrying `code: missing_credentials`; a transport that

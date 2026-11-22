@@ -302,6 +302,65 @@ describe('a refusal is attributed to whoever refused', () => {
   });
 });
 
+describe('a sign-in or a spent plan is its own headline', () => {
+  // VS-138: the two endings the operator can fix from the sentence. The card
+  // led both with "Something went wrong", which reads as a network fault.
+  const SIGNED_OUT =
+    'Codex on your PC is signed out. Open a terminal on the PC, run `codex login`, and sign in.';
+  const QUOTA =
+    "Claude Code has used up its plan's limit. Until it resets, pick another backend.";
+
+  test.each([
+    ['backend_signed_out', 'Sign in on your computer'],
+    ['backend_quota', 'Switch backend or wait'],
+  ])('the typed code %s names the fix even when the text does not', (code: string, title: string) => {
+    // The code is the authority: a message with nothing recognisable in it
+    // still gets the verdict the Gate named.
+    const result = humanizeGatewayError(new GatewayHttpError('the backend refused', 502, code));
+    expect(result.title).toBe(title);
+    expect(result.action).toBe('copy'); // nothing on the phone fixes a PC sign-in or a plan
+  });
+
+  test.each([
+    [SIGNED_OUT, 'Sign in on your computer', /sign in/i],
+    [QUOTA, 'Switch backend or wait', /backend|wait/i],
+  ])('a transport that kept only the text still names the fix', (message: string, title: string, next: RegExp) => {
+    // The chat stream flattens a failed frame to its message, so the Gate's own
+    // sentence is all that arrives for the banner.
+    for (const error of [new Error(message), message]) {
+      const result = humanizeGatewayError(error);
+      expect(result.title).toBe(title);
+      expect(result.cause).toBe(message);
+      expect(result.next).toMatch(next);
+      expect(result.affected).toBe('this backend');
+    }
+  });
+
+  test('a code that says something else is not overridden by the wording', () => {
+    const result = humanizeGatewayError(
+      Object.assign(new Error(SIGNED_OUT), { code: 'backend_error' }),
+    );
+    expect(result.title).not.toBe('Sign in on your computer');
+  });
+
+  test('only the Gate\'s own sentences are read; a bare rate limit is not a spent plan', () => {
+    // "signed out" without the fix, and a transient rate limit without a reset,
+    // are not the verdicts these two failures own.
+    expect(humanizeGatewayError(new Error('The backend is signed out.')).title)
+      .toBe('Something went wrong');
+    expect(humanizeGatewayError(new Error('Codex is rate limited right now.')).title)
+      .toBe('Something went wrong');
+  });
+
+  test('a genuinely unknown failure keeps the generic card', () => {
+    const result = humanizeGatewayError(new Error('the sprocket sheared off'));
+    expect(result.title).toBe('Something went wrong');
+    expect(result.cause).toBe('the sprocket sheared off');
+    expect(result.affected).toBe('gateway connection');
+    expect(result.next).toBe('Check the details below and try again.');
+  });
+});
+
 describe('a run failure outranks the auth heuristic', () => {
   // A provider's 401 forwarded inside a run or Bot-send failure rides along
   // with the Gate's own verdict (here the CLI probe's stderr). Reading it as

@@ -10,6 +10,12 @@ import { Icon } from './Icon';
 import { Text } from './Text';
 
 export type ErrorCardProps = {
+  /**
+   * The headline above the cause. A failure the operator can name — a backend
+   * they are signed out of, a spent plan — is its own headline ("Sign in on
+   * your computer"); a genuinely unknown one keeps the generic eyebrow.
+   */
+  title?: string;
   /** What went wrong. */
   cause: string;
   /** What it affects (gateway connection, session history, …). */
@@ -32,6 +38,7 @@ export type ErrorCardProps = {
 
 /** Structured error surface per the luxury rules: cause, affected target, next action. */
 export function ErrorCard({
+  title = 'Something went wrong',
   cause,
   affected,
   next,
@@ -60,7 +67,7 @@ export function ErrorCard({
           color="statusDisconnected"
         />
         <Text variant="caption" color="statusDisconnected" style={styles.eyebrow}>
-          Something went wrong
+          {title}
         </Text>
       </View>
       <Text variant="caption" color="secondary">
