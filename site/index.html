@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Versutus</title>
+<style>
+  :root {
+    --stage: #0A0A0B;
+    --inset: #111114;
+    --elevated: #18181C;
+    --type: #F5F7FA;
+    --secondary: #9CA3AF;
+    --accent: #8B7CFF;
+    --gold: #D4AF37;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--stage); }
+  body {
+    margin: 0;
+    background: var(--stage);
+    color: var(--type);
+    font-family: "Segoe UI", sans-serif;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  main {
+    max-width: 42rem;
+    margin: 0 auto;
+    padding: 5rem 1.5rem 4rem;
+  }
+  header { margin-bottom: 3.5rem; }
+  .mark {
+    display: block;
+    width: 3rem;
+    height: 3px;
+    background: var(--accent);
+    border-radius: 2px;
+    margin-bottom: 1.5rem;
+  }
+  h1 {
+    font-family: Palatino, "Palatino Linotype", Georgia, serif;
+    font-weight: 400;
+    font-size: 3.25rem;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    margin: 0 0 0.75rem;
+    color: var(--type);
+  }
+  .tagline {
+    font-family: Palatino, "Palatino Linotype", Georgia, serif;
+    font-size: 1.35rem;
+    line-height: 1.4;
+    color: var(--secondary);
+    margin: 0;
+  }
+  .tagline .gold { color: var(--gold); font-style: italic; }
+  section { margin-bottom: 2.75rem; }
+  h2 {
+    font-family: Palatino, "Palatino Linotype", Georgia, serif;
+    font-weight: 400;
+    font-size: 1.4rem;
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+    margin: 0 0 0.9rem;
+    color: var(--type);
+  }
+  h2 .rule {
+    display: block;
+    width: 2rem;
+    height: 1px;
+    background: var(--accent);
+    margin-bottom: 0.6rem;
+  }
+  p {
+    margin: 0 0 0.9rem;
+    color: var(--secondary);
+    font-size: 1.02rem;
+  }
+  p.strong { color: var(--type); }
+  ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  li {
+    padding: 0.85rem 0;
+    border-top: 1px solid rgba(245, 247, 250, 0.08);
+    display: grid;
+    grid-template-columns: 5.5rem 1fr;
+    gap: 1rem;
+  }
+  li:first-child { border-top: none; padding-top: 0; }
+  .surface {
+    font-family: Palatino, "Palatino Linotype", Georgia, serif;
+    color: var(--type);
+    font-size: 1.05rem;
+    line-height: 1.4;
+  }
+  .desc { color: var(--secondary); font-size: 0.98rem; line-height: 1.6; }
+  .panel {
+    background: var(--elevated);
+    border: 1px solid rgba(245, 247, 250, 0.06);
+    border-radius: 10px;
+    padding: 1.25rem 1.4rem;
+  }
+  footer {
+    border-top: 1px solid rgba(245, 247, 250, 0.08);
+    padding-top: 1.6rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+  .repo {
+    color: var(--secondary);
+    font-size: 0.9rem;
+    text-decoration: none;
+    border-bottom: 1px solid var(--accent);
+    padding-bottom: 1px;
+    word-break: break-all;
+  }
+  .status {
+    color: var(--type);
+    font-size: 0.9rem;
+  }
+  .status .gold { color: var(--gold); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="mark" aria-hidden="true"></span>
+    <h1>Versutus</h1>
+    <p class="tagline">A mobile and web client for AI agent gateways.</p>
+  </header>
+
+  <section aria-labelledby="why">
+    <h2 id="why"><span class="rule" aria-hidden="true"></span>Why</h2>
+    <p class="strong">Hermes ships a desktop app, a TUI, and an HTTP API. It does not ship a mobile client.</p>
+    <p>Bridging the agent into Telegram or Discord keeps a text box and drops run lifecycle, approval prompts, and tool-call inspection.</p>
+  </section>
+
+  <section aria-labelledby="what">
+    <h2 id="what"><span class="rule" aria-hidden="true"></span>What</h2>
+    <p>Versutus is a client. It holds no model credentials. It is <strong style="color: var(--type); font-weight: 600;">not a public relay</strong>. The agent stays where you put it.</p>
+  </section>
+
+  <section aria-labelledby="gateways">
+    <h2 id="gateways"><span class="rule" aria-hidden="true"></span>Gateways</h2>
+    <ul>
+      <li>
+        <span class="surface">Hermes</span>
+        <span class="desc">Over HTTP and SSE.</span>
+      </li>
+      <li>
+        <span class="surface">Versutus Gate</span>
+        <span class="desc">An OpenAI-compatible proxy.</span>
+      </li>
+      <li>
+        <span class="surface">OpenClaw</span>
+        <span class="desc">Over its WebSocket.</span>
+      </li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="surfaces">
+    <h2 id="surfaces"><span class="rule" aria-hidden="true"></span>Surfaces</h2>
+    <ul>
+      <li>
+        <span class="surface">Home</span>
+        <span class="desc">Connection and live runs.</span>
+      </li>
+      <li>
+        <span class="surface">Chat</span>
+        <span class="desc">Streaming, with approvals inline.</span>
+      </li>
+      <li>
+        <span class="surface">Activity</span>
+        <span class="desc">Start a run, approve or deny, stop.</span>
+      </li>
+      <li>
+        <span class="surface">Tools</span>
+        <span class="desc">Shell only when the gateway advertises one.</span>
+      </li>
+      <li>
+        <span class="surface">Voice</span>
+        <span class="desc">Hold to talk; a separate opt-in hands-free call with no wake word.</span>
+      </li>
+    </ul>
+  </section>
+
+  <footer>
+    <span class="repo">ethanjones1132-lab/Versutus</span>
+    <span class="status"><span class="gold">pre-release</span>. Not on an app store.</span>
+  </footer>
+</main>
+</body>
+</html>
+
