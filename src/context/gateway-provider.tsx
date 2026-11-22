@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, AppState, Platform } from 'react-native';
 
+import { subscribeToApprovalPushes } from '@/context/approval-push';
 import { registerCrestFleet } from '@/lib/bot-avatar';
 import { GatewayDiscoveryScanner, isNativeDiscoveryAvailable } from '@/lib/discovery/scanner';
 import { beaconKindForUrl, buildExplicitHostCandidates, buildGatewayCandidates, friendlyPcName, matchSavedGateway, mergeTokenlessTwinGateways, normalizePcAddress, reachableAlternateIpv4 } from '@/lib/gateway/candidates';
@@ -5646,6 +5647,30 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       cancelRead?.();
     };
   }, [status, refreshPendingApprovals, scheduleConnectedRead]);
+
+  // The poll above is the fallback, not the first word: the Gate already pushes
+  // an approval notice to this phone the moment its card goes up, and while the
+  // app is running that push is the live event which tells us a run we did not
+  // open is now waiting. Reading the inbox on receipt is what makes the row and
+  // its badge (the same `pendingApprovals` list, counted) appear immediately
+  // instead of inside the 120 s auto-deny window or after a reconnect. A phone
+  // whose push permission is off, or a Gate too old to relay approvals, still
+  // has the timer above; a push for another Gateway is not this inbox's news.
+  useEffect(() => {
+    if (status !== 'connected') return undefined;
+    return subscribeToApprovalPushes((push) => {
+      const gatewayKey = typeof push.gatewayKey === 'string' ? push.gatewayKey : undefined;
+      const activeId = activeGatewayRef.current?.id;
+      // A notice from another Gateway is not this inbox's news. Before the
+      // profile ref has rendered on a cold connect, read anyway: the Gate in
+      // front of us is the one the poll would ask.
+      if (gatewayKey && activeId && gatewayKey !== activeId) return;
+      if (statusRef.current !== 'connected') return;
+      // Silent: the operator may already be reading the rows this push is
+      // about, so the read must not replace them with the inbox's skeleton.
+      void refreshPendingApprovals({ silent: true });
+    });
+  }, [status, refreshPendingApprovals]);
 
   const runTask = useCallback(
     async (

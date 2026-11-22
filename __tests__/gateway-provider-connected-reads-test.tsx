@@ -1,5 +1,6 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
+import * as Notifications from 'expo-notifications';
 import { AppState, type AppStateStatus } from 'react-native';
 
 import {
@@ -129,6 +130,12 @@ jest.mock('@/lib/notifications/local', () => ({
   notifyGatewayDown: jest.fn(async () => undefined),
   notifyRunComplete: jest.fn(async () => undefined),
   notifyRunProgress: jest.fn(async () => undefined),
+}));
+
+// The Gate relays an approval as an Expo push the moment its card goes up. The
+// provider listens for that live event; this mock hands the test its listener.
+jest.mock('expo-notifications', () => ({
+  addNotificationReceivedListener: jest.fn(),
 }));
 
 jest.mock('@/lib/notifications/routine-sync', () => ({
@@ -341,6 +348,18 @@ const observed: { gateway: GatewayContextValue | null; chat: ChatSurfaceContextV
 /** `pendingApprovalsState` on every commit since the last reset. */
 const pendingStatesSeen: GatewayContextValue['pendingApprovalsState'][] = [];
 
+type PushedNotification = { request: { content: { data?: Record<string, unknown> } } };
+
+/** Every listener the provider installed through `addNotificationReceivedListener`. */
+const pushedNotificationListeners: ((notification: PushedNotification) => void)[] = [];
+
+/** Deliver a relayed push the way the platform would while the app is running. */
+function pushNotification(data: Record<string, unknown>): void {
+  for (const listener of [...pushedNotificationListeners]) {
+    listener({ request: { content: { data } } });
+  }
+}
+
 function recordContexts(gateway: GatewayContextValue, chat: ChatSurfaceContextValue): null {
   observed.gateway = gateway;
   observed.chat = chat;
@@ -426,6 +445,18 @@ beforeEach(async () => {
   observed.gateway = null;
   observed.chat = null;
   pendingStatesSeen.length = 0;
+  pushedNotificationListeners.length = 0;
+  jest.mocked(Notifications.addNotificationReceivedListener).mockImplementation(((listener: (
+    notification: PushedNotification,
+  ) => void) => {
+    pushedNotificationListeners.push(listener);
+    return {
+      remove: () => {
+        const at = pushedNotificationListeners.indexOf(listener);
+        if (at >= 0) pushedNotificationListeners.splice(at, 1);
+      },
+    };
+  }) as unknown as typeof Notifications.addNotificationReceivedListener);
   jest.spyOn(AppState, 'addEventListener').mockImplementation(((
     _type: string,
     listener: (state: AppStateStatus) => void,
@@ -841,6 +872,72 @@ describe('an approval raised after connect reaches the inbox without a pull', ()
     await advance(30_000);
     expect(gatewayApi().pendingApprovals).toEqual([]);
     expect(gatewayApi().pendingApprovalsState).toBe('unavailable');
+  });
+});
+
+// The Gate pushes an approval notice the moment the card goes up, before the
+// phone's next poll and without a reconnect. A running app that ignored that
+// event made the operator wait out the poll (or a reconnect) inside the Gate's
+// 120 s auto-deny window, and the badge stayed dark with the inbox.
+describe('an approval push lands in the inbox while the connection stays up', () => {
+  async function connectAlpha(): Promise<FakeClient> {
+    const alpha = profile({ id: 'alpha', url: 'http://alpha.test:8642', kind: 'custom' });
+    mockState.gateways = [alpha];
+    mockState.activeId = alpha.id;
+    mockState.manifests.set(alpha.url, GATE_MANIFEST);
+    await mount();
+    await settle(4, 2_000);
+    return mockClients[0];
+  }
+
+  test('the pushed row appears and the badge counts it before the next poll', async () => {
+    const client = await connectAlpha();
+    expect(gatewayApi().status).toBe('connected');
+    expect(gatewayApi().pendingApprovals).toEqual([]);
+    const readsAtConnect = approvalsReads(client);
+    // The connect read's own loading phase is over; this test is about what
+    // the push does from here.
+    pendingStatesSeen.length = 0;
+
+    // The Gate raises the request and relays its notice at the same moment.
+    approvalsAnswer = [
+      { approvalId: 'push-1', type: 'workspace_write', summary: 'Write the build output' },
+    ];
+
+    // Only the push moves this: no manual refresh, no reconnect, and not
+    // enough connection time to reach the next scheduled inbox read.
+    await act(async () => {
+      pushNotification({ kind: 'approval', runId: 'run-1', gatewayKey: 'alpha' });
+      await Promise.resolve();
+    });
+    await settle(2, 0);
+
+    expect(gatewayApi().pendingApprovals.map((row) => row.approvalId)).toEqual(['push-1']);
+    // The badge draws `pendingApprovals.length` (side drawer, Runs): the same
+    // list moves the count the instant the pushed row lands.
+    expect(gatewayApi().pendingApprovals).toHaveLength(1);
+    expect(gatewayApi().pendingApprovalsState).toBe('ready');
+    expect(approvalsReads(client)).toBe(readsAtConnect + 1);
+    // The connection never dropped and no second client was built.
+    expect(mockClients).toHaveLength(1);
+    // Reading on a push keeps whatever the operator was already deciding on
+    // screen instead of swapping it for the inbox's skeleton.
+    expect(pendingStatesSeen).not.toContain('loading');
+  });
+
+  test('a push about something other than an approval reads nothing', async () => {
+    const client = await connectAlpha();
+    const readsAtConnect = approvalsReads(client);
+    approvalsAnswer = [{ approvalId: 'push-1', type: 'workspace_write' }];
+
+    await act(async () => {
+      pushNotification({ kind: 'run', runId: 'run-1', gatewayKey: 'alpha' });
+      await Promise.resolve();
+    });
+    await settle(2, 0);
+
+    expect(gatewayApi().pendingApprovals).toEqual([]);
+    expect(approvalsReads(client)).toBe(readsAtConnect);
   });
 });
 
