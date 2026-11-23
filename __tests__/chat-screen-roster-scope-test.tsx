@@ -309,18 +309,24 @@ async function redraw(patch: Record<string, unknown>) {
   await settle();
 }
 
-/** Let the microtask queue drain and the effects that follow it come due. */
-async function settle(rounds = 4) {
+/** Let the microtask queue drain and the effects that follow it come due.
+ *
+ * The async timer advance is the point: React 19 parks follow-up work on
+ * `queueMicrotask`, which jest's modern fake timers fake, so awaiting a bare
+ * `Promise.resolve()` left timers sitting in the fake queue past this window —
+ * the test then hung until its 20s timeout. `advanceTimersByTimeAsync` drains
+ * the timers *and* the microtasks they queue, round after round. */
+async function settle(rounds = 6, ms = 1) {
   for (let index = 0; index < rounds; index += 1) {
     await act(async () => {
-      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(ms);
     });
   }
 }
 
 async function advance(ms: number) {
   await act(async () => {
-    jest.advanceTimersByTime(ms);
+    await jest.advanceTimersByTimeAsync(ms);
   });
   await settle();
 }
