@@ -76,14 +76,18 @@ describe('registerNotificationCategories', () => {
     ]);
   });
 
-  test('both approval actions decide without foregrounding the app', async () => {
+  test('both approval actions foreground the app so a killed-app tap is delivered', async () => {
     await registerNotificationCategories();
 
-    // The point of the category is deciding from the banner; `true` here
-    // would open the app on every button press and defeat it.
+    // The decision must ARRIVE before it can be applied: expo v57
+    // NotificationAction.options says that with `false` and the app killed,
+    // "NotificationResponseReceived listeners will not be triggered when a user
+    // selects this action" — so a banner-only button would drop the tap in
+    // silence. Foregrounding opens the app, and VS-171's launch path (or the
+    // run's inbox row) finishes the decision there.
     const [, actions] = approvalRegistration();
     for (const action of actions) {
-      expect(action.options?.opensAppToForeground).toBe(false);
+      expect(action.options?.opensAppToForeground).toBe(true);
     }
   });
 
@@ -150,11 +154,11 @@ describe('registerNotificationCategories', () => {
   test('a reply foregrounds the app, where the Bot Chat send path lives', async () => {
     await registerNotificationCategories();
 
-    // The approval buttons deliberately decide without foregrounding; a reply
-    // is the other way round. expo v57 NotificationAction.options: with `false`
-    // and the app killed, "NotificationResponseReceived listeners will not be
-    // triggered when a user selects this action" — so a non-foregrounding reply
-    // would silently swallow the text the operator typed.
+    // The reply foregrounds for the same reason the approval buttons do: expo
+    // v57 NotificationAction.options says that with `false` and the app killed,
+    // "NotificationResponseReceived listeners will not be triggered when a user
+    // selects this action" — so a non-foregrounding reply would silently
+    // swallow the text the operator typed.
     const [, actions] = botMessageRegistration();
     expect(actions[0].options?.opensAppToForeground).toBe(true);
     expect(actions[0].options?.isDestructive).toBeUndefined();

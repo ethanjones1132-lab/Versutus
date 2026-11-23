@@ -5,12 +5,15 @@
 // src/app/_layout.tsx reads the response's actionIdentifier, payload and the
 // live status, and applies this decision ahead of the tap's destination.
 //
-// An approval is decided from the banner, without opening the app
-// (`opensAppToForeground: false` on both actions, registered in categories.ts).
-// The action identifier is the discriminator — a plain tap delivers expo's
-// DEFAULT_ACTION_IDENTIFIER, which is not a decision — the payload must name the
-// approval pending right now, because only runs THIS app initiated can be
-// approved (CONTEXT.md, ADR 0001), and the connection must still be live.
+// An approval is decided from the banner: both actions foreground the app
+// (`opensAppToForeground: true`, registered in categories.ts), because a killed
+// app is never woken by a non-foregrounding one, so the decision is applied by
+// whichever handler receives it — the live listener, or the launch path for a
+// tap that started the process. The action identifier is the discriminator — a
+// plain tap delivers expo's DEFAULT_ACTION_IDENTIFIER, which is not a decision
+// — the payload must name the approval pending right now, because only runs
+// THIS app initiated can be approved (CONTEXT.md, ADR 0001), and the connection
+// must still be live.
 // Anything else refuses here and keeps the tap's ordinary destination;
 // the caller posts an honest notice rather than pretending to have decided, and
 // `approvalRefusalReason` / `approvalRefusalCopy` below decide WHICH notice —

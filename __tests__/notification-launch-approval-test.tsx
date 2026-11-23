@@ -119,9 +119,13 @@ import TestRenderer, { act } from 'react-test-renderer';
 import { NotificationRouter } from '@/app/_layout';
 import {
   APPROVAL_APPROVE_ACTION_ID,
+  APPROVAL_CATEGORY_ID,
   APPROVAL_DENY_ACTION_ID,
   APPROVAL_NOTICE_DATA_KIND,
 } from '@/lib/notifications/categories';
+
+/** Category registration the mounted router made, readable by identifier. */
+const mockSetCategory = Notifications.setNotificationCategoryAsync as jest.Mock;
 
 declare const __dirname: string;
 
@@ -219,6 +223,30 @@ describe('the launch tap dispatches an approval ACTION', () => {
     expect(mockNotifyDecided).toHaveBeenCalledWith('deny');
     expect(mockNotifyRefused).not.toHaveBeenCalled();
     expect(mockRouter.navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe('the approval category asks for the foreground, so a killed-app tap arrives at all', () => {
+  test('both approval actions declare opensAppToForeground through the registered category', () => {
+    mountRouter();
+
+    // Read back the definition the router actually registered at mount — the
+    // exported category, not a literal in the source. `false` here is the
+    // regression the launch cases above could never observe: expo v57 wakes no
+    // killed app for a non-foregrounding action, so a tap on such a button is
+    // never delivered and no response exists to dispatch.
+    const registration = mockSetCategory.mock.calls.find(
+      ([identifier]: [string]) => identifier === APPROVAL_CATEGORY_ID,
+    ) as [string, Notifications.NotificationAction[]] | undefined;
+    expect(registration).toBeDefined();
+    const actions = registration?.[1] ?? [];
+    expect(actions.map((action) => action.identifier)).toEqual([
+      APPROVAL_APPROVE_ACTION_ID,
+      APPROVAL_DENY_ACTION_ID,
+    ]);
+    for (const action of actions) {
+      expect(action.options?.opensAppToForeground).toBe(true);
+    }
   });
 });
 

@@ -8,15 +8,17 @@
 // buttons.
 //
 // Two categories live here, and they answer opposite questions. The approval
-// notice asks for a DECISION, so both of its actions are
-// `opensAppToForeground: false` — the point is deciding a run from the banner
-// without opening the app. Two facts bound how far that can go, and both are
-// stated here rather than papered over: only runs THIS app initiated can be
-// approved (CONTEXT.md, ADR 0001), and a KILLED app is never woken by a
-// non-foregrounding action — expo v57 does not trigger the response listener
-// at all in that case, so the fail-closed path belongs to the action handling,
-// never to this registration. The bot-message notice asks for TEXT, and only
-// this app can carry it to the Bot, so its reply action foregrounds — see
+// notice asks for a DECISION, and both of its actions foreground the app
+// (`opensAppToForeground: true`). That is not a convenience: a KILLED app is
+// never woken by a non-foregrounding action — expo v57 does not trigger the
+// response listener at all in that case — so a banner-only approval button
+// would drop the operator's tap in silence. Foregrounding is what makes the
+// action arrive; settling it afterwards belongs to the action handling
+// (VS-171's launch path, or the run's inbox row), never to this registration.
+// Only runs THIS app initiated can be approved (CONTEXT.md, ADR 0001), so the
+// payload must still name the pending run, and an action that carries no run
+// id settles nothing — it only opens the app. The bot-message notice asks for
+// TEXT, so its reply action foregrounds for the same reason — see
 // BOT_MESSAGE_ACTIONS.
 //
 // Expo v57 docs (setNotificationCategoryAsync): the category identifier must
@@ -48,12 +50,18 @@ const APPROVAL_ACTIONS: Notifications.NotificationAction[] = [
   {
     identifier: APPROVAL_APPROVE_ACTION_ID,
     buttonTitle: 'Approve',
-    options: { opensAppToForeground: false },
+    // The button has to be DELIVERED before anything can apply it: with
+    // `false` and the app killed, expo v57 never fires the response listener,
+    // so the tap would never reach the handler. Opening the app lets VS-171's
+    // launch settlement (or the run's inbox row) finish the decision.
+    options: { opensAppToForeground: true },
   },
   {
     identifier: APPROVAL_DENY_ACTION_ID,
     buttonTitle: 'Deny',
-    options: { isDestructive: true, opensAppToForeground: false },
+    // Same reason as Approve above — a denial taken on a killed app must reach
+    // the app just the same, and `isDestructive` only styles the button.
+    options: { isDestructive: true, opensAppToForeground: true },
   },
 ];
 
