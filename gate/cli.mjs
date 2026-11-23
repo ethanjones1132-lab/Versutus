@@ -488,8 +488,11 @@ async function handlePair(args) {
       console.error(`Error: No pending request "${requestId}". Run "pair list" to see open requests.`);
       process.exit(1);
     }
-    const token = await deviceTokens.issue(entry.deviceId, { role: entry.role, scopes: entry.scopes });
-    console.log(`Approved device ${entry.deviceId}. Token: ${token}`);
+    // The token is issued for the phone, but it is never printed: stdout can
+    // land in a log the operator does not control. The phone reads its token
+    // from the signed status route, so approving only names the device here.
+    await deviceTokens.issue(entry.deviceId, { role: entry.role, scopes: entry.scopes });
+    console.log(`Approved device ${entry.deviceId}. The phone collects its token through its signed status request; none is printed here.`);
     return;
   }
 
@@ -1084,7 +1087,8 @@ async function main() {
     console.log('  pair <open|approve|revoke|list>');
     console.log('    Manage device pairing and access tokens');
     console.log('    open [--minutes N]  Open the pairing window (default 5 minutes)');
-    console.log('    approve <requestId> Approve a pending access request');
+    console.log('    approve <requestId> Approve a pending access request; the phone');
+    console.log('                        collects its own token, nothing is printed');
     console.log('    revoke <deviceId>   Revoke a device\'s access token');
     console.log('    list                List pending requests and paired devices');
     console.log('');
