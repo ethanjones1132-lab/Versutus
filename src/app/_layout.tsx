@@ -32,7 +32,7 @@ import { HandsfreeVoiceProvider } from '@/context/handsfree-voice-provider';
 import { isShowcaseMode } from '@/lib/demo/showcase-mode';
 import { installGlobalFailureHandlers, recordFailure } from '@/lib/diagnostics/failure-log';
 import type { ChatSurface } from '@/lib/gateway/bots';
-import { deepLinkTarget } from '@/lib/gateway/deep-link';
+import { deepLinkTarget, namedCallEngine } from '@/lib/gateway/deep-link';
 import { openSessionById, openSessionByIdFailureText } from '@/lib/gateway/session-open-by-id';
 import {
   dismissSharedText,
@@ -550,7 +550,19 @@ function GatewayDeepLinkRouter() {
       if (!supportsHandsfreeCalls(Platform.OS)) return;
       if (status !== 'connected') return;
       handledRef.current = url;
-      router.navigate({ pathname: '/chat', params: { call: '1' } });
+      // The engine the link NAMED rides along as a parameter for this call
+      // only (VS-078): the screen offers it on the sheet and never writes it
+      // to settings, so the stored preference is still what the next call from
+      // the call button uses. A link that names no engine carries nothing —
+      // `deepLinkTarget` folds that to `auto`, but the difference matters here,
+      // and `namedCallEngine` is where it is read. The launcher shortcut and
+      // the widget's signed start name none, so they keep honouring the stored
+      // preference instead of forcing `auto` on the operator.
+      const namedEngine = namedCallEngine(parsed.queryParams ?? {});
+      router.navigate({
+        pathname: '/chat',
+        params: { call: '1', ...(namedEngine ? { engine: namedEngine } : {}) },
+      });
       if (!target.botId) return;
       const botId = target.botId;
       void openBot(botId)

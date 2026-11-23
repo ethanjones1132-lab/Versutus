@@ -1,4 +1,4 @@
-import { deepLinkTarget } from '@/lib/gateway/deep-link';
+import { deepLinkTarget, namedCallEngine } from '@/lib/gateway/deep-link';
 
 declare const __dirname: string;
 
@@ -232,6 +232,22 @@ describe('deepLinkTarget (the app link vocabulary)', () => {
     expect(deepLinkTarget('call/', {})).toBeNull();
   });
 
+  test('the engine a call link NAMES is told apart from no engine at all (VS-078)', () => {
+    // Every engine the vocabulary knows is the engine the link named: the sheet
+    // selects it for the one call the link opens.
+    for (const engine of ['auto', 'local', 'codex', 'phone'] as const) {
+      expect(namedCallEngine({ engine })).toBe(engine);
+    }
+    // An absent or unknown engine is no request at all — the target still folds
+    // it to `auto`, but nothing is overridden for the call, so the operator's
+    // stored preference (or the Gate's own order, for `auto` itself) decides.
+    expect(namedCallEngine({})).toBeUndefined();
+    expect(namedCallEngine({ engine: 'nope' })).toBeUndefined();
+    expect(namedCallEngine({ engine: ['phone', 'local'] })).toBe('phone');
+    const folded = deepLinkTarget('call', {});
+    expect(folded && folded.kind === 'call' ? folded.engine : undefined).toBe('auto');
+  });
+
   test('an activity link is a target even with no query, and a repeated value is dropped', () => {
     expect(deepLinkTarget('activity', {})).toEqual({ kind: 'activity' });
     expect(deepLinkTarget('/activity', {})).toEqual({ kind: 'activity' });
@@ -439,6 +455,21 @@ describe('GatewayDeepLinkRouter routes on that target', () => {
     // only path that can.
     expect(call).not.toContain('handsfree');
     expect(src).not.toContain('sendChatInput');
+  });
+
+  test('a call link hands the engine it named to the screen, and nothing when it named none', () => {
+    const src = routerSource();
+    const call = src.slice(
+      src.indexOf("if (target.kind === 'call')"),
+      src.indexOf('// A Bot Chat link opens the way a roster tap opens one'),
+    );
+
+    // VS-078: the engine rides the navigation as a parameter, read from what
+    // the link NAMED. An `auto` the fold made up for an absent engine is not a
+    // request, so the shortcut and the widget's signed start still let the
+    // stored preference decide.
+    expect(call).toContain('namedCallEngine(parsed.queryParams ?? {})');
+    expect(call).toContain('...(namedEngine ? { engine: namedEngine } : {})');
   });
 
   test('the screen opens the call sheet for a call link', () => {

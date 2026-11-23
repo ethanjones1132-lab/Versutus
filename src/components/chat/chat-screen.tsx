@@ -209,6 +209,7 @@ import {
   type VoiceEnginePreference,
 } from '@/lib/voice/voice-engine-choice';
 import { VOICE_ENGINE_ROWS, voiceEngineDisclosure } from '@/lib/voice/voice-engine-copy';
+import { namedCallEngine } from '@/lib/gateway/deep-link';
 import { speakerAction } from '@/lib/voice/speech-reply';
 import { availableVoices, speakReply, speechAvailableFrom, stopSpeech } from '@/lib/voice/speech';
 import {
@@ -513,7 +514,7 @@ function PairingRequiredBanner({ onShow }: { onShow: () => void }) {
 export function ChatScreen() {
   const router = useRouter();
   const navigation = useNavigation();
-  const params = useLocalSearchParams<{ call?: string }>();
+  const params = useLocalSearchParams<{ call?: string; engine?: string }>();
   const tokens = useTokens();
   const {
     activeGateway,
@@ -621,7 +622,16 @@ export function ChatScreen() {
   const [callPreparing, setCallPreparing] = useState(false);
   const [callCapsLoading, setCallCapsLoading] = useState(false);
   const [callError, setCallError] = useState<string | undefined>();
-  const [callPreference, setCallPreference] = useState<VoiceEnginePreference>('auto');
+  const [callPreferenceStored, setCallPreferenceStored] = useState<VoiceEnginePreference>('auto');
+  /**
+   * The engine a `versutus://call?engine=…` link NAMED, held for the one call
+   * that link opened (VS-078). It is an override, never a preference: the saved
+   * `voiceEngine` is left exactly as it was, and the next offer without a link
+   * puts this back so the call button keeps using what the operator saved.
+   */
+  const [callLinkEngine, setCallLinkEngine] = useState<VoiceEnginePreference | undefined>(undefined);
+  /** What this open of the sheet asks about: the link's engine for its call, otherwise the stored preference. */
+  const callPreference = callLinkEngine ?? callPreferenceStored;
   const [callCapabilities, setCallCapabilities] = useState<VoiceEngineCapabilities | null>(null);
 
   // Keyed by gateway + surface + session so leaving a thread and coming
@@ -1909,8 +1919,12 @@ export function ChatScreen() {
    * opens after the answer arrives, because that answer is what says whether
    * there is a consent to honour or a kill switch to report. `requireSheet`
    * serves a `versutus://call` link: a link is never a tap, so it always asks.
+   *
+   * `engine` is a link's one-call override (VS-078), not a preference: it is
+   * held for this offer only, the saved setting is never written, and the next
+   * offer without it reads the stored preference again.
    */
-  const openCallSheet = useCallback((options?: { requireSheet?: boolean }) => {
+  const openCallSheet = useCallback((options?: { requireSheet?: boolean; engine?: VoiceEnginePreference }) => {
     if (callOfferHidden) return;
     const seq = ++callCapsReadSeqRef.current;
     // A chat with no session is no longer a reason to refuse: Start resolves it
@@ -1923,7 +1937,9 @@ export function ChatScreen() {
     void (async () => {
       const stored = await loadAppSettings();
       if (seq !== callCapsReadSeqRef.current) return;
-      setCallPreference(stored.voiceEngine);
+      setCallPreferenceStored(stored.voiceEngine);
+      setCallLinkEngine(options?.engine);
+      const preference = options?.engine ?? stored.voiceEngine;
       let capabilities: VoiceEngineCapabilities | null = null;
       try {
         capabilities = await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', await pushDeviceParams());
@@ -1938,7 +1954,7 @@ export function ChatScreen() {
         setCallSheetVisible(true);
         return;
       }
-      const choice = chooseVoiceEngine(stored.voiceEngine, capabilities, Platform.OS);
+      const choice = chooseVoiceEngine(preference, capabilities, Platform.OS);
       if (!options?.requireSheet && choice.engine !== 'none') {
         const transport: HandsfreeStartTransport = choice.engine === 'phone' ? 'phone' : 'gate';
         const consent = await readHandsfreeConsent();
@@ -1947,7 +1963,7 @@ export function ChatScreen() {
           setCallSheetVisible(false);
           // A one-tap start that fails still owes the operator the sheet and the
           // reason; the start path has already put the reason in `callError`.
-          if (!(await startCallWith(choice, stored.voiceEngine))) {
+          if (!(await startCallWith(choice, preference))) {
             if (seq === callCapsReadSeqRef.current) setCallSheetVisible(true);
           }
           return;
@@ -1956,19 +1972,21 @@ export function ChatScreen() {
       setCallSheetVisible(true);
     })();
   }, [callOfferHidden, draftThread?.sessionId, gatewayRequest, startCallWith]);
+  const callLinkEntryEngine = namedCallEngine({ engine: params.engine });
   const openCallSheetFromLink = useCallback(
-    () => openCallSheet({ requireSheet: true }),
-    [openCallSheet],
+    () => openCallSheet({ requireSheet: true, engine: callLinkEntryEngine }),
+    [callLinkEntryEngine, openCallSheet],
   );
 
   // A `versutus://call` link lands here: the router opened the Bot Chat and
-  // passed `call=1`. A link never starts capture on its own — the confirm
-  // sheet is what opens, and the operator's Start is what begins a call. The
-  // sheet opens through openCallSheet, the same path as the call button, so the
-  // stored engine and the Gate's readiness are read before it shows. This effect
-  // sits below openCallSheet because its deps read that binding. The param is
-  // handled once so a re-render cannot reopen the sheet after the operator
-  // dismisses it.
+  // passed `call=1`, plus the engine the link named (VS-078), if any. A link
+  // never starts capture on its own — the confirm sheet is what opens, and the
+  // operator's Start is what begins a call. The sheet opens through
+  // openCallSheet, the same path as the call button, so the Gate's readiness is
+  // read before it shows; the engine is the link's for this one call and the
+  // stored preference otherwise. This effect sits below openCallSheet because
+  // its deps read that binding. The param is handled once so a re-render cannot
+  // reopen the sheet after the operator dismisses it.
   const callEntry = params.call;
   const callEntryHandledRef = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -1985,11 +2003,13 @@ export function ChatScreen() {
   }, [callPlatformSupported, isFocused, callEntry, draftThread, openCallSheetFromLink]);
 
   const handleChangeEngine = useCallback(() => {
-    setCallPreference((current) => {
-      const index = CALL_ENGINE_ORDER.indexOf(current);
-      return CALL_ENGINE_ORDER[(index + 1) % CALL_ENGINE_ORDER.length];
-    });
-  }, []);
+    const index = CALL_ENGINE_ORDER.indexOf(callPreference);
+    const next = CALL_ENGINE_ORDER[(index + 1) % CALL_ENGINE_ORDER.length];
+    // A link's engine is this sheet's own choice: changing it moves the
+    // override, not the saved preference the next call reads.
+    if (callLinkEngine !== undefined) setCallLinkEngine(next);
+    else setCallPreferenceStored(next);
+  }, [callLinkEngine, callPreference]);
   const callEngine = useMemo(
     () => (callCapabilities ? chooseVoiceEngine(callPreference, callCapabilities, Platform.OS) : null),
     [callCapabilities, callPreference],
@@ -2016,6 +2036,9 @@ export function ChatScreen() {
     // Dismissing the sheet ends the open that asked: a read still in flight has
     // nobody to answer for and must not clear the next sheet's loading flag.
     callCapsReadSeqRef.current += 1;
+    // And a link's engine belonged to the call it opened (VS-078), so a
+    // dismissal drops it; the next offer reads the stored preference.
+    setCallLinkEngine(undefined);
     setCallSheetVisible(false);
     setCallError(undefined);
   }, []);

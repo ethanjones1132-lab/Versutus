@@ -63,11 +63,25 @@ export function botChatLink(botId: string | undefined): string | undefined {
   return id ? `versutus://chat?bot=${encodeURIComponent(id)}` : undefined;
 }
 
-/** An absent or unknown engine is `auto`, never a guessed one. */
-function callEngine(value: string | undefined): DeepLinkCallEngine {
+/**
+ * The engine a call link NAMES, or undefined when it names none this app
+ * knows. A call link always answers with an engine, so `callEngine` below folds
+ * absence to `auto`; a caller that must tell "names auto" from "names nothing"
+ * reads it here. The sheet's one-call override is that caller (VS-078): a link
+ * naming an engine selects it for the call it opens, while a link naming none
+ * — the launcher shortcut, the widget's signed start — asks for a call and
+ * leaves the engine to the operator's stored preference.
+ */
+export function namedCallEngine(query: DeepLinkQuery): DeepLinkCallEngine | undefined {
+  const value = firstValue(query.engine);
   return (CALL_ENGINES as readonly string[]).includes(value ?? '')
     ? (value as DeepLinkCallEngine)
-    : 'auto';
+    : undefined;
+}
+
+/** An absent or unknown engine is `auto`, never a guessed one. */
+function callEngine(value: string | undefined): DeepLinkCallEngine {
+  return namedCallEngine({ engine: value }) ?? 'auto';
 }
 
 /** The first value of a repeated param, or undefined when the link carries none. */
