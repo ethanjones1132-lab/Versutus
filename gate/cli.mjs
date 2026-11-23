@@ -7,6 +7,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PairingStore } from './core/pairing.mjs';
 import { DeviceTokenStore } from './core/device-tokens.mjs';
+import { clampGrant } from './core/device-scopes.mjs';
 import { validateId, buildInstanceConfigTemplate, getKindTemplate, describeStartFailure, resolveStartPort, resolveStartHost, isLoopbackHost, startFailureExitCode, classifyBindHost, plaintextBindError, resolvePlaintextAck } from './core/cli-helpers.mjs';
 import { resolveGateHome } from './core/paths.mjs';
 import { ProviderStore } from './core/providers/store.mjs';
@@ -458,6 +459,32 @@ async function handleStart(args = []) {
 }
 
 /**
+ * The refusal line for a stored role this Gate does not know. Nothing is
+ * issued and the request stays where it is, so the operator can still read it:
+ * the wording says so instead of implying the request was used up. The role
+ * came from a phone, so it is quoted and escaped rather than pasted raw.
+ */
+function unknownRoleLine(role) {
+  const named = JSON.stringify(typeof role === 'string' ? role : String(role ?? ''));
+  return `Error: The Gate does not know the role ${named}, so no grant was issued and the request is still waiting. Have the phone request pairing again with a role this Gate knows, or deny it on the pair page.`;
+}
+
+/** The one line approval prints: the device, never the token. */
+function approvedLine(deviceId) {
+  return `Approved device ${deviceId}. The phone collects its token through its signed status request; none is printed here.`;
+}
+
+/**
+ * Say what the clamp removed, so a trimmed grant is never silent. Scope names
+ * are a phone's words too, so they are quoted and escaped.
+ */
+function droppedScopesNote(dropped) {
+  if (!Array.isArray(dropped) || dropped.length === 0) return '';
+  const named = dropped.map((scope) => JSON.stringify(String(scope))).join(', ');
+  return ` Dropped ${dropped.length} scope${dropped.length === 1 ? '' : 's'} this Gate does not know: ${named}.`;
+}
+
+/**
  * Handle 'pair' command: manage device pairing and tokens
  */
 async function handlePair(args) {
@@ -483,16 +510,35 @@ async function handlePair(args) {
       console.error('Error: Usage: node gate/cli.mjs pair approve <requestId>');
       process.exit(1);
     }
+    // A pending row is a phone's claim, not a grant. Judge the role before
+    // consuming the request, exactly as the /pair page does: `takePending` is
+    // what removes it, so an unknown role must be refused while the request is
+    // still on file, or a `pair list` the operator meant to act on goes empty.
+    const pending = (await pairing.listPending()).find((request) => request.requestId === requestId);
+    if (pending && !clampGrant(pending)) {
+      console.error(unknownRoleLine(pending.role));
+      process.exit(1);
+    }
     const entry = await pairing.takePending(requestId);
     if (!entry) {
       console.error(`Error: No pending request "${requestId}". Run "pair list" to see open requests.`);
       process.exit(1);
     }
+    // Issue only what the Gate knows, whatever the stored claim said: this file
+    // may have been written by an older Gate or a phone asking for more than it
+    // was offered. If the role changed in the moment between the check above
+    // and this clamp, the grant is still refused — the same window the page
+    // has, and the request is already gone either way.
+    const grant = clampGrant(entry);
+    if (!grant) {
+      console.error(unknownRoleLine(entry.role));
+      process.exit(1);
+    }
     // The token is issued for the phone, but it is never printed: stdout can
     // land in a log the operator does not control. The phone reads its token
     // from the signed status route, so approving only names the device here.
-    await deviceTokens.issue(entry.deviceId, { role: entry.role, scopes: entry.scopes });
-    console.log(`Approved device ${entry.deviceId}. The phone collects its token through its signed status request; none is printed here.`);
+    await deviceTokens.issue(entry.deviceId, { role: grant.role, scopes: grant.scopes });
+    console.log(`${approvedLine(entry.deviceId)}${droppedScopesNote(grant.dropped)}`);
     return;
   }
 

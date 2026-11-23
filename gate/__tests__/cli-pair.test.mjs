@@ -86,8 +86,12 @@ test('pair approve confirms the device without printing its token', async () => 
   assert.ok(!result.stderr.includes(issued), 'the issued token must never appear on stderr');
 });
 
+// A stored role the Gate does not know ('viewer', 'root', '') is not a grant
+// it may issue, so the round-trip case asks for the one role it does know:
+// `operator` (KNOWN_ROLES in core/device-scopes.mjs). The refused-role case is
+// pinned below.
 test('pair approve records the requested role and scopes and consumes the request', async () => {
-  const requestId = await addPending({ deviceId: 'phone-2', role: 'viewer', scopes: ['chat:read'] });
+  const requestId = await addPending({ deviceId: 'phone-2', role: 'operator', scopes: ['chat:read'] });
   const result = await runCli(['pair', 'approve', requestId]);
 
   assert.equal(result.code, 0, result.stderr);
@@ -95,12 +99,58 @@ test('pair approve records the requested role and scopes and consumes the reques
   const devices = await deviceStore().list();
   assert.equal(devices.length, 1);
   assert.equal(devices[0].deviceId, 'phone-2');
-  assert.equal(devices[0].role, 'viewer');
+  assert.equal(devices[0].role, 'operator');
   assert.deepEqual(devices[0].scopes, ['chat:read']);
   assert.equal(devices[0].revoked, false);
 
   const pending = await new PairingStore(join(cliRoot, '.pairing.json')).listPending();
   assert.equal(pending.length, 0, 'approving consumes the pending request');
+});
+
+test('pair approve issues only the scopes the Gate knows and says how many it dropped', async () => {
+  const requestId = await addPending({
+    deviceId: 'phone-trimmed',
+    scopes: ['chat:send', 'teleport:anywhere', 'chat:read', 'backups:manage'],
+  });
+  const result = await runCli(['pair', 'approve', requestId]);
+
+  assert.equal(result.code, 0, result.stderr);
+  const devices = await deviceStore().list();
+  assert.equal(devices.length, 1);
+  assert.deepEqual(
+    devices[0].scopes,
+    ['chat:send', 'chat:read'],
+    'only the scope names this Gate knows are written into the grant',
+  );
+  assert.match(result.stdout, /Dropped 2 scopes this Gate does not know/, 'a trimmed grant is never silent');
+  assert.match(result.stdout, /teleport:anywhere/);
+  assert.match(result.stdout, /backups:manage/);
+  assert.doesNotMatch(result.stdout, /Token:/);
+
+  const issued = devices[0].token;
+  assert.ok(typeof issued === 'string' && issued.length > 0, 'approving still issues a token');
+  assert.ok(!result.stdout.includes(issued), 'the issued token must never appear on stdout');
+  assert.equal(
+    (await new PairingStore(join(cliRoot, '.pairing.json')).listPending()).length,
+    0,
+    'a trimmed approval still consumes the request',
+  );
+});
+
+test('pair approve refuses a role the Gate does not know, issuing nothing and keeping the request', async () => {
+  const requestId = await addPending({ deviceId: 'phone-root', role: 'root', scopes: ['chat:send'] });
+  const result = await runCli(['pair', 'approve', requestId]);
+
+  assert.equal(result.code, 1, 'an unknown role is refused, not approved');
+  assert.equal(result.stdout, '', 'a refused approval prints no approval line');
+  assert.match(result.stderr, /does not know the role "root"/);
+  assert.match(result.stderr, /still waiting/, 'the refusal says the request was not used up');
+  assert.deepEqual(await deviceStore().list(), [], 'no grant rides a role this Gate does not know');
+
+  const pending = await new PairingStore(join(cliRoot, '.pairing.json')).listPending();
+  assert.equal(pending.length, 1, 'the request is still on file for the operator');
+  assert.equal(pending[0].requestId, requestId);
+  assert.equal(pending[0].role, 'root');
 });
 
 test('pair approve still explains a missing id and an unknown request', async () => {
