@@ -47,6 +47,7 @@ import {
   decisionCanReachGateway,
   isApprovalActionFor,
 } from '@/lib/notifications/approval-action';
+import { applyLaunchApproval } from '@/lib/notifications/approval-response';
 import { botReplyFromResponse, type BotReply } from '@/lib/notifications/bot-reply';
 import {
   BOT_MESSAGE_REPLY_ACTION_ID,
@@ -160,7 +161,7 @@ async function deliverBotReply(
   if (outcome === 'queued') void notifyBotReplyNotSent('queued');
 }
 
-function NotificationRouter() {
+export function NotificationRouter() {
   const router = useRouter();
   const {
     isBootstrapped,
@@ -423,7 +424,11 @@ function NotificationRouter() {
     // during boot (Expo v57 notifications docs, "Responding to a notification
     // tap"), and a routine notice is usually tapped exactly that way, so the
     // launch response is read — once; the read retires it — and routed
-    // through the same decision the live listener applies.
+    // through the same decision the live listener applies. The response carries
+    // the ACTION too, and a decision must not be dropped just because its tap
+    // started the process: applyLaunchApproval settles the approval the in-app
+    // sheet would have settled. 'decided' means the tap already did its work,
+    // so only the remaining cases hold a destination to route.
     if (!launchReadRef.current) {
       launchReadRef.current = true;
       const launch = readLaunchResponse();
@@ -432,11 +437,19 @@ function NotificationRouter() {
           identifier: launch.notification.request.identifier,
           at: Date.now(),
         };
-        pendingTapRef.current = destinationFor(launch.notification.request.content.data);
-        pendingRunFocusRef.current = runFocusFor(launch.notification.request.content.data);
-        pendingReplySessionRef.current = replyTapFromLaunch(launch) ?? replySessionFor(
-          launch.notification.request.content.data,
-        );
+        const launchApproval = applyLaunchApproval(launch, {
+          pending: approvalRef.current,
+          status: statusRef.current,
+          notifyDecided: notifyApprovalDecided,
+          notifyRefused: notifyApprovalRefused,
+        });
+        if (launchApproval !== 'decided') {
+          pendingTapRef.current = destinationFor(launch.notification.request.content.data);
+          pendingRunFocusRef.current = runFocusFor(launch.notification.request.content.data);
+          pendingReplySessionRef.current = replyTapFromLaunch(launch) ?? replySessionFor(
+            launch.notification.request.content.data,
+          );
+        }
       }
     }
 
