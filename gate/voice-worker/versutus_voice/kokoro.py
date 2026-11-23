@@ -223,6 +223,48 @@ def load_kokoro_speech(models_dir, config=None, *, ort=None, kokoro_cls=None, ch
     return adapter(*build_cpu())
 
 
+def build_kokoro_fixture(models_dir, *, ort=None, kokoro_cls=None):
+    """A Kokoro for the measurement fixtures, plus the providers that really ran.
+
+    The live loader above returns a chunked PCM adapter; the fixture harness needs
+    raw samples, so this repeats only its provider choice: pip's CUDA DLLs are
+    preloaded, CUDA is tried first, and the CPU session is used when the CUDA one
+    (or its EP) cannot initialize. ``providers`` is read back from the session that
+    was actually built, so a CPU-only measurement cannot be reported as CUDA.
+    """
+    models_dir = Path(models_dir)
+    model = models_dir / MODELS["full"]
+    voices = models_dir / "voices-v1.0.bin"
+    if not model.is_file() or not voices.is_file():
+        raise FileNotFoundError(f"Kokoro model/voices not found under {models_dir}")
+    if ort is None:
+        import onnxruntime as ort
+    if kokoro_cls is None:
+        from kokoro_onnx import Kokoro as kokoro_cls
+
+    def build(provider):
+        providers = [PROVIDERS[provider]]
+        if provider != "cpu":
+            providers.append(PROVIDERS["cpu"])
+        session = ort.InferenceSession(str(model), providers=providers)
+        active = session.get_providers()
+        if not active or active[0] != PROVIDERS[provider]:
+            raise RuntimeError(f"{PROVIDERS[provider]} did not initialize")
+        return kokoro_cls.from_session(session, str(voices)), active
+
+    if PROVIDERS["cuda"] in ort.get_available_providers():
+        try:
+            if hasattr(ort, "preload_dlls"):
+                ort.preload_dlls(directory="")
+        except Exception:
+            pass  # CUDA may still load from PATH or an earlier preload
+        try:
+            return build("cuda")
+        except Exception:
+            pass  # e.g. a venv whose nvinfer/cudnn DLLs are not on PATH
+    return build("cpu")
+
+
 def last_tts_latency(models_dir, config):
     try:
         sample = json.loads((Path(models_dir).parent / "tts-latency.json").read_text(encoding="utf-8"))
