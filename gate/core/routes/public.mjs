@@ -1,3 +1,5 @@
+import { clampGrant } from '../device-scopes.mjs';
+
 // The unauthenticated access endpoint gets a tight body cap: anyone who can
 // reach the port can POST to it, and a signed access request is a few hundred
 // bytes. Authenticated routes keep their own, generous cap in server.mjs.
@@ -99,13 +101,25 @@ export async function handlePublicRoute({
       return true;
     }
 
-    const role = body.role ?? 'operator';
-    const scopes = Array.isArray(body.scopes) ? body.scopes : [];
+    // The signed body says what the phone wants; it does not decide what it
+    // gets. The Gate writes into the grant only names from its own tables —
+    // the route/RPC scopes in server.mjs — so an unknown scope is dropped and
+    // an unknown role is refused outright. The request is still checked as
+    // signed above, unchanged.
+    const grant = clampGrant({
+      role: body.role ?? 'operator',
+      scopes: Array.isArray(body.scopes) ? body.scopes : [],
+    });
+    if (!grant) {
+      res.writeHead(403);
+      res.end(JSON.stringify({ status: 'denied', reason: 'The access request names a role this Gate does not know.' }));
+      return true;
+    }
 
     if (await pairing.isWindowOpen()) {
-      const grantedToken = await deviceTokens.issue(device.id, { role, scopes });
+      const grantedToken = await deviceTokens.issue(device.id, { role: grant.role, scopes: grant.scopes });
       res.writeHead(200);
-      res.end(JSON.stringify({ status: 'granted', token: grantedToken, role, scopes }));
+      res.end(JSON.stringify({ status: 'granted', token: grantedToken, role: grant.role, scopes: grant.scopes }));
       return true;
     }
 
@@ -115,8 +129,8 @@ export async function handlePublicRoute({
       clientId: device.clientId,
       name: device.name ?? body.client?.name,
       model: device.model ?? body.client?.model,
-      role,
-      scopes,
+      role: grant.role,
+      scopes: grant.scopes,
     });
     console.log(`pairing: a phone is asking to connect - approve it at http://localhost:${port}/pair`);
     res.writeHead(202);

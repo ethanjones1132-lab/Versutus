@@ -87,6 +87,44 @@ async function addRequest(pairing, deviceId = 'phone-12345678') {
   });
 }
 
+// Every scope a fresh Versutus pairing asks for: the acting scopes from the
+// Gate's DEVICE_ACT_SCOPES/DEVICE_RPC_SCOPES tables plus the two read scopes.
+const ALL_KNOWN_SCOPES = [
+  'chat:send', 'chat:read', 'runs:start', 'runs:read', 'terminal:use', 'sessions:manage',
+  'providers:manage', 'environments:manage', 'routines:manage', 'capabilities:manage',
+  'devices:manage', 'voice:manage', 'bots:manage',
+];
+
+function accessBody(overrides = {}) {
+  return {
+    device: { id: 'phone-window', publicKey: 'phone-key', clientId: 'versutus-mobile' },
+    signature: 'signature',
+    signedAtMs: Date.now(),
+    role: 'operator',
+    scopes: ['chat:send'],
+    ...overrides,
+  };
+}
+
+async function access(state, body) {
+  let status;
+  let payload;
+  await handlePublicRoute({
+    req: { url: '/.well-known/gateway/access', headers: {} },
+    res: {
+      writeHead(code) { status = code; },
+      end(value) { payload = value; },
+    },
+    pathname: '/.well-known/gateway/access',
+    method: 'POST',
+    pairing: state.pairing,
+    deviceTokens: state.deviceTokens,
+    verifySignedAccessRequest: () => ({ ok: true }),
+    readJsonBody: async () => body,
+  });
+  return { status, body: JSON.parse(payload) };
+}
+
 test('loopback GET lists a pending phone without exposing credentials or tokens', async () => {
   const state = await fixture();
   await addRequest(state.pairing);
@@ -227,4 +265,131 @@ test('same-origin checks reject cross-site POSTs even when the token is valid', 
 
   assert.equal(denied.statusCode, 403);
   assert.equal((await state.pairing.listPending()).length, 1);
+});
+
+test('a pending row shows the role, a count and every scope, and Approve issues exactly the clamped set', async () => {
+  const state = await fixture();
+  const requestId = await state.pairing.addPending({
+    deviceId: 'phone-full',
+    publicKeyB64Url: 'public-key-must-not-render',
+    clientId: 'versutus-mobile',
+    name: 'Ethan’s phone',
+    model: 'Pixel',
+    role: 'operator',
+    scopes: [...ALL_KNOWN_SCOPES, 'root:everything'],
+  });
+
+  const page = await getPage(state);
+  // The count carries the breadth in one phrase, before the list.
+  assert.match(page.body, /13 scopes — full operator/);
+  for (const scope of ALL_KNOWN_SCOPES) {
+    assert.ok(page.body.includes(scope), `the row must name ${scope}`);
+  }
+  // Acting scopes carry the plain words of the Gate's own tables.
+  assert.match(page.body, /open a shell/);
+  assert.match(page.body, /send a chat turn/);
+  assert.match(page.body, /revoke a paired device/);
+  // The unknown scope is trimmed, not rendered, and the row says so.
+  assert.doesNotMatch(page.body, /root:everything/);
+  assert.match(page.body, /trimmed/i);
+
+  const approved = await post(
+    state,
+    'approve',
+    new URLSearchParams({ csrf: csrf(page), requestId }).toString(),
+    { origin: 'http://localhost:8760' },
+  );
+  assert.equal(approved.statusCode, 303);
+  const grants = await state.deviceTokens.list();
+  assert.equal(grants.length, 1);
+  assert.equal(grants[0].role, 'operator');
+  assert.deepEqual(grants[0].scopes, ALL_KNOWN_SCOPES);
+});
+
+test('a role the Gate does not know is refused at approve, and the request stays for the operator', async () => {
+  const state = await fixture();
+  const rootId = await state.pairing.addPending({
+    deviceId: 'phone-root', publicKeyB64Url: 'key', clientId: 'versutus-mobile', role: 'root', scopes: ['chat:send'],
+  });
+  const emptyId = await state.pairing.addPending({
+    deviceId: 'phone-empty-role', publicKeyB64Url: 'key', clientId: 'versutus-mobile', role: '', scopes: [],
+  });
+
+  const page = await getPage(state);
+  assert.match(page.body, /does not know this role/i);
+  assert.match(page.body, /Approve will refuse/);
+
+  const token = csrf(page);
+  for (const requestId of [rootId, emptyId]) {
+    const refused = await post(
+      state,
+      'approve',
+      new URLSearchParams({ csrf: token, requestId }).toString(),
+      { origin: 'http://localhost:8760' },
+    );
+    assert.equal(refused.statusCode, 403, requestId);
+  }
+  assert.deepEqual(await state.deviceTokens.list(), []);
+  assert.equal((await state.pairing.listPending()).length, 2, 'a refused approve must not consume the request');
+});
+
+test('the open-window grant is clamped at the Gate and refuses an unknown role', async () => {
+  const state = await fixture();
+  await state.pairing.openWindow(60_000);
+
+  const granted = await access(state, accessBody({ scopes: [...ALL_KNOWN_SCOPES, 'root:everything'] }));
+  assert.equal(granted.status, 200);
+  assert.equal(granted.body.status, 'granted');
+  assert.equal(granted.body.role, 'operator');
+  assert.deepEqual(granted.body.scopes, ALL_KNOWN_SCOPES);
+  const grants = await state.deviceTokens.list();
+  assert.equal(grants.length, 1);
+  assert.deepEqual(grants[0].scopes, ALL_KNOWN_SCOPES);
+
+  const deduped = await access(state, accessBody({
+    device: { id: 'phone-dupes', publicKey: 'phone-key', clientId: 'versutus-mobile' },
+    scopes: ['runs:read', 'chat:send', 'runs:read'],
+  }));
+  assert.equal(deduped.status, 200);
+  assert.deepEqual(deduped.body.scopes, ['runs:read', 'chat:send'], 'order is kept and duplicates collapse');
+
+  for (const role of ['root', '']) {
+    const refused = await access(state, accessBody({
+      device: { id: `phone-${role || 'empty'}`, publicKey: 'phone-key', clientId: 'versutus-mobile' },
+      role,
+      scopes: ['chat:send'],
+    }));
+    assert.equal(refused.status, 403);
+    assert.equal(refused.body.status, 'denied');
+  }
+  assert.equal((await state.deviceTokens.list()).length, 2, 'no grant rides an unknown role');
+});
+
+test('a closed-window request is queued clamped, and one that asked for nothing grants nothing', async () => {
+  const state = await fixture();
+
+  const queued = await access(state, accessBody({ scopes: [...ALL_KNOWN_SCOPES, 'root:everything'] }));
+  assert.equal(queued.status, 202);
+  const [pending] = await state.pairing.listPending();
+  assert.equal(pending.role, 'operator');
+  assert.deepEqual(pending.scopes, ALL_KNOWN_SCOPES);
+
+  const nothing = await access(state, accessBody({
+    device: { id: 'phone-nothing', publicKey: 'phone-key', clientId: 'versutus-mobile' },
+    scopes: [],
+  }));
+  assert.equal(nothing.status, 202);
+  const emptyPending = (await state.pairing.listPending()).find((entry) => entry.deviceId === 'phone-nothing');
+  assert.deepEqual(emptyPending.scopes, [], 'asking for nothing stays a grant of nothing');
+
+  const page = await getPage(state);
+  const approved = await post(
+    state,
+    'approve',
+    new URLSearchParams({ csrf: csrf(page), requestId: nothing.body.requestId }).toString(),
+    { origin: 'http://localhost:8760' },
+  );
+  assert.equal(approved.statusCode, 303);
+  const grant = (await state.deviceTokens.list()).find((entry) => entry.deviceId === 'phone-nothing');
+  assert.deepEqual(grant.scopes, []);
 });
