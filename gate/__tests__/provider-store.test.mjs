@@ -1,10 +1,11 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { ProviderStore } from '../core/providers/store.mjs';
+import { ProviderService } from '../core/providers/service.mjs';
 
 const roots = [];
 
@@ -96,7 +97,48 @@ test('a legacy record with no id field is given the id it was addressed by', asy
   assert.equal(listed[0].config.id, 'my-openai');
 });
 
-test('an explicit id in the record always wins over the filename', async () => {
+// The body of a record is untrusted input: a hand-edited file, or a copy of
+// another provider's record, can claim any `id`. The filename is what `get` was
+// addressed by and what `put` writes back to, so believing the body let the copy
+// be read under `zen` and then committed over `openai.json`.
+test('a copied record is read and written under the filename id it lives in', async () => {
+  const gateHome = await tempHome();
+  const configDir = join(gateHome, 'config', 'providers');
+  await mkdir(configDir, { recursive: true });
+
+  const canonical = sample('openai').config;
+  const canonicalBody = JSON.stringify(canonical, null, 2) + '\n';
+  await writeFile(join(configDir, 'openai.json'), canonicalBody, 'utf8');
+  await writeFile(
+    join(configDir, 'zen.json'),
+    JSON.stringify({ ...canonical, label: 'Copied' }),
+    'utf8',
+  );
+
+  const store = new ProviderStore(gateHome);
+  const record = await store.get('zen');
+  assert.equal(record.config.id, 'zen', 'the filename is the canonical id');
+  assert.equal(record.config.label, 'Copied', 'the rest of the stored record is kept');
+
+  // Two files, two ids: the copy must not be reported as the provider it names.
+  const listed = await store.list();
+  assert.deepEqual(listed.map((entry) => entry.config.id), ['openai', 'zen']);
+
+  // A commit through the service writes back to the file the record was read
+  // from, never to the file named by the id in its body.
+  const service = new ProviderService({ store });
+  await service.noteCredentialSet('zen');
+  assert.equal(
+    await readFile(join(configDir, 'openai.json'), 'utf8'),
+    canonicalBody,
+    'the commit rewrote the original provider from the copied record',
+  );
+  const rewritten = JSON.parse(await readFile(join(configDir, 'zen.json'), 'utf8'));
+  assert.equal(rewritten.id, 'zen');
+  assert.equal(rewritten.label, 'Copied');
+});
+
+test('an explicit id in the record never overrides the filename', async () => {
   const gateHome = await tempHome();
   await mkdir(join(gateHome, 'config', 'providers'), { recursive: true });
   await writeFile(
@@ -106,7 +148,8 @@ test('an explicit id in the record always wins over the filename', async () => {
   );
 
   const record = await new ProviderStore(gateHome).get('on-disk-name');
-  assert.equal(record.config.id, 'declared-id');
+  assert.equal(record.config.id, 'on-disk-name');
+  assert.equal(record.config.label, 'X');
 });
 
 test('legacy and v2 records sort together without throwing', async () => {

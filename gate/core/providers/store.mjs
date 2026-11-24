@@ -110,12 +110,15 @@ export class ProviderStore {
     const registration = await readRecord(join(this.configDir, `${id}.json`));
     if (registration.state !== 'ok') return null;
     // The filename is the canonical id -- it is what `get` is addressed by, and
-    // what `list` derives before reading. Legacy v1 records carry no `id` field
-    // at all, and a record that does not know its own id reaches the manifest
-    // as `{ id: undefined }` and takes the whole Gate down on the first sort.
-    const config = typeof registration.value.id !== 'string' || !registration.value.id
-      ? { ...registration.value, id }
-      : registration.value;
+    // what `put` and `list` derive before reading or writing. The stored body is
+    // not trusted to agree: a hand-edited or copied record can claim any id, and
+    // believing it let that record be read under one name and then committed
+    // over a different file, leaving the original behind and the roster
+    // reporting one id twice. Legacy v1 records carry no `id` field at all, and
+    // a record that does not know its own id reaches the manifest as
+    // `{ id: undefined }` and takes the whole Gate down on the first sort -- so
+    // the filename always wins, present or not.
+    const config = { ...registration.value, id };
     // sanitized state is optional until the first check/refresh. It is read
     // through the same reader, because a state file caught mid-replace would
     // otherwise read as a live provider that suddenly claims to be legacy.

@@ -78,6 +78,16 @@ export function createProviderRpc({ service, vault, oauth, onChanged }) {
     // an immediate `check`) reads "Not configured" / "Set key" for a provider
     // that now has a working key, and keeps the old failure backoff on top.
     'providers.auth.setApiKey': async ({ id, value } = {}) => statusAndReload(async () => {
+      // A key is a non-empty string. `vault.set` refuses `undefined`/`null`, but
+      // `String(value)` turns a number into a "credential" and accepts an empty
+      // or whitespace-only string, so the presence check then reports a key that
+      // no vendor will ever accept -- the same lie the null refusal was added to
+      // stop. Refuse the input here, before the vault or the record is touched.
+      if (typeof value !== 'string' || value.trim() === '') {
+        const error = new Error('a provider API key must be a non-empty string');
+        error.code = 'credential_value_invalid';
+        throw error;
+      }
       const snapshot = await service.get(id);
       if (snapshot.mode !== 'api_key') {
         throw new Error('provider is not in api_key mode');
