@@ -79,17 +79,24 @@ describe('tab pull-to-refresh failure is surfaced', () => {
 
   test('the Runs notice renders below the title row and above the start card', () => {
     const src = readRuns();
-    const titleAt = src.indexOf('title="Runs"');
+    const headerAt = src.indexOf('<AppHeader');
+    const listAt = src.lastIndexOf('<FlatList');
+    const listHeaderAt = src.indexOf('const listHeader');
     const errorAt = src.indexOf('refreshError ? (');
     const startAt = src.indexOf('styles.startCard');
-    expect(titleAt).toBeGreaterThanOrEqual(0);
-    expect(errorAt).toBeGreaterThan(titleAt);
+    // The page header owns the title above the list (the title moves out of
+    // the list's header so it no longer scrolls), and the notice stays inside
+    // that list header, above the start card.
+    expect(headerAt).toBeGreaterThanOrEqual(0);
+    expect(listAt).toBeGreaterThan(headerAt);
+    expect(listHeaderAt).toBeGreaterThanOrEqual(0);
+    expect(errorAt).toBeGreaterThan(listHeaderAt);
     expect(startAt).toBeGreaterThan(errorAt);
   });
 
-  test('the Home notice renders below the ScreenHeader and above the dashboard', () => {
+  test('the Home notice renders below the header and above the dashboard', () => {
     const src = readHome();
-    const headerAt = src.indexOf('<ScreenHeader');
+    const headerAt = src.indexOf('<AppHeader');
     const errorAt = src.indexOf('refreshError ? (');
     const dashAt = src.indexOf('<GatewayHomeDashboard');
     expect(headerAt).toBeGreaterThanOrEqual(0);

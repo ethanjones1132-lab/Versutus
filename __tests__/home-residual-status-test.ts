@@ -28,7 +28,7 @@ function dashboard(): string {
 describe('Home is a residual status strip, not a command center', () => {
   test('the header no longer brands Command center', () => {
     expect(home()).not.toContain('Command center');
-    expect(home()).toContain('<PageTitle');
+    expect(home()).toContain('<AppHeader');
     expect(home()).toContain('title="Home"');
     expect(home()).toContain("'Connect your PC'");
   });

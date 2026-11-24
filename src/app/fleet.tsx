@@ -4,10 +4,11 @@ import { ScrollView, StyleSheet } from 'react-native';
 
 import { ConstellationView } from '@/components/fleet/constellation-view';
 import { FleetBotSheet } from '@/components/fleet/bot-sheet';
-import { Icon, PageTitle, PressableScale, Screen, Text } from '@/components/ui';
+import { AppHeader, Icon, PressableScale, Screen, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useGatewayReachability } from '@/hooks/use-gateway-reachability';
+import { useHeaderScrolled } from '@/hooks/use-header-scrolled';
 import { connectionErrorShown } from '@/lib/connection/stale-error';
 import type { PublicBot } from '@/lib/gateway/bots';
 import { botTap } from '@/lib/fleet/bot-tap';
@@ -71,6 +72,7 @@ export default function FleetScreen() {
     connectGateway,
   } = useGateway();
   const reachability = useGatewayReachability({ gateways, activeGateway, status });
+  const { scrolled, onScroll } = useHeaderScrolled();
   const [rosterRead, setRosterRead] = useState(UNREPORTED_ROSTER);
   const rosterRequest = useMemo(
     () => ({ gatewayId: activeGateway?.id, status, listBots }),
@@ -344,29 +346,31 @@ export default function FleetScreen() {
 
   return (
     <Screen>
-      <ScrollView contentContainerStyle={styles.content}>
-        <PageTitle
-          title="Fleet"
-          leading={
-            <PressableScale
-              onPress={() => (router.canGoBack() ? router.back() : router.replace('/home'))}
-              hitSlop={10}
-              accessibilityRole="button"
-              accessibilityLabel="Back to Gate">
-              <Icon
-                name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }}
-                size={20}
-                color="textPrimary"
-              />
-            </PressableScale>
-          }
-          status={
-            <Text variant="caption" color="secondary">
-              The gateways this device knows, and the Bots on the one it is connected to. A saved
-              gateway is dimmed and dated; only the connected one is live.
-            </Text>
-          }
-        />
+      <AppHeader
+        variant="page"
+        title="Fleet"
+        leading={
+          <PressableScale
+            onPress={() => (router.canGoBack() ? router.back() : router.replace('/home'))}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Back to Gate">
+            <Icon
+              name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }}
+              size={20}
+              color="textPrimary"
+            />
+          </PressableScale>
+        }
+        scrolled={scrolled}
+        status={
+          <Text variant="caption" color="secondary">
+            The gateways this device knows, and the Bots on the one it is connected to. A saved
+            gateway is dimmed and dated; only the connected one is live.
+          </Text>
+        }
+      />
+      <ScrollView contentContainerStyle={styles.content} onScroll={onScroll} scrollEventThrottle={16}>
         {noticeMessage ? (
           <Text variant="caption" color="statusDisconnected">
             {noticeMessage}

@@ -7,9 +7,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RoutinesSection } from '@/components/activity/routines-section';
 import { TodaySection } from '@/components/activity/today-section';
 import { PulsingDot } from '@/components/connection-badge';
-import { ErrorCard, PageTitle, Screen, SegmentedControl, Text } from '@/components/ui';
+import { AppHeader, ErrorCard, Screen, SegmentedControl, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { useHeaderScrolled } from '@/hooks/use-header-scrolled';
 import { useTokens } from '@/hooks/use-tokens';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
@@ -35,7 +36,8 @@ export default function ActivityScreen() {
   // own signal so filing a job from the form there re-reads the feed it shows.
   const [routinesReloadSignal, setRoutinesReloadSignal] = useState(0);
   const [activityView, setActivityView] = useState<'today' | 'routines'>('today');
-  const { parallaxY, onScroll } = useAmbientParallaxScroll();
+  const ambient = useAmbientParallaxScroll();
+  const { scrolled, onScroll } = useHeaderScrolled(ambient.onScroll);
   const insets = useSafeAreaInsets();
   // Any run on Activity opens Runs *on that run*: the same door a run
   // notice uses, so Runs finds it, scrolls to it and lights its edge.
@@ -67,7 +69,27 @@ export default function ActivityScreen() {
   };
 
   return (
-    <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })} parallaxY={parallaxY}>
+    <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })} parallaxY={ambient.parallaxY}>
+      <AppHeader
+        variant="page"
+        title="Activity"
+        inset={Spacing.four - 4}
+        leading={<DrawerMenuButton />}
+        scrolled={scrolled}
+        status={
+          <>
+            <PulsingDot
+              color={status === 'connected' ? tokens.statusConnected : tokens.textTertiary}
+              active={status === 'connecting' || status === 'reconnecting'}
+            />
+            <Text variant="caption" color="secondary">
+              {status === 'connected'
+                ? `Live${activeGateway ? ` · ${activeGateway.name}` : ''}`
+                : 'Offline — showing what this phone last saw'}
+            </Text>
+          </>
+        }
+      />
       <ScrollView
         style={styles.list}
         contentContainerStyle={[
@@ -88,24 +110,6 @@ export default function ActivityScreen() {
 
         }>
         <View style={styles.header}>
-          <PageTitle
-            title="Activity"
-            leading={<DrawerMenuButton />}
-            status={
-              <>
-                <PulsingDot
-                  color={status === 'connected' ? tokens.statusConnected : tokens.textTertiary}
-                  active={status === 'connecting' || status === 'reconnecting'}
-                />
-                <Text variant="caption" color="secondary">
-                  {status === 'connected'
-                    ? `Live${activeGateway ? ` · ${activeGateway.name}` : ''}`
-                    : 'Offline — showing what this phone last saw'}
-                </Text>
-              </>
-            }
-          />
-
           <SegmentedControl
             options={[{ key: 'today', label: 'Today' }, { key: 'routines', label: 'Routines' }]}
             selectedKey={activityView}

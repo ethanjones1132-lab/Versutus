@@ -42,27 +42,28 @@ function countTitles(src: string): number {
 
 describe('named screens carry exactly one title-level heading in their own body', () => {
   test('Activity', () => {
-    // Activity opens on the shared large title (PageTitle), the one heading
+    // Activity opens on the shared header (AppHeader page), the one heading
     // above its sections; no card inside it is promoted to a title.
     const src = activityScreen();
     expect(countTitles(src)).toBe(0);
-    expect((src.match(/<PageTitle/g) ?? []).length).toBe(1);
+    expect((src.match(/<AppHeader/g) ?? []).length).toBe(1);
     expect(src).toContain('title="Activity"');
   });
 
   test('Runs', () => {
-    // Runs opens as Activity does: the shared large title, and nothing inside
+    // Runs opens as Activity does: the shared page header, and nothing inside
     // it promoted to a second title.
     const src = runsScreen();
     expect(countTitles(src)).toBe(0);
-    expect((src.match(/<PageTitle/g) ?? []).length).toBe(1);
+    expect((src.match(/<AppHeader/g) ?? []).length).toBe(1);
     expect(src).toContain('title="Runs"');
   });
 
   test('Capabilities', () => {
     const src = capabilitiesScreen();
-    expect(countTitles(src)).toBe(1);
-    expect(src).toContain('<Text variant="title">Capabilities</Text>');
+    expect(countTitles(src)).toBe(0);
+    expect((src.match(/<AppHeader/g) ?? []).length).toBe(1);
+    expect(src).toContain('title="Capabilities"');
   });
 });
 
@@ -138,8 +139,9 @@ describe('Gate setup child card headings sit at headline under the one screen ti
 
   test('setup keeps one screen title and still mounts its three child cards', () => {
     const setup = readSource('src', 'app', 'gateway', 'setup.tsx');
-    expect(countTitles(setup)).toBe(1);
-    expect(setup).toContain('<Text variant="title">Gate setup</Text>');
+    expect(countTitles(setup)).toBe(0);
+    expect((setup.match(/<AppHeader/g) ?? []).length).toBe(1);
+    expect(setup).toContain('title="Gate setup"');
     expect(setup).toContain('<GatewayIdentitySection />');
     expect(setup).toContain('<ProvidersSection />');
     expect(setup).toContain('<EnvironmentsSection />');

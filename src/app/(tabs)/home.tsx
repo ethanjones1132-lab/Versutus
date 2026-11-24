@@ -5,9 +5,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { GatewayHomeDashboard } from '@/components/gateway/gateway-home-dashboard';
 import { DrawerMenuButton } from '@/components/nav/drawer-menu-button';
-import { ErrorCard, PageTitle, Screen, ScreenHeader, Text } from '@/components/ui';
+import { AppHeader, ErrorCard, Screen, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { useHeaderScrolled } from '@/hooks/use-header-scrolled';
 import { useTokens } from '@/hooks/use-tokens';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
@@ -22,7 +23,8 @@ export default function HomeScreen() {
   // A refused refresh read is named below the header instead of ending the
   // spinner as if the pull succeeded; cleared by the next success.
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  const { parallaxY, onScroll } = useAmbientParallaxScroll();
+  const ambient = useAmbientParallaxScroll();
+  const { scrolled, onScroll } = useHeaderScrolled(ambient.onScroll);
   const insets = useSafeAreaInsets();
 
   // The digest reads lastSeenAt when the operator NEXT arrives, so leaving
@@ -68,11 +70,27 @@ export default function HomeScreen() {
   return (
     <Screen
       edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })}
-      parallaxY={parallaxY}>
-      <ScreenHeader
+      parallaxY={ambient.parallaxY}>
+      <AppHeader
+        variant="page"
+        title="Home"
+        inset={Spacing.four - 4}
         leading={<DrawerMenuButton />}
-        title=""
         onTrailingPress={() => router.push('/gateway/settings')}
+        scrolled={scrolled}
+        status={
+          <Text variant="caption" color="secondary">
+            {gateways.length === 0
+              ? 'Connect your PC'
+              : status === 'connected'
+                ? 'Connected'
+                : status === 'connecting' || status === 'reconnecting'
+                  ? 'Connecting'
+                  : status === 'pairing'
+                    ? 'Approve this device'
+                    : 'Offline'}
+          </Text>
+        }
       />
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: tabContentPaddingBottom({ platform: Platform.OS, insetBottom: insets.bottom }) }]}
@@ -87,22 +105,6 @@ export default function HomeScreen() {
             progressBackgroundColor={tokens.backgroundElevated}
           />
         }>
-        <PageTitle
-          title="Home"
-          status={
-            <Text variant="caption" color="secondary">
-              {gateways.length === 0
-                ? 'Connect your PC'
-                : status === 'connected'
-                  ? 'Connected'
-                  : status === 'connecting' || status === 'reconnecting'
-                    ? 'Connecting'
-                    : status === 'pairing'
-                      ? 'Approve this device'
-                      : 'Offline'}
-            </Text>
-          }
-        />
         {refreshError ? (
           <ErrorCard
             cause={refreshError}

@@ -174,6 +174,10 @@ describe('the diagnostics screen shows the log the app kept', () => {
     expect(src.indexOf('Recent failures')).toBeGreaterThan(src.indexOf('Runtime environment'));
     // The existing section headings stay at headline — one screen title only.
     expect(src).toContain('<Text variant="headline">Recent failures</Text>');
-    expect((src.match(/variant="title"/g) ?? []).length).toBe(1);
+    // The one screen title is the AppHeader's, so no body Text carries the
+    // title variant any more; the section headings stay at headline.
+    expect((src.match(/variant="title"/g) ?? []).length).toBe(0);
+    expect((src.match(/<AppHeader/g) ?? []).length).toBe(1);
+    expect(src).toContain('title="Runtime environment"');
   });
 });

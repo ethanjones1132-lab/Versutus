@@ -1,3 +1,5 @@
+export { AppHeader } from './AppHeader';
+export type { AppHeaderProps, AppHeaderVariant } from './AppHeader';
 export { Badge } from './Badge';
 export { BaseSheet } from './BaseSheet';
 export { Button } from './Button';

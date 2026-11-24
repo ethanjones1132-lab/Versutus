@@ -1,9 +1,11 @@
+import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { Badge, Button, Card, Screen, Text } from '@/components/ui';
+import { AppHeader, Badge, Button, Card, Icon, PressableScale, Screen, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { useHeaderScrolled } from '@/hooks/use-header-scrolled';
 import {
   clearFailures,
   loadFailures,
@@ -26,6 +28,8 @@ import {
  * living under `src/app/dev/`, which redirects away outside __DEV__.
  */
 export default function GatewayDiagnosticsScreen() {
+  const router = useRouter();
+  const { scrolled, onScroll } = useHeaderScrolled();
   const { activeGateway } = useGateway();
   const [liveCheck, setLiveCheck] = useState<EnvironmentCheck | null>(null);
   const [running, setRunning] = useState(false);
@@ -88,9 +92,26 @@ export default function GatewayDiagnosticsScreen() {
 
   return (
     <Screen>
-      <ScrollView contentContainerStyle={styles.content}>
+      <AppHeader
+        variant="compact"
+        title="Runtime environment"
+        leading={
+          <PressableScale
+            onPress={() => (router.canGoBack() ? router.back() : router.replace('/gateway/settings'))}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Back to settings">
+            <Icon
+              name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }}
+              size={20}
+              color="textPrimary"
+            />
+          </PressableScale>
+        }
+        scrolled={scrolled}
+      />
+      <ScrollView contentContainerStyle={styles.content} onScroll={onScroll} scrollEventThrottle={16}>
         <Card variant="hero" padding={Spacing.three} style={styles.card}>
-          <Text variant="title">Runtime environment</Text>
           <Text variant="body" color="secondary" style={styles.blurb}>
             What this build&apos;s JavaScript engine provides. Tests run in Node, where
             all of this exists — only the device can answer for the device.

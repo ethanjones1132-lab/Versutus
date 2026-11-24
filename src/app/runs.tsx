@@ -12,9 +12,10 @@ import { AgenticRunSheet } from '@/components/activity/agentic-run-sheet';
 import { PulsingDot } from '@/components/connection-badge';
 import { RunCard } from '@/components/activity/run-card';
 import { ScorecardsSection } from '@/components/activity/scorecards-section';
-import { Button, Card, EmptyState, ErrorCard, Icon, PageTitle, PressableScale, Screen, Text, TextField } from '@/components/ui';
+import { AppHeader, Button, Card, EmptyState, ErrorCard, Icon, PressableScale, Screen, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { useHeaderScrolled } from '@/hooks/use-header-scrolled';
 import { useNow } from '@/hooks/use-now';
 import { useTokens } from '@/hooks/use-tokens';
 import { filterRunsByBot, type ScorecardFilter } from '@/lib/fleet/scorecard';
@@ -136,7 +137,8 @@ export default function RunsScreen() {
   // null for no filter. Null is the default and passes the provider's list
   // through untouched, so the destination opens exactly as the tab did before.
   const [scorecardFilter, setScorecardFilter] = useState<ScorecardFilter>(null);
-  const { parallaxY, onScroll } = useAmbientParallaxScroll();
+  const ambient = useAmbientParallaxScroll();
+  const { scrolled, onScroll } = useHeaderScrolled(ambient.onScroll);
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const now = useNow(60_000);
@@ -639,36 +641,9 @@ export default function RunsScreen() {
 
   const listHeader = (
     <View style={styles.header}>
-      {/* Runs opens the way Activity does — the serif title in the lamp's
-          light, one status line, and the same day as a ribbon of light — so it
-          reads as Activity, opened out, not a different screen. */}
-      <PageTitle
-        title="Runs"
-        leading={
-          <PressableScale
-            onPress={() => (router.canGoBack() ? router.back() : router.replace('/activity'))}
-            hitSlop={10}
-            accessibilityRole="button"
-            accessibilityLabel="Back to Activity"
-            style={styles.back}>
-            <Icon name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }} size={20} color="textPrimary" />
-          </PressableScale>
-        }
-        status={
-          <>
-            <PulsingDot
-              color={status === 'connected' ? tokens.statusConnected : tokens.textTertiary}
-              active={status === 'connecting' || status === 'reconnecting'}
-            />
-            <Text variant="caption" color="secondary">
-              {status === 'connected'
-                ? `Live${activeRuns.length > 0 ? ` · ${activeRuns.length} in flight` : ''}`
-                : 'Offline — showing what this phone last saw'}
-            </Text>
-          </>
-        }
-      />
-
+      {/* Runs' title is the page header above the list; the ribbon of light
+          and the day's glance stay with the content, so they scroll while the
+          title keeps its place. */}
       <ActivityGlance
         pendingApprovals={pendingApprovals.length}
         runs={activityRunsForActiveGateway}
@@ -811,7 +786,36 @@ export default function RunsScreen() {
   );
 
   return (
-    <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })} parallaxY={parallaxY}>
+    <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })} parallaxY={ambient.parallaxY}>
+      <AppHeader
+        variant="page"
+        title="Runs"
+        inset={Spacing.four - 4}
+        leading={
+          <PressableScale
+            onPress={() => (router.canGoBack() ? router.back() : router.replace('/activity'))}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Back to Activity"
+            style={styles.back}>
+            <Icon name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }} size={20} color="textPrimary" />
+          </PressableScale>
+        }
+        scrolled={scrolled}
+        status={
+          <>
+            <PulsingDot
+              color={status === 'connected' ? tokens.statusConnected : tokens.textTertiary}
+              active={status === 'connecting' || status === 'reconnecting'}
+            />
+            <Text variant="caption" color="secondary">
+              {status === 'connected'
+                ? `Live${activeRuns.length > 0 ? ` · ${activeRuns.length} in flight` : ''}`
+                : 'Offline — showing what this phone last saw'}
+            </Text>
+          </>
+        }
+      />
       <FlatList
         ref={listRef}
         data={listData}

@@ -13,6 +13,7 @@ jest.mock('@/components/fleet/bot-sheet', () => ({ FleetBotSheet: 'FleetBotSheet
 jest.mock('@/components/ui', () => ({
   Screen: 'Screen',
   Text: 'Text',
+  AppHeader: 'AppHeader',
   PageTitle: 'PageTitle',
   PressableScale: 'PressableScale',
   Icon: 'Icon',

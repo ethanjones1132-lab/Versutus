@@ -777,20 +777,17 @@ export default function RootLayout() {
                     name="gateway/setup"
                     options={{
                       presentation: 'modal',
-                      headerShown: true,
-                      title: 'Gate setup',
-                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                      headerTintColor: VersutusDarkTheme.colors.text,
+                      // One title area: the page draws its own header, so the
+                      // native modal header no longer repeats "Gate setup".
+                      headerShown: false,
                     }}
                   />
                   <Stack.Screen
                     name="gateway/capabilities"
                     options={{
                       presentation: 'modal',
-                      headerShown: true,
-                      title: 'Capabilities',
-                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                      headerTintColor: VersutusDarkTheme.colors.text,
+                      // Same rule: the page's compact header owns the title.
+                      headerShown: false,
                     }}
                   />
                   <Stack.Screen

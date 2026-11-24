@@ -16,13 +16,26 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   multiRemove: jest.fn(async () => undefined),
 }));
 
-jest.mock('@/components/ui', () => ({
-  Screen: 'Screen',
-  Card: 'Card',
-  Badge: 'Badge',
-  Button: 'Button',
-  Text: 'Text',
+jest.mock('expo-router', () => ({
+  useRouter: () => ({ back: jest.fn(), canGoBack: () => false, replace: jest.fn() }),
 }));
+
+jest.mock('@/components/ui', () => {
+  const React = require('react');
+  return {
+    // The route's one title now lives in AppHeader. Render its title as text
+    // (never a host stub carrying element props) so the tree stays JSON-safe.
+    AppHeader: ({ title }: { title?: string }) =>
+      title ? React.createElement('Text', null, title) : null,
+    Screen: 'Screen',
+    Card: 'Card',
+    Badge: 'Badge',
+    Button: 'Button',
+    Icon: 'Icon',
+    PressableScale: 'PressableScale',
+    Text: 'Text',
+  };
+});
 
 jest.mock('@/context/gateway-provider', () => ({
   useGateway: () => ({ activeGateway: { kind: 'custom', url: 'http://gate.test' } }),

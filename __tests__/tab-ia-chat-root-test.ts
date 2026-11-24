@@ -39,7 +39,7 @@ describe('Side drawer IA — Chat root, zero bottom tabs', () => {
     const src = readHome();
     expect(src).toContain('export default function HomeScreen');
     expect(src).toContain('<GatewayHomeDashboard');
-    expect(src).toContain('<ScreenHeader');
+    expect(src).toContain('<AppHeader');
     expect(src).toContain('refreshError');
   });
 

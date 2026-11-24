@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
@@ -9,8 +10,9 @@ import { EnvironmentsSection } from '@/components/gateway/environments-section';
 import { GatewayManagementSection } from '@/components/gateway/gateway-management-section';
 import { NotificationsSection } from '@/components/gateway/notifications-section';
 import { ProvidersSection } from '@/components/gateway/providers-section';
-import { Card, Chip, Screen, SegmentedControl, Text } from '@/components/ui';
+import { AppHeader, Card, Chip, Icon, PressableScale, Screen, SegmentedControl, Text } from '@/components/ui';
 import { useGateway } from '@/context/gateway-provider';
+import { useHeaderScrolled } from '@/hooks/use-header-scrolled';
 import { backendChipLabel } from '@/lib/gateway/backend-freshness';
 import { gateSetupReach } from '@/lib/gateway/gate-setup-reach';
 import { Spacing } from '@/constants/tokens';
@@ -32,6 +34,8 @@ const SECTIONS = [
  * and two ways to half-create the same thing.
  */
 export default function GatewaySetupScreen() {
+  const router = useRouter();
+  const { scrolled, onScroll } = useHeaderScrolled();
   const [section, setSection] = useState<Section>('providers');
   const { backends, selectedBackendId, selectBackend, activeGateway, activeManifest, status } = useGateway();
   const reach = gateSetupReach({ status, kind: activeGateway?.kind, hasManifest: activeManifest !== null });
@@ -47,9 +51,21 @@ export default function GatewaySetupScreen() {
 
   return (
     <Screen>
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text variant="title">Gate setup</Text>
-
+      <AppHeader
+        variant="page"
+        title="Gate setup"
+        leading={
+          <PressableScale
+            onPress={() => (router.canGoBack() ? router.back() : router.replace('/chat'))}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Close Gate setup">
+            <Icon name={{ ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }} size={20} color="textSecondary" />
+          </PressableScale>
+        }
+        scrolled={scrolled}
+      />
+      <ScrollView contentContainerStyle={styles.content} onScroll={onScroll} scrollEventThrottle={16}>
         <GatewayIdentitySection />
 
         {backends.length > 0 ? (

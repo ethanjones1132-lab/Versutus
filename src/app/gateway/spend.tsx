@@ -5,9 +5,10 @@ import { ScrollView, StyleSheet } from 'react-native';
 import { SpendChart } from '@/components/gateway/spend-chart';
 import { SpendPerBotSection } from '@/components/gateway/spend-per-bot-section';
 import { SpendSessionTable } from '@/components/gateway/spend-session-table';
-import { Card, EmptyState, ErrorCard, Icon, PageTitle, PressableScale, Screen, Skeleton, Text } from '@/components/ui';
+import { AppHeader, Card, EmptyState, ErrorCard, Icon, PressableScale, Screen, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { useHeaderScrolled } from '@/hooks/use-header-scrolled';
 import {
   BUDGETS_UNREAD,
   loadBudgets,
@@ -131,6 +132,7 @@ const BUDGETS_UNREAD_COPY = 'The budget caps stored on this device could not be 
  */
 export default function GatewaySpendScreen() {
   const router = useRouter();
+  const { scrolled, onScroll } = useHeaderScrolled();
   const {
     gatewayRequest,
     status,
@@ -376,29 +378,31 @@ export default function GatewaySpendScreen() {
 
   return (
     <Screen edges={['top', 'bottom']}>
-      <ScrollView contentContainerStyle={styles.content}>
-        {/* Spend opens like its sister modal, Settings: the serif title in the
-            lamp's light and one quiet line, no header bar above it. */}
-        <PageTitle
-          title="Spend"
-          leading={
-            <PressableScale
-              onPress={() => (router.canGoBack() ? router.back() : router.replace('/activity'))}
-              hitSlop={10}
-              accessibilityRole="button"
-              accessibilityLabel="Close spend"
-              style={styles.close}>
-              <Icon name={{ ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }} size={20} color="textSecondary" />
-            </PressableScale>
-          }
-          status={
-            <Text variant="caption" color="secondary" style={styles.headingLine}>
-              What this gateway&apos;s sessions have cost, folded from the session catalogue this
-              device can read.
-            </Text>
-          }
-        />
-
+      {/* Spend opens like its sister modal, Settings: the serif title in the
+          lamp's light and one quiet line, no native header bar above it. */}
+      <AppHeader
+        variant="page"
+        title="Spend"
+        inset={Spacing.four - 4}
+        leading={
+          <PressableScale
+            onPress={() => (router.canGoBack() ? router.back() : router.replace('/activity'))}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Close spend"
+            style={styles.close}>
+            <Icon name={{ ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }} size={20} color="textSecondary" />
+          </PressableScale>
+        }
+        scrolled={scrolled}
+        status={
+          <Text variant="caption" color="secondary" style={styles.headingLine}>
+            What this gateway&apos;s sessions have cost, folded from the session catalogue this
+            device can read.
+          </Text>
+        }
+      />
+      <ScrollView contentContainerStyle={styles.content} onScroll={onScroll} scrollEventThrottle={16}>
         {state.loaded ? (
           <Card variant="hero" padding={Spacing.three} style={styles.card}>
             <Text variant="headline">{spendBasisCopy(basis)}</Text>

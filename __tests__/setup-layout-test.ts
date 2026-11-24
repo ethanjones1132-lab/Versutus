@@ -38,8 +38,9 @@ test('the chat backend card heading is a headline, not a second screen title', (
 test('the screen body carries exactly one title-level heading', () => {
   const src = setup();
   const titles = src.match(/variant="title"/g) ?? [];
-  expect(titles).toHaveLength(1);
-  expect(src).toContain('<Text variant="title">Gate setup</Text>');
+  expect(titles).toHaveLength(0);
+  expect((src.match(/<AppHeader/g) ?? []).length).toBe(1);
+  expect(src).toContain('title="Gate setup"');
 });
 
 test('each tab intro is grouped in a panel with the section it describes', () => {

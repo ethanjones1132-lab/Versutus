@@ -39,6 +39,7 @@ jest.mock('@/components/ui', () => ({
   Chip: 'Chip',
   EmptyState: 'EmptyState',
   ErrorCard: 'ErrorCard',
+  AppHeader: 'AppHeader',
   PageTitle: 'PageTitle',
   Screen: 'Screen',
   Text: 'Text',

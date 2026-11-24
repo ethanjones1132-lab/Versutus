@@ -13,18 +13,19 @@ import { CommandResultView } from '@/components/terminal/command-result-view';
 import { TerminalModePicker, type TerminalMode } from '@/components/terminal/mode-picker';
 import { TerminalOutput } from '@/components/terminal/terminal-output';
 import {
+  AppHeader,
   Button,
   Card,
   Chip,
   EmptyState,
   ErrorCard,
-  PageTitle,
   Screen,
   Text,
   TextField,
 } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { useHeaderScrolled } from '@/hooks/use-header-scrolled';
 import { useTokens } from '@/hooks/use-tokens';
 import {
   agentCommands,
@@ -82,7 +83,8 @@ export function TerminalScreen() {
   const [logSheetVisible, setLogSheetVisible] = useState(false);
   const [outputCopied, setOutputCopied] = useState(false);
   const outputCopiedResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const { parallaxY, onScroll } = useAmbientParallaxScroll();
+  const ambient = useAmbientParallaxScroll();
+  const { scrolled, onScroll } = useHeaderScrolled(ambient.onScroll);
   const insets = useSafeAreaInsets();
   const sessionRef = useRef<TerminalSession | null>(null);
 
@@ -260,26 +262,27 @@ export function TerminalScreen() {
   const modeLabel = mode === 'shell' ? 'Shell' : mode === 'rpc' ? 'Commands' : 'Agent';
 
   return (
-    <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })} parallaxY={parallaxY}>
-      <View style={styles.header}>
-        <PageTitle
-          title="Tools"
-          leading={<DrawerMenuButton />}
-          status={
-            <>
-              <PulsingDot
-                color={statusColor(tokens, status)}
-                active={status === 'connecting' || status === 'reconnecting'}
-              />
-              <Text variant="caption" color="secondary" numberOfLines={1} style={styles.headerKicker}>
-                {settings.pcName ?? activeGateway.name} · {modeLabel} ·{' '}
-                {mode === 'shell' && shellReady ? (terminalConnected ? 'live' : 'starting…') : statusLabel(status)}
-                {status !== 'connected' && statusDetail ? ` · ${statusDetail}` : ''}
-              </Text>
-            </>
-          }
-        />
-      </View>
+    <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })} parallaxY={ambient.parallaxY}>
+      <AppHeader
+        variant="page"
+        title="Tools"
+        inset={Spacing.four - 4}
+        leading={<DrawerMenuButton />}
+        scrolled={scrolled}
+        status={
+          <>
+            <PulsingDot
+              color={statusColor(tokens, status)}
+              active={status === 'connecting' || status === 'reconnecting'}
+            />
+            <Text variant="caption" color="secondary" numberOfLines={1} style={styles.headerKicker}>
+              {settings.pcName ?? activeGateway.name} · {modeLabel} ·{' '}
+              {mode === 'shell' && shellReady ? (terminalConnected ? 'live' : 'starting…') : statusLabel(status)}
+              {status !== 'connected' && statusDetail ? ` · ${statusDetail}` : ''}
+            </Text>
+          </>
+        }
+      />
 
       <View style={styles.modePicker}>
         <TerminalModePicker mode={mode} onModeChange={setMode} />
@@ -466,10 +469,6 @@ export function TerminalScreen() {
 }
 
 const styles = StyleSheet.create({
-  header: {
-    paddingHorizontal: Spacing.four - 4,
-    paddingTop: Spacing.two,
-  },
   headerKicker: {
     flexShrink: 1,
   },

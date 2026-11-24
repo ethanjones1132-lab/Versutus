@@ -9,11 +9,11 @@ import { SpendEntryRow } from '@/components/gateway/spend-entry-row';
 import { TransportSecurityCard } from '@/components/gateway/transport-security-card';
 import { VersutusMark } from '@/components/brand/versutus-mark';
 import {
+  AppHeader,
   Badge,
   Card,
   ErrorCard,
   Icon,
-  PageTitle,
   PressableScale,
   RowGroup,
   RowGroupRow,
@@ -24,6 +24,7 @@ import {
 } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { useHeaderScrolled } from '@/hooks/use-header-scrolled';
 import { useTokens } from '@/hooks/use-tokens';
 import {
   APP_LOCK_LABEL,
@@ -136,6 +137,7 @@ export default function GatewaySettingsScreen() {
   } = useGateway();
   const tokens = useTokens();
   const router = useRouter();
+  const { scrolled, onScroll } = useHeaderScrolled();
   const [copied, setCopied] = useState<'id' | null>(null);
   const [appLock, setAppLock] = useState(false);
   const [appLockReason, setAppLockReason] = useState<AppLockUnavailableReason | null>(null);
@@ -628,42 +630,44 @@ export default function GatewaySettingsScreen() {
 
   return (
     <Screen edges={['top', 'bottom']}>
-      <ScrollView contentContainerStyle={styles.content}>
-        {/* Settings opens like every page: the serif title in the lamp's
-            light, and the Gate it is talking to as its one status line — the
-            mark, the name, the connection. One serif line, no header bar. */}
-        <PageTitle
-          title="Settings"
-          leading={
-            <PressableScale
-              onPress={() => (router.canGoBack() ? router.back() : router.replace('/chat'))}
-              hitSlop={10}
-              accessibilityRole="button"
-              accessibilityLabel="Close settings"
-              style={styles.close}>
-              <Icon name={{ ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }} size={20} color="textSecondary" />
-            </PressableScale>
-          }
-          status={
-            <View style={styles.identityStatus}>
-              <VersutusMark size={22} />
-              <Text variant="callout" numberOfLines={1} style={styles.identityName}>
-                {gateName}
-              </Text>
-              <View
-                style={[
-                  styles.statusDot,
-                  { backgroundColor: status === 'connected' ? tokens.statusConnected : tokens.textTertiary },
-                ]}
-              />
-              <Text variant="caption" color="secondary" numberOfLines={1} style={styles.identityDetail}>
-                {status === 'connected' ? 'Connected' : 'Not connected'}
-                {activeGateway?.kind ? ` · ${activeGateway.kind === 'hermes' ? 'Hermes Gate' : activeGateway.kind}` : ''}
-              </Text>
-            </View>
-          }
-        />
-
+      {/* Settings opens like every page: the serif title in the lamp's light,
+          and the Gate it is talking to as its one status line — the mark, the
+          name, the connection. One title, owned by the shared header. */}
+      <AppHeader
+        variant="page"
+        title="Settings"
+        inset={Spacing.four - 4}
+        leading={
+          <PressableScale
+            onPress={() => (router.canGoBack() ? router.back() : router.replace('/chat'))}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Close settings"
+            style={styles.close}>
+            <Icon name={{ ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }} size={20} color="textSecondary" />
+          </PressableScale>
+        }
+        scrolled={scrolled}
+        status={
+          <View style={styles.identityStatus}>
+            <VersutusMark size={22} />
+            <Text variant="callout" numberOfLines={1} style={styles.identityName}>
+              {gateName}
+            </Text>
+            <View
+              style={[
+                styles.statusDot,
+                { backgroundColor: status === 'connected' ? tokens.statusConnected : tokens.textTertiary },
+              ]}
+            />
+            <Text variant="caption" color="secondary" numberOfLines={1} style={styles.identityDetail}>
+              {status === 'connected' ? 'Connected' : 'Not connected'}
+              {activeGateway?.kind ? ` · ${activeGateway.kind === 'hermes' ? 'Hermes Gate' : activeGateway.kind}` : ''}
+            </Text>
+          </View>
+        }
+      />
+      <ScrollView contentContainerStyle={styles.content} onScroll={onScroll} scrollEventThrottle={16}>
         <View style={styles.section}>
           <SectionHeader title="Gateway" />
           <RowGroup>

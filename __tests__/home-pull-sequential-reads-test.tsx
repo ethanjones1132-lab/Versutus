@@ -26,6 +26,7 @@ jest.mock('react-native-reanimated', () => ({
 
 jest.mock('@/components/ui', () => ({
   ErrorCard: 'ErrorCard',
+  AppHeader: 'AppHeader',
   PageTitle: 'PageTitle',
   Screen: 'Screen',
   ScreenHeader: 'ScreenHeader',

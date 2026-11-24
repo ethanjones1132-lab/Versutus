@@ -3,9 +3,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, ScrollView, StyleSheet, View } from 'react-native';
 
 import { CouncilCompareView } from '@/components/chat/council-compare-view';
-import { Button, Card, Chip, EmptyState, ErrorCard, Icon, PageTitle, PressableScale, Screen, Skeleton, Text, TextField } from '@/components/ui';
+import { AppHeader, Button, Card, Chip, EmptyState, ErrorCard, Icon, PressableScale, Screen, Skeleton, Text, TextField } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { useHeaderScrolled } from '@/hooks/use-header-scrolled';
 import type { PublicBot } from '@/lib/gateway/bots';
 import {
   boundedOperation,
@@ -99,6 +100,7 @@ const NO_BOTS: PublicBot[] = [];
  */
 export default function CouncilScreen() {
   const router = useRouter();
+  const { scrolled, onScroll } = useHeaderScrolled();
   const { activeGateway, status, hasGroupRooms, botGroups, listBots, openBot, requestSurface } = useGateway();
   // The gateway every Bot on this screen must belong to. No active gateway is an
   // identity of its own: a switch to "none" must not keep the last one's roster.
@@ -421,29 +423,30 @@ export default function CouncilScreen() {
 
   return (
     <Screen>
-      <ScrollView contentContainerStyle={styles.content}>
-        <PageTitle
-          title="Council"
-          leading={
-            <PressableScale
-              onPress={() => (router.canGoBack() ? router.back() : router.replace('/home'))}
-              hitSlop={10}
-              accessibilityRole="button"
-              accessibilityLabel="Back to Gate">
-              <Icon
-                name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }}
-                size={20}
-                color="textPrimary"
-              />
-            </PressableScale>
-          }
-          status={
-            <Text variant="caption" color="secondary">
-              Ask up to three Bots the same prompt and compare their answers side by side.
-            </Text>
-          }
-        />
-
+      <AppHeader
+        variant="page"
+        title="Council"
+        leading={
+          <PressableScale
+            onPress={() => (router.canGoBack() ? router.back() : router.replace('/home'))}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Back to Gate">
+            <Icon
+              name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }}
+              size={20}
+              color="textPrimary"
+            />
+          </PressableScale>
+        }
+        scrolled={scrolled}
+        status={
+          <Text variant="caption" color="secondary">
+            Ask up to three Bots the same prompt and compare their answers side by side.
+          </Text>
+        }
+      />
+      <ScrollView contentContainerStyle={styles.content} onScroll={onScroll} scrollEventThrottle={16}>
         {!hasGroupRooms ? (
           <Card variant="surface" padding={Spacing.three}>
             <Text variant="body" color="secondary">

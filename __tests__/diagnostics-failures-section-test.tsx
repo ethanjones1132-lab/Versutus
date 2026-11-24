@@ -5,13 +5,26 @@
 // rather than rendering a blank card, and let the operator clear what they have
 // already read. The runtime environment card above it must keep working.
 
-jest.mock('@/components/ui', () => ({
-  Screen: 'Screen',
-  Card: 'Card',
-  Badge: 'Badge',
-  Button: 'Button',
-  Text: 'Text',
+jest.mock('expo-router', () => ({
+  useRouter: () => ({ back: jest.fn(), canGoBack: () => false, replace: jest.fn() }),
 }));
+
+jest.mock('@/components/ui', () => {
+  const React = require('react');
+  return {
+    // The route's one title now lives in AppHeader; render it as text so the
+    // mounted tree still shows the card's heading, as a host stub would not.
+    AppHeader: ({ title }: { title?: string }) =>
+      title ? React.createElement('Text', null, title) : null,
+    Screen: 'Screen',
+    Card: 'Card',
+    Badge: 'Badge',
+    Button: 'Button',
+    Icon: 'Icon',
+    PressableScale: 'PressableScale',
+    Text: 'Text',
+  };
+});
 
 jest.mock('@/context/gateway-provider', () => ({
   useGateway: () => ({ activeGateway: { kind: 'custom', url: 'http://gate.test' } }),
