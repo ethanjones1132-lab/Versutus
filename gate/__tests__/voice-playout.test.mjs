@@ -407,6 +407,28 @@ test('an engine that reports hearing gets no speculative turn on an early end', 
   assert.deepEqual(turn.texts, ['Half a thought'], 'and the Bot is asked exactly once');
 });
 
+test('a final is not committed on a wall-clock settle the worker has not scored', async (t) => {
+  // VS-179: the worker ended the utterance at audio 10_000 ms but its loop has
+  // only scored to 10_050. A wall-clock settle would send the prefix while the
+  // resumed speech was still queued, then the next final would withdraw it.
+  const engine = makeEngine({ reportsHearing: true });
+  const { turn, runTurn } = controllableTurn();
+  await startCall(t, { engine, runTurn, utteranceSettleMs: 200 });
+
+  engine.emit('final', { text: 'So I was thinking', eosMs: 10_000, positionMs: 10_050 });
+  await sleep(350);
+  assert.equal(turn.texts.length, 0, 'the worker has not scored the settle yet');
+
+  engine.emit('hearing', { active: false, positionMs: 10_149 });
+  await sleep(250);
+  assert.equal(turn.texts.length, 0, 'still short of the settle');
+
+  // The audio loop catches up; only now does the hold start and the turn go.
+  engine.emit('hearing', { active: false, positionMs: 10_200 });
+  await waitFor(() => turn.texts.length === 1, 1_000);
+  assert.deepEqual(turn.texts, ['So I was thinking']);
+});
+
 // ─── What a failed turn is called on the phone ─────────────────────────────
 
 test('a failed turn is named by who failed, never in the backend\'s own words', async (t) => {

@@ -276,6 +276,7 @@ export class LocalEngine extends EventEmitter {
       text: params.text,
       eosMs: params.eosMs,
       decodeMs: params.decodeMs,
+      ...(Number.isFinite(params.positionMs) ? { positionMs: params.positionMs } : {}),
     });
     else if (method === 'voice.earlyEnd') this.emit('earlyEnd', { text: params.text });
     else if (method === 'voice.speechAudio') {
@@ -286,7 +287,10 @@ export class LocalEngine extends EventEmitter {
       });
     } else if (method === 'voice.speechDone') this.emit('speechDone', { gen: params.gen, ttsId: params.ttsId });
     else if (method === 'voice.userSpeechStart') this.emit('userSpeechStart', { gen: params.gen });
-    else if (method === 'voice.hearing') this.emit('hearing', { active: Boolean(params.active) });
+    else if (method === 'voice.hearing') this.emit('hearing', {
+      active: Boolean(params.active),
+      ...(Number.isFinite(params.positionMs) ? { positionMs: params.positionMs } : {}),
+    });
     else if (method === 'voice.utteranceOpen') this.emit('utteranceOpen', {});
     else if (method === 'voice.noSpeechDrop') this.emit('noSpeechDrop', {});
     else if (method === 'voice.echoGated') this.emit('echoGated', { gen: params.gen, count: params.count });

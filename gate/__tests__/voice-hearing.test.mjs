@@ -59,6 +59,54 @@ test('a final with nothing more being heard waits only the settle', () => {
   assert.deepEqual(holds(out.effects), [SETTLE_MS]);
 });
 
+const hearsAudio = () => run([{
+  type: 'ready',
+  utteranceHoldMs: SETTLE_MS,
+  utteranceSettleMs: SETTLE_MS,
+  reportsHearing: true,
+  continuationMs: 5_000,
+}]).state;
+
+test('the settle after a final is audio the worker has scored, not wall time', () => {
+  // VS-179: the worker ended the utterance here but has only scored 50 ms past
+  // it. The resumed speech may still be queued, so the prefix is not a turn.
+  const heardFinal = run([
+    { type: 'final', text: 'First sentence.', eosMs: 10_000, positionMs: 10_050 },
+  ], hearsAudio());
+
+  const wall = run([{ type: 'holdElapsed', nowMs: 1_000 }], heardFinal.state);
+  assert.equal(wall.state.phase, 'listening');
+  assert.equal(wall.effects.some((effect) => effect.kind === 'turn.run'), false);
+
+  // Still short of the settle: a position update changes nothing yet.
+  const short = run([{ type: 'hearing', active: false, positionMs: 10_249 }], wall.state);
+  assert.equal(short.effects.some((effect) => effect.kind === 'turn.run'), false);
+
+  // The loop has caught up: only now does the settle's hold start, and the
+  // turn is sent when it elapses.
+  const caught = run([{ type: 'hearing', active: false, positionMs: 10_250 }], short.state);
+  assert.deepEqual(holds(caught.effects), [SETTLE_MS]);
+  const sent = run([{ type: 'holdElapsed', nowMs: 1_400 }], caught.state);
+  assert.equal(sent.state.phase, 'thinking');
+  const turn = sent.effects.find((effect) => effect.kind === 'turn.run');
+  assert.equal(turn.text, 'First sentence.');
+});
+
+test('a final the worker had already scored past the settle keeps today\'s hold', () => {
+  const out = run([
+    { type: 'final', text: 'Done.', eosMs: 10_000, positionMs: 10_300 },
+  ], hearsAudio());
+  // The position travels with the final, which is what lets the settle be
+  // measured in audio at all.
+  assert.equal(out.state.settleEosMs, 10_000);
+  assert.equal(out.state.workerPositionMs, 10_300);
+  assert.deepEqual(holds(out.effects), [SETTLE_MS]);
+
+  const sent = run([{ type: 'holdElapsed', nowMs: 1_000 }], out.state);
+  assert.equal(sent.state.phase, 'thinking');
+  assert.equal(sent.effects.find((effect) => effect.kind === 'turn.run').text, 'Done.');
+});
+
 test('speech that resumes during the settle stops the clock again', () => {
   const settling = run([{ type: 'final', text: 'Hello there.' }], listening());
   const resumed = run([{ type: 'hearing', active: true }], settling.state);

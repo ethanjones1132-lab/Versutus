@@ -338,13 +338,18 @@ def test_a_held_turn_completes_when_the_re_judge_finds_the_pause_over():
 
     def scorer(_window):
         calls["n"] += 1
-        # Unsure at the first pause, confident at the 800 ms re-judge.
+        # Unsure at the first pause, confident at every later look.
         return 0.1 if calls["n"] == 1 else 0.9
 
     pipeline = _unsure_pipeline(events, scorer)
     pipeline.open({"voiceSessionId": "vs-1"})
     pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
     pipeline.pushAudio({"chunk": encode_chunk(_silence(300), 16000)})
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
+    assert "voice.final" not in [method for method, _params in events]
+
+    # The first sure look is not enough on its own (VS-179): the same audio
+    # must look sure again at the next re-judge before the prefix is sent.
     pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
     assert "voice.final" not in [method for method, _params in events]
 
@@ -1113,6 +1118,51 @@ def test_hearing_opens_with_speech_and_closes_after_the_final():
     # never commits a turn the final was about to extend.
     last_hearing = len(methods) - 1 - methods[::-1].index("voice.hearing")
     assert methods.index("voice.final") < last_hearing
+
+
+def test_hearing_and_the_final_carry_the_scored_audio_position():
+    # VS-179: the Gate's settle is measured in audio. Both events say how far
+    # the loop has scored, and by the final it has scored the settle past eos.
+    events = []
+    pipeline = _pipeline(events)
+    pipeline.open({"voiceSessionId": "vs-1"})
+
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
+    first = next(params for method, params in events if method == "voice.hearing")
+    assert first["positionMs"] > 0
+
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
+    final = next(params for method, params in events if method == "voice.final")
+    assert final["positionMs"] > final["eosMs"]
+    assert final["positionMs"] - final["eosMs"] >= 200
+    positions = [params["positionMs"] for method, params in events if method == "voice.hearing"]
+    assert positions == sorted(positions)
+
+
+def test_a_false_hearing_is_repeated_once_the_audio_catches_up():
+    # A false read taken before a final's settle was scored is repeated when the
+    # loop reaches it, so a Gate waiting in audio can let the held turn go.
+    events = []
+    pipeline = _pipeline(events)
+    pipeline.open({"voiceSessionId": "vs-1"})
+    with pipeline._hearing_lock:
+        pipeline._hearing = False
+        pipeline._audio_ms = 100.0
+        pipeline._hearing_announced_ms = pipeline._call_started_ms + 100.0
+        pipeline._settle_target_ms = pipeline._call_started_ms + 250.0
+
+    pipeline._sync_hearing()
+    assert events == [], "still short of the settle"
+
+    with pipeline._hearing_lock:
+        pipeline._audio_ms = 260.0
+    pipeline._sync_hearing()
+    assert _hearing(events) == [False]
+
+    with pipeline._hearing_lock:
+        pipeline._audio_ms = 400.0
+    pipeline._sync_hearing()
+    assert _hearing(events) == [False], "announced exactly once"
 
 
 def test_hearing_stays_open_across_a_pause_the_judge_is_unsure_about():

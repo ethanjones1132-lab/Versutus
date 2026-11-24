@@ -16,6 +16,12 @@ that merely *could* be the end ("So I was thinking about the release plan,")
 So a score is only trusted at once when it is `sure`; a marginal one waits
 `marginal_ms` of silence first, which is what keeps a pause of up to a second
 and a half inside one turn without making every clear turn wait for it.
+
+VS-179 (2026-11-24): a held pause is re-scored every `rejudge_step_ms` with more
+silence, and one look crossing `sure` was enough to send the prefix. A loaded PC
+can produce that single crossing while the resumed speech is still queued, so a
+held turn now needs `sure_looks` consecutive sure looks. The force point remains
+the only completion taken without a score at all.
 """
 
 from .audio import INPUT_SAMPLE_RATE
@@ -34,6 +40,7 @@ class TurnJudge:
         min_pad_ms=300,
         sample_rate=INPUT_SAMPLE_RATE,
         is_complete=None,
+        sure_looks=2,
     ):
         self.threshold = threshold
         # At or above this the turn is over the moment the person pauses.
@@ -48,6 +55,16 @@ class TurnJudge:
         self.min_pad_ms = min_pad_ms
         self.sample_rate = sample_rate
         self.is_complete = is_complete
+        # A held pause is only over when the same audio looks sure twice in a
+        # row. One look can flip to 0.9 on a pause that is still mid-thought
+        # (measured on a loaded PC, VS-179): the prefix is re-scored with more
+        # silence each time, and one crossing of `sure` was enough to send it.
+        self.sure_looks = max(1, int(sure_looks))
+        self._sure_streak = 0
+
+    def reset(self):
+        """Forget the last pause's sure streak: a new utterance starts fresh."""
+        self._sure_streak = 0
 
     def window(self, pcm):
         """The scorer only ever sees the last ``max_seconds`` of audio."""
@@ -78,15 +95,24 @@ class TurnJudge:
     def decide(self, window, silence_ms):
         """Return 'waiting', 'complete' or 'incomplete' for the current silence."""
         if silence_ms >= self.force_ms:
+            self._sure_streak = 0
             return "complete"
         if silence_ms < self.rejudge_ms:
             return "waiting"
         try:
             score = float(self.is_complete(self._scored(window, silence_ms)))
         except Exception:  # noqa: BLE001 - a scorer that cannot answer is not a completion
+            self._sure_streak = 0
             return "incomplete"
         if score >= self.sure:
-            return "complete"
+            self._sure_streak += 1
+            if self._sure_streak >= self.sure_looks:
+                self._sure_streak = 0
+                return "complete"
+            # One sure look is not a stable verdict: the next look must agree,
+            # unless the force point ends the pause without a score at all.
+            return "incomplete"
+        self._sure_streak = 0
         if score >= self.threshold and silence_ms >= self.marginal_ms:
             return "complete"
         return "incomplete"

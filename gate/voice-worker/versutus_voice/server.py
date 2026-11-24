@@ -28,6 +28,12 @@ _PARTIAL_WINDOW_MS = 600
 _BAD_CHUNK_ERROR_SECONDS = 1.0
 # Speech the VAD must hear before an utterance opens.
 SPEECH_START_MS = 250
+# How much audio past a final's end the worker must have scored before its
+# "not hearing any more" is trustworthy. The Gate's own settle is measured in
+# this audio, not in wall clock (VS-179): on a loaded PC the audio loop can be
+# behind the resumed speech, and a hearing flag read before it catches up sent
+# half an utterance.
+HEARING_SETTLE_MS = 200
 # The shortest held utterance that is transcribed as a turn at all.
 MIN_UTTERANCE_MS = 400
 # Audio kept from before an utterance opens, prepended when it does.
@@ -151,6 +157,15 @@ class VoicePipeline:
         self._finals_in_flight = 0
         self._hearing = False
         self._hearing_lock = threading.Lock()
+        # The audio position the loop has actually scored, in ms from the call's
+        # first frame. It travels with `voice.final`/`voice.hearing` so a settle
+        # can be measured in audio rather than wall clock (VS-179).
+        self._audio_ms = 0.0
+        # The position past which the last final's silence is trustworthy, and
+        # the position last announced to the Gate: a false `hearing` that the
+        # Gate received before this point is repeated once it is reached.
+        self._settle_target_ms = None
+        self._hearing_announced_ms = 0.0
         # What voice.ready names: the device Whisper really ran on, so a silent
         # CUDA→CPU fallback is visible to the Gate and not only on stderr.
         self.whisper_device = "cpu"
@@ -188,9 +203,10 @@ class VoicePipeline:
         """Leave no trace of the last call behind (VOW-6).
 
         The Gate restarts generations at 0 for every call, so a cancellation
-        the synthesizer still remembers would silence the whole next one. The
-        turn judge and the transcriber hold no state of their own: what they
-        were given lives here, in ``_pending``, the buffers and the queues.
+        the synthesizer still remembers would silence the whole next one. What
+        the judge and the transcriber were given lives here, in ``_pending``,
+        the buffers and the queues; only the judge's sure streak is its own, and
+        it is reset with them.
         """
         self._epoch += 1
         self._cancel_speech_jobs()
@@ -211,6 +227,12 @@ class VoicePipeline:
             # A new call starts quiet; nothing is announced for the old one.
             self._finals_in_flight = 0
             self._hearing = False
+            self._audio_ms = 0.0
+            self._settle_target_ms = None
+            self._hearing_announced_ms = 0.0
+        reset_turn = getattr(self._turn, "reset", None)
+        if callable(reset_turn):
+            reset_turn()
         self._buffer.clear()
         self._preroll = bytearray()
         self._synth.reset()
@@ -228,7 +250,10 @@ class VoicePipeline:
 
         Called after anything that can change it. The lock makes the announced
         value the state at the time of the announcement, so the last word the
-        Gate hears is the true one whichever thread spoke last.
+        Gate hears is the true one whichever thread spoke last. Every word
+        carries the audio position it was decided at: the Gate measures its
+        settle in audio, so a false read from before the resumed speech was
+        scored cannot commit half an utterance (VS-179).
         """
         with self._hearing_lock:
             # An onset the VAD is still counting is included: it takes 250 ms
@@ -243,10 +268,23 @@ class VoicePipeline:
                 or self._finals_in_flight > 0
                 or starting
             )
+            position = self._call_started_ms + self._audio_ms
             if active == self._hearing:
+                # The flag did not change, but a final may have raised the
+                # audio position its silence must reach. Repeat the same false
+                # exactly once, when the loop has caught up to it, so the Gate
+                # can let the held turn go without guessing with a clock.
+                if (
+                    not active
+                    and self._settle_target_ms is not None
+                    and self._hearing_announced_ms < self._settle_target_ms <= position
+                ):
+                    self._hearing_announced_ms = position
+                    self._emit("voice.hearing", {"active": False, "positionMs": position})
                 return
             self._hearing = active
-            self._emit("voice.hearing", {"active": active})
+            self._hearing_announced_ms = position
+            self._emit("voice.hearing", {"active": active, "positionMs": position})
 
     def pushAudio(self, params):
         chunk = (params or {}).get("chunk") or {}
@@ -262,6 +300,10 @@ class VoicePipeline:
         # or not it is speaking, so a held utterance's silence is measured from
         # the decoded chunk durations (§4.6 step 3).
         chunk_ms = len(pcm) / (2 * rate) * 1000.0 if rate else 0.0
+        # What has actually been scored, not merely received: the Gate measures
+        # its settle against this (VS-179).
+        with self._hearing_lock:
+            self._audio_ms += chunk_ms
         if self._pending is not None and not self._speaking:
             self._pending["silence_ms"] += chunk_ms
 
@@ -359,6 +401,10 @@ class VoicePipeline:
         # held audio joins what follows rather than being sent or lost.
         held = self._pending["pcm"] if self._pending is not None else b""
         self._pending = None
+        # The pause this streak belonged to is over; the new one starts at zero.
+        reset_turn = getattr(self._turn, "reset", None)
+        if callable(reset_turn):
+            reset_turn()
         self._speaking = True
         self._last_partial = 0
         self._utterance += 1
@@ -403,7 +449,11 @@ class VoicePipeline:
             self._finalize(utterance, eos_ms, early_end=True)
         else:
             # An unsure verdict is a thinking pause. Hold it and
-            # re-judge at 600 ms of silence, forcing at 1.6 s.
+            # re-judge at 600 ms of silence, forcing at 1.6 s. A pause is a new
+            # verdict, so it starts without the last one's sure streak.
+            reset_turn = getattr(self._turn, "reset", None)
+            if callable(reset_turn):
+                reset_turn()
             self._pending = {
                 "pcm": utterance,
                 "eos_ms": eos_ms,
@@ -718,6 +768,13 @@ class VoicePipeline:
             if early_end:
                 self._emit("voice.earlyEnd", {"text": text})
             payload = {"text": text, "decodeMs": decode_ms}
+            with self._hearing_lock:
+                # The Gate waits for its settle past `eosMs` in this audio, not
+                # in wall clock: a loop behind the resumed speech must not let a
+                # half-utterance go (VS-179).
+                payload["positionMs"] = self._call_started_ms + self._audio_ms
+                if eos_ms is not None:
+                    self._settle_target_ms = eos_ms + HEARING_SETTLE_MS
             if eos_ms is not None:
                 payload["eosMs"] = eos_ms
             self._emit("voice.final", payload)

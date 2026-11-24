@@ -57,6 +57,15 @@ export const INITIAL_VOICE_SESSION = Object.freeze({
   // long enough to cover a thinking pause; one that never does leaves this
   // false, and the hold alone decides as it always has.
   hearing: false,
+  // That engine also says how much audio it has actually scored, so the settle
+  // can be measured in audio rather than wall clock (VS-179). `settleEosMs` is
+  // the end of the last final, `workerPositionMs` the engine's audio position,
+  // and `settleArmed` says a hold was started after the audio had caught up.
+  reportsHearing: false,
+  utteranceSettleMs: 0,
+  settleEosMs: null,
+  workerPositionMs: null,
+  settleArmed: false,
   // The person started talking while their turn was still being thought about.
   // Until it is known whether that was words or a cough, the turn keeps running
   // and what it says is held here, unspoken and unsent, in the order it came.
@@ -170,6 +179,7 @@ function commitUtterance(state, text, { finals = 1, nowMs = null, before = [] } 
       committedAtMs: nowMs,
       deferring: false,
       deferred: [],
+      settleArmed: false,
     },
     effects: [
       ...before,
@@ -192,13 +202,48 @@ function hearFinal(state, event) {
   // the first segment: that upstream is ended here, so one utterance is never
   // two live turns, and its replacement is started at the hold instead.
   if (state.pendingText) effects.push({ kind: 'turn.cancel' });
+  const next = withFinalTiming(
+    {
+      ...state,
+      pendingText: merged,
+      pendingFinals: state.pendingFinals + 1,
+    },
+    event,
+  );
   effects.push(
     frameSend({ t: 'partial', text: merged }),
     // While the engine says more is being heard, the clock does not run: the
     // utterance is sent when the person stops, not a guess after they paused.
-    holdEffect(state),
+    holdEffect(next),
   );
-  return stay({ ...state, pendingText: merged, pendingFinals: state.pendingFinals + 1 }, effects);
+  return stay({ ...next, settleArmed: settleScored(next) }, effects);
+}
+
+/**
+ * Take the audio position a final was announced at. An engine that reports
+ * hearing says how far it has actually scored; the Gate waits for the settle
+ * past `eosMs` in that audio, not in its own clock (VS-179).
+ */
+function withFinalTiming(state, event) {
+  return {
+    ...state,
+    // A final that carries no audio timing falls back to the wall clock, as
+    // every engine did before this: never keep a previous final's position and
+    // judge this one with it.
+    settleEosMs: Number.isFinite(event.eosMs) ? event.eosMs : null,
+    workerPositionMs: Number.isFinite(event.positionMs) ? event.positionMs : null,
+    settleArmed: false,
+  };
+}
+
+/**
+ * Has the worker scored the settle past the last final's end? Engines that do
+ * not report a position keep the wall clock's answer, which is all they have.
+ */
+function settleScored(state) {
+  if (!state.reportsHearing) return true;
+  if (!Number.isFinite(state.settleEosMs) || !Number.isFinite(state.workerPositionMs)) return true;
+  return state.workerPositionMs >= state.settleEosMs + (state.utteranceSettleMs || 0);
 }
 
 /** Run the hold only while nothing more is being heard; otherwise stop it. */
@@ -223,7 +268,7 @@ function hearDuringTurn(state, event) {
   // so the thread shows it, and what was just said goes as the next turn: the
   // Bot has the first half and its own answer in front of it.
   if (state.deferring && state.deferred.some((held) => held.type === 'replyDone')) {
-    const next = {
+    const next = withFinalTiming({
       ...state,
       phase: 'listening',
       pendingText: text,
@@ -232,8 +277,8 @@ function hearDuringTurn(state, event) {
       committedAtMs: null,
       deferring: false,
       deferred: [],
-    };
-    return stay(next, [
+    }, event);
+    return stay({ ...next, settleArmed: settleScored(next) }, [
       frameSend({ t: 'turn', turnId: state.turnId, state: 'done' }),
       phaseEffect('listening'),
       heard,
@@ -243,7 +288,7 @@ function hearDuringTurn(state, event) {
   if (isContinuation(state, event)) {
     const merged = joinSpeech(state.committedText, text);
     const merging = { kind: 'utterance.merge', chars: text.length };
-    const gathered = {
+    const gathered = withFinalTiming({
       ...state,
       phase: 'listening',
       pendingText: merged,
@@ -253,9 +298,9 @@ function hearDuringTurn(state, event) {
       // The turn is withdrawn, so whatever it had said while held goes with it.
       deferring: false,
       deferred: [],
-    };
+    }, event);
     if (state.utteranceHoldMs > 0) {
-      return stay(gathered, [
+      return stay({ ...gathered, settleArmed: settleScored(gathered) }, [
         merging,
         { kind: 'turn.cancel' },
         phaseEffect('listening'),
@@ -349,6 +394,8 @@ export function reduceVoiceSession(state, event) {
           resumePhase: state.muted ? 'listening' : null,
           turnId: event.turnId ?? state.turnId,
           utteranceHoldMs: event.utteranceHoldMs ?? state.utteranceHoldMs,
+          utteranceSettleMs: event.utteranceSettleMs ?? state.utteranceSettleMs,
+          reportsHearing: event.reportsHearing ?? state.reportsHearing,
           continuationMs: event.continuationMs ?? state.continuationMs,
           ttsChunkWords: event.ttsChunkWords ?? state.ttsChunkWords,
         },
@@ -385,14 +432,32 @@ export function reduceVoiceSession(state, event) {
     // settle after it is not.
     case 'hearing': {
       const hearing = Boolean(event.active);
-      if (hearing === state.hearing) return stay(state);
-      const next = { ...state, hearing };
+      const positionMs = Number.isFinite(event.positionMs) ? event.positionMs : state.workerPositionMs;
+      const next = { ...state, hearing, workerPositionMs: positionMs };
+      if (hearing === state.hearing) {
+        // The flag did not change, but the worker may have caught up to the
+        // audio its last final needed (VS-179). A false read taken before the
+        // resumed speech was scored no longer holds the turn back once the
+        // settle has been heard.
+        if (
+          !hearing
+          && state.phase === 'listening'
+          && next.pendingText
+          && !state.settleArmed
+          && settleScored(next)
+        ) {
+          return stay({ ...next, settleArmed: true }, [holdEffect(next)]);
+        }
+        return stay(next);
+      }
       // The sound that held the turn's reply back has stopped and no words came
       // of it (a final arrives before this, and takes the turn back): it was a
       // cough or a door. The turn was never touched, and what it said while
       // held is released now, in order.
       if (!hearing && state.deferring) return releaseDeferred(next);
-      if (state.phase === 'listening' && state.pendingText) return stay(next, [holdEffect(next)]);
+      if (state.phase === 'listening' && state.pendingText) {
+        return stay({ ...next, settleArmed: settleScored(next) }, [holdEffect(next)]);
+      }
       return stay(next);
     }
 
@@ -429,6 +494,10 @@ export function reduceVoiceSession(state, event) {
       if (state.hearing) return stay(state);
       const text = state.pendingText.trim();
       if (!text) return stay(state);
+      // The wall clock has run, but an engine that reports hearing has not
+      // necessarily scored the audio behind it. Until it has, the resumed speech
+      // may still be queued and this prefix is only half the utterance (VS-179).
+      if (!settleScored(state)) return stay({ ...state, settleArmed: false });
       return commitUtterance(state, text, { finals: state.pendingFinals, nowMs: event.nowMs });
     }
 

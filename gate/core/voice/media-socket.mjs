@@ -1592,7 +1592,13 @@ export function attachVoiceMediaSocket({
       if (Number.isFinite(event.eosMs) && Number.isFinite(event.decodeMs)) {
         latestFinalTiming = { eosMs: event.eosMs, decodeMs: event.decodeMs };
       }
-      dispatch({ type: 'final', text: event.text, turnId: session.voiceSessionId });
+      dispatch({
+        type: 'final',
+        text: event.text,
+        turnId: session.voiceSessionId,
+        eosMs: event.eosMs,
+        positionMs: event.positionMs,
+      });
     });
     engine.on?.('partial', (event) => dispatch({ type: 'partial', text: event.text }));
     engine.on?.('speechAudio', (event) => {
@@ -1617,7 +1623,11 @@ export function attachVoiceMediaSocket({
       ttsJobs.delete(event.ttsId);
       synthesisedPlayout(event.gen);
     });
-    engine.on?.('hearing', (event) => dispatch({ type: 'hearing', active: Boolean(event?.active) }));
+    engine.on?.('hearing', (event) => dispatch({
+      type: 'hearing',
+      active: Boolean(event?.active),
+      positionMs: event?.positionMs,
+    }));
     engine.on?.('utteranceOpen', () => dispatch({ type: 'userSpeaking' }));
     engine.on?.('earlyEnd', (event) => {
       // An engine that says when the person has stopped needs no head start:
@@ -1691,6 +1701,8 @@ export function attachVoiceMediaSocket({
           type: 'ready',
           turnId: session.voiceSessionId,
           utteranceHoldMs: engine.reportsHearing ? utteranceSettleMs : utteranceHoldMs,
+          utteranceSettleMs: engine.reportsHearing ? utteranceSettleMs : 0,
+          reportsHearing: Boolean(engine.reportsHearing),
           continuationMs,
           ttsChunkWords: engine.ttsChunkWords,
         });

@@ -72,6 +72,8 @@ def test_push_audio_ends_a_turn_and_speak_streams_in_order():
     heard = [event for event in events if event[0] == "voice.final"]
     assert heard[0][1]["text"] == "hello there"
     assert "eosMs" not in heard[0][1]
+    # The Gate measures its settle against the audio actually scored (VS-179).
+    assert heard[0][1]["positionMs"] > 0
 
     server.handle_message(
         json.dumps(
