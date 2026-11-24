@@ -20,6 +20,7 @@ export { SectionHeader } from './SectionHeader';
 export { SegmentedControl } from './SegmentedControl';
 export { Skeleton } from './Skeleton';
 export { StatTile } from './StatTile';
+export { SwitchRow } from './SwitchRow';
 export { Text } from './Text';
 export { TextField } from './TextField';
 export type { TextFieldHandle } from './TextField';
@@ -37,6 +38,7 @@ export type { RowGroupProps, RowGroupRowProps } from './RowGroup';
 export type { SegmentedControlOption, SegmentedControlProps } from './SegmentedControl';
 export type { SkeletonProps } from './Skeleton';
 export type { StatTileProps } from './StatTile';
+export type { SwitchRowProps } from './SwitchRow';
 export type {
   ButtonProps,
   ButtonSize,

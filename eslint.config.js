@@ -3,6 +3,8 @@ const { defineConfig } = require('eslint/config');
 const expoConfig = require("eslint-config-expo/flat");
 const globals = require("globals");
 
+const uiContracts = require("./eslint-rules/ui-contracts");
+
 module.exports = defineConfig([
   expoConfig,
   {
@@ -32,6 +34,27 @@ module.exports = defineConfig([
       // gate/ is a Node service with no React in it. `useCredentialBackend` is
       // a plain function whose name happens to match the hook convention.
       "react-hooks/rules-of-hooks": "off",
+    },
+  },
+  {
+    // The contracts a screen relies on but TypeScript cannot see: pairing
+    // EmptyState's action props, and keeping SwitchRow controlled. Error-level
+    // because a drifted call site is the regression this gate exists to catch.
+    files: ["src/**/*.{ts,tsx}"],
+    plugins: { "ui-contracts": uiContracts },
+    rules: {
+      "ui-contracts/empty-state-contract": "error",
+      "ui-contracts/switch-row-contract": "error",
+    },
+  },
+  {
+    // These rule modules run in Node (CommonJS), like the config that loads
+    // them; they are not React Native source.
+    files: ["eslint-rules/**/*.js"],
+    languageOptions: {
+      globals: { ...globals.node },
+      sourceType: "commonjs",
+      ecmaVersion: "latest",
     },
   },
 ]);
