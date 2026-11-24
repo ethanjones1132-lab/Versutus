@@ -50,6 +50,7 @@ function readSource(...parts: string[]): string {
 
 const layout = () => readSource('src', 'app', '_layout.tsx');
 const gate = () => readSource('src', 'components', 'app-lock-gate.tsx');
+const phaseModule = () => readSource('src', 'components', 'app-lock-phase.tsx');
 const settingsScreen = () => readSource('src', 'app', 'gateway', 'settings.tsx');
 
 const mockGetItem = AsyncStorage.getItem as jest.Mock;
@@ -267,10 +268,11 @@ describe('the gate and its switch', () => {
     // cost the router, the deep-link listeners and the notification router.
     expect(src).toContain('{children}');
     expect(src).toMatch(/<Modal/);
-    // The cover is drawn on every answer except the one that means open, so an
-    // unresolved answer is covered too (fail-closed; see
-    // app-lock-fail-closed-test.tsx for the mounted behavior).
-    expect(src).toContain("visible={phase !== 'open'}");
+    // The cover is drawn on every answer except the one that means open, and
+    // also on the inactive edge before a snapshot, so an unresolved answer is
+    // covered too (fail-closed; see app-lock-fail-closed-test.tsx for the
+    // mounted behavior).
+    expect(src).toContain("visible={phase !== 'open' || coverOnInactive}");
   });
 
   test('the cover is presented the way a sheet is, so it outranks one', () => {
@@ -385,7 +387,7 @@ describe('the gate and its switch', () => {
     // storage read plus the biometric probe. Treating that window as
     // "answered, not locked" consumed the arriving route before the lock ever
     // saw it, so the lock edge brought it down with nothing held.
-    expect(src).toContain("type LockPhase = 'pending' | 'locked' | 'open';");
+    expect(phaseModule()).toContain("type LockPhase = 'pending' | 'locked' | 'open';");
     expect(src).toContain("const [phase, setPhase] = useState<LockPhase>('pending');");
     // One place settles it, from the device's own answer.
     expect(src).toContain("setPhase(lockable ? 'locked' : 'open');");

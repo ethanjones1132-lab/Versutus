@@ -1,3 +1,4 @@
+import { useAppLockPhase } from '@/components/app-lock-phase';
 import { TlsFingerprintChangeSheet } from '@/components/gateway/tls-fingerprint-change-sheet';
 import { useGateway } from '@/context/gateway-provider';
 
@@ -8,13 +9,18 @@ import { useGateway } from '@/context/gateway-provider';
  * setup, the home dashboard or a reconnect — so this cannot live inside the
  * chat screen: the user would be left with a gateway that silently refuses to
  * connect and no way to resolve it.
+ *
+ * The prompt is withheld while the app lock covers the device. It is held by
+ * the provider rather than dropped, so it is exactly the same prompt when the
+ * unlock lands — and its Trust control is never reachable over the cover.
  */
 export function TlsFingerprintGuard() {
   const { tlsFingerprintChange, approveTlsFingerprintChange, rejectTlsFingerprintChange } = useGateway();
+  const phase = useAppLockPhase();
 
   return (
     <TlsFingerprintChangeSheet
-      visible={!!tlsFingerprintChange}
+      visible={!!tlsFingerprintChange && phase === 'open'}
       previousFingerprint={tlsFingerprintChange?.previousFingerprint ?? ''}
       observedFingerprint={tlsFingerprintChange?.observedFingerprint ?? ''}
       gatewayLabel={tlsFingerprintChange?.gatewayName}

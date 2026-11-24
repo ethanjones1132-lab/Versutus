@@ -50,11 +50,26 @@ jest.mock('@/lib/settings/app-lock-device', () => {
 });
 
 jest.mock('@/components/ui', () => ({
+  BaseSheet: 'BaseSheet',
   Button: 'Button',
+  Divider: 'Divider',
   Text: 'Text',
 }));
 
 jest.mock('@/components/brand/versutus-mark', () => ({ VersutusMark: 'VersutusMark' }));
+
+// The TLS prompt is real; only the gateway that raises it and its controls are
+// supplied here, so the guard's own visibility rule is what the case observes.
+jest.mock('@/context/gateway-provider', () => ({
+  useGateway: jest.fn(),
+}));
+
+jest.mock('@/lib/haptics', () => ({
+  haptics: {
+    warning: jest.fn(async () => undefined),
+    success: jest.fn(async () => undefined),
+  },
+}));
 
 // tokens.ts only needs Easing for its Motion curves; reanimated's native
 // worklet unpackers cannot load under jest-expo.
@@ -83,6 +98,7 @@ import { AppState, type AppStateStatus, Modal } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
 import { AppLockGate } from '@/components/app-lock-gate';
+import { TlsFingerprintGuard } from '@/components/gateway/tls-fingerprint-guard';
 import { saveAppLock } from '@/lib/settings/app-lock';
 import { deviceAppLockState } from '@/lib/settings/app-lock-device';
 
@@ -90,6 +106,22 @@ import { deviceAppLockState } from '@/lib/settings/app-lock-device';
 // needs the ElementType cast the way the glass-surface test does.
 const BUTTON = 'Button' as ElementType;
 const mockDeviceState = deviceAppLockState as jest.MockedFunction<typeof deviceAppLockState>;
+const gatewayMock = jest.requireMock('@/context/gateway-provider') as {
+  useGateway: jest.Mock;
+};
+const biometric = jest.requireMock('expo-local-authentication') as {
+  authenticateAsync: jest.Mock;
+};
+
+type TlsPrompt = {
+  previousFingerprint: string;
+  observedFingerprint: string;
+  gatewayId: string;
+  gatewayName: string;
+};
+const mockTlsPrompt: { current: TlsPrompt | null } = { current: null };
+const mockApproveTls = jest.fn(async () => undefined);
+const mockRejectTls = jest.fn();
 
 let renderer: ReactTestRenderer;
 let appStateListeners: ((state: AppStateStatus) => void)[] = [];
@@ -97,6 +129,15 @@ let appStateListeners: ((state: AppStateStatus) => void)[] = [];
 async function mount(): Promise<void> {
   await act(async () => {
     renderer = create(createElement(AppLockGate, null, createElement('App', null)));
+  });
+}
+
+/** The real guard mounted under the real gate, for the lock's TLS contract. */
+async function mountWithTls(): Promise<void> {
+  await act(async () => {
+    renderer = create(
+      createElement(AppLockGate, null, createElement(TlsFingerprintGuard)),
+    );
   });
 }
 
@@ -112,10 +153,14 @@ async function flipTheSwitch(enabled: boolean): Promise<void> {
   });
 }
 
-async function background(): Promise<void> {
+async function appState(state: AppStateStatus): Promise<void> {
   await act(async () => {
-    for (const listener of [...appStateListeners]) listener('background');
+    for (const listener of [...appStateListeners]) listener(state);
   });
+}
+
+async function background(): Promise<void> {
+  await appState('background');
 }
 
 async function unlock(): Promise<void> {
@@ -128,9 +173,41 @@ async function unlock(): Promise<void> {
   });
 }
 
+/** The Trust control the TLS prompt offers, if it is on screen at all. */
+function trustButton() {
+  return renderer.root
+    .findAllByType(BUTTON)
+    .find((candidate) => candidate.props.label === 'Trust new fingerprint');
+}
+
+/** Every string on screen, so a fingerprint cannot hide in a child. */
+function screenText(): string {
+  return renderer.root
+    .findAll(() => true)
+    .flatMap((node) => {
+      const children = node.props?.children;
+      if (typeof children === 'string' || typeof children === 'number') return [String(children)];
+      if (Array.isArray(children)) {
+        return children
+          .filter((child) => typeof child === 'string' || typeof child === 'number')
+          .map(String);
+      }
+      return [];
+    })
+    .join('\n');
+}
+
 beforeEach(() => {
   appStateListeners = [];
   deviceFault.unreadable = false;
+  mockTlsPrompt.current = null;
+  gatewayMock.useGateway.mockImplementation(() => ({
+    tlsFingerprintChange: mockTlsPrompt.current,
+    approveTlsFingerprintChange: mockApproveTls,
+    rejectTlsFingerprintChange: mockRejectTls,
+  }));
+  biometric.authenticateAsync.mockReset();
+  biometric.authenticateAsync.mockImplementation(async () => ({ success: true }));
   storage.keyValueStorage.setItem.mockClear();
   jest.spyOn(AppState, 'addEventListener').mockImplementation(((
     _type: string,
@@ -232,5 +309,81 @@ describe('a verdict this phone cannot give', () => {
     // The store says on, the device could not say, so the app stays reachable
     // rather than sealing the operator out on an error.
     expect(covered()).toBe(false);
+  });
+});
+
+describe('the lock keeps a security prompt off the device it covers', () => {
+  test('a locked gate presents no TLS Trust control or fingerprints, and the unlock reveals the same prompt', async () => {
+    await saveAppLock(true);
+    mockTlsPrompt.current = {
+      previousFingerprint: 'AA11',
+      observedFingerprint: 'BB22',
+      gatewayId: 'alpha',
+      gatewayName: 'alpha',
+    };
+    await mountWithTls();
+
+    expect(covered()).toBe(true);
+    // Nothing of the change prompt may be reachable or legible over the cover:
+    // not the Trust control, not either fingerprint.
+    expect(trustButton()).toBeUndefined();
+    expect(screenText()).not.toContain('AA11');
+    expect(screenText()).not.toContain('BB22');
+
+    // The prompt was held, not dropped: the unlock shows the same change.
+    await unlock();
+    expect(covered()).toBe(false);
+    expect(trustButton()).toBeDefined();
+    expect(screenText()).toContain('AA11');
+    expect(screenText()).toContain('BB22');
+  });
+
+  test('an inactive edge covers the app and an active return to an open gate clears it', async () => {
+    await saveAppLock(false);
+    await mount();
+    expect(covered()).toBe(false);
+
+    // The edge iOS takes the app-switcher snapshot on: the cover must be up
+    // even though the lock itself is off, so the snapshot shows no content.
+    await appState('inactive');
+    expect(covered()).toBe(true);
+
+    await appState('active');
+    expect(covered()).toBe(false);
+  });
+
+  test('a prompt inactive edge during an unlock does not relock over its success', async () => {
+    await saveAppLock(true);
+    let settleUnlock: (result: { success: boolean }) => void = () => undefined;
+    biometric.authenticateAsync.mockImplementationOnce(
+      () =>
+        new Promise<{ success: boolean }>((resolve) => {
+          settleUnlock = resolve;
+        }),
+    );
+    await mount();
+    expect(covered()).toBe(true);
+
+    await unlock();
+    // The biometric prompt itself takes the app inactive while it decides.
+    await appState('inactive');
+    expect(covered()).toBe(true);
+    await appState('active');
+    // That 'active' is the prompt closing, not the operator returning, so the
+    // cover waits for the unlock's answer instead of lifting early.
+    expect(covered()).toBe(true);
+
+    await act(async () => {
+      settleUnlock({ success: true });
+    });
+    expect(covered()).toBe(false);
+
+    // A later system prompt over the now-open app covers it for its snapshot...
+    await appState('inactive');
+    expect(covered()).toBe(true);
+    // ... and the return lifts that cover without relocking the app.
+    await appState('active');
+    expect(covered()).toBe(false);
+    expect(biometric.authenticateAsync).toHaveBeenCalledTimes(1);
   });
 });

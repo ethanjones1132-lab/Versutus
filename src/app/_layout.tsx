@@ -805,10 +805,13 @@ export default function RootLayout() {
                   />
                   {__DEV__ ? <Stack.Screen name="dev" options={{ headerShown: false }} /> : null}
                 </Stack>
+                {/* Inside the gate so the lock's phase reaches it: the TLS
+                    change prompt waits for the unlock instead of presenting
+                    its Trust control over the cover. */}
+                <TlsFingerprintGuard />
               </AppLockGate>
               <HandsfreeCallBanner />
               <ConnectedToast />
-              <TlsFingerprintGuard />
             </View>
           </AppBootstrap>
           </ThemeProvider>

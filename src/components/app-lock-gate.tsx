@@ -40,6 +40,7 @@ import { type Href, useGlobalSearchParams, usePathname, useRouter } from 'expo-r
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Modal, StyleSheet, View } from 'react-native';
 
+import { AppLockPhaseProvider, type LockPhase } from '@/components/app-lock-phase';
 import { VersutusMark } from '@/components/brand/versutus-mark';
 import { Button, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
@@ -56,11 +57,7 @@ import { deviceAppLockState } from '@/lib/settings/app-lock-device';
 /** Modal asks Android for a back handler; the lock is not dismissable. */
 const ignoreBackPress = () => undefined;
 
-/**
- * The gate's own answer about this device, and the window before it has one:
- * `pending` until `deviceAppLockState()` resolves, then `locked` or `open`.
- */
-type LockPhase = 'pending' | 'locked' | 'open';
+export type { LockPhase } from '@/components/app-lock-phase';
 
 export function AppLockGate({ children }: { children: React.ReactNode }) {
   const tokens = useTokens();
@@ -77,6 +74,24 @@ export function AppLockGate({ children }: { children: React.ReactNode }) {
   // the read can settle, and that window is where a cold-start link's push
   // lands.
   const [phase, setPhase] = useState<LockPhase>('pending');
+  // The phase as the AppState listener reads it. The listener is installed
+  // once, so it cannot close over a render's value; this ref follows every
+  // committed phase below.
+  const phaseRef = useRef<LockPhase>('pending');
+  // Whether a cover is up because the app is inactive, not because it is
+  // locked. Kept apart from `phase` on purpose: a system prompt (the biometric
+  // prompt included) reports 'inactive', and settling the phase on that edge
+  // would relock the app the moment a successful unlock finished.
+  const [coverOnInactive, setCoverOnInactive] = useState(false);
+  // An unlock is a prompt the app is away for. An 'active' return that lands
+  // while this is true belongs to that prompt, not to an operator coming back,
+  // so it must not lift a cover the unlock is still deciding.
+  const unlockingRef = useRef(false);
+  // The ref follows every committed phase, so the listener below reads the
+  // current answer rather than the one from its installing render.
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
   // The device's answer, and the background listener below's only source of
   // truth: the verdict is refreshed on every write to the opt-in rather than
   // read once, so the switch in Settings takes effect without a cold start.
@@ -133,20 +148,36 @@ export function AppLockGate({ children }: { children: React.ReactNode }) {
   }, [readLockable]);
 
   // Leaving the app locks it again: a cover that only appeared at launch would
-  // leave the app readable in the switcher. 'background' and not 'inactive': a
-  // system prompt over the app reports 'inactive', and relocking on that risks
-  // dropping a second cover the moment the operator unlocks, so the gate takes
-  // the one edge that only a real leave produces. Coming back is the other
-  // cheap place to refresh the verdict: the flag can have changed while the app
-  // was away, and a cover already drawn is never lifted by this — only the
-  // operator's unlock is.
+  // leave the app readable in the switcher. Relocking waits for 'background'
+  // and not 'inactive': a system prompt over the app reports 'inactive', and
+  // relocking on that risks dropping a second cover the moment the operator
+  // unlocks, so the gate takes the one edge that only a real leave produces.
+  // The snapshot is a different job, though: iOS takes it on the way to
+  // 'inactive', before 'background', so THIS edge puts the cover up through
+  // `coverOnInactive` without touching `phase`. Coming back is the other cheap
+  // place to refresh the verdict: the flag can have changed while the app was
+  // away, and a cover already drawn is never lifted by this — only the
+  // operator's unlock, or an 'active' return to a gate that is already open
+  // with no unlock in flight, is.
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'inactive') {
+        setCoverOnInactive(true);
+        return;
+      }
       if (state === 'background') {
         if (lockableRef.current) setPhase('locked');
         return;
       }
-      if (state === 'active') void readLockable();
+      if (state === 'active') {
+        void readLockable();
+        // An 'active' edge while the biometric prompt is still deciding is the
+        // prompt closing, not the operator returning: leave the cover for the
+        // unlock's own answer, which clears it on success.
+        if (phaseRef.current === 'open' && !unlockingRef.current) {
+          setCoverOnInactive(false);
+        }
+      }
     });
     return () => subscription.remove();
   }, [readLockable]);
@@ -201,23 +232,35 @@ export function AppLockGate({ children }: { children: React.ReactNode }) {
   }, [phase, router]);
 
   const unlock = useCallback(async () => {
+    if (unlockingRef.current) return;
+    unlockingRef.current = true;
     try {
       // The device's own passcode stays a fallback (the module's default), so
       // a failed biometric is a retry here, not a way to lose the app.
       const result = await LocalAuthentication.authenticateAsync({
         promptMessage: APP_LOCK_UNLOCK_LABEL,
       });
-      if (result.success) setPhase('open');
+      if (result.success) {
+        setPhase('open');
+        // The ref is the listener's answer too, and it must not lag the unlock
+        // for the 'active' edge the prompt leaves behind.
+        phaseRef.current = 'open';
+        // The prompt's own 'inactive' edge put this cover up; the unlock is
+        // what takes it back down, so it cannot outlive the lock it was for.
+        setCoverOnInactive(false);
+      }
     } catch {
       // A prompt that could not run leaves the cover up; Unlock is the retry.
+    } finally {
+      unlockingRef.current = false;
     }
   }, []);
 
   return (
-    <>
+    <AppLockPhaseProvider value={phase}>
       {children}
       <Modal
-        visible={phase !== 'open'}
+        visible={phase !== 'open' || coverOnInactive}
         transparent
         // No animation: a fade would leave the app legible under the cover for
         // the length of the fade, which is the leak the lock is for.
@@ -233,7 +276,7 @@ export function AppLockGate({ children }: { children: React.ReactNode }) {
           <Button label={APP_LOCK_UNLOCK_LABEL} onPress={() => void unlock()} />
         </View>
       </Modal>
-    </>
+    </AppLockPhaseProvider>
   );
 }
 
