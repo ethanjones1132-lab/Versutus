@@ -10,7 +10,6 @@ import { StatusBar } from 'expo-status-bar';
 import { NavigationBar } from 'expo-navigation-bar';
 import { useEffect, useRef } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
-import { supportsHandsfreeCalls } from '@/lib/voice/voice-engine-choice';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { AppBootstrap } from '@/components/app-bootstrap';
@@ -32,7 +31,7 @@ import { HandsfreeVoiceProvider } from '@/context/handsfree-voice-provider';
 import { isShowcaseMode } from '@/lib/demo/showcase-mode';
 import { installGlobalFailureHandlers, recordFailure } from '@/lib/diagnostics/failure-log';
 import type { ChatSurface } from '@/lib/gateway/bots';
-import { deepLinkTarget, namedCallEngine } from '@/lib/gateway/deep-link';
+import { deepLinkTarget } from '@/lib/gateway/deep-link';
 import { openSessionById, openSessionByIdFailureText } from '@/lib/gateway/session-open-by-id';
 import {
   dismissSharedText,
@@ -540,42 +539,8 @@ function GatewayDeepLinkRouter() {
       return;
     }
 
-    // A call link (the widget's signed auto-start, a launcher shortcut, or a
-    // hand-written confirm link) opens the Bot Chat and asks the screen for
-    // the call sheet. A link alone never opens the microphone: the sheet's
-    // Start, or the native signature check on a signed link, is what begins
-    // capture (§4.4). With no Bot named the sheet belongs to whatever thread
-    // is already up, which is the screen's call.
-    if (target.kind === 'call') {
-      if (!supportsHandsfreeCalls(Platform.OS)) return;
-      if (status !== 'connected') return;
-      handledRef.current = url;
-      // The engine the link NAMED rides along as a parameter for this call
-      // only (VS-078): the screen offers it on the sheet and never writes it
-      // to settings, so the stored preference is still what the next call from
-      // the call button uses. A link that names no engine carries nothing —
-      // `deepLinkTarget` folds that to `auto`, but the difference matters here,
-      // and `namedCallEngine` is where it is read. The launcher shortcut and
-      // the widget's signed start name none, so they keep honouring the stored
-      // preference instead of forcing `auto` on the operator.
-      const namedEngine = namedCallEngine(parsed.queryParams ?? {});
-      router.navigate({
-        pathname: '/chat',
-        params: { call: '1', ...(namedEngine ? { engine: namedEngine } : {}) },
-      });
-      if (!target.botId) return;
-      const botId = target.botId;
-      void openBot(botId)
-        .then((opened) => {
-          if (!opened) {
-            requestSurface({ kind: 'roster' });
-            return;
-          }
-          requestSurface({ kind: 'bot', botId });
-        })
-        .catch(() => requestSurface({ kind: 'roster' }));
-      return;
-    }
+    // Expo Router's /call landing handles the intent and its confirmation.
+    if (target.kind === 'call') return;
 
     // The last target the fold answers is a chat link.
 

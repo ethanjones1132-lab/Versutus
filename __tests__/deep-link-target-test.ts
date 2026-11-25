@@ -438,38 +438,23 @@ describe('GatewayDeepLinkRouter routes on that target', () => {
   });
 
   test('a call link opens the Bot Chat and asks for the sheet, never the mic', () => {
-    const src = routerSource();
-    const call = src.slice(
-      src.indexOf("if (target.kind === 'call')"),
-      src.indexOf('// A Bot Chat link opens the way a roster tap opens one'),
-    );
-
-    expect(call.length).toBeGreaterThan(0);
-    const navigate = call.indexOf('router.navigate');
-    const sheet = call.indexOf("call: '1'");
-    expect(navigate).toBeGreaterThan(-1);
-    // The tab is brought up first, then the screen is asked for the sheet.
-    expect(sheet).toBeGreaterThan(navigate);
-    // Any app or web page can fire the link, so the router itself must never
-    // start capture; the sheet's Start (or the native signature check) is the
-    // only path that can.
-    expect(call).not.toContain('handsfree');
-    expect(src).not.toContain('sendChatInput');
+    const call = readSource('src', 'app', 'call.tsx');
+    expect(call).toContain('openBot(botId)');
+    expect(call).toContain("pathname: '/chat'");
+    expect(call).toContain("call: '1'");
+    expect(call).not.toContain('startCall');
+    expect(call).not.toContain('sendChatInput');
   });
 
   test('a call link hands the engine it named to the screen, and nothing when it named none', () => {
-    const src = routerSource();
-    const call = src.slice(
-      src.indexOf("if (target.kind === 'call')"),
-      src.indexOf('// A Bot Chat link opens the way a roster tap opens one'),
-    );
+    const call = readSource('src', 'app', 'call.tsx');
 
     // VS-078: the engine rides the navigation as a parameter, read from what
     // the link NAMED. An `auto` the fold made up for an absent engine is not a
     // request, so the shortcut and the widget's signed start still let the
     // stored preference decide.
-    expect(call).toContain('namedCallEngine(parsed.queryParams ?? {})');
-    expect(call).toContain('...(namedEngine ? { engine: namedEngine } : {})');
+    expect(call).toContain('namedCallEngine(query)');
+    expect(call).toContain('params: { call: \'1\', callRequest, callBot: botId, engine }');
   });
 
   test('the screen opens the call sheet for a call link', () => {

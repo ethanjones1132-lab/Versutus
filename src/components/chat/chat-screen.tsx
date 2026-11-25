@@ -193,6 +193,7 @@ import {
   handsfreeConsentKey,
   handsfreeConsentStoreFromUnknown,
   handsfreeCallsOffered,
+  handsfreeTransportForCall,
   hasHandsfreeConsent,
   logHandsfreeStart,
   type HandsfreeCallConsentStore,
@@ -514,7 +515,12 @@ function PairingRequiredBanner({ onShow }: { onShow: () => void }) {
 export function ChatScreen() {
   const router = useRouter();
   const navigation = useNavigation();
-  const params = useLocalSearchParams<{ call?: string; engine?: string }>();
+  const params = useLocalSearchParams<{
+    call?: string;
+    callRequest?: string;
+    callBot?: string;
+    engine?: string;
+  }>();
   const tokens = useTokens();
   const {
     activeGateway,
@@ -1830,10 +1836,11 @@ export function ChatScreen() {
     }
     setCallBusy(true);
     setCallError(undefined);
-    // The provider's decision is authoritative; this local expression is only
-    // a fallback for a context that does not carry it.
-    const transport = choice && choice.engine !== 'phone' ? 'gate' : 'phone';
-    const decidedTransport = handsfree.transport ?? transport;
+    // A link or the sheet can choose a different engine for this call. Use the
+    // provider's saved transport only while this call has no resolved choice.
+    const transport = choice || preference === 'phone'
+      ? handsfreeTransportForCall(choice?.engine, preference)
+      : handsfree.transport ?? 'phone';
     // A chat with nothing sent in it has no session yet. That is not a refusal:
     // the session is resolved (or opened) here, bounded, and a chat that cannot
     // be prepared still starts — the Gate opens the conversation then, and the
@@ -1857,14 +1864,14 @@ export function ChatScreen() {
         model: resolveSendModel(activeGateway, selectedBackendId, selectedBotId).model,
         label: callTargetLabel,
         voice: botVoice ?? {},
-        transport: decidedTransport,
+        transport,
         voiceEngine: preference,
       });
       if (attempt.result === 'started') {
         // Consent belongs to the engine AND transport that actually opened. An
         // unresolved choice records nothing, so the next call asks again.
         if (choice) {
-          void rememberHandsfreeConsent(choice.engine, decidedTransport);
+          void rememberHandsfreeConsent(choice.engine, transport);
         }
         setCallSheetVisible(false);
         // The Gate opened the chat this call answers in (the thread had none),
@@ -1988,19 +1995,36 @@ export function ChatScreen() {
   // its deps read that binding. The param is handled once so a re-render cannot
   // reopen the sheet after the operator dismisses it.
   const callEntry = params.call;
+  const callRequest = params.callRequest;
+  const callBot = params.callBot;
   const callEntryHandledRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (!callPlatformSupported || !isFocused || callEntry !== '1' || !draftThread) return undefined;
-    if (callEntryHandledRef.current === callEntry) return undefined;
+    if (!callPlatformSupported || !isFocused || callEntry !== '1' || status !== 'connected') return undefined;
+    const request = callRequest ?? callEntry;
+    if (callEntryHandledRef.current === request) return undefined;
     // Marked handled when the sheet opens, not when the timer is scheduled: a
     // re-render that clears the timer before it fires must leave the link free
     // to open the sheet on the next pass.
     const timer = setTimeout(() => {
-      callEntryHandledRef.current = callEntry;
+      if (callBot && (surface.kind !== 'bot' || surface.botId !== callBot)) {
+        if (selectedBotId === callBot) showSurface({ kind: 'bot', botId: callBot });
+        return;
+      }
+      if (!draftThread) {
+        if (callRequest && !callBot) {
+          clearBot();
+          showSurface({ kind: 'configurable' });
+        }
+        return;
+      }
+      callEntryHandledRef.current = request;
       openCallSheetFromLink();
     }, 0);
     return () => clearTimeout(timer);
-  }, [callPlatformSupported, isFocused, callEntry, draftThread, openCallSheetFromLink]);
+  }, [
+    callPlatformSupported, isFocused, callEntry, callRequest, callBot, status, surface, selectedBotId, draftThread,
+    clearBot, showSurface, openCallSheetFromLink,
+  ]);
 
   const handleChangeEngine = useCallback(() => {
     const index = CALL_ENGINE_ORDER.indexOf(callPreference);

@@ -175,6 +175,7 @@ const mockSurface = { messages: [] as unknown[], isSending: false, isCommandRunn
 /** The target each start was handed; the mock needs a shape to read it back. */
 type MockCallTarget = { transport?: string; voiceEngine?: string };
 let startedTarget: MockCallTarget | undefined;
+let mockStoredTransport: 'phone' | 'gate';
 const mockStart = jest.fn();
 
 jest.mock('@/context/gateway-provider', () => ({
@@ -185,6 +186,7 @@ jest.mock('@/context/handsfree-voice-provider', () => ({
   useHandsfreeVoice: () => ({
     active: false,
     canStart: true,
+    transport: mockStoredTransport,
     start: mockStart,
     end: jest.fn(),
     startBlocker: undefined,
@@ -380,6 +382,7 @@ beforeEach(async () => {
   jest.useFakeTimers();
   reset();
   mockStart.mockReset();
+  mockStoredTransport = 'gate';
   mockStart.mockImplementation(async (target: MockCallTarget) => {
     startedTarget = target;
     return { result: 'started' as string };
@@ -417,6 +420,26 @@ afterEach(async () => {
 });
 
 describe('a call link selects its engine for that call only (VS-078)', () => {
+  test.each([
+    { stored: 'local', storedTransport: 'gate', engine: 'phone', label: 'This phone only', transport: 'phone' },
+    { stored: 'phone', storedTransport: 'phone', engine: 'local', label: LOCAL_LABEL, transport: 'gate' },
+  ] as const)('starts $engine on $transport when the saved engine is $stored', async ({
+    stored, storedTransport, engine, label, transport,
+  }) => {
+    await saveAppSettings({ voiceEngine: stored });
+    mockStoredTransport = storedTransport;
+    mockRouteParams = { call: '1', engine };
+
+    await mount();
+    await openConfigurableThread();
+    expect(sheet().engineLabel).toBe(label);
+
+    await pressSheetStart();
+    expect(mockStart).toHaveBeenCalledTimes(1);
+    expect(startedTarget).toMatchObject({ voiceEngine: engine, transport });
+    expect((await loadAppSettings()).voiceEngine).toBe(stored);
+  });
+
   test('engine=local opens the sheet on local while codex is stored, and the stored preference is untouched', async () => {
     await saveAppSettings({ voiceEngine: 'codex' });
     mockRouteParams = { call: '1', engine: 'local' };
@@ -458,6 +481,19 @@ describe('a call link selects its engine for that call only (VS-078)', () => {
     await pressSheetStart();
     expect(startedTarget?.voiceEngine).toBe('codex');
     expect((await loadAppSettings()).voiceEngine).toBe('codex');
+  });
+
+  test('an unresolved call uses the transport offered by the provider', async () => {
+    gateVoice(null);
+    await mount();
+    await openConfigurableThread();
+
+    await pressCall();
+    expect(sheet().visible).toBe(true);
+    expect(sheet().engineLabel).toBeUndefined();
+
+    await pressSheetStart();
+    expect(startedTarget).toMatchObject({ voiceEngine: 'auto', transport: 'gate' });
   });
 
   test('a dismissed link sheet leaves nothing behind for the next call', async () => {

@@ -159,10 +159,15 @@ describe('the Call offer and the start path share one transport decision', () =>
     );
   });
 
-  test('the start path uses the provider’s transport instead of re-deciding it', () => {
+  test('the start path decides this call’s transport from the engine chosen for it', () => {
+    // b859037: a link or the sheet can pick a different engine for one call, so
+    // the provider's saved transport only applies while the call has no resolved
+    // choice. Consent is remembered for the transport that actually opened.
     const start = between(screen, 'const startCallWith = useCallback(', '}, [activeGateway');
-    expect(start).toContain('const decidedTransport = handsfree.transport ?? transport');
-    expect(start).toContain('transport: decidedTransport');
+    expect(start).toContain('handsfreeTransportForCall(choice?.engine, preference)');
+    expect(start).toContain("handsfree.transport ?? 'phone'");
+    expect(start).toContain('rememberHandsfreeConsent(choice.engine, transport)');
+    expect(start).not.toContain('decidedTransport');
   });
 
   test('a newly connected gateway never inherits the previous gateway’s engine', () => {
