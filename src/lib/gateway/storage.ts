@@ -1,5 +1,6 @@
 import { sanitizeHeaderValue } from '@/lib/gateway/http-transport';
 import { collapseDuplicateGateways, mergeIntoExistingGateway } from '@/lib/gateway/profile-dedupe';
+import { cleartextRefusalMessage } from '@/lib/gateway/security';
 import { normalizeGatewayUrl } from '@/lib/gateway/url';
 import { secureKeyValueStorage } from '@/lib/storage/secure-key-value';
 
@@ -174,10 +175,19 @@ export async function removeGateway(id: string): Promise<GatewayProfile[]> {
  * Add a profile, merging it into a saved profile for the same gateway rather
  * than creating a second one (profile-dedupe.ts). Returns the profile that is
  * actually stored — the caller must connect with THAT, not the one it built.
+ *
+ * Every writer of the profile store funnels through here, so this is where a
+ * refused transport is stopped: a profile that could only ever send a Bearer
+ * token in cleartext off the trusted local network is never persisted, and
+ * nothing (a deep link included) can hand one to `loadGateways` by another
+ * route.
  */
 export async function addGatewayProfile(
   profile: GatewayProfile,
 ): Promise<{ profile: GatewayProfile; gateways: GatewayProfile[] }> {
+  const refusal = cleartextRefusalMessage(profile.url);
+  if (refusal) throw new Error(refusal);
+
   return enqueueStoreMutation(async () => {
     const merged = mergeIntoExistingGateway(await loadGateways(), profile);
     await writeGateways(merged.gateways);
@@ -233,6 +243,13 @@ export function createGatewayProfile(input: {
   agentId?: string;
   discoverySource?: GatewayProfile['discoverySource'];
 }): GatewayProfile {
+  const url = normalizeGatewayUrl(input.url);
+  // The save path's own check: build the normalized URL first, so the operator
+  // is told about the address that would actually be stored, and so a refused
+  // address never becomes a profile an add screen or a deep link can hold.
+  const refusal = cleartextRefusalMessage(url);
+  if (refusal) throw new Error(refusal);
+
   const discoverySource =
     input.discoverySource ??
     (input.url.includes('.ts.net') || input.url.startsWith('https://') ? 'tailscale' : 'manual');
@@ -240,7 +257,7 @@ export function createGatewayProfile(input: {
   return {
     id: `gw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: input.name.trim() || 'My Gateway',
-    url: normalizeGatewayUrl(input.url),
+    url,
     kind: input.kind,
     token: input.token?.trim() || undefined,
     tlsFingerprint: input.tlsFingerprint?.trim() || undefined,

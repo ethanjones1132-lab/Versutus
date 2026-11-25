@@ -11,8 +11,14 @@ function withOpenClawDiscovery(config) {
     if (!existing.includes(BONJOUR_SERVICE)) {
       config.modResults.NSBonjourServices = [...existing, BONJOUR_SERVICE];
     }
-    // Gateways are reached over plain HTTP on LAN/tailnet — ATS must allow it.
-    // (Private portal tool; scoped exceptions cannot cover wildcard ts.net hosts.)
+    // Gateways are reached over plain HTTP on LAN/tailnet, and the trusted
+    // host set is only known at runtime (a LAN IP, a MagicDNS name). ATS cannot
+    // express RFC 1918 ranges or a wildcard ts.net name, so this platform
+    // exemption stays blanket: the real gate is the app's own predicate
+    // (`isTrustedCleartextHost`, src/lib/gateway/security.ts), which refuses a
+    // cleartext origin off the trusted local network before a profile is saved
+    // or a request is built. Android's `usesCleartextTraffic` is the same kind
+    // of blanket boolean (see app.json).
     config.modResults.NSAppTransportSecurity = {
       ...(config.modResults.NSAppTransportSecurity ?? {}),
       NSAllowsArbitraryLoads: true,

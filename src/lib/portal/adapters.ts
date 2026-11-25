@@ -9,6 +9,7 @@ import { HermesGatewayClient, type GatewayClientCallbacks } from '@/lib/gateway/
 import type { PublicBot } from '@/lib/gateway/bots';
 import type { BotGroupRoom, GroupReply, GroupTranscriptEntry, GroupTurnError } from '@/lib/gateway/groups';
 import { ManifestClient } from '@/lib/gateway/manifest-client';
+import { cleartextRefusalMessage } from '@/lib/gateway/security';
 import type { RoutineScope } from '@/lib/gateway/activity-feed';
 import { OpenClawAdapterClient } from '@/lib/portal/openclaw-adapter';
 import type { GatewayIdentity } from '@/lib/portal/identify';
@@ -320,6 +321,14 @@ export function createClientForKind(
   identity?: GatewayIdentity,
 ): PortalClient {
   const reachable = profileWithAlternateIpv4(profile, identity);
+  // The request path's one gate: every client that attaches the Bearer token
+  // to an outbound request is built here, so a profile whose transport the
+  // save path would refuse is refused again before any transport exists —
+  // there is no client, and therefore no header, for a host off the trusted
+  // local network.
+  const refusal = cleartextRefusalMessage(reachable.url);
+  if (refusal) throw new Error(refusal);
+
   switch (kind) {
     case 'openclaw':
       return new OpenClawAdapterClient(reachable, callbacks);

@@ -584,7 +584,7 @@ describe('a Gate profile with no token at all', () => {
 
 describe('a bare Hermes that legitimately has no token', () => {
   test('still connects, and still sends no Authorization header', async () => {
-    const gamma = profile({ id: 'gamma', url: 'http://hermes.test:8642', kind: 'hermes', token: undefined });
+    const gamma = profile({ id: 'gamma', url: 'http://127.0.0.1:8642', kind: 'hermes', token: undefined });
     mockState.gateways = [gamma];
     mockState.activeId = null;
     refuseWithoutKey = false;

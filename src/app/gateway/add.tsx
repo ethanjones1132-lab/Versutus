@@ -10,6 +10,7 @@ import { useGateway } from '@/context/gateway-provider';
 import { gatewayAddKeyboardBehavior } from '@/lib/gateway/add-keyboard-behavior';
 import { humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import { ipv4FromExpoExtra } from '@/lib/gateway/host-lookup';
+import { cleartextRefusalMessage } from '@/lib/gateway/security';
 import { normalizeGatewayUrl } from '@/lib/gateway/url';
 import { requestGatewayAccess, type AccessRequestResult } from '@/lib/portal/access';
 import { identifyGateway, type GatewayIdentity } from '@/lib/portal/identify';
@@ -64,6 +65,17 @@ export default function AddGatewayScreen() {
         // instead of letting a bad entry fall into the misleading "token
         // required" dead end.
         const normalizedUrl = normalizeGatewayUrl(url);
+
+        // 0b. Cleartext to a host off the trusted local network is refused
+        // before anything is sent to it. The link's address is untrusted input
+        // and Save would otherwise hand this device's identity — and any token
+        // the link carried — to whatever host it names.
+        const refusal = cleartextRefusalMessage(normalizedUrl);
+        if (refusal) {
+          setSaveError(refusal);
+          setSaving(false);
+          return;
+        }
 
         // 1. Identify the gateway regardless of origin (manifest → fingerprints).
         const identity = await identifyGateway({

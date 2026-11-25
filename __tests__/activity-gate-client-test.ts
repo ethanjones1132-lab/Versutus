@@ -17,7 +17,7 @@ jest.mock('expo-constants', () => ({ __esModule: true, default: { expoConfig: { 
 const PROFILE: GatewayProfile = {
   id: 'gate-activity',
   name: 'Activity Gate',
-  url: 'http://gate.test:8760',
+  url: 'http://100.100.1.2:8760',
   kind: 'custom',
   token: 'k',
   createdAt: 0,
