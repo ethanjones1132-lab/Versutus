@@ -1,74 +1,249 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Versutus — a mobile and web client for AI agent gateways</title>
-<meta name="description" content="Versutus is a mobile and web client for AI agent gateways: point it at a Hermes Agent on your own machine and drive it from a phone.">
-<link rel="stylesheet" href="styles.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Versutus — a mobile &amp; web client for AI agent gateways</title>
+  <meta name="description" content="Versutus is a mobile and web client for AI agent gateways: point it at a Hermes Agent on your own machine and drive chat, Bots, agentic runs, approvals and tools from your phone.">
+  <meta name="theme-color" content="#0b1210">
+  <meta property="og:title" content="Versutus — a mobile &amp; web client for AI agent gateways">
+  <meta property="og:description" content="Point Versutus at a Hermes Agent on your own machine — over LAN, over Tailscale, or through a gate you control — and drive it from your phone.">
+  <meta property="og:type" content="website">
+  <link rel="stylesheet" href="styles.css">
+  <script src="script.js" defer></script>
 </head>
 <body>
-<header>
-  <nav>
-    <a class="brand" href="#top">Versutus</a>
-    <ul>
-      <li><a href="#features">Features</a></li>
-      <li><a href="#gateways">Gateways</a></li>
-      <li><a href="#privacy">Privacy</a></li>
-      <li><a href="#status">Status</a></li>
-    </ul>
-  </nav>
-</header>
+  <a class="skip-link" href="#main">Skip to content</a>
 
-<main id="top">
-  <section class="hero">
-    <h1>Versutus</h1>
-    <p class="tagline">A mobile and web client for AI agent gateways — your agent stays where you put it.</p>
-    <p class="lede">Point Versutus at a Hermes Agent running on your own machine — over LAN, over Tailscale, or through a gate you control — and drive it from a phone.</p>
-  </section>
+  <header class="site-header">
+    <nav class="site-nav" aria-label="Primary">
+      <a class="brand" href="#top">Versutus</a>
+      <ul class="nav-links">
+        <li><a href="#features">Features</a></li>
+        <li><a href="#bots">Bots</a></li>
+        <li><a href="#gateways">Gateways</a></li>
+        <li><a href="#voice">Voice</a></li>
+        <li><a href="#privacy">Privacy</a></li>
+        <li><a href="#status">Status</a></li>
+      </ul>
+    </nav>
+  </header>
 
-  <section id="features">
-    <h2>Features</h2>
-    <p>Versutus is a client for AI agent gateways, with chat, Bots, agentic runs, approvals and tools — on Android, iOS and the web.</p>
-    <ul class="surfaces">
-      <li><strong>Home</strong> — connection, capabilities, live runs and approvals.</li>
-      <li><strong>Chat</strong> — streaming markdown, slash commands, model picker, offline outbox, tool-call cards and inline run approvals.</li>
-      <li><strong>Activity</strong> — start an agentic run, watch live events, approve or deny, stop.</li>
-      <li><strong>Tools</strong> — inspect what your gateway offers.</li>
-      <li><strong>Connecting</strong> — saved gateways, Tailscale or LAN hosts probed on launch, and <code>versutus://add</code> deep links.</li>
-      <li><strong>Identity</strong> — secure on-device profiles and tokens.</li>
-    </ul>
-    <h3>Bots</h3>
-    <p>A Bot is a Hermes profile with its own soul, memory, model pin, sessions and crons. The Chat tab opens on a roster of Bots; tapping one opens its own persistent conversation. Each Bot is reached with its own key — if that fails, the request never silently falls back to the default profile.</p>
-    <h3>Voice</h3>
-    <p>Hold-to-talk dictation lands in the composer and never sends by itself; optional spoken replies per Bot; a separate opt-in hands-free call that only starts on an explicit Start call tap. No wake word, no always-listening mode.</p>
-  </section>
+  <main id="main">
+    <section class="hero" id="top" aria-labelledby="hero-headline">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>A mobile &amp; web client for AI agent gateways</p>
+        <h1 id="hero-headline">Meet Versutus: your agent, in your pocket, on your terms.</h1>
+        <p class="tagline">Point Versutus at a Hermes Agent on your own machine — over LAN, over Tailscale, or through a gate you control — and drive it from a phone.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="https://github.com/ethanjones1132-lab/Versutus">View the source</a>
+          <a class="btn btn-secondary" href="#features">How it works</a>
+        </div>
+        <p class="hero-meta">Android · iOS · web &nbsp;·&nbsp; not published to any store &nbsp;·&nbsp; pre-release</p>
+      </div>
+      <figure class="hero-art">
+        <svg class="hero-illustration" viewBox="0 0 520 640" role="img" aria-label="A phone showing the Versutus Chat screen: a Bot roster at the top, a short conversation, a tool-call chip, and an inline run approval card with Approve and Deny buttons.">
+          <defs>
+            <radialGradient id="glow" cx="50%" cy="45%" r="55%">
+              <stop offset="0%" stop-color="#5fd0b4" stop-opacity="0.28"/>
+              <stop offset="100%" stop-color="#5fd0b4" stop-opacity="0"/>
+            </radialGradient>
+            <linearGradient id="frame" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#1c2420"/>
+              <stop offset="100%" stop-color="#0c1210"/>
+            </linearGradient>
+            <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#101815"/>
+              <stop offset="100%" stop-color="#0b100e"/>
+            </linearGradient>
+          </defs>
 
-  <section id="gateways">
-    <h2>Gateways</h2>
-    <p>One portal, many gateways — the app reads what the live gateway advertises and only shows those surfaces.</p>
-    <ul>
-      <li><strong>Hermes</strong> — HTTP REST + SSE, the primary PC agent.</li>
-      <li><strong>Versutus Gate</strong> — a multi-provider gate with an OpenAI-compatible chat proxy, in this repo.</li>
-      <li><strong>OpenClaw</strong> — WebSocket adapter for compatible profiles.</li>
-    </ul>
-    <p>Gateways are reachable over LAN or Tailscale, through a gate you control — not through a public relay.</p>
-  </section>
+          <ellipse class="hero-glow" cx="260" cy="330" rx="205" ry="300" fill="url(#glow)"/>
 
-  <section id="privacy">
-    <h2>Privacy</h2>
-    <p>Versutus is a client. It holds no model credentials of its own, brokers nothing on anyone else's behalf, and is not a public relay. Approvals stay with you: run approvals, tool-call inspection and per-Bot session scoping all happen on your side of the wire. Your agent stays where you put it.</p>
-  </section>
+          <!-- phone frame -->
+          <rect x="135" y="15" width="250" height="610" rx="44" fill="url(#frame)" stroke="#2c3a34" stroke-width="2"/>
+          <rect x="147" y="27" width="226" height="586" rx="34" fill="url(#screen)"/>
+          <rect x="220" y="36" width="80" height="14" rx="7" fill="#0a0f0d" stroke="#243029" stroke-width="1"/>
 
-  <section id="status">
-    <h2>Status</h2>
-    <p>Versutus is pre-release, single author, actively built. It is not published to any store.</p>
-    <p>Source: <a href="https://github.com/ethanjones1132-lab/Versutus">https://github.com/ethanjones1132-lab/Versutus</a></p>
-  </section>
-</main>
+          <!-- status bar -->
+          <text class="svg-status" x="166" y="60" font-size="10" font-weight="600" fill="#cfe0d8" font-family="ui-sans-serif, system-ui, sans-serif">9:41</text>
+          <g fill="#cfe0d8">
+            <rect x="330" y="53" width="4" height="7" rx="1"/>
+            <rect x="338" y="50" width="4" height="10" rx="1"/>
+            <rect x="346" y="47" width="4" height="13" rx="1"/>
+          </g>
 
-<footer>
-  <p>Versutus — a mobile and web client for AI agent gateways.</p>
-</footer>
+          <!-- roster header -->
+          <text class="svg-label" x="163" y="92" font-size="9" letter-spacing="1.5" fill="#7d8f86" font-family="ui-sans-serif, system-ui, sans-serif">BOTS</text>
+          <rect x="163" y="102" width="64" height="28" rx="14" fill="#16201c" stroke="#25332d" stroke-width="1"/>
+          <circle cx="177" cy="116" r="9" fill="#5fd0b4"/>
+          <text x="190" y="120" font-size="9" font-weight="600" fill="#e7f2ec" font-family="ui-sans-serif, system-ui, sans-serif">Mina</text>
+          <rect x="233" y="102" width="64" height="28" rx="14" fill="#16201c" stroke="#25332d" stroke-width="1"/>
+          <circle cx="247" cy="116" r="9" fill="#8ab4f8"/>
+          <text x="260" y="120" font-size="9" font-weight="600" fill="#e7f2ec" font-family="ui-sans-serif, system-ui, sans-serif">Karl</text>
+          <rect x="303" y="102" width="60" height="28" rx="14" fill="#16201c" stroke="#25332d" stroke-width="1"/>
+          <circle cx="317" cy="116" r="9" fill="#e5c07b"/>
+          <text x="330" y="120" font-size="9" font-weight="600" fill="#e7f2ec" font-family="ui-sans-serif, system-ui, sans-serif">Ada</text>
+
+          <!-- conversation -->
+          <rect x="212" y="146" width="151" height="34" rx="14" fill="#5fd0b4"/>
+          <text x="226" y="167" font-size="10" font-weight="600" fill="#08251e" font-family="ui-sans-serif, system-ui, sans-serif">Run the release checks</text>
+
+          <rect x="163" y="192" width="118" height="42" rx="14" fill="#16201c" stroke="#26332c" stroke-width="1"/>
+          <text x="175" y="208" font-size="9.5" fill="#cfe0d8" font-family="ui-sans-serif, system-ui, sans-serif">Tests 12 / 12</text>
+          <text x="175" y="222" font-size="9.5" fill="#cfe0d8" font-family="ui-sans-serif, system-ui, sans-serif">passing — on your machine.</text>
+
+          <!-- tool-call chip -->
+          <rect x="163" y="248" width="202" height="26" rx="13" fill="#121a17" stroke="#25332d" stroke-width="1"/>
+          <circle cx="177" cy="261" r="7" fill="none" stroke="#5fd0b4" stroke-width="1.5"/>
+          <text x="192" y="265" font-size="8.5" fill="#9fb4a8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">tool · run_tests · 12 passed</text>
+
+          <!-- run approval card -->
+          <rect x="163" y="288" width="202" height="118" rx="16" fill="#16201c" stroke="#3a4a41" stroke-width="1.25"/>
+          <circle cx="177" cy="311" r="5" fill="#5fd0b4"/>
+          <text x="190" y="315" font-size="8" letter-spacing="1.4" fill="#5fd0b4" font-family="ui-sans-serif, system-ui, sans-serif">RUN APPROVAL</text>
+          <text x="177" y="340" font-size="9.5" font-weight="600" fill="#eaf3ed" font-family="ui-sans-serif, system-ui, sans-serif">run_tests: deployment dry run</text>
+          <text x="177" y="355" font-size="8.5" fill="#9fb4a8" font-family="ui-sans-serif, system-ui, sans-serif">on Hermes · 4 actions · 1 pending</text>
+          <rect x="177" y="372" width="80" height="26" rx="9" fill="#5fd0b4"/>
+          <text x="213" y="389" font-size="9.5" font-weight="700" fill="#08251e" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif">Approve</text>
+          <rect x="265" y="372" width="80" height="26" rx="9" fill="#1c2622" stroke="#3a4a41" stroke-width="1"/>
+          <text x="305" y="389" font-size="9.5" font-weight="600" fill="#d8e4dc" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif">Deny</text>
+
+          <!-- composer -->
+          <rect x="163" y="566" width="202" height="34" rx="17" fill="#101815" stroke="#25332d" stroke-width="1"/>
+          <text x="179" y="587" font-size="9" fill="#7d8f86" font-family="ui-sans-serif, system-ui, sans-serif">Message Mina…</text>
+          <circle cx="342" cy="583" r="10" fill="#5fd0b4"/>
+          <path d="M339 583 L345 583 M345 583 L341.5 579.5 M345 583 L341.5 586.5" stroke="#08251e" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <figcaption class="sr-only">Illustration of the Versutus Chat screen on a phone: roster, conversation, tool call and run approval.</figcaption>
+      </figure>
+    </section>
+
+    <section class="why-band" aria-labelledby="why-headline">
+      <p class="eyebrow">Why it exists</p>
+      <h2 id="why-headline">A text box is not an agent surface.</h2>
+      <div class="why-grid">
+        <p>Bridge Hermes Agent into Telegram or Discord and you get a text box: no run lifecycle, no approval prompts, no tool-call inspection, no capability discovery, no per-Bot session scoping.</p>
+        <p>Versutus speaks to the API server directly, so run lifecycle, approvals, tool-call inspection, capability discovery and per-Bot session scoping all survive the trip to your phone. Your agent stays where you put it.</p>
+      </div>
+    </section>
+
+    <section id="features" aria-labelledby="features-headline">
+      <p class="eyebrow">Features</p>
+      <h2 id="features-headline">Everything the agent does, in your pocket.</h2>
+      <p class="lede">Versutus is a client — Android, iOS and web — for AI agent gateways. It never assumes a capability: it reads what the live gateway advertises and shows only the surfaces that exist.</p>
+      <ul class="surfaces">
+        <li><strong>Home</strong><span>Connection, capabilities, live runs and approvals.</span></li>
+        <li><strong>Chat</strong><span>Streaming markdown, slash commands, model picker, offline outbox, tool-call cards and inline run approvals.</span></li>
+        <li><strong>Activity</strong><span>Start an agentic run, watch live events, approve or deny, stop.</span></li>
+        <li><strong>Tools</strong><span>Shell when advertised; otherwise RPC and Agent commands.</span></li>
+        <li><strong>Connecting</strong><span>Saved gateways, Tailscale or LAN hosts probed on launch, and <code>versutus://add</code> deep links.</span></li>
+        <li><strong>Identity</strong><span>Secure on-device profiles and tokens.</span></li>
+      </ul>
+      <p class="note">For example, the Shell tab appears only when a gateway advertises a terminal. Otherwise Tools offers RPC and Agent commands — the app shows what the gateway actually supports, never a promise of what it does not.</p>
+    </section>
+
+    <section id="bots" aria-labelledby="bots-headline">
+      <p class="eyebrow">Bots</p>
+      <h2 id="bots-headline">A roster, not a chat.</h2>
+      <p>A Bot is a Hermes profile with its own soul, memory, model pin, sessions and crons. The Chat tab opens on a roster of Bots; tapping one opens its own persistent conversation. Each Bot is reached with its own key — if that fails, the request never silently falls back to the default profile. It fails closed, not open.</p>
+      <figure class="callout">
+        <p><strong>Per-Bot scoping.</strong> Every Bot keeps its own sessions and history, so a coding Bot and a calendar Bot never blur together.</p>
+      </figure>
+    </section>
+
+    <section id="gateways" aria-labelledby="gateways-headline">
+      <p class="eyebrow">Gateways</p>
+      <h2 id="gateways-headline">One portal, many gateways.</h2>
+      <p>Versutus talks to the API server directly, over LAN, over Tailscale, or through a gate you control — never through a public relay.</p>
+
+      <figure class="diagram">
+        <div class="diagram-track" aria-hidden="true">
+          <div class="diagram-node">
+            <span class="diagram-icon diagram-phone"></span>
+            <span class="diagram-name">Versutus</span>
+            <span class="diagram-detail">phone · web</span>
+          </div>
+          <span class="diagram-flow" aria-hidden="true"></span>
+          <div class="diagram-node diagram-gate">
+            <span class="diagram-icon diagram-gate-icon"></span>
+            <span class="diagram-name">Your gateway</span>
+            <span class="diagram-detail">Hermes · Versutus Gate · OpenClaw</span>
+          </div>
+          <span class="diagram-flow" aria-hidden="true"></span>
+          <div class="diagram-node">
+            <span class="diagram-icon diagram-machine"></span>
+            <span class="diagram-name">Your machine</span>
+            <span class="diagram-detail">Hermes Agent</span>
+          </div>
+        </div>
+        <figcaption>Phone talks to your gateway; the gateway talks to the agent on your own machine. Nothing passes through a third party.</figcaption>
+      </figure>
+
+      <ul class="gateways-list">
+        <li>
+          <h3>Hermes</h3>
+          <p>HTTP REST + SSE — the primary PC agent. This is the open Hermes Agent, with its own API server.</p>
+        </li>
+        <li>
+          <h3>Versutus Gate</h3>
+          <p>A multi-provider gateway with an OpenAI-compatible chat proxy, open source alongside the app.</p>
+        </li>
+        <li>
+          <h3>OpenClaw</h3>
+          <p>WebSocket adapter for compatible profiles.</p>
+        </li>
+      </ul>
+
+      <p class="fineprint">Hermes Agent is a desktop app, a TUI and an HTTP API server — but no mobile client, and <a href="https://github.com/NousResearch/hermes-agent/issues/35966">the open issue</a> asking for one has been open for a while. Versutus is that missing client.</p>
+    </section>
+
+    <section id="voice" aria-labelledby="voice-headline">
+      <p class="eyebrow">Voice</p>
+      <h2 id="voice-headline">Your keys, not your ears.</h2>
+      <p>Hold-to-talk dictation drops text into the composer and never sends by itself. Spoken replies can be enabled per Bot. And the hands-free call is a separate, opt-in mode that only starts on an explicit Start call tap — never ambiently.</p>
+      <ul class="voice-list">
+        <li><strong>No wake word.</strong> Versutus never listens for a word in the background.</li>
+        <li><strong>No always-listening mode.</strong> Dictation is a held tap; the call is a started tap. Nothing else wakes.</li>
+      </ul>
+    </section>
+
+    <section id="privacy" aria-labelledby="privacy-headline">
+      <p class="eyebrow">Privacy</p>
+      <h2 id="privacy-headline">Your agent stays where you put it.</h2>
+      <div class="privacy-grid">
+        <p>Versutus is a client. It holds no model credentials of its own, brokers nothing on anyone else's behalf, and is not a public relay.</p>
+        <p>Run approvals, tool-call inspection and per-Bot session scoping all happen on your side of the wire. The key that reaches a Bot — its own key — either works, or fails closed. There is no silent fallback to a default profile.</p>
+      </div>
+      <ul class="privacy-list">
+        <li><strong>Holds no credentials.</strong> Versutus never carries model keys; your gateway holds them.</li>
+        <li><strong>Brokers nothing.</strong> It does not relay, proxy or sell your agent's traffic.</li>
+        <li><strong>Fails closed.</strong> A Bot whose key fails is not reached silently through another profile.</li>
+      </ul>
+    </section>
+
+    <section id="status" aria-labelledby="status-headline">
+      <p class="eyebrow">Status</p>
+      <h2 id="status-headline">Pre-release, actively built.</h2>
+      <p>Versutus is pre-release, single author and actively built. It is not published in any store, and it is honest about that. The source is the whole store door — a link to the repo, and a README that tells you where things stand.</p>
+      <div class="status-card">
+        <dl>
+          <div><dt>Build state</dt><dd>Pre-release · single author · actively built</dd></div>
+          <div><dt>Store presence</dt><dd>Not published to any store</dd></div>
+          <div><dt>Source</dt><dd><a href="https://github.com/ethanjones1132-lab/Versutus">https://github.com/ethanjones1132-lab/Versutus</a></dd></div>
+        </dl>
+      </div>
+      <a class="btn btn-primary status-cta" href="https://github.com/ethanjones1132-lab/Versutus">View the source</a>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>Versutus — a mobile &amp; web client for AI agent gateways. Your agent stays where you put it.</p>
+    <nav class="footer-nav" aria-label="Footer">
+      <a href="https://github.com/ethanjones1132-lab/Versutus">Repository</a>
+      <a href="https://github.com/NousResearch/hermes-agent/issues/35966">Hermes issue</a>
+    </nav>
+    <p class="fineprint">Built against Hermes Agent. No accounts, no relay.</p>
+  </footer>
 </body>
 </html>
