@@ -1,0 +1,270 @@
+:root {
+  --bg: #faf8f4;
+  --surface: #ffffff;
+  --border: #e3ded4;
+  --text: #26241f;
+  --muted: #5c564c;
+  --accent: #0f6b5c;
+  --accent-strong: #0a4f43;
+  --accent-soft: #dcefe9;
+  --code-bg: #efece5;
+  --code-text: #3a352c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16150f;
+    --surface: #201f18;
+    --border: #35332a;
+    --text: #ece8dd;
+    --muted: #b5af9f;
+    --accent: #5fd0b4;
+    --accent-strong: #8adcbf;
+    --accent-soft: #1e2f28;
+    --code-bg: #2a2820;
+    --code-text: #d8d2c2;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+.content,
+main,
+header,
+footer {
+  width: 100%;
+  max-width: 46rem;
+  margin: 0 auto;
+  padding-left: 1.25rem;
+  padding-right: 1.25rem;
+}
+
+header {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  z-index: 10;
+}
+
+header nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 0.9rem;
+  padding-bottom: 0.9rem;
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 1.15rem;
+  letter-spacing: 0.01em;
+  color: var(--accent-strong);
+  text-decoration: none;
+}
+
+header nav ul {
+  display: flex;
+  gap: 1.1rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+header nav a {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.95rem;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+header nav a:hover,
+header nav a:focus-visible {
+  color: var(--accent-strong);
+}
+
+main {
+  display: flex;
+  flex-direction: column;
+  gap: 3.5rem;
+  padding-top: 2rem;
+}
+
+section {
+  scroll-margin-top: 4.5rem;
+}
+
+.hero {
+  text-align: center;
+  padding-top: 2.5rem;
+  padding-bottom: 1rem;
+}
+
+h1 {
+  font-size: clamp(2.75rem, 8vw, 4.25rem);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin: 0 0 1rem;
+  color: var(--accent-strong);
+}
+
+.tagline {
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 0.75rem;
+}
+
+.lede {
+  color: var(--muted);
+  font-size: 1.1rem;
+  max-width: 38rem;
+  margin: 0 auto;
+}
+
+h2 {
+  font-size: 1.75rem;
+  color: var(--text);
+  margin: 0 0 0.75rem;
+  letter-spacing: -0.01em;
+}
+
+h3 {
+  font-size: 1.15rem;
+  color: var(--accent-strong);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 1.75rem 0 0.5rem;
+}
+
+section p {
+  margin: 0 0 1rem;
+  color: var(--text);
+}
+
+ul {
+  padding-left: 1.25rem;
+}
+
+li {
+  margin-bottom: 0.5rem;
+  line-height: 1.6;
+}
+
+li strong {
+  color: var(--accent-strong);
+}
+
+.surfaces {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem 1.25rem;
+  padding-left: 0;
+  list-style: none;
+}
+
+.surfaces li {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.7rem 0.85rem;
+  margin-bottom: 0;
+  font-size: 0.95rem;
+}
+
+code {
+  background: var(--code-bg);
+  color: var(--code-text);
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.3rem;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+a {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+a:hover,
+a:focus-visible {
+  color: var(--accent);
+}
+
+#gateways ul,
+#privacy ul {
+  list-style: none;
+  padding-left: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+}
+
+#gateways li {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.75rem 0.9rem;
+  margin-bottom: 0;
+}
+
+#status a {
+  word-break: break-all;
+}
+
+footer {
+  border-top: 1px solid var(--border);
+  margin-top: 1rem;
+  padding-top: 1.5rem;
+  padding-bottom: 2.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+@media (max-width: 40rem) {
+  header nav {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.6rem;
+  }
+
+  header nav ul {
+    flex-wrap: wrap;
+    gap: 0.6rem 0.9rem;
+  }
+
+  .surfaces {
+    grid-template-columns: 1fr;
+  }
+
+  #gateways ul {
+    grid-template-columns: 1fr;
+  }
+
+  h1 {
+    font-size: 2.5rem;
+  }
+
+  .tagline {
+    font-size: 1.15rem;
+  }
+}

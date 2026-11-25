@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Versutus — a mobile and web client for AI agent gateways</title>
+<meta name="description" content="Versutus is a mobile and web client for AI agent gateways: point it at a Hermes Agent on your own machine and drive it from a phone.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <nav>
+    <a class="brand" href="#top">Versutus</a>
+    <ul>
+      <li><a href="#features">Features</a></li>
+      <li><a href="#gateways">Gateways</a></li>
+      <li><a href="#privacy">Privacy</a></li>
+      <li><a href="#status">Status</a></li>
+    </ul>
+  </nav>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <h1>Versutus</h1>
+    <p class="tagline">A mobile and web client for AI agent gateways — your agent stays where you put it.</p>
+    <p class="lede">Point Versutus at a Hermes Agent running on your own machine — over LAN, over Tailscale, or through a gate you control — and drive it from a phone.</p>
+  </section>
+
+  <section id="features">
+    <h2>Features</h2>
+    <p>Versutus is a client for AI agent gateways, with chat, Bots, agentic runs, approvals and tools — on Android, iOS and the web.</p>
+    <ul class="surfaces">
+      <li><strong>Home</strong> — connection, capabilities, live runs and approvals.</li>
+      <li><strong>Chat</strong> — streaming markdown, slash commands, model picker, offline outbox, tool-call cards and inline run approvals.</li>
+      <li><strong>Activity</strong> — start an agentic run, watch live events, approve or deny, stop.</li>
+      <li><strong>Tools</strong> — inspect what your gateway offers.</li>
+      <li><strong>Connecting</strong> — saved gateways, Tailscale or LAN hosts probed on launch, and <code>versutus://add</code> deep links.</li>
+      <li><strong>Identity</strong> — secure on-device profiles and tokens.</li>
+    </ul>
+    <h3>Bots</h3>
+    <p>A Bot is a Hermes profile with its own soul, memory, model pin, sessions and crons. The Chat tab opens on a roster of Bots; tapping one opens its own persistent conversation. Each Bot is reached with its own key — if that fails, the request never silently falls back to the default profile.</p>
+    <h3>Voice</h3>
+    <p>Hold-to-talk dictation lands in the composer and never sends by itself; optional spoken replies per Bot; a separate opt-in hands-free call that only starts on an explicit Start call tap. No wake word, no always-listening mode.</p>
+  </section>
+
+  <section id="gateways">
+    <h2>Gateways</h2>
+    <p>One portal, many gateways — the app reads what the live gateway advertises and only shows those surfaces.</p>
+    <ul>
+      <li><strong>Hermes</strong> — HTTP REST + SSE, the primary PC agent.</li>
+      <li><strong>Versutus Gate</strong> — a multi-provider gate with an OpenAI-compatible chat proxy, in this repo.</li>
+      <li><strong>OpenClaw</strong> — WebSocket adapter for compatible profiles.</li>
+    </ul>
+    <p>Gateways are reachable over LAN or Tailscale, through a gate you control — not through a public relay.</p>
+  </section>
+
+  <section id="privacy">
+    <h2>Privacy</h2>
+    <p>Versutus is a client. It holds no model credentials of its own, brokers nothing on anyone else's behalf, and is not a public relay. Approvals stay with you: run approvals, tool-call inspection and per-Bot session scoping all happen on your side of the wire. Your agent stays where you put it.</p>
+  </section>
+
+  <section id="status">
+    <h2>Status</h2>
+    <p>Versutus is pre-release, single author, actively built. It is not published to any store.</p>
+    <p>Source: <a href="https://github.com/ethanjones1132-lab/Versutus">https://github.com/ethanjones1132-lab/Versutus</a></p>
+  </section>
+</main>
+
+<footer>
+  <p>Versutus — a mobile and web client for AI agent gateways.</p>
+</footer>
+</body>
+</html>
