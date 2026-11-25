@@ -1,31 +1,53 @@
 // ─── Secure key-value storage ─────────────────────────────────────
 // SecureStore-backed persistence for secrets (gateway tokens, device
 // identity keys). Falls back to AsyncStorage only in dev runtimes where
-// SecureStore is unavailable. Web uses localStorage (same as the plain
-// store — browser security model applies).
+// SecureStore is unavailable.
+//
+// A browser has no keychain. `localStorage` is plain text, readable by any
+// script on the origin, and it survives a reload — so a secret written there
+// is still readable long after the tab that wrote it is gone. Web therefore
+// keeps what is written through this module in memory for the session only:
+// values survive navigation inside the tab but not a reload, and a plaintext
+// copy an older web build left in localStorage is deleted the first time this
+// module touches that key. Non-secret settings do not need this module —
+// `key-value.ts` persists those to localStorage on web, where surviving a
+// reload is the point.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
-function readWebValue(key: string): string | null {
-  try {
-    return globalThis.localStorage?.getItem(key) ?? null;
-  } catch {
-    return null;
-  }
+/**
+ * Secrets written in this browser session. Deliberately module-scoped memory:
+ * a page reload starts empty, which is the promise made to the operator.
+ * Nothing here is ever mirrored into localStorage.
+ */
+const webSessionSecrets = new Map<string, string>();
+
+let webSessionNoticeShown = false;
+
+/** Say, once per page load, why a web secret is not there after a reload. */
+function noteWebSessionOnly(operation: 'read' | 'write', key: string): void {
+  if (webSessionNoticeShown) return;
+  webSessionNoticeShown = true;
+  console.warn(
+    `[secure-key-value] Web has no secure store: ${operation} of "${key}" uses memory for this session only and never writes to localStorage. Reloading the page forgets it.`,
+  );
 }
 
-function writeWebValue(key: string, value: string): void {
+/**
+ * A secret an older web build persisted is still readable right now, so the
+ * plaintext copy is removed before this module answers. Only a key this module
+ * is actually asked about is touched — the store has no way to tell which
+ * localStorage keys hold secrets, and guessing from the name would be worse.
+ */
+function discardLegacyWebValue(key: string): void {
   try {
-    globalThis.localStorage?.setItem(key, value);
-  } catch {
-    // Ignore locked-down browser storage.
-  }
-}
-
-function removeWebValue(key: string): void {
-  try {
-    globalThis.localStorage?.removeItem(key);
+    const storage = globalThis.localStorage;
+    if (!storage || storage.getItem(key) === null) return;
+    storage.removeItem(key);
+    console.warn(
+      `[secure-key-value] Removed the plaintext copy of "${key}" an older web build left in localStorage; web secrets are session-only now.`,
+    );
   } catch {
     // Ignore locked-down browser storage.
   }
@@ -129,7 +151,11 @@ async function runSecureStore<T>(
 
 export const secureKeyValueStorage = {
   async getItem(key: string, load: LoadSecureStore = loadSecureStore): Promise<string | null> {
-    if (Platform.OS === 'web') return readWebValue(key);
+    if (Platform.OS === 'web') {
+      discardLegacyWebValue(key);
+      noteWebSessionOnly('read', key);
+      return webSessionSecrets.get(key) ?? null;
+    }
     const secureKey = toSecureStoreKey(key);
     const store = await loadStoreOrNull(load);
     if (store) {
@@ -159,7 +185,9 @@ export const secureKeyValueStorage = {
 
   async setItem(key: string, value: string, load: LoadSecureStore = loadSecureStore): Promise<void> {
     if (Platform.OS === 'web') {
-      writeWebValue(key, value);
+      discardLegacyWebValue(key);
+      webSessionSecrets.set(key, value);
+      noteWebSessionOnly('write', key);
       return;
     }
     const secureKey = toSecureStoreKey(key);
@@ -179,7 +207,12 @@ export const secureKeyValueStorage = {
 
   async removeItem(key: string, load: LoadSecureStore = loadSecureStore): Promise<void> {
     if (Platform.OS === 'web') {
-      removeWebValue(key);
+      webSessionSecrets.delete(key);
+      try {
+        globalThis.localStorage?.removeItem(key);
+      } catch {
+        // Ignore locked-down browser storage.
+      }
       return;
     }
     const secureKey = toSecureStoreKey(key);
