@@ -57,12 +57,13 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 const focusEffects: (() => unknown)[] = [];
 /** The route params the screen reads; a `versutus://call` link sets `call: '1'`. */
 let mockRouteParams: Record<string, string> = {};
+let mockIsFocused = true;
 jest.mock('expo-router', () => ({
   useRouter: () => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn() }),
   useFocusEffect: (effect: () => unknown) => {
     focusEffects.push(effect);
   },
-  useIsFocused: () => true,
+  useIsFocused: () => mockIsFocused,
   useLocalSearchParams: () => mockRouteParams,
   useNavigation: () => ({ dispatch: jest.fn() }),
 }));
@@ -177,6 +178,8 @@ type MockCallTarget = { transport?: string; voiceEngine?: string };
 let startedTarget: MockCallTarget | undefined;
 let mockStoredTransport: 'phone' | 'gate';
 const mockStart = jest.fn();
+const mockEnd = jest.fn();
+let mockCallActive = false;
 
 jest.mock('@/context/gateway-provider', () => ({
   useGateway: () => mockGateway,
@@ -184,11 +187,11 @@ jest.mock('@/context/gateway-provider', () => ({
 }));
 jest.mock('@/context/handsfree-voice-provider', () => ({
   useHandsfreeVoice: () => ({
-    active: false,
+    active: mockCallActive,
     canStart: true,
     transport: mockStoredTransport,
     start: mockStart,
-    end: jest.fn(),
+    end: mockEnd,
     startBlocker: undefined,
     callsEnded: 0,
     lastEndReason: undefined,
@@ -382,6 +385,9 @@ beforeEach(async () => {
   jest.useFakeTimers();
   reset();
   mockStart.mockReset();
+  mockEnd.mockClear();
+  mockCallActive = false;
+  mockIsFocused = true;
   mockStoredTransport = 'gate';
   mockStart.mockImplementation(async (target: MockCallTarget) => {
     startedTarget = target;
@@ -512,5 +518,39 @@ describe('a call link selects its engine for that call only (VS-078)', () => {
     await pressCall();
     expect(sheet().engineLabel).toBe(CODEX_LABEL);
     expect((await loadAppSettings()).voiceEngine).toBe('codex');
+  });
+});
+
+describe('ending a shared call from Chat', () => {
+  test('a mounted, unfocused roster leaves a call started on another route running', async () => {
+    mockIsFocused = false;
+    await mount();
+    expect(find(ROSTER)).toBeDefined();
+
+    mockCallActive = true;
+    await act(async () => {
+      renderer.update(createElement(ChatScreen));
+    });
+
+    expect(mockEnd).not.toHaveBeenCalled();
+  });
+
+  test('leaving the focused chat for the roster ends the live call', async () => {
+    await mount();
+    await openConfigurableThread();
+    mockCallActive = true;
+    await act(async () => {
+      renderer.update(createElement(ChatScreen));
+    });
+    expect(mockEnd).not.toHaveBeenCalled();
+
+    mockGateway.requestedSurface = { kind: 'roster' };
+    await act(async () => {
+      renderer.update(createElement(ChatScreen));
+    });
+    await settle();
+
+    expect(find(ROSTER)).toBeDefined();
+    expect(mockEnd).toHaveBeenCalledTimes(1);
   });
 });

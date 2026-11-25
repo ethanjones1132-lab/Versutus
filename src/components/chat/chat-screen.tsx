@@ -2101,12 +2101,13 @@ export function ChatScreen() {
   }, [handsfreeCallsEnded, handsfreeLastEndReason]);
 
   // A call is bound to the thread it started in. The provider watches the
-  // gateway, session and Bot it captured; this screen covers the remaining move
-  // — leaving a thread surface for the roster or a room.
+  // gateway, session and Bot it captured. Only the focused Chat route can end
+  // it on a move to the roster or a room. A warm call link can leave an older
+  // Chat route mounted on the roster while the focused route starts the call.
   useEffect(() => {
-    if (!handsfreeActive) return;
+    if (!isFocused || !handsfreeActive) return;
     if (surface.kind !== 'configurable' && surface.kind !== 'bot') endHandsfree();
-  }, [endHandsfree, handsfreeActive, surface.kind]);
+  }, [endHandsfree, handsfreeActive, isFocused, surface.kind]);
 
   const handleResumeMessage = useCallback(
     (message: ChatMessage) => {

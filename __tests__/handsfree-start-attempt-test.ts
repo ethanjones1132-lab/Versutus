@@ -87,6 +87,33 @@ describe('openGateVoiceSession against a fake Gate', () => {
     expect(attempt.result).toBe('session-grant-incomplete');
   });
 
+  test('a grant for a call that already ended is released before starting native audio', async () => {
+    const startSession = jest.fn(async () => 'started' as const);
+    const startGateMedia = jest.fn(async () => true);
+    const gatewayRequest = jest.fn(async (method: string) =>
+      method === 'voice.session.start' ? grant : { stopped: true },
+    );
+
+    const attempt = await openGateVoiceSession({
+      gatewayUrl: 'http://127.0.0.1:8760',
+      gatewayToken: 'tok',
+      target,
+      device: { deviceId: 'phone-abc12345' },
+      gatewayRequest,
+      startSession,
+      startGateMedia,
+      isStartCurrent: () => false,
+      log: () => undefined,
+    });
+
+    expect(startSession).not.toHaveBeenCalled();
+    expect(startGateMedia).not.toHaveBeenCalled();
+    expect(gatewayRequest).toHaveBeenLastCalledWith('voice.session.stop', {
+      voiceSessionId: 'vs-1', reason: 'start-failed', deviceId: 'phone-abc12345',
+    });
+    expect(attempt.result).toBe('call-torn-down-while-starting');
+  });
+
   test('a media failure stops the granted session AND cancels the native start by its id', async () => {
     const calls: string[] = [];
     const canceled: string[] = [];

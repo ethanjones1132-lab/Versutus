@@ -77,6 +77,8 @@ export type OpenGateVoiceSessionInput = {
   cancelStartSession?: (startId: string) => Promise<void> | void;
   /** The attempt id; generated when omitted so tests can pin it. */
   startId?: string;
+  /** A late grant cannot start native audio after the provider ended the attempt. */
+  isStartCurrent?: () => boolean;
   startGateMedia: (options: {
     url: string;
     token: string;
@@ -298,6 +300,11 @@ export async function openGateVoiceSession(
       return finish({ result: 'session-grant-incomplete' }, log);
     }
     grant = parsed;
+
+    if (input.isStartCurrent?.() === false) {
+      await stopGrantedSession(input.gatewayRequest, parsed.voiceSessionId, deadline, input.device);
+      return finish({ result: 'call-torn-down-while-starting' }, log, { engine: parsed.engine });
+    }
 
     if (input.startSession) {
       let sessionOutcome: 'started' | 'permission-denied' | 'unavailable';

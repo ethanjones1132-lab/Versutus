@@ -1734,8 +1734,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       // torn-down-while-starting branch below can cancel the exact native
       // session this start opened. An unkeyed stop would also end a newer call.
       const startId = newHandsfreeStartId();
+      const isStartCurrent = () => targetRef.current === target && sessionRef.current.phase === 'starting';
       const attempt = await openGateVoiceSession({
         startId,
+        isStartCurrent,
         gatewayUrl: gateway.url,
         gatewayToken: gateway.token ?? '',
         target: {
@@ -1767,7 +1769,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         // cannot strand the start or leak an unhandled rejection.
         cancelStartSession: (startId) => cancelNativeSession(module, startId),
         registerGrant: (grant) => {
-          if (targetRef.current !== target || sessionRef.current.phase !== 'starting') return false;
+          if (!isStartCurrent()) return false;
           gateSessionIdRef.current = grant.voiceSessionId;
           gateGrantRef.current = grant;
           const thread = threadRef.current;
@@ -1820,7 +1822,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         if (attempt.result === 'voice-disabled' && latest.current.activeGateway?.id === target.gatewayId) {
           setVoiceCapabilities({ gatewayId: target.gatewayId, capabilities: { enabled: false } });
         }
-        refuseGateStart();
+        if (isStartCurrent()) refuseGateStart();
         return { result: attempt.result, detail: attempt.detail };
       }
 
