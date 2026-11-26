@@ -960,6 +960,15 @@ export function buildCapabilitySnapshot(
     approvals: backendScoped.runs,
   };
 
+  // The group tile and the commands inside it must answer the same question: a
+  // selected backend that cannot serve sessions greys the tile AND refuses
+  // `/session …`, rather than letting the command reach a backend-level failure
+  // the operator cannot act on (QUALITY-SCAN 2026-10-11).
+  const groupOffered = (definition: CapabilityGroupDef): boolean =>
+    backends.length > 0 && definition.id in backendOverride
+      ? backendOverride[definition.id]
+      : isGroupReady(definition);
+
   const providerRecords = options.providers ?? [];
   const readyProviders = providerRecords.filter(
     (provider) => provider.readiness?.state === 'ready',
@@ -1106,7 +1115,7 @@ export function buildCapabilitySnapshot(
   else overallStatus = isStale ? 'stale' : 'fresh';
 
   const advertised = new Set(
-    CAPABILITY_GROUP_DEFS.filter(isGroupReady).flatMap(
+    CAPABILITY_GROUP_DEFS.filter(groupOffered).flatMap(
       (definition) => definition.commandGroups ?? [],
     ),
   );

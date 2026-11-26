@@ -365,6 +365,50 @@ describe('capability tiles reflect the selected backend', () => {
     expect(tools?.note).toBe('via OpenCode');
   });
 
+  test('commands follow the selected backend too, not the Gate-wide union', () => {
+    const capabilities = {
+      features: { sessions: true, tools: true },
+      endpoints: { sessions: {}, tools: {} },
+      rpcMethods: ['sessions.list', 'tools.list'],
+    } as unknown as GatewayCapabilities;
+    const snapshot = buildCapabilitySnapshot(
+      'connected',
+      null,
+      undefined,
+      Date.now(),
+      capabilities,
+      [],
+      { backends, selectedBackendId: 'hermes-local' },
+    );
+    // The tiles already say Hermes cannot serve sessions or tools. The command
+    // map used to keep offering them from the Gate-wide union, so `/session …`
+    // and `/tools` reached a backend the selection excluded (QUALITY-SCAN
+    // 2026-10-11).
+    expect(snapshot.groups.find((group) => group.id === 'sessions')?.status).toBe('unsupported');
+    expect(snapshot.methods['session-list']).toEqual({
+      available: false,
+      reason: 'not offered by this gateway',
+    });
+    expect(snapshot.methods.tools).toEqual({
+      available: false,
+      reason: 'not offered by this gateway',
+    });
+
+    // Selecting the backend that does provide them keeps the commands offered,
+    // so this is a scoped refusal rather than a blanket one.
+    const supported = buildCapabilitySnapshot(
+      'connected',
+      null,
+      undefined,
+      Date.now(),
+      capabilities,
+      [],
+      { backends, selectedBackendId: 'opencode-local' },
+    );
+    expect(supported.methods['session-list']).toEqual({ available: true, reason: undefined });
+    expect(supported.methods.tools).toEqual({ available: true, reason: undefined });
+  });
+
   test('counts provider readiness rather than endpoint existence', () => {
     const snapshot = buildCapabilitySnapshot(
       'connected',

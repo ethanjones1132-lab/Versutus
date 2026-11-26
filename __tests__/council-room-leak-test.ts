@@ -534,6 +534,23 @@ describe('the round bound is about the screen, not the request', () => {
     // Nothing arrived at all: every Bot names the missing answer for itself.
     expect(councilNoAnswerColumns(targets).map((column) => column.state)).toEqual(['failed', 'failed']);
   });
+
+  test('an arrived failure keeps the Bot\u2019s own error; only a miss says No answer', () => {
+    const targets = [
+      { botId: 'scout', label: 'Scout' },
+      { botId: 'night', label: 'Night' },
+    ];
+    const columns = councilNoAnswerColumns(targets, [
+      { botId: 'scout', label: 'Scout', state: 'failed', error: 'Scout is still starting' },
+    ]);
+    // A `failed` column is an arrival carrying the Bot's own error. The bound
+    // must not bury it behind the generic copy meant for a Bot that never
+    // reported at all (QUALITY-SCAN 2026-10-11).
+    expect(columns).toEqual([
+      { botId: 'scout', label: 'Scout', state: 'failed', error: 'Scout is still starting' },
+      { botId: 'night', label: 'Night', state: 'failed', error: COUNCIL_NO_ANSWER_COPY },
+    ]);
+  });
 });
 
 // ─── The screen: no durable admission, no send ─────────────────────────────

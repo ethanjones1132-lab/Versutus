@@ -146,9 +146,11 @@ export const COUNCIL_STOPPED_NOTE = 'Round stopped.';
 export const COUNCIL_OFFLINE_COPY = 'Connect to a gateway to compare Bots';
 
 /**
- * The columns a bounded round ends with: every answer that DID land keeps its
- * column, and each Bot still missing one says so by name. A timeout never
- * rewrites an answer that arrived and never claims silence where there was none.
+ * The columns a bounded round ends with: every column that DID arrive keeps its
+ * state — an answer, a deliberate silence, or the Bot's own failure with its own
+ * error — and each Bot still missing one says so by name. A timeout never
+ * rewrites what arrived and never claims silence where there was none; only a
+ * target with no arrived column gets `COUNCIL_NO_ANSWER_COPY`.
  */
 export function councilNoAnswerColumns(
   targets: CouncilTarget[],
@@ -156,7 +158,11 @@ export function councilNoAnswerColumns(
 ): CouncilColumn[] {
   return targets.map((target) => {
     const column = arrived.find((candidate) => candidate.botId === target.botId);
-    if (column?.state === 'answered') return column;
+    // A `failed` column is an arrival too: it carries the Bot's own error, and
+    // replacing it with "No answer" would hide the real reason (QUALITY-SCAN
+    // 2026-10-11). A `silent` column is the Gate saying nothing to add, which is
+    // also a verdict rather than a missing one.
+    if (column) return column;
     return { ...target, state: 'failed', error: COUNCIL_NO_ANSWER_COPY };
   });
 }
