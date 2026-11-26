@@ -2439,7 +2439,6 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // environment's session after selectBackend had just let it go.
       let sessionId = liveSessionId({
         live: sessionIdRef.current,
-        stored: gateway.sessionId,
       });
 
       // Resume this app's own most recent session, or start a fresh one. The

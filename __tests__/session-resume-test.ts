@@ -133,29 +133,29 @@ describe('resolveResumeSession — session pick + graceful degrade', () => {
   });
 });
 
-describe('liveSessionId — stored is a reconnect pin, not a live thread', () => {
+describe('liveSessionId — the reconnect pin is not a live thread', () => {
   test('an open thread reloads itself even when the profile remembers another', () => {
-    expect(liveSessionId({ live: 'ses_open', stored: 'ses_old' })).toBe('ses_open');
+    expect(liveSessionId({ live: 'ses_open' })).toBe('ses_open');
   });
 
   test('a deliberate release does not restore the previous session from the profile', () => {
-    // selectBackend clears the live slot then reloads. The old `live ?? stored`
+    // selectBackend clears the live slot then reloads. The old live-or-profile
     // fallback immediately resurrected the previous CLI environment's session:
     // history loaded it (or a 404 looked empty) and the next send still
     // carried that id.
-    expect(liveSessionId({ live: undefined, stored: 'ses_old' })).toBeUndefined();
+    expect(liveSessionId({ live: undefined })).toBeUndefined();
   });
 
-  test('connect copies stored onto live first, so a reconnect still resumes', () => {
+  test('connect copies the reconnect pin onto live first, so a reconnect still resumes', () => {
     // connectGateway assigns sessionIdRef from the profile before the first
-    // history load. After that, live is stored — the helper never has to
-    // fall back to the profile itself.
-    expect(liveSessionId({ live: 'ses_remembered', stored: 'ses_remembered' })).toBe('ses_remembered');
+    // history load. After that, live carries the pin — the helper never has
+    // to fall back to the profile itself.
+    expect(liveSessionId({ live: 'ses_remembered' })).toBe('ses_remembered');
   });
 
-  test('an empty live slot with nothing stored stays empty', () => {
-    expect(liveSessionId({ live: undefined, stored: undefined })).toBeUndefined();
-    expect(liveSessionId({ live: '  ', stored: 'ses_old' })).toBeUndefined();
+  test('an empty live slot with no reconnect pin stays empty', () => {
+    expect(liveSessionId({ live: undefined })).toBeUndefined();
+    expect(liveSessionId({ live: '  ' })).toBeUndefined();
   });
 });
 
@@ -200,41 +200,41 @@ describe('pinLiveSession — a new session is still current after reconnect', ()
     // connectGateway assigns sessionIdRef from the profile before the first
     // history load. Without this write, that assignment restores ses_old
     // even after the client was pinned — disconnect runs too late to help.
-    expect(liveSessionId({ live: next?.sessionId, stored: next?.sessionId })).toBe('ses_new');
+    expect(liveSessionId({ live: next?.sessionId })).toBe('ses_new');
   });
 
   test('a New session that is not pinned reconnects as the previous thread', () => {
     // The hole: createNewSession wrote sessionIdRef and React state, never
-    // the client or the profile. connectGateway then copied stored onto live.
-    expect(liveSessionId({ live: 'ses_old', stored: 'ses_old' })).toBe('ses_old');
+    // the client or the profile. connectGateway then copied the pin onto live.
+    expect(liveSessionId({ live: 'ses_old' })).toBe('ses_old');
   });
 
   test('a list pick that persists the reconnect pin is the session connect copies onto live', () => {
     // selectSession used to call setSessionId only. connectGateway copies
-    // stored onto live before attachClient disconnects, so a pick then
-    // background/reconnect restored whichever session New session (or the
+    // the pin onto live before attachClient disconnects, so a pick then
+    // background/reconnect brought back whichever session New session (or the
     // last persist) wrote — not the one just picked.
     const client = pinClient('ses_old');
-    const stored = profile('ses_from_new_session');
-    const next = pinLiveSession({ client, sessionId: 'ses_picked', profile: stored });
+    const previous = profile('ses_from_new_session');
+    const next = pinLiveSession({ client, sessionId: 'ses_picked', profile: previous });
     expect(client.sessionId).toBe('ses_picked');
     expect(next?.sessionId).toBe('ses_picked');
-    expect(stored.sessionId).toBe('ses_from_new_session');
-    expect(liveSessionId({ live: next?.sessionId, stored: next?.sessionId })).toBe('ses_picked');
+    expect(previous.sessionId).toBe('ses_from_new_session');
+    expect(liveSessionId({ live: next?.sessionId })).toBe('ses_picked');
   });
 
   test('a Bot Chat that persists the reconnect pin is the session connect copies onto live', () => {
-    // openBot used to call setSessionId only. connectGateway copies stored
+    // openBot used to call setSessionId only. connectGateway copies the pin
     // onto live before attachClient disconnects, so tapping a Bot then
-    // background/reconnect restored whichever session New session or a list
+    // background/reconnect brought back whichever session New session or a list
     // pick last persisted — not that Bot Chat.
     const client = pinClient('ses_old');
-    const stored = profile('ses_from_new_session');
-    const next = pinLiveSession({ client, sessionId: 'ses_bot_chat', profile: stored });
+    const previous = profile('ses_from_new_session');
+    const next = pinLiveSession({ client, sessionId: 'ses_bot_chat', profile: previous });
     expect(client.sessionId).toBe('ses_bot_chat');
     expect(next?.sessionId).toBe('ses_bot_chat');
-    expect(stored.sessionId).toBe('ses_from_new_session');
-    expect(liveSessionId({ live: next?.sessionId, stored: next?.sessionId })).toBe('ses_bot_chat');
+    expect(previous.sessionId).toBe('ses_from_new_session');
+    expect(liveSessionId({ live: next?.sessionId })).toBe('ses_bot_chat');
   });
 
   test('an already-pinned profile is the same object so the caller skips persist', () => {
@@ -260,15 +260,15 @@ describe('pinLiveSession — a new session is still current after reconnect', ()
 
   test('a model change that persists an empty pin reconnects without the old session', () => {
     // After /model set or a picker pick, the live session is released so the
-    // next send opens one pinned to the new model. connectGateway copies
-    // stored onto live before disconnect, so leaving the old sessionId on
-    // the profile would restore that thread (and its old model) on reconnect.
+    // next send opens one pinned to the new model. connectGateway copies the
+    // pin onto live before disconnect, so leaving the old sessionId on the
+    // profile would restore that thread (and its old model) on reconnect.
     const client = pinClient('ses_old_model');
-    const stored = profile('ses_old_model');
-    const next = pinLiveSession({ client, sessionId: undefined, profile: stored });
+    const previous = profile('ses_old_model');
+    const next = pinLiveSession({ client, sessionId: undefined, profile: previous });
     expect(client.sessionId).toBeUndefined();
     expect(next?.sessionId).toBeUndefined();
-    expect(stored.sessionId).toBe('ses_old_model');
-    expect(liveSessionId({ live: next?.sessionId, stored: next?.sessionId })).toBeUndefined();
+    expect(previous.sessionId).toBe('ses_old_model');
+    expect(liveSessionId({ live: next?.sessionId })).toBeUndefined();
   });
 });

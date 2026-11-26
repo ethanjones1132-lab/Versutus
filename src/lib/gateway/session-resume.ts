@@ -29,7 +29,6 @@ export const RESUME_SESSION_PAGE = 20;
  */
 export function liveSessionId(input: {
   live?: string;
-  stored?: string;
 }): string | undefined {
   const live = input.live?.trim();
   if (live) return live;
