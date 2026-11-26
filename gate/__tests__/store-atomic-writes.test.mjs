@@ -1,6 +1,6 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import fsPromises, { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import fsPromises, { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -155,14 +155,118 @@ function refuseReads(plan) {
 
 // ─── a reader never loses a record to a save in flight ─────────────────────
 //
-// Two readers, because they can be trusted in different ways. The directory
-// reader is hot: it never opens the record, so it cannot starve the writer's
-// own rename on Windows, and it samples exactly the window a delete-then-rename
-// write left open — which is also the window that made `list()` skip a live
-// record. The `get` reader is paced instead: a free-running `get` opens the
-// record thousands of times a second, and the writer's rename then loses its
-// retries. That is a property of Windows file locking, not of the code under
-// test, and a test that fails on it tests nothing.
+// Both probes below watch the save instead of racing it. The file system calls
+// a save makes are wrapped, and the record is read after each one lands, while
+// the writer is still awaiting the wrapper: no save syscall can run between a
+// change and the probe, so what the probe sees is a state the save itself
+// produced. That is exactly the window a delete-then-rename write leaves open,
+// and the window that used to let `list()` skip a live record.
+//
+// The earlier shape sampled on a free-running (or 20 ms) timer instead. That
+// made the verdict depend on the box: under load a single `readdir` can omit a
+// live entry, and a reader holding handles often enough can starve the writer
+// until its rename retry budget runs out. Neither is a property of the code
+// under test, and a test that fails on either proves nothing. Probing at the
+// syscall boundary is immune to both — the directory is static while the probe
+// runs, and the probe's handle is closed before the writer takes its next step.
+
+const SAVE_MUTATIONS = ['rm', 'unlink', 'writeFile', 'rename'];
+const TRANSIENT_LOCK_CODES = new Set(['EPERM', 'EBUSY', 'EACCES', 'EMFILE', 'ENFILE']);
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * True only when the path does not exist. A sharing violation (something holds
+ * the file) is proof it does exist, so it is waited out and read as present:
+ * an unreadable handle must never be mistaken for a save that removed a record.
+ */
+async function pathExists(path) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await stat(path);
+      return true;
+    } catch (error) {
+      if (error?.code === 'ENOENT') return false;
+      if (!TRANSIENT_LOCK_CODES.has(error?.code)) return true;
+      await delay(10);
+    }
+  }
+  return true;
+}
+
+/**
+ * A listing for a probe. `null` means the directory could not be read this
+ * instant (a locked box, not a missing record); the caller then decides from a
+ * direct existence check instead of blaming the save for the enumeration.
+ */
+async function listForProbe(dir) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await readdir(dir);
+    } catch (error) {
+      if (!TRANSIENT_LOCK_CODES.has(error?.code)) throw error;
+      await delay(10);
+    }
+  }
+  return null;
+}
+
+/**
+ * Runs `probe` after every mutating call a save makes, before the save may
+ * continue. `beginSave` resets the rename-attempt counter so a failure can say
+ * how many attempts the save had already spent.
+ */
+function observeSaveSteps(probe) {
+  const originals = new Map();
+  const syscalls = new Map();
+  let renameAttempts = 0;
+
+  for (const method of SAVE_MUTATIONS) {
+    const original = fsPromises[method];
+    originals.set(method, original);
+    fsPromises[method] = async (...args) => {
+      // Counted before the call: a rename that is refused still spent an
+      // attempt, and a starving save has to be able to report how many.
+      if (method === 'rename') renameAttempts += 1;
+      const result = await original(...args);
+      syscalls.set(method, (syscalls.get(method) ?? 0) + 1);
+      await probe({ syscall: method, target: String(args[0]) });
+      return result;
+    };
+  }
+  syncBuiltinESMExports();
+
+  return {
+    beginSave() { renameAttempts = 0; },
+    get syscalls() { return syscalls; },
+    get renameAttempts() { return renameAttempts; },
+    restore() {
+      for (const [method, original] of originals) fsPromises[method] = original;
+      syncBuiltinESMExports();
+    },
+  };
+}
+
+/**
+ * A save that exhausts its rename retries is a real fault — the caller gets a
+ * failure instead of a save — so the test must fail, but with the cause and the
+ * attempt count, not with a bare `node:fs` stack.
+ */
+async function saveInto(observer, run) {
+  observer.beginSave();
+  try {
+    return await run();
+  } catch (error) {
+    if (!TRANSIENT_LOCK_CODES.has(error?.code)) throw error;
+    throw new Error(
+      `the save gave up after ${observer.renameAttempts} rename attempt(s) with ${error.code}; `
+      + 'the record was never removed, but the caller got a failure instead of a save',
+      { cause: error },
+    );
+  }
+}
 
 test('an environment record is never absent from its directory while it is being saved', async () => {
   const gateHome = await tempHome('gate-env-atomic-');
@@ -170,30 +274,41 @@ test('an environment record is never absent from its directory while it is being
   const record = validEnvironment();
   await store.put(record);
   const dir = join(gateHome, 'config', 'environments');
+  const file = environmentFile(gateHome, 'hermes-local');
 
   let samples = 0;
   let absent = 0;
-  let saving = true;
-  const watcher = (async () => {
-    while (saving) {
-      samples += 1;
-      if (!(await readdir(dir)).includes('hermes-local.json')) absent += 1;
-      await new Promise((resolve) => setImmediate(resolve));
+  const misses = [];
+  const observer = observeSaveSteps(async ({ syscall, target }) => {
+    samples += 1;
+    const listing = await listForProbe(dir);
+    if (listing?.includes('hermes-local.json')) return;
+    // The writer is paused here, so the directory cannot legitimately skip a
+    // live entry; the direct check keeps an enumeration quirk on a loaded box
+    // from reading as a lost record. A save that really removed the path fails
+    // both checks.
+    if (await pathExists(file)) return;
+    absent += 1;
+    if (misses.length < 3) {
+      const held = listing === null ? 'an unreadable listing' : `[${listing.join(', ')}]`;
+      misses.push(`after ${syscall}(${target}) the directory held ${held} and the record did not exist`);
     }
-  })();
-  // A put that gives up (25 lost renames under load) must still stop the
-  // background loop, or the failed test keeps the process alive forever.
+  });
+
   try {
     for (let generation = 0; generation < 300; generation += 1) {
-      await store.put({ ...record, label: `Hermes ${generation}` });
+      await saveInto(observer, () => store.put({ ...record, label: `Hermes ${generation}` }));
     }
   } finally {
-    saving = false;
-    await watcher;
+    observer.restore();
   }
 
-  assert.ok(samples > 300, `the watcher never raced the writer (only ${samples} samples)`);
-  assert.equal(absent, 0, `the record was absent from the directory ${absent} times mid-save`);
+  assert.ok(samples > 300, `the observer never watched a save step (only ${samples} steps)`);
+  assert.ok(
+    observer.syscalls.has('writeFile') && observer.syscalls.has('rename'),
+    'the probe never saw the temp write and the rename that replaces the record',
+  );
+  assert.equal(absent, 0, `the record was absent from the directory ${absent} times mid-save: ${misses.join(' | ')}`);
 });
 
 test('an environment never goes missing from a read while it is being saved', async () => {
@@ -201,31 +316,39 @@ test('an environment never goes missing from a read while it is being saved', as
   const store = new CliEnvironmentStore(gateHome);
   const record = validEnvironment();
   await store.put(record);
+  const file = environmentFile(gateHome, 'hermes-local');
 
   let reads = 0;
   let missing = 0;
-  let saving = true;
-  const reader = (async () => {
-    while (saving) {
-      reads += 1;
-      if ((await store.get('hermes-local')) === null) missing += 1;
-      // Paced, not free-running: see the note above these tests.
-      await new Promise((resolve) => setTimeout(resolve, 20));
+  const misses = [];
+  const observer = observeSaveSteps(async ({ syscall, target }) => {
+    reads += 1;
+    const seen = await store.get('hermes-local');
+    if (seen !== null) return;
+    // Only a record that is not on disk was lost by the save. A refusal while
+    // the file is still there is a lock race — the read-retry suite pins that
+    // separately — and must not be counted as this save dropping the record.
+    if (await pathExists(file)) return;
+    missing += 1;
+    if (misses.length < 3) {
+      misses.push(`store.get('hermes-local') answered null after ${syscall}(${target}) and the record was not on disk`);
     }
-  })();
-  // A put that gives up (25 lost renames under load) must still stop the
-  // background loop, or the failed test keeps the process alive forever.
+  });
+
   try {
     for (let generation = 0; generation < 400; generation += 1) {
-      await store.put({ ...record, label: `Hermes ${generation}` });
+      await saveInto(observer, () => store.put({ ...record, label: `Hermes ${generation}` }));
     }
   } finally {
-    saving = false;
-    await reader;
+    observer.restore();
   }
 
-  assert.ok(reads > 5, `the reader never raced the writer (only ${reads} reads)`);
-  assert.equal(missing, 0, `the environment vanished ${missing} times mid-save`);
+  assert.ok(reads > 5, `the reader never watched a save step (only ${reads} reads)`);
+  assert.ok(
+    observer.syscalls.has('writeFile') && observer.syscalls.has('rename'),
+    'the probe never saw the temp write and the rename that replaces the record',
+  );
+  assert.equal(missing, 0, `the environment vanished ${missing} times mid-save: ${misses.join(' | ')}`);
 });
 
 test("a provider's two records are never absent from their directories while they are being saved", async () => {
@@ -234,73 +357,96 @@ test("a provider's two records are never absent from their directories while the
   await store.put(provider(), providerState(0));
   const configDir = join(gateHome, 'config', 'providers');
   const stateDir = join(gateHome, 'state', 'providers');
+  const configFile = providerConfigFile(gateHome, 'openai-main');
+  const stateFile = providerStateFile(gateHome, 'openai-main');
 
   let samples = 0;
   let absent = 0;
-  let saving = true;
-  const watcher = (async () => {
-    while (saving) {
-      samples += 1;
-      // Each directory is checked on its own: the two files are written one
-      // after the other, so pooling their names would let one of them mask the
-      // other's absence.
-      const configs = await readdir(configDir);
-      const states = await readdir(stateDir);
-      if (!configs.includes('openai-main.json') || !states.includes('openai-main.json')) absent += 1;
-      await new Promise((resolve) => setImmediate(resolve));
+  const misses = [];
+  const observer = observeSaveSteps(async ({ syscall, target }) => {
+    samples += 1;
+    // Each directory is checked on its own: the two files are written one
+    // after the other, so pooling their names would let one of them mask the
+    // other's absence.
+    const configs = await listForProbe(configDir);
+    const states = await listForProbe(stateDir);
+    if ((configs === null || configs.includes('openai-main.json'))
+      && (states === null || states.includes('openai-main.json'))) return;
+    // As above: only a path that is really gone is a lost record.
+    if (await pathExists(configFile) && await pathExists(stateFile)) return;
+    absent += 1;
+    if (misses.length < 3) {
+      const held = (listing) => (listing === null ? 'an unreadable listing' : `[${listing.join(', ')}]`);
+      misses.push(
+        `after ${syscall}(${target}) config held ${held(configs)} and state held ${held(states)}`,
+      );
     }
-  })();
-  // A put that gives up (25 lost renames under load) must still stop the
-  // background loop, or the failed test keeps the process alive forever.
+  });
+
   try {
     for (let generation = 1; generation <= 300; generation += 1) {
-      await store.put({ ...provider(), label: `OpenAI ${generation}` }, providerState(generation));
+      await saveInto(observer, () => store.put({ ...provider(), label: `OpenAI ${generation}` }, providerState(generation)));
     }
   } finally {
-    saving = false;
-    await watcher;
+    observer.restore();
   }
 
-  assert.ok(samples > 300, `the watcher never raced the writer (only ${samples} samples)`);
-  assert.equal(absent, 0, `a provider record was absent from its directory ${absent} times mid-save`);
+  assert.ok(samples > 300, `the observer never watched a save step (only ${samples} steps)`);
+  assert.ok(
+    observer.syscalls.has('writeFile') && observer.syscalls.has('rename'),
+    'the probe never saw the temp writes and the renames that replace the records',
+  );
+  assert.equal(absent, 0, `a provider record was absent from its directory ${absent} times mid-save: ${misses.join(' | ')}`);
 });
 
 test('a provider never goes missing from a read while it is being saved', async () => {
   const gateHome = await tempHome('gate-prov-atomic-');
   const store = new ProviderStore(gateHome);
   await store.put(provider(), providerState(0));
+  const configFile = providerConfigFile(gateHome, 'openai-main');
+  const stateFile = providerStateFile(gateHome, 'openai-main');
 
   let reads = 0;
   let missing = 0;
   let bootstrapped = 0;
-  let saving = true;
+  const misreads = [];
   // Both files are rewritten on every save, and a state file that cannot be
   // parsed falls back to the legacy bootstrap verdict — so an unatomic state
   // write shows up here as a live provider that suddenly claims to be legacy.
-  const reader = (async () => {
-    while (saving) {
-      reads += 1;
-      const record = await store.get('openai-main');
-      if (record === null) missing += 1;
-      else if (record.state?.catalog?.source === 'legacy_bootstrap') bootstrapped += 1;
-      // Paced, not free-running: see the note above these tests.
-      await new Promise((resolve) => setTimeout(resolve, 20));
+  const observer = observeSaveSteps(async ({ syscall, target }) => {
+    reads += 1;
+    const record = await store.get('openai-main');
+    if (record === null) {
+      if (await pathExists(configFile)) return;
+      missing += 1;
+      if (misreads.length < 3) {
+        misreads.push(`store.get('openai-main') answered null after ${syscall}(${target}) and the config was not on disk`);
+      }
+      return;
     }
-  })();
-  // A put that gives up (25 lost renames under load) must still stop the
-  // background loop, or the failed test keeps the process alive forever.
+    if (record.state?.catalog?.source !== 'legacy_bootstrap') return;
+    if (await pathExists(stateFile)) return;
+    bootstrapped += 1;
+    if (misreads.length < 3) {
+      misreads.push(`store.get('openai-main') answered legacy_bootstrap after ${syscall}(${target}) and the state was not on disk`);
+    }
+  });
+
   try {
     for (let generation = 1; generation <= 400; generation += 1) {
-      await store.put({ ...provider(), label: `OpenAI ${generation}` }, providerState(generation));
+      await saveInto(observer, () => store.put({ ...provider(), label: `OpenAI ${generation}` }, providerState(generation)));
     }
   } finally {
-    saving = false;
-    await reader;
+    observer.restore();
   }
 
-  assert.ok(reads > 5, `the reader never raced the writer (only ${reads} reads)`);
-  assert.equal(missing, 0, `the provider vanished ${missing} times mid-save`);
-  assert.equal(bootstrapped, 0, `the provider's state file was caught mid-replace ${bootstrapped} times`);
+  assert.ok(reads > 5, `the reader never watched a save step (only ${reads} reads)`);
+  assert.ok(
+    observer.syscalls.has('writeFile') && observer.syscalls.has('rename'),
+    'the probe never saw the temp writes and the renames that replace the records',
+  );
+  assert.equal(missing, 0, `the provider vanished ${missing} times mid-save: ${misreads.join(' | ')}`);
+  assert.equal(bootstrapped, 0, `the provider's state file was caught mid-replace ${bootstrapped} times: ${misreads.join(' | ')}`);
 });
 
 // ─── a save never deletes the record it is replacing ───────────────────────
