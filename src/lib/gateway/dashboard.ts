@@ -1202,13 +1202,17 @@ export function summarizeCommandResult(command: GatewayCommand, result: unknown)
   const record = isRecord(result) ? result : undefined;
 
   if (command.id === 'health') {
-    const state = readString(record, 'status') ?? readString(record, 'state') ?? 'OK';
+    // A missing state is an unreadable read, not a healthy verdict: the old
+    // `?? 'OK'` rendered "Health: OK" for a refused, empty or non-object
+    // payload with no evidence behind it.
+    const state = readString(record, 'status') ?? readString(record, 'state') ?? 'unknown';
     return `Health: ${state}`;
   }
 
   if (command.id === 'status') {
     const version = readString(record, 'version') ?? readString(isRecord(record?.server) ? record.server : undefined, 'version');
-    const state = readString(record, 'status') ?? readString(record, 'state') ?? 'online';
+    // Same honesty rule: "online" was invented here, never read from the gateway.
+    const state = readString(record, 'status') ?? readString(record, 'state') ?? 'unknown';
     return version ? `Status: ${state} - ${version}` : `Status: ${state}`;
   }
 
