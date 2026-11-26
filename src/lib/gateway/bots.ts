@@ -1,3 +1,5 @@
+import { botRoutingView } from './bot-detail';
+
 export const BOT_CHAT_TITLE = 'Bot Chat';
 
 /** Profile pin written by `hermes -p <id> config set model.*` (ADR 0015). */
@@ -143,14 +145,12 @@ export function botRuntimeWritable(runtime?: string | null): boolean {
  * a detail surface, not every row.
  */
 export function botRowSubtitle(bot: PublicBot): string {
-  if (bot.routingIssue === 'multiplex_disabled') return 'Multiplex is off';
-  if (
-    !bot.routable ||
-    bot.routingIssue === 'listen_key_missing' ||
-    bot.routingIssue === 'default_key_refused'
-  ) {
-    return 'Not set up yet';
-  }
+  // The verdict itself — which issue outranks which — lives in botRoutingView
+  // so the row, the chip and Details cannot disagree. The row keeps its own
+  // one-line copy: the key's name belongs to Details, not every roster row.
+  const issue = botRoutingView(bot).issue;
+  if (issue === 'multiplex_disabled') return 'Multiplex is off';
+  if (issue !== null) return 'Not set up yet';
   const pin = bot.model?.default ?? null;
   const kind = botRuntimeLabel(bot.runtime);
   const label = kind ? `${kind} Bot` : 'Bot';
@@ -175,15 +175,11 @@ export function botChipModelPin(bot: PublicBot): string {
  * neither degrade to the boolean alone.
  */
 export function botChipRoutingTag(bot: PublicBot): string {
-  if (bot.routingIssue === 'multiplex_disabled') return 'Multiplex is off';
-  if (
-    !bot.routable ||
-    bot.routingIssue === 'listen_key_missing' ||
-    bot.routingIssue === 'default_key_refused'
-  ) {
-    return 'Not set up yet';
-  }
-  return '';
+  // Same single verdict as the roster row (botRoutingView): the chip only
+  // chooses silence for a routable member.
+  const issue = botRoutingView(bot).issue;
+  if (issue === null) return '';
+  return issue === 'multiplex_disabled' ? 'Multiplex is off' : 'Not set up yet';
 }
 
 /** What the phone's bot edit form can change. The name is identity (ADR 0011) and is not editable. */

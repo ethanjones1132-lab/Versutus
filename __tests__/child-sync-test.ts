@@ -52,10 +52,19 @@ function provider(overrides: Partial<GatewayManifestProvider> = {}): GatewayMani
 }
 
 describe('reconcileChildProfiles', () => {
+  test('reconcile reports only what it decides — no always-empty upsert list', () => {
+    // The old shape carried `toUpsert: []` and took a manifest providers
+    // argument it never read, suggesting a create path that does not exist.
+    // The corrected contract names only the retirements.
+    const result = reconcileChildProfiles(PARENT, [PARENT]);
+    expect(result).toEqual({ toRemove: [] });
+    expect(Object.keys(result)).toEqual(['toRemove']);
+  });
+
   test('does not create child profiles for advertised providers', () => {
-    const { toUpsert, toRemove } = reconcileChildProfiles(PARENT, [provider()], [PARENT]);
-    expect(toUpsert).toEqual([]);
-    expect(toRemove).toEqual([]);
+    const result = reconcileChildProfiles(PARENT, [PARENT]);
+    expect(result.toRemove).toEqual([]);
+    expect('toUpsert' in result).toBe(false);
   });
 
   test('retires stored provider child profiles back to the parent Gate', () => {
@@ -68,8 +77,7 @@ describe('reconcileChildProfiles', () => {
       parentId: 'gw-parent',
       createdAt: 2000,
     };
-    const { toUpsert, toRemove } = reconcileChildProfiles(PARENT, [provider()], [PARENT, existingChild]);
-    expect(toUpsert).toEqual([]);
+    const { toRemove } = reconcileChildProfiles(PARENT, [PARENT, existingChild]);
     expect(toRemove).toEqual(['gw-parent::claude']);
   });
 
@@ -83,9 +91,9 @@ describe('reconcileChildProfiles', () => {
       parentId: 'gw-other',
       createdAt: 2000,
     };
-    const { toUpsert, toRemove } = reconcileChildProfiles(PARENT, [], [PARENT, otherParentChild]);
-    expect(toUpsert).toEqual([]);
+    const { toRemove } = reconcileChildProfiles(PARENT, [PARENT, otherParentChild]);
     expect(toRemove).toEqual([]);
+    expect(reconcileChildProfiles(PARENT, [PARENT, otherParentChild])).toEqual({ toRemove: [] });
   });
 
   test('keeps a direct Hermes/agent profile that is not a provider child', () => {
@@ -97,8 +105,7 @@ describe('reconcileChildProfiles', () => {
       token: 't',
       createdAt: 2000,
     };
-    const { toUpsert, toRemove } = reconcileChildProfiles(PARENT, [provider()], [PARENT, hermes]);
-    expect(toUpsert).toEqual([]);
+    const { toRemove } = reconcileChildProfiles(PARENT, [PARENT, hermes]);
     expect(toRemove).toEqual([]);
   });
 });

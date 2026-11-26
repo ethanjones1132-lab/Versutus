@@ -7,7 +7,7 @@
 // field comes off PublicBot, so older Gates degrade exactly like the row
 // does (absent fields render as honest absences, never invented text).
 
-import type { PublicBot } from './bots';
+import type { BotRoutingIssue, PublicBot } from './bots';
 
 import { routingFailureView } from './run-failures';
 
@@ -61,15 +61,25 @@ function modelPinLine(bot: PublicBot): string | null {
 export function botRoutingView(bot: Pick<PublicBot, 'routable' | 'routingIssue'>): {
   title: string;
   next?: string;
+  /**
+   * Which issue produced the verdict, or null when routable. The roster row
+   * and member chip read this instead of re-deriving the precedence from
+   * `routingIssue`/`routable` themselves.
+   */
+  issue: BotRoutingIssue | null;
 } {
   // Multiplex first: with it off the named prefix is not an address, so the
   // key verdict below would send the operator to a fix that changes nothing.
-  if (bot.routingIssue === 'multiplex_disabled') return routingFailureView('multiplex_disabled');
-  if (bot.routingIssue === 'default_key_refused') return routingFailureView('default_key_refused');
-  if (!bot.routable || bot.routingIssue === 'listen_key_missing') {
-    return routingFailureView('listen_key_missing');
+  if (bot.routingIssue === 'multiplex_disabled') {
+    return { ...routingFailureView('multiplex_disabled'), issue: 'multiplex_disabled' };
   }
-  return { title: 'Routable' };
+  if (bot.routingIssue === 'default_key_refused') {
+    return { ...routingFailureView('default_key_refused'), issue: 'default_key_refused' };
+  }
+  if (!bot.routable || bot.routingIssue === 'listen_key_missing') {
+    return { ...routingFailureView('listen_key_missing'), issue: 'listen_key_missing' };
+  }
+  return { title: 'Routable', issue: null };
 }
 
 export function describeBotDetail(bot: PublicBot): BotDetailView {

@@ -18,16 +18,19 @@ export function isProviderChildProfile(profile: GatewayProfile, parentId: string
 /**
  * Retire provider child profiles. Providers stay on the parent Gate.
  * Direct Hermes/agent profiles (no parentId prefix) are not touched.
+ *
+ * There is no upsert half: a manifest's providers are settings on the parent,
+ * not gateways to create. Reporting an always-empty `toUpsert` suggested
+ * otherwise, so the result names only what this function actually decides.
  */
 export function reconcileChildProfiles(
   parent: GatewayProfile,
-  _providers: GatewayManifestProvider[],
   allGateways: GatewayProfile[],
-): { toUpsert: GatewayProfile[]; toRemove: string[] } {
+): { toRemove: string[] } {
   const toRemove = allGateways
     .filter((profile) => isProviderChildProfile(profile, parent.id))
     .map((profile) => profile.id);
-  return { toUpsert: [], toRemove };
+  return { toRemove };
 }
 
 /**
@@ -43,10 +46,13 @@ export type ChildProfileSync = {
 
 export async function syncChildProfiles(
   parent: GatewayProfile,
-  providers: GatewayManifestProvider[],
+  // Accepted for the manifest refresh call sites, which pass the providers
+  // their document advertised. Nothing is created from them: providers are
+  // retired off the roster, not mirrored as child gateways (see above).
+  _providers: GatewayManifestProvider[],
 ): Promise<ChildProfileSync> {
   const current = await loadGateways();
-  const { toRemove } = reconcileChildProfiles(parent, providers, current);
+  const { toRemove } = reconcileChildProfiles(parent, current);
   if (toRemove.length === 0) return { gateways: current, removedIds: [] };
   return { gateways: await removeGatewayIds(toRemove), removedIds: toRemove };
 }

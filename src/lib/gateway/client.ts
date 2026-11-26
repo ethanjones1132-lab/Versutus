@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+
 import { readChatFrames } from '@/lib/gateway/turns';
 import { VOICE_POLICY_REQUIRED } from '@/lib/gateway/chat-input-source';
 import { GatewayHttpError, isAuthRejection } from '@/lib/gateway/errors';
@@ -48,6 +50,17 @@ export type GatewayClientCallbacks = {
 
 const LONG_TIMEOUT_MS = 120000;
 
+/**
+ * What one plain list read produced.
+ *
+ * `ok: false` means "could not read", never "the host has none" — the same
+ * distinction `BotSoulRead` makes for a Bot's soul. A refusal (401), an
+ * unreachable host or a body with no list in it must stay distinguishable from
+ * a real empty list, or the caller states a fact about the host it never
+ * measured.
+ */
+export type GatewayListRead<T> = { ok: true; items: T[] } | { ok: false; error?: string };
+
 /** A cancel is a courtesy call; it must never hold a sheet open. */
 export const CANCEL_TURN_TIMEOUT_MS = 5_000;
 
@@ -60,6 +73,27 @@ export const CANCEL_TURN_TIMEOUT_MS = 5_000;
  */
 export function createTurnId(): string {
   return createMessageId('turn').replace(/[^A-Za-z0-9_-]/g, '');
+}
+
+/**
+ * The one mapping from Hermes's provider catalogue to picker rows.
+ *
+ * `getModels`' native path and its `readHermesModelOptions` fallback both read
+ * the same `/api/model/options` body, so a field added to one copy was missing
+ * from the other. Only the mapping lives here: each caller keeps its own
+ * empty-list policy (getModels falls through to the Gate path, the fallback
+ * reports null).
+ */
+function modelsFromHermesOptions(options: HermesModelOptions): ModelInfo[] {
+  return flattenHermesModelOptions(options).map((model) => ({
+    id: model.id,
+    object: 'model',
+    owned_by: model.providerId,
+    provider: model.provider,
+    providerId: model.providerId,
+    modelId: model.modelId,
+    available: model.available,
+  }));
 }
 
 /**
@@ -121,6 +155,25 @@ type PendingRun = {
 };
 
 /**
+ * The line shown when the Gateway refused our key.
+ *
+ * The key lives on the gateway host, not on the phone. Only a Windows desktop
+ * operator can follow a `%LOCALAPPDATA%` path, so every other platform
+ * (Android and iOS included — the app's main targets) is pointed at the key's
+ * setting on the host instead of a file their device does not have.
+ */
+export function gatewayAuthRejectionMessage(platform: string = Platform.OS): string {
+  // `win32` is Node's name for the host platform; React Native Windows reports
+  // `windows`. Both are the only platforms where the LOCALAPPDATA path means
+  // anything.
+  const windows = platform === 'win32' || platform === 'windows';
+  const hint = windows
+    ? 'Enter API_SERVER_KEY from %LOCALAPPDATA%\\hermes\\.env.'
+    : 'Enter the API_SERVER_KEY set on the gateway host.';
+  return `Gateway rejected the API key. ${hint}`;
+}
+
+/**
  * Hermes Gateway HTTP Client.
  *
  * Connects to a Hermes API server (OpenAI-compatible REST + SSE) over HTTP.
@@ -144,6 +197,14 @@ export class HermesGatewayClient {
   private monitor: ConnectionMonitor;
   private connectAttempt: Promise<void> | null = null;
   private modelDialect: 'hermes' | 'gate' | null = null;
+  /**
+   * The dialect the session routes answered last time. A Gate serves only
+   * `/v1/*` and 404s `/api/sessions`; a direct Hermes host is the reverse.
+   * Remembering it (the way `modelDialect` remembers the model read) keeps
+   * every session list, message page, create and delete from paying a 404
+   * probe on each call.
+   */
+  private sessionDialect: 'hermes' | 'gate' | null = null;
 
   constructor(
     private profile: GatewayProfile,
@@ -207,6 +268,7 @@ export class HermesGatewayClient {
     });
     // A new endpoint may speak the other dialect; re-identify on next read.
     this.modelDialect = null;
+    this.sessionDialect = null;
   }
 
   /**
@@ -266,9 +328,7 @@ export class HermesGatewayClient {
         this.monitor.suspend();
         this.authRejectedState = true;
         this.setStatus('disconnected', message, { authRejected: true });
-        throw new Error(
-          'Gateway rejected the API key. Enter API_SERVER_KEY from %LOCALAPPDATA%\\hermes\\.env.',
-        );
+        throw new Error(gatewayAuthRejectionMessage());
       }
       // Capability catalog is optional; a gateway without it is still usable.
       this.callbacks.onError?.(message);
@@ -431,18 +491,10 @@ export class HermesGatewayClient {
     let nativeRouteMissing = false;
     try {
       const options = await this.transport.request<HermesModelOptions>('GET', '/api/model/options');
-      const flattened = flattenHermesModelOptions(options);
-      if (flattened.length > 0) {
+      const models = modelsFromHermesOptions(options);
+      if (models.length > 0) {
         this.modelDialect = 'hermes';
-        return flattened.map((model) => ({
-          id: model.id,
-          object: 'model',
-          owned_by: model.providerId,
-          provider: model.provider,
-          providerId: model.providerId,
-          modelId: model.modelId,
-          available: model.available,
-        }));
+        return models;
       }
     } catch (error) {
       nativeRouteMissing = error instanceof GatewayHttpError && error.status === 404;
@@ -457,19 +509,8 @@ export class HermesGatewayClient {
   private async readHermesModelOptions(): Promise<ModelInfo[] | null> {
     try {
       const options = await this.transport.request<HermesModelOptions>('GET', '/api/model/options');
-      const flattened = flattenHermesModelOptions(options);
-      if (flattened.length > 0) {
-        return flattened.map((model) => ({
-          id: model.id,
-          object: 'model',
-          owned_by: model.providerId,
-          provider: model.provider,
-          providerId: model.providerId,
-          modelId: model.modelId,
-          available: model.available,
-        }));
-      }
-      return null;
+      const models = modelsFromHermesOptions(options);
+      return models.length > 0 ? models : null;
     } catch {
       return null;
     }
@@ -485,18 +526,25 @@ export class HermesGatewayClient {
     // answers 404 to the `/api/*` form, so every session read through a Gate
     // failed and the sheet reported "Sessions could not be read" -- the delay
     // being the 404 and its retry, not a slow read (/v1/sessions answers in
-    // ~80ms). Try the Gate path first, keep the Hermes one for a direct
-    // connection. Same shape either way: { object, data }.
-    try {
-      const gate = await this.getSessionsFromPath(`/v1/sessions?limit=${limit}`, limit);
-      if (Array.isArray(gate?.data)) return gate.data;
-    } catch (error) {
-      // A direct Hermes host answers the `/v1/*` path 404. Anything else is
-      // the Gate's own answer and must surface rather than silently retrying
-      // another dialect. 404 is never retried — it is the dialect signal.
-      if (!(error instanceof GatewayHttpError) || error.status !== 404) throw error;
+    // ~80ms). Lead with the dialect that answered last time, and keep both for
+    // the first read against an unknown host. Same shape either way: { object,
+    // data }.
+    if (this.sessionDialect !== 'hermes') {
+      try {
+        const gate = await this.getSessionsFromPath(`/v1/sessions?limit=${limit}`, limit);
+        if (Array.isArray(gate?.data)) {
+          this.sessionDialect = 'gate';
+          return gate.data;
+        }
+      } catch (error) {
+        // A direct Hermes host answers the `/v1/*` path 404. Anything else is
+        // the Gate's own answer and must surface rather than silently retrying
+        // another dialect. 404 is never retried — it is the dialect signal.
+        if (!(error instanceof GatewayHttpError) || error.status !== 404) throw error;
+      }
     }
     const result = await this.transport.request<SessionsResponse>('GET', `/api/sessions?limit=${limit}`);
+    this.sessionDialect = 'hermes';
     return result.data ?? [];
   }
 
@@ -525,34 +573,38 @@ export class HermesGatewayClient {
     // The Hermes API server rejects an empty JSON body with 400
     // ("Invalid JSON in request body"). Send an explicit empty-string title
     // instead so the request shape is always valid.
-    try {
-      const gate = await this.transport.request<HermesSession | { session: HermesSession }>(
-        'POST',
-        '/v1/sessions',
-        {
-          title: title ?? '',
-          // `{ modelId }` is the shape the Gate hands to backend.createSession.
-          ...(model ? { model: { modelId: model } } : {}),
-        },
-      );
-      const session = (gate as { session?: HermesSession })?.session ?? (gate as HermesSession);
-      if (session && typeof session.id === 'string') {
-        this.currentSessionId = session.id;
-        return session;
+    if (this.sessionDialect !== 'hermes') {
+      try {
+        const gate = await this.transport.request<HermesSession | { session: HermesSession }>(
+          'POST',
+          '/v1/sessions',
+          {
+            title: title ?? '',
+            // `{ modelId }` is the shape the Gate hands to backend.createSession.
+            ...(model ? { model: { modelId: model } } : {}),
+          },
+        );
+        const session = (gate as { session?: HermesSession })?.session ?? (gate as HermesSession);
+        if (session && typeof session.id === 'string') {
+          this.sessionDialect = 'gate';
+          this.currentSessionId = session.id;
+          return session;
+        }
+        // A 200 without a session id is not a session — fall through to the
+        // native path rather than pin an unknown thread.
+      } catch (error) {
+        // A direct Hermes host answers the `/v1/*` path 404. Anything else is
+        // the Gate's own answer — including its `{ error: { code:
+        // 'session_create_failed' } }` refusal — and must surface rather than
+        // silently retry another dialect.
+        if (!(error instanceof GatewayHttpError) || error.status !== 404) throw error;
       }
-      // A 200 without a session id is not a session — fall through to the
-      // native path rather than pin an unknown thread.
-    } catch (error) {
-      // A direct Hermes host answers the `/v1/*` path 404. Anything else is
-      // the Gate's own answer — including its `{ error: { code:
-      // 'session_create_failed' } }` refusal — and must surface rather than
-      // silently retry another dialect.
-      if (!(error instanceof GatewayHttpError) || error.status !== 404) throw error;
     }
     const result = await this.transport.request<{ session: HermesSession }>('POST', '/api/sessions', {
       title: title ?? '',
       ...(model ? { model } : {}),
     });
+    this.sessionDialect = 'hermes';
     this.currentSessionId = result.session.id;
     return result.session;
   }
@@ -565,20 +617,23 @@ export class HermesGatewayClient {
   async deleteSession(sessionId: string): Promise<void> {
     // The Gate serves only `/v1/*`: DELETE /v1/sessions/{id} answers
     // `{ deleted: true }`. A direct Hermes host answers the native
-    // DELETE /api/sessions/{id}. Try the Gate dialect first and keep the
-    // native one for a genuine Hermes host. Anything other than a 404 on
-    // the Gate path is the Gate's own answer and must surface rather than
-    // silently retrying another dialect.
-    try {
-      await this.transport.request<void>('DELETE', `/v1/sessions/${sessionId}`);
-      return;
-    } catch (error) {
-      // A direct Hermes host answers the `/v1/*` path 404. Anything else is
-      // the Gate's own answer and must surface rather than silently retrying
-      // another dialect.
-      if (!(error instanceof GatewayHttpError) || error.status !== 404) throw error;
+    // DELETE /api/sessions/{id}. Lead with the dialect that answered last
+    // time. Anything other than a 404 on the Gate path is the Gate's own
+    // answer and must surface rather than silently retrying another dialect.
+    if (this.sessionDialect !== 'hermes') {
+      try {
+        await this.transport.request<void>('DELETE', `/v1/sessions/${sessionId}`);
+        this.sessionDialect = 'gate';
+        return;
+      } catch (error) {
+        // A direct Hermes host answers the `/v1/*` path 404. Anything else is
+        // the Gate's own answer and must surface rather than silently retrying
+        // another dialect.
+        if (!(error instanceof GatewayHttpError) || error.status !== 404) throw error;
+      }
     }
     await this.transport.request<void>('DELETE', `/api/sessions/${sessionId}`);
+    this.sessionDialect = 'hermes';
   }
 
   async getSessionMessages(sessionId: string, limit = 50): Promise<SessionMessage[]> {
@@ -602,27 +657,31 @@ export class HermesGatewayClient {
     before?: string,
   ): Promise<SessionMessagePage> {
     // The Gate serves only `/v1/*`. A direct Hermes host answers the native
-    // GET /api/sessions/{id}/messages with `{ data }`. Try the Gate dialect
-    // first and keep the native one for a genuine Hermes host.
+    // GET /api/sessions/{id}/messages with `{ data }`. Lead with the dialect
+    // that answered last time and keep both for the first read.
     const query = `limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`;
-    try {
-      const gate = await this.transport.request<SessionMessagesResponse>(
-        'GET',
-        `/v1/sessions/${sessionId}/messages?${query}`,
-      );
-      if (Array.isArray(gate?.data)) {
-        return { messages: gate.data, hasMore: gate.hasMore, nextBefore: gate.nextBefore };
+    if (this.sessionDialect !== 'hermes') {
+      try {
+        const gate = await this.transport.request<SessionMessagesResponse>(
+          'GET',
+          `/v1/sessions/${sessionId}/messages?${query}`,
+        );
+        if (Array.isArray(gate?.data)) {
+          this.sessionDialect = 'gate';
+          return { messages: gate.data, hasMore: gate.hasMore, nextBefore: gate.nextBefore };
+        }
+      } catch (error) {
+        // A direct Hermes host answers the `/v1/*` path 404. Anything else is
+        // the Gate's own answer and must surface rather than silently retrying
+        // another dialect.
+        if (!(error instanceof GatewayHttpError) || error.status !== 404) throw error;
       }
-    } catch (error) {
-      // A direct Hermes host answers the `/v1/*` path 404. Anything else is
-      // the Gate's own answer and must surface rather than silently retrying
-      // another dialect.
-      if (!(error instanceof GatewayHttpError) || error.status !== 404) throw error;
     }
     const result = await this.transport.request<SessionMessagesResponse>(
       'GET',
       `/api/sessions/${sessionId}/messages?${query}`,
     );
+    this.sessionDialect = 'hermes';
     return { messages: result.data ?? [] };
   }
 
@@ -860,26 +919,39 @@ export class HermesGatewayClient {
   }
 
   /**
-   * Get skills list.
+   * Get the skills list.
+   *
+   * A refusal, an unreachable host or a body with no list is a FAILED read,
+   * not an empty catalogue — the caller must be able to say it could not read
+   * the skills rather than that the host has none.
    */
-  async getSkills(): Promise<unknown[]> {
+  async getSkills(): Promise<GatewayListRead<unknown>> {
     try {
-      const result = await this.transport.request<{ data?: unknown[] } | unknown[]>('GET', '/v1/skills');
-      return Array.isArray(result) ? result : (result as { data?: unknown[] }).data ?? [];
-    } catch {
-      return [];
+      const result = await this.transport.request<{ data?: unknown } | unknown[]>('GET', '/v1/skills');
+      if (Array.isArray(result)) return { ok: true, items: result };
+      const items = (result as { data?: unknown }).data;
+      if (Array.isArray(items)) return { ok: true, items };
+      return { ok: false, error: 'The gateway answered without a skills list.' };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
   }
 
   /**
-   * Get toolsets.
+   * Get the toolsets catalogue.
+   *
+   * Same contract as getSkills: a failed read is reported as one, never
+   * collapsed into an empty list.
    */
-  async getToolsets(): Promise<unknown[]> {
+  async getToolsets(): Promise<GatewayListRead<unknown>> {
     try {
-      const result = await this.transport.request<{ data?: unknown[] } | unknown[]>('GET', '/v1/toolsets');
-      return Array.isArray(result) ? result : (result as { data?: unknown[] }).data ?? [];
-    } catch {
-      return [];
+      const result = await this.transport.request<{ data?: unknown } | unknown[]>('GET', '/v1/toolsets');
+      if (Array.isArray(result)) return { ok: true, items: result };
+      const items = (result as { data?: unknown }).data;
+      if (Array.isArray(items)) return { ok: true, items };
+      return { ok: false, error: 'The gateway answered without a toolsets list.' };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
   }
 
