@@ -129,8 +129,12 @@ export function resolveRoute(
   method: string,
   params: Record<string, unknown> = {},
 ): { route: Route; path: string; body: Record<string, unknown> } | null {
+  // A bare `METHOD_TO_ROUTE[method]` also answers Object.prototype members:
+  // "constructor" or "toString" came back as a built-in function, so an
+  // unsupported method resolved to a bogus route instead of being reported as
+  // unsupported. Only an own entry is a route.
+  if (!Object.hasOwn(METHOD_TO_ROUTE, method)) return null;
   const route = METHOD_TO_ROUTE[method];
-  if (!route) return null;
 
   let path = route.path;
   const query: string[] = [];
@@ -146,6 +150,15 @@ export function resolveRoute(
     } else {
       body[key] = value;
     }
+  }
+  // A required {param} with no value cannot be built. Leaving the placeholder
+  // in the path sent `DELETE /api/jobs/{jobId}` to the host as if it were a
+  // real id; fail locally instead and name what the caller forgot.
+  const missing = path.match(/\{[^{}]+\}/g);
+  if (missing) {
+    throw new Error(
+      `${method} is missing a value for ${missing.join(', ')} — cannot build ${route.method} ${route.path}.`,
+    );
   }
   if (query.length > 0) path += `?${query.join('&')}`;
 

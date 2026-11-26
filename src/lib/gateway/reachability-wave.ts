@@ -4,10 +4,12 @@ import type { ProbeResult } from '@/lib/gateway/probe';
 
 /**
  * How many saved-gateway health probes may be in flight at once during one
- * reachability wave. Probes are tiny GET /health requests with a 1.8s
- * timeout; probing them one at a time made a full dashboard verdict take up
- * to 1.8s x N on lossy Tailscale hops. A small cap turns that into about
- * ceil(N / cap) rounds without opening N simultaneous sockets on the phone.
+ * reachability wave. Probes are tiny GET /health requests bounded by
+ * GATEWAY_PROBE_TIMEOUT_MS (12 s) and, on the parallel path,
+ * GATEWAY_PROBE_PARALLEL_TIMEOUT_MS (10 s), both in probe.ts; probing them
+ * one at a time made a full dashboard verdict wait out the slowest dead host.
+ * A small cap turns that into about ceil(N / cap) rounds without opening N
+ * simultaneous sockets on the phone.
  */
 export const PROBE_WAVE_CONCURRENCY = 3;
 

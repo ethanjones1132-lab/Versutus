@@ -64,7 +64,9 @@ export function buildRpcMethodSlashMap(commands: RpcSlashEntry[]): Record<string
     const slash = command.slash;
     if (typeof method !== 'string' || !method.trim()) continue;
     if (typeof slash !== 'string' || !slash.trim()) continue;
-    if (map[method] !== undefined) continue;
+    // Own entries only: `map[method] !== undefined` saw Object.prototype's
+    // `constructor`/`toString` and skipped a real entry for such a name.
+    if (Object.hasOwn(map, method)) continue;
     map[method] = slash;
   }
   return map;
@@ -76,5 +78,6 @@ export function rpcMethodSlash(
   map: Record<string, string>,
 ): string | undefined {
   if (!method.trim()) return undefined;
-  return map[method];
+  // A name that only Object.prototype carries is unsupported, not a slash.
+  return Object.hasOwn(map, method) ? map[method] : undefined;
 }

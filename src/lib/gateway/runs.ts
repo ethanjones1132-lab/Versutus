@@ -397,10 +397,6 @@ async function readStatusWithRetry(
 }
 
 /**
- * Start a run and drive it to a terminal state, pausing for the user's
- * decision whenever the gateway requests approval.
- */
-/**
  * Ask the gateway to stop a run, and say so honestly when it would not.
  *
  * Both call sites used `.catch(() => undefined)` and then returned
@@ -428,6 +424,10 @@ async function requestStop(
   }
 }
 
+/**
+ * Start a run and drive it to a terminal state, pausing for the user's
+ * decision whenever the gateway requests approval.
+ */
 export async function executeRun(
   client: RunCapableClient,
   prompt: string,
