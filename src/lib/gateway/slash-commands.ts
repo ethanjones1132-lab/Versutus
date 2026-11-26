@@ -573,7 +573,7 @@ export async function executeGatewaySlashCommand(
   // snapshot judges the undispatched `models.authStatus` registry method,
   // which no dispatcher serves, so without the bypass the read never runs.
   if (commandName === '/env' && !registeredFamilySubcommand(commandName, args)) {
-    return runAdvancedFamilyCommand(commandName, args, context);
+    return runAdvancedFamilyCommand(commandName, args, context, argText);
   }
   if (commandName === '/session' && context.currentSessionId?.trim() && isLocalSessionRead(args)) {
     return runSessionCommand(args, context);
@@ -598,7 +598,7 @@ export async function executeGatewaySlashCommand(
   }
 
   const blocked = blockUnsupportedCommand(commandName, args, context.methods);
-  if (blocked && commandName !== '/run') return blocked;
+  if (blocked) return blocked;
 
   if (!commandName || commandName === '/help') {
     const sub = args[0]?.toLowerCase();
@@ -653,7 +653,7 @@ export async function executeGatewaySlashCommand(
   }
 
   if (['/agents', '/tools', '/plugins', '/cron', '/env', '/skills', '/artifacts'].includes(commandName)) {
-    return runAdvancedFamilyCommand(commandName, args, context);
+    return runAdvancedFamilyCommand(commandName, args, context, argText);
   }
 
   if (commandName === '/talk' || commandName === '/voicewake') {
@@ -1103,16 +1103,6 @@ async function runAgentSubcommand(args: string[], context: SlashCommandContext):
   return textResult('Usage: /agent status or /agent stop', '/agent');
 }
 
-/**
- * Every `/model` subcommand that has its own branch in runModelCommand. A bare
- * `/model <name>` must never claim one of these as a model id: with
- * setModelOverride wired, `/model fallbacks a,b` used to switch the session to
- * a model literally named "fallbacks" and never reached the fallbacks handler.
- */
-const MODEL_SUBCOMMANDS = new Set([
-  'show', 'status', 'auth', 'routing', 'policy', 'agent', 'agents', 'set', 'set-agent', 'fallbacks',
-]);
-
 async function runModelCommand(args: string[], context: SlashCommandContext): Promise<SlashCommandResult> {
   const subcommand = args[0]?.toLowerCase();
   if (!subcommand || subcommand === 'show' || subcommand === 'status') {
@@ -1134,23 +1124,6 @@ async function runModelCommand(args: string[], context: SlashCommandContext): Pr
     const snapshot = await readConfigSnapshot(context);
     const agentId = args.slice(1).find((arg) => !arg.startsWith('--'));
     return textResult(formatAgentModels(snapshot, agentId), agentId ? `/model agent ${agentId}` : '/model agents', compactJson(readPath(readConfigObject(snapshot), 'agents')));
-  }
-
-  // Bare /model <name> — switch directly through setModelOverride
-  // (no --confirm needed; picking a model is not destructive).
-  // Fall through to config.patch if no per-request override is available.
-  if (subcommand && !MODEL_SUBCOMMANDS.has(subcommand)) {
-    const modelId = subcommand;
-    const validation = await validateModelId(modelId, context);
-    if (context.setModelOverride) {
-      await context.setModelOverride(modelId);
-      const warning = validation.state === 'missing' ? `\n${modelCatalogValidationCopy(validation)}` : '';
-      return textResult(
-        `Model override set to ${modelId}\nThe current session will reopen so the next turn actually runs on this model.${warning}`,
-        '/model',
-      );
-    }
-    // Fall through to config.patch path if no setModelOverride
   }
 
   if (subcommand === 'set') {
@@ -1281,46 +1254,47 @@ async function runModelCommand(args: string[], context: SlashCommandContext): Pr
     return textResult(`Agent ${agentId} model updated to ${modelId}\n${formatConfigWriteResult(result)}`, '/model set-agent', compactJson(result));
   }
 
-  // Bare `/model <name>` — any first token that is not a recognised
-    // subcommand is a model id the operator wants to switch to. Picking
-    // a model is not destructive; the ceremony around `set --confirm`
-    // existed for no gain and is why this composer path is unused in
-    // favour of the sheet. Hermes still gets `set --confirm` working
-    // unchanged above, so nothing that scripts it breaks.
-    const bareModelId = args.find((arg) => !arg.startsWith('--'));
-    if (bareModelId) {
-      return applyModelIdDirect(bareModelId, context);
-    }
+  // Bare `/model <name>` — every recognised subcommand has returned above, so
+  // the first non-flag token here is a model id the operator wants to switch
+  // to. Picking a model is not destructive and needs no `--confirm`; the
+  // composer path is live for both Hermes and OpenClaw, and every bare switch
+  // goes through applyModelIdDirect so the two never drift apart.
+  const bareModelId = args.find((arg) => !arg.startsWith('--'));
+  if (bareModelId) return applyModelIdDirect(bareModelId, context);
 
-    return textResult('Usage: /model, /model auth, /model routing, /model agent <id>, /model set <model-id> --confirm, /model set-agent <agent-id> <model-id> --confirm, or /model fallbacks <ids> --confirm', '/model');
+  return textResult('Usage: /model, /model auth, /model routing, /model agent <id>, /model set <model-id> --confirm, /model set-agent <agent-id> <model-id> --confirm, or /model fallbacks <ids> --confirm', '/model');
+}
+
+/**
+ * Apply a model id the operator typed without the `set --confirm` ceremony.
+ * Hermes / Gate (which exposes `setModelOverride`) goes through the same
+ * per-request profile override the picker uses and reports a catalog
+ * mismatch as a warning; OpenClaw (no override) goes straight through
+ * `config.patch` with the standard primary-model patch, so it never spends a
+ * catalog read whose verdict it would discard.
+ */
+async function applyModelIdDirect(modelId: string, context: SlashCommandContext): Promise<SlashCommandResult> {
+  if (context.setModelOverride) {
+    const validation = await validateModelId(modelId, context);
+    await context.setModelOverride(modelId);
+    const warning = validation.state === 'missing' ? `\n${modelCatalogValidationCopy(validation)}` : '';
+    return textResult(
+      `Model override set to ${modelId}\nThe current session will reopen so the next turn actually runs on this model.${warning}`,
+      '/model',
+    );
   }
 
-  /**
-   * Apply a model id the operator typed without the `set --confirm` ceremony.
-   * Hermes / Gate (which exposes `setModelOverride`) goes through the same
-   * per-request profile override the picker uses; OpenClaw (no override) goes
-   * straight through `config.patch` with the standard primary-model patch.
-   */
-  async function applyModelIdDirect(modelId: string, context: SlashCommandContext): Promise<SlashCommandResult> {
-    if (context.setModelOverride) {
-      await context.setModelOverride(modelId);
-      return textResult(
-        `Model override set to ${modelId}.\nThe current session will reopen so the next turn actually runs on this model.`,
-        '/model',
-      );
-    }
+  const snapshot = await readConfigSnapshot(context);
+  const baseHash = readBaseHash(snapshot);
+  if (!baseHash) return textResult('Could not read the config base hash. Run /model and retry.', '/model');
 
-    const snapshot = await readConfigSnapshot(context);
-    const baseHash = readBaseHash(snapshot);
-    if (!baseHash) return textResult('Could not read the config base hash. Run /model and retry.', '/model');
-
-    const patch = { agents: { defaults: { model: { primary: modelId } } } };
-    const result = await context.gatewayRequest('config.patch', {
-      raw: JSON.stringify(patch, null, 2),
-      baseHash,
-    });
-    return textResult(`Default model updated to ${modelId}\n${formatConfigWriteResult(result)}`, '/model', compactJson(result));
-  }
+  const patch = { agents: { defaults: { model: { primary: modelId } } } };
+  const result = await context.gatewayRequest('config.patch', {
+    raw: JSON.stringify(patch, null, 2),
+    baseHash,
+  });
+  return textResult(`Default model updated to ${modelId}\n${formatConfigWriteResult(result)}`, '/model', compactJson(result));
+}
 
 async function runConfigCommand(args: string[], context: SlashCommandContext): Promise<SlashCommandResult> {
   const subcommand = args[0]?.toLowerCase();
@@ -1389,8 +1363,12 @@ async function runHealthChecksCommand(
   try {
     const result = await context.gatewayRequest(method, {});
     return textResult(diagnosticsSlashCopy(diagnosticsReadFromUnknown(result)), commandName);
-  } catch {
-    return textResult(diagnosticsSlashCopy({ ok: false }), commandName);
+  } catch (error) {
+    // A refused read must name why it failed: the old copy dropped the
+    // reason, so a timeout, an auth failure and an undispatched method were
+    // indistinguishable. Keep the summary sentence and append the cause.
+    const reason = error instanceof Error ? error.message : String(error);
+    return textResult(`Health checks could not be read: ${reason}`, commandName);
   }
 }
 
@@ -1410,8 +1388,11 @@ async function runSessionSpendCommand(
       return textResult(`${copy}\nNewest ${SESSION_SPEND_LIST_LIMIT} sessions.`, commandName);
     }
     return textResult(copy, commandName);
-  } catch {
-    return textResult('Sessions could not be read.', commandName);
+  } catch (error) {
+    // Same honesty rule as the health read: a refused sessions.list carries
+    // its reason into the bubble instead of a bare "could not be read".
+    const reason = error instanceof Error ? error.message : String(error);
+    return textResult(`Sessions could not be read: ${reason}`, commandName);
   }
 }
 
@@ -1761,7 +1742,12 @@ function registeredFamilySubcommand(commandName: string, args: string[]): Gatewa
   return best;
 }
 
-async function runAdvancedFamilyCommand(commandName: string, args: string[], context: SlashCommandContext): Promise<SlashCommandResult> {
+async function runAdvancedFamilyCommand(
+  commandName: string,
+  args: string[],
+  context: SlashCommandContext,
+  argText?: string,
+): Promise<SlashCommandResult> {
   const registered = registeredFamilySubcommand(commandName, args);
   if (registered) return runCommand(registered, context);
 
@@ -1776,7 +1762,11 @@ async function runAdvancedFamilyCommand(commandName: string, args: string[], con
     return runCronActionCommand(sub, args.slice(1), context);
   }
   if (commandName === '/cron' && sub === 'create') {
-    return runCronCreateCommand(args.slice(1).join(' '), context);
+    // The prompt is free text: rebuild the argument from what the operator
+    // typed, not from the tokenized args, so quotes and runs of whitespace
+    // survive. Fall back to the joined tokens for callers without raw text.
+    const rawRest = argText === undefined ? undefined : splitFirstWord(argText)[1];
+    return runCronCreateCommand(rawRest ?? args.slice(1).join(' '), context);
   }
   if (commandName === '/env' && (sub === 'start' || sub === 'stop')) {
     return runEnvLifecycleCommand(sub, args.slice(1), context);
@@ -1820,8 +1810,6 @@ async function runAdvancedFamilyCommand(commandName: string, args: string[], con
       title = 'Artifacts';
       break;
   }
-
-  if (!method) method = commandName.replace('/', '').replace('-', '.') + '.list';
 
   const params = sub ? { id: sub } : {};
   const result = await context.gatewayRequest(method, params).catch(e => ({ error: String(e) }));
@@ -2062,7 +2050,12 @@ function formatRegisteredCommandResult(command: GatewayCommand, result: unknown)
 
 function formatGatewayHealth(result: unknown): string {
   const record = isRecord(result) ? result : {};
-  const state = readFirstString(record, ['status', 'state', 'health']) ?? (readFirstBoolean(record, ['ok', 'healthy']) === false ? 'not healthy' : 'OK');
+  // No recognised field is not a healthy verdict: an empty or malformed
+  // payload used to render "Health: OK" with no evidence behind it. A present
+  // `ok`/`healthy` flag still decides, so only the absence changes.
+  const healthy = readFirstBoolean(record, ['ok', 'healthy']);
+  const state = readFirstString(record, ['status', 'state', 'health'])
+    ?? (healthy === false ? 'not healthy' : healthy === true ? 'OK' : 'unknown');
   const version = readFirstString(record, ['version']);
   const uptime = readFirstNumber(record, ['uptimeMs', 'uptime_ms', 'uptime']);
   return [
@@ -2075,7 +2068,9 @@ function formatGatewayHealth(result: unknown): string {
 function formatGatewayStatus(result: unknown): string {
   const record = isRecord(result) ? result : {};
   const server = isRecord(record.server) ? record.server : {};
-  const state = readFirstString(record, ['status', 'state']) ?? readFirstString(server, ['status', 'state']) ?? 'online';
+  // Same rule for the status summary: a payload with no state is unknown,
+  // never an invented "online".
+  const state = readFirstString(record, ['status', 'state']) ?? readFirstString(server, ['status', 'state']) ?? 'unknown';
   const version = readFirstString(record, ['version']) ?? readFirstString(server, ['version']);
   const mode = readFirstString(record, ['mode', 'authMode', 'auth']);
   const lines = [`Status: ${state}`];
@@ -2502,8 +2497,11 @@ async function runCronCreateCommand(
   // Split on the first two pipes only: the prompt itself may contain `|`.
   const firstPipe = rest.indexOf('|');
   const secondPipe = firstPipe < 0 ? -1 : rest.indexOf('|', firstPipe + 1);
-  const title = firstPipe < 0 ? '' : rest.slice(0, firstPipe).trim();
-  const schedule = secondPipe < 0 ? '' : rest.slice(firstPipe + 1, secondPipe).trim();
+  // Title and schedule keep the tokenizer's quoting rules (a quoted title is
+  // one segment, not literal quote marks); the prompt is kept verbatim, so
+  // `/cron create T | daily | Say "hi"` schedules `Say "hi"`, not `Say hi`.
+  const title = firstPipe < 0 ? '' : tokenizeCommand(rest.slice(0, firstPipe)).join(' ').trim();
+  const schedule = secondPipe < 0 ? '' : tokenizeCommand(rest.slice(firstPipe + 1, secondPipe)).join(' ').trim();
   const prompt = secondPipe < 0 ? '' : rest.slice(secondPipe + 1).trim();
   if (!title || !schedule || !prompt) return textResult(USAGE, '/cron create');
   const method = 'jobs.create';

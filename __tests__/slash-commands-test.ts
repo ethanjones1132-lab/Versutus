@@ -221,7 +221,9 @@ describe('/usage and /cost from session records', () => {
       gatewayRequest,
       runAgentCommand: jest.fn(),
     });
-    expect(result.text).toBe('Sessions could not be read.');
+    // Corrected expectation: a refused read names its cause. The old exact
+    // copy dropped the reason, so an auth failure and a timeout read the same.
+    expect(result.text).toBe('Sessions could not be read: sessions.list is not supported');
     expect(result.text).not.toMatch(/Tokens: 0/);
   });
 
@@ -291,7 +293,9 @@ describe('/status and /diagnostics name health checks', () => {
       gatewayRequest,
       runAgentCommand: jest.fn(),
     });
-    expect(status.text).toBe('Health checks could not be read.');
+    // Corrected expectation: the refused read keeps its summary sentence but
+    // now appends the reason; the old copy hid it entirely.
+    expect(status.text).toBe('Health checks could not be read: diagnostics.full is not supported');
     expect(status.text).not.toMatch(/online|\{\}/);
     expect(status.raw).toBeUndefined();
 
@@ -300,7 +304,8 @@ describe('/status and /diagnostics name health checks', () => {
       gatewayRequest,
       runAgentCommand: jest.fn(),
     });
-    expect(diagnostics.text).toBe('Health checks could not be read.');
+    // Same corrected expectation for /diagnostics: reason included.
+    expect(diagnostics.text).toBe('Health checks could not be read: diagnostics.full is not supported');
     expect(diagnostics.text).not.toBe('Diagnostics summary');
   });
 

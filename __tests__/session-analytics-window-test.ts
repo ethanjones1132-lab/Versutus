@@ -106,7 +106,10 @@ describe('/usage spend window', () => {
   test('a failed read keeps the failure copy, never zeros', async () => {
     const gatewayRequest = jest.fn().mockRejectedValue(new Error('boom'));
     const result = await executeGatewaySlashCommand('/usage', contextFor(gatewayRequest));
-    expect(result.text).toBe('Sessions could not be read.');
+    // Corrected expectation: the refused read now names its cause, so a
+    // timeout and an auth failure no longer read the same (QUALITY-SCAN
+    // 2026-10-11, slash-commands.ts summary reads).
+    expect(result.text).toBe('Sessions could not be read: boom');
   });
 });
 

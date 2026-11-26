@@ -3,10 +3,10 @@ import { executeGatewaySlashCommand } from '@/lib/gateway/slash-commands';
 /**
  * The bare form `/model <name>` should switch directly through the existing
  * `setModelOverride` path -- it does not require the `set` verb nor the
- * `--confirm` flag. Picking a model is not destructive; the ceremony
- * existed for no gain and is why the composer path is unused in favour
- * of the sheet. The legacy `set <name> --confirm` form must keep
- * parsing so anything that scripts it does not break.
+ * `--confirm` flag. Picking a model is not destructive, and this composer
+ * path is live for both Hermes (override) and OpenClaw (config.patch), not
+ * dead in favour of the sheet. The legacy `set <name> --confirm` form must
+ * keep parsing so anything that scripts it does not break.
  */
 describe('/model <name> direct switch', () => {
   test('bare form with a Hermes setModelOverride dispatches the switch without --confirm', async () => {
