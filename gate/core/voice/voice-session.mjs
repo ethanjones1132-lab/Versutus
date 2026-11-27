@@ -61,11 +61,15 @@ export const INITIAL_VOICE_SESSION = Object.freeze({
   // can be measured in audio rather than wall clock (VS-179). `settleEosMs` is
   // the end of the last final, `workerPositionMs` the engine's audio position,
   // and `settleArmed` says a hold was started after the audio had caught up.
+  // `pendingDecodes` lets an endpoint's settle run before its final transcript.
   reportsHearing: false,
   utteranceSettleMs: 0,
   settleEosMs: null,
   workerPositionMs: null,
   settleArmed: false,
+  settleInProgress: false,
+  settleElapsed: false,
+  pendingDecodes: 0,
   // The person started talking while their turn was still being thought about.
   // Until it is known whether that was words or a cough, the turn keeps running
   // and what it says is held here, unspoken and unsent, in the order it came.
@@ -180,6 +184,9 @@ function commitUtterance(state, text, { finals = 1, nowMs = null, before = [] } 
       deferring: false,
       deferred: [],
       settleArmed: false,
+      settleInProgress: false,
+      settleElapsed: false,
+      pendingDecodes: 0,
     },
     effects: [
       ...before,
@@ -207,14 +214,18 @@ function hearFinal(state, event) {
       ...state,
       pendingText: merged,
       pendingFinals: state.pendingFinals + 1,
+      pendingDecodes: Math.max(0, state.pendingDecodes - 1),
     },
     event,
   );
+  if (next.settleInProgress && next.settleElapsed && next.pendingDecodes === 0 && settleScored(next)) {
+    return commitUtterance(next, merged, { finals: next.pendingFinals });
+  }
   effects.push(
     frameSend({ t: 'partial', text: merged }),
     // While the engine says more is being heard, the clock does not run: the
     // utterance is sent when the person stops, not a guess after they paused.
-    holdEffect(next),
+    ...(next.settleInProgress ? [] : [holdEffect(next)]),
   );
   return stay({ ...next, settleArmed: settleScored(next) }, effects);
 }
@@ -366,7 +377,10 @@ export function reduceVoiceSession(state, event) {
   if (event.type === 'socketClosed') return endCall(state, event.reason ?? 'network');
   if (event.type === 'error' && event.fatal) return endCall(state, 'engine-error');
   if (event.type === 'error') {
-    return stay(state, [
+    const next = event.code === 'stt_failed'
+      ? { ...state, pendingDecodes: Math.max(0, state.pendingDecodes - 1) }
+      : state;
+    return stay(next, [
       frameSend({
         t: 'error',
         code: event.code ?? 'engine_error',
@@ -430,10 +444,34 @@ export function reduceVoiceSession(state, event) {
     // phase and sends no frame; it only decides whether the hold may run. A
     // gathered utterance waits while more is being heard and is sent a short
     // settle after it is not.
-    case 'hearing': {
+    case 'hearing':
+    case 'endOfSpeech': {
+      if (event.type === 'endOfSpeech') {
+        if (state.phase !== 'listening') return stay(state);
+        const next = {
+          ...state,
+          hearing: false,
+          settleEosMs: Number.isFinite(event.eosMs) ? event.eosMs : null,
+          workerPositionMs: Number.isFinite(event.positionMs) ? event.positionMs : state.workerPositionMs,
+          settleArmed: false,
+          settleInProgress: true,
+          settleElapsed: false,
+          pendingDecodes: state.pendingDecodes + 1,
+        };
+        return stay(next, state.utteranceHoldMs > 0 ? [{ kind: 'hold.start', ms: state.utteranceHoldMs }] : []);
+      }
       const hearing = Boolean(event.active);
       const positionMs = Number.isFinite(event.positionMs) ? event.positionMs : state.workerPositionMs;
       const next = { ...state, hearing, workerPositionMs: positionMs };
+      if (hearing && state.settleInProgress) {
+        return stay({
+          ...next,
+          settleEosMs: null,
+          settleArmed: false,
+          settleInProgress: false,
+          settleElapsed: false,
+        }, [{ kind: 'hold.start', ms: 0 }]);
+      }
       if (hearing === state.hearing) {
         // The flag did not change, but the worker may have caught up to the
         // audio its last final needed (VS-179). A false read taken before the
@@ -446,6 +484,9 @@ export function reduceVoiceSession(state, event) {
           && !state.settleArmed
           && settleScored(next)
         ) {
+          if (state.settleInProgress && state.settleElapsed && state.pendingDecodes === 0) {
+            return commitUtterance(next, next.pendingText, { finals: next.pendingFinals });
+          }
           return stay({ ...next, settleArmed: true }, [holdEffect(next)]);
         }
         return stay(next);
@@ -468,6 +509,20 @@ export function reduceVoiceSession(state, event) {
         return hearDuringTurn(state, event);
       }
       return stay(state);
+    }
+
+    case 'noSpeechDrop': {
+      const next = { ...state, pendingDecodes: Math.max(0, state.pendingDecodes - 1) };
+      if (
+        next.settleInProgress
+        && next.settleElapsed
+        && next.pendingDecodes === 0
+        && next.pendingText
+        && settleScored(next)
+      ) {
+        return commitUtterance(next, next.pendingText, { finals: next.pendingFinals });
+      }
+      return stay(next);
     }
 
     // The person started talking again while their turn was still being thought
@@ -493,11 +548,22 @@ export function reduceVoiceSession(state, event) {
       // utterance is still growing, and it is sent when the engine says it is not.
       if (state.hearing) return stay(state);
       const text = state.pendingText.trim();
-      if (!text) return stay(state);
+      if (!text) {
+        return stay(state.settleInProgress ? { ...state, settleElapsed: true } : state);
+      }
+      if (state.pendingDecodes > 0) {
+        return stay({ ...state, settleElapsed: true });
+      }
       // The wall clock has run, but an engine that reports hearing has not
       // necessarily scored the audio behind it. Until it has, the resumed speech
       // may still be queued and this prefix is only half the utterance (VS-179).
-      if (!settleScored(state)) return stay({ ...state, settleArmed: false });
+      if (!settleScored(state)) {
+        return stay({
+          ...state,
+          settleArmed: false,
+          settleElapsed: state.settleInProgress,
+        });
+      }
       return commitUtterance(state, text, { finals: state.pendingFinals, nowMs: event.nowMs });
     }
 

@@ -278,6 +278,10 @@ export class LocalEngine extends EventEmitter {
       decodeMs: params.decodeMs,
       ...(Number.isFinite(params.positionMs) ? { positionMs: params.positionMs } : {}),
     });
+    else if (method === 'voice.endOfSpeech') this.emit('endOfSpeech', {
+      eosMs: params.eosMs,
+      ...(Number.isFinite(params.positionMs) ? { positionMs: params.positionMs } : {}),
+    });
     else if (method === 'voice.earlyEnd') this.emit('earlyEnd', { text: params.text });
     else if (method === 'voice.speechAudio') {
       const chunk = params.chunk ?? {};

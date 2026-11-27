@@ -475,6 +475,16 @@ class VoicePipeline:
         # sending it is what made calls "send prematurely".
         if len(pcm) < self._min_utterance_bytes:
             return
+        # The endpoint is already known here, on the audio loop. Keep the
+        # text-bearing earlyEnd contract for the eventual transcript, but let
+        # the Gate begin its settle while Whisper decodes the final.
+        self._emit(
+            "voice.endOfSpeech",
+            {
+                "eosMs": eos_ms,
+                "positionMs": self._call_started_ms + self._audio_ms,
+            },
+        )
         self._queue_recognition(("final", self._utterance, pcm, early_end, eos_ms))
 
     def speak(self, params):

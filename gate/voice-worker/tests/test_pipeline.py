@@ -128,7 +128,7 @@ def _slow_synth(seen, entered, release):
     return synth
 
 
-_BOOKKEEPING = ("voice.hearing", "voice.utteranceOpen")
+_BOOKKEEPING = ("voice.hearing", "voice.utteranceOpen", "voice.endOfSpeech")
 
 
 def _heard(events):
@@ -283,6 +283,41 @@ def test_a_confident_turn_judge_marks_an_early_end_before_the_final():
 
     methods = [method for method, _params in events]
     assert methods.index("voice.earlyEnd") < methods.index("voice.final")
+    assert events[methods.index("voice.earlyEnd")][1]["text"] == "hello there"
+
+
+def test_end_of_speech_is_emitted_while_the_final_decode_is_still_running():
+    events = []
+    final_started = threading.Event()
+    release_final = threading.Event()
+
+    def transcribe(_pcm, beam_size):
+        if beam_size == 5:
+            final_started.set()
+            assert release_final.wait(5)
+        return "hello there"
+
+    pipeline, threads = _threaded_pipeline(
+        events,
+        lambda text: [text.encode("ascii")],
+        transcriber=PartialTranscriber(transcribe),
+    )
+    pipeline._turn = TurnJudge(is_complete=lambda _window: 0.9)
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
+
+    assert final_started.wait(5)
+    methods = [method for method, _params in events]
+    assert "voice.endOfSpeech" in methods
+    assert "voice.final" not in methods
+
+    release_final.set()
+    _join_all(threads)
+    methods = [method for method, _params in events]
+    assert methods.index("voice.endOfSpeech") < methods.index("voice.final")
+    assert methods.index("voice.earlyEnd") < methods.index("voice.final")
+    assert events[methods.index("voice.final")][1]["text"] == "hello there"
     assert events[methods.index("voice.earlyEnd")][1]["text"] == "hello there"
 
 

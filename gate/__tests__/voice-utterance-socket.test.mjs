@@ -384,6 +384,29 @@ test('a second segment ends a speculative turn, and the hold starts the only liv
   await call.close();
 });
 
+test('a pre-decode endpoint lets the Gate settle while the final transcript is pending', async (t) => {
+  const engine = makeControllableEngine();
+  const attempts = [];
+  const call = await startCall(t, {
+    engine,
+    utteranceHoldMs: 250,
+    runTurn: async (_session, text) => {
+      attempts.push(text);
+      return { hasContent: true };
+    },
+  });
+
+  engine.emit('endOfSpeech', { eosMs: 10_000, positionMs: 10_000 });
+  await sleep(300);
+  engine.emit('final', { text: 'hello there', eosMs: 10_000, positionMs: 10_250 });
+  await waitUntil(() => attempts.length === 1);
+
+  assert.deepEqual(attempts, ['hello there']);
+  await waitUntil(() => ofType(call.frames, 'final').some((frame) => frame.text === 'hello there'));
+  await call.end();
+  await call.close();
+});
+
 test('the audit reports how long a turn took to answer and to be heard', async (t) => {
   const engine = makeControllableEngine();
   const call = await startCall(t, {

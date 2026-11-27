@@ -1628,11 +1628,19 @@ export function attachVoiceMediaSocket({
       active: Boolean(event?.active),
       positionMs: event?.positionMs,
     }));
-    engine.on?.('utteranceOpen', () => dispatch({ type: 'userSpeaking' }));
+    engine.on?.('endOfSpeech', (event) => dispatch({
+      type: 'endOfSpeech',
+      eosMs: event?.eosMs,
+      positionMs: event?.positionMs,
+    }));
+    engine.on?.('utteranceOpen', () => {
+      dispatch({ type: 'hearing', active: true });
+      dispatch({ type: 'userSpeaking' });
+    });
     engine.on?.('earlyEnd', (event) => {
-      // An engine that says when the person has stopped needs no head start:
-      // the turn is committed a short settle after the final, and a turn sent
-      // early and then withdrawn leaves a half-said prompt in the Bot's thread.
+      // Hearing-aware engines announce the endpoint separately, so the settle
+      // can overlap decode. Their text-bearing earlyEnd is not a second,
+      // speculative turn; an engine without hearing still gets its head start.
       if (engine.reportsHearing) return;
       if (!allowSpeculativeTurns || call.phase !== 'listening' || turnAbort || speculative) return;
       void startTurn(event.text, { speculative: true });

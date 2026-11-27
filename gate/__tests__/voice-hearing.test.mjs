@@ -54,6 +54,26 @@ test('the gathered utterance is sent a settle after the person stops', () => {
   assert.equal(turn.text, 'First sentence. Second sentence.');
 });
 
+test('an endpoint signal received during decode arms the settle for its final transcript', () => {
+  const endpoint = run([
+    { type: 'hearing', active: true, positionMs: 10_000 },
+    { type: 'endOfSpeech', eosMs: 10_000, positionMs: 10_000 },
+  ], listening());
+  assert.equal(endpoint.state.hearing, false);
+  assert.equal(endpoint.state.pendingText, '');
+  assert.deepEqual(holds(endpoint.effects), [SETTLE_MS]);
+  assert.equal(endpoint.effects.some((effect) => effect.kind === 'turn.run'), false);
+
+  const elapsed = run([{ type: 'holdElapsed', nowMs: 1_000 }], endpoint.state);
+  assert.equal(elapsed.state.settleElapsed, true);
+
+  const final = run([
+    { type: 'final', text: 'Hello there.', eosMs: 10_000, positionMs: 10_250 },
+  ], elapsed.state);
+  assert.equal(final.state.phase, 'thinking');
+  assert.equal(final.effects.find((effect) => effect.kind === 'turn.run').text, 'Hello there.');
+});
+
 test('a final with nothing more being heard waits only the settle', () => {
   const out = run([{ type: 'final', text: 'Hello there.' }], listening());
   assert.deepEqual(holds(out.effects), [SETTLE_MS]);

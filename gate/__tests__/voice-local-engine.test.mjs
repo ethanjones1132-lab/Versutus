@@ -200,6 +200,16 @@ test('an earlyEnd notification becomes an engine earlyEnd', async () => {
   assert.equal(ends[0].text, 'hello');
 });
 
+test('an endOfSpeech notification carries its endpoint position to the engine', async () => {
+  const { engine, children } = await opened();
+
+  const ends = [];
+  engine.on('endOfSpeech', (event) => ends.push(event));
+  notify(children[0], 'voice.endOfSpeech', { eosMs: 1234, positionMs: 1300 });
+
+  assert.deepEqual(ends, [{ eosMs: 1234, positionMs: 1300 }]);
+});
+
 test('a worker error notification becomes an engine error', async () => {
   const { engine, children } = await opened();
   const errors = [];
