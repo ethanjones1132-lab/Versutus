@@ -75,6 +75,12 @@ jest.mock('@/lib/gateway/dashboard', () => ({
 
 const gateway = (id: string) => ({ id, url: 'http://localhost', token: 't', name: 'GW' });
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
+}
+
 // Stand-in host names for the mocked UI primitives; not real JSX intrinsics,
 // so they need an ElementType cast for findAllByType.
 const TEXT_FIELD = 'TextField' as ElementType;
@@ -166,5 +172,54 @@ describe('terminal session survival', () => {
 
     const updated = renderer.root.findAllByType(TEXT_FIELD)[0];
     expect(updated.props.value).toBe('ls -la');
+  });
+
+  test('re-entering Shell while the first open is pending starts only one session', async () => {
+    const pending = deferred<{ sid: string; close: jest.Mock }>();
+    jest.mocked(openTerminalSession).mockReturnValueOnce(pending.promise as never);
+
+    mockGatewayState('gw-1', 'connected');
+    await act(async () => { renderer = create(createElement(TerminalScreen)); });
+    await act(async () => { renderer.root.findByType(MODE_PICKER).props.onModeChange('shell'); });
+    expect(openTerminalSession).toHaveBeenCalledTimes(1);
+
+    // Leave Shell and come back while the first open has not settled yet; the
+    // in-flight guard must make the second start a no-op.
+    await act(async () => { renderer.root.findByType(MODE_PICKER).props.onModeChange('rpc'); });
+    await act(async () => { renderer.root.findByType(MODE_PICKER).props.onModeChange('shell'); });
+    expect(openTerminalSession).toHaveBeenCalledTimes(1);
+
+    await act(async () => { pending.resolve(session); });
+    // Nothing superseded the pending open, so its session is adopted and live.
+    expect(session.close).not.toHaveBeenCalled();
+
+    mockGatewayState('gw-2', 'connected');
+    await act(async () => { renderer.update(createElement(TerminalScreen)); });
+    expect(session.close).toHaveBeenCalledTimes(1);
+  });
+
+  test('a gateway change while an open is pending closes the superseded session', async () => {
+    const first = deferred<{ sid: string; close: jest.Mock }>();
+    const second = deferred<{ sid: string; close: jest.Mock }>();
+    const oldSession = { sid: 'sess-old', close: jest.fn() };
+    const newSession = { sid: 'sess-new', close: jest.fn() };
+    jest.mocked(openTerminalSession)
+      .mockReturnValueOnce(first.promise as never)
+      .mockReturnValueOnce(second.promise as never);
+
+    mockGatewayState('gw-1', 'connected');
+    await act(async () => { renderer = create(createElement(TerminalScreen)); });
+    await act(async () => { renderer.root.findByType(MODE_PICKER).props.onModeChange('shell'); });
+    expect(openTerminalSession).toHaveBeenCalledTimes(1);
+
+    mockGatewayState('gw-2', 'connected');
+    await act(async () => { renderer.update(createElement(TerminalScreen)); });
+    expect(openTerminalSession).toHaveBeenCalledTimes(2);
+
+    await act(async () => { first.resolve(oldSession); });
+    expect(oldSession.close).toHaveBeenCalledTimes(1);
+
+    await act(async () => { second.resolve(newSession); });
+    expect(newSession.close).not.toHaveBeenCalled();
   });
 });

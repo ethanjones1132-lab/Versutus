@@ -87,6 +87,10 @@ export function TerminalScreen() {
   const { scrolled, onScroll } = useHeaderScrolled(ambient.onScroll);
   const insets = useSafeAreaInsets();
   const sessionRef = useRef<TerminalSession | null>(null);
+  // Token of an open still awaiting openTerminalSession. While one is pending a
+  // second start is a no-op, and an open superseded by a gateway change (or
+  // unmount) closes the session it opened instead of adopting it.
+  const pendingStartRef = useRef<object | null>(null);
 
   const appendOutput = useCallback((chunk: string) => {
     setTerminalLines((previous) => appendTerminalChunk(previous, chunk));
@@ -94,6 +98,9 @@ export function TerminalScreen() {
 
   const startTerminal = useCallback(async () => {
     if (!activeGateway || status !== 'connected' || !shellReady) return;
+    if (pendingStartRef.current) return;
+    const token = {};
+    pendingStartRef.current = token;
     sessionRef.current?.close();
     sessionRef.current = null;
     setTerminalLines([]);
@@ -122,13 +129,22 @@ export function TerminalScreen() {
         },
         activeGateway.token,
       );
+      if (pendingStartRef.current !== token) {
+        // Superseded while the open was pending: this start no longer owns the
+        // session it opened, so close it rather than adopt it.
+        session.close();
+        return;
+      }
       sessionRef.current = session;
       setTerminalConnected(true);
       await haptics.success();
     } catch (error) {
+      if (pendingStartRef.current !== token) return;
       const message = error instanceof Error ? error.message : String(error);
       setTerminalError(message);
       await haptics.error();
+    } finally {
+      if (pendingStartRef.current === token) pendingStartRef.current = null;
     }
   }, [activeGateway, appendOutput, shellReady, status]);
 
@@ -139,6 +155,9 @@ export function TerminalScreen() {
   // (reconnecting -> connected) must not kill a healthy stream.
   useEffect(() => {
     return () => {
+      // Invalidate any open still awaiting its session: it must not adopt a
+      // session belonging to a gateway that is already gone.
+      pendingStartRef.current = null;
       sessionRef.current?.close();
       sessionRef.current = null;
       setTerminalConnected(false);
