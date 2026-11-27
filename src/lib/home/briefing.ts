@@ -12,10 +12,13 @@
 //   operator's point of view, never a finished run.
 
 import type { ActivityRun } from '@/lib/gateway/runs';
+import { runIsInFlight } from '@/lib/activity/run-partition';
 
 export type HomeBriefingFinished = {
   complete: ActivityRun[];
   failed: ActivityRun[];
+  /** Runs the operator ended. Over, but not a failure — its own fate. */
+  cancelled: ActivityRun[];
   unresolved: ActivityRun[];
 };
 
@@ -28,18 +31,21 @@ export type HomeBriefing = {
   pendingApprovals: number;
 };
 
-const LIVE_RUN_STATUSES: ReadonlySet<ActivityRun['status']> = new Set([
-  'running',
-  'waiting-approval',
-]);
-
 function terminalFate(status: ActivityRun['status']): keyof HomeBriefingFinished {
-  if (status === 'complete') return 'complete';
-  // failed and cancelled mean the run is over and did not go well;
-  // unresolved means it is over but its fate is unknown — that stays its
-  // own group rather than being dressed up as either.
-  if (status === 'unresolved') return 'unresolved';
-  return 'failed';
+  switch (status) {
+    case 'complete':
+      return 'complete';
+    // Cancelled is over, but it is the operator's own stop, not a failure;
+    // reporting it under "failed" is a claim the run's status never made.
+    case 'cancelled':
+      return 'cancelled';
+    case 'failed':
+      return 'failed';
+    // unresolved means it is over but its fate is unknown — that stays its
+    // own group rather than being dressed up as either.
+    default:
+      return 'unresolved';
+  }
 }
 
 /**
@@ -48,14 +54,9 @@ function terminalFate(status: ActivityRun['status']): keyof HomeBriefingFinished
  * ended. The gateway may still be executing it, so the digest carries it over
  * as live rather than reporting it as news — the header rule above, applied to
  * a restored row. Once the settle re-poll learns a real fate it carries a
- * `finishedAt` of its own and is ordinary news again.
- */
-function isUnwatchedStillGoing(run: ActivityRun): boolean {
-  return run.status === 'unresolved' && typeof run.finishedAt !== 'number';
-}
-
-/**
- * Select what Home should show since the operator's last visit.
+ * `finishedAt` of its own and is ordinary news again. The predicate itself is
+ * `runIsInFlight`, shared with the glance, Activity and the drawer.
+ *
  * `now` is injectable for tests; in production a finish timestamp is never
  * trusted past it (an unsettled record may carry a placeholder), so such a
  * run counts as still-live, not as an overdue completion.
@@ -67,16 +68,15 @@ export function buildHomeBriefing(
 ): HomeBriefing | null {
   if (lastSeenAt === null) return null;
 
-  const finished: HomeBriefingFinished = { complete: [], failed: [], unresolved: [] };
+  const finished: HomeBriefingFinished = { complete: [], failed: [], cancelled: [], unresolved: [] };
   const live: ActivityRun[] = [];
   let pendingApprovals = 0;
 
   for (const run of runs) {
     const finishedAfterLeave =
       typeof run.finishedAt === 'number' && run.finishedAt > lastSeenAt && run.finishedAt <= now;
-    const carriedOver = LIVE_RUN_STATUSES.has(run.status) || isUnwatchedStillGoing(run);
 
-    if (carriedOver) {
+    if (runIsInFlight(run)) {
       if (run.status === 'waiting-approval') pendingApprovals += 1;
       live.push(run);
       continue;
@@ -117,8 +117,8 @@ function countRuns(count: number): string {
 }
 
 export function homeBriefingSummary(briefing: HomeBriefing): HomeBriefingSummary {
-  const { complete, failed, unresolved } = briefing.finished;
-  const finishedCount = complete.length + failed.length + unresolved.length;
+  const { complete, failed, cancelled, unresolved } = briefing.finished;
+  const finishedCount = complete.length + failed.length + cancelled.length + unresolved.length;
   const liveCount = briefing.live.length;
   const stillGoing = liveCount - briefing.pendingApprovals;
   const lines: string[] = [];
@@ -129,6 +129,9 @@ export function homeBriefingSummary(briefing: HomeBriefing): HomeBriefingSummary
     lines.push(`${countRuns(briefing.pendingApprovals)} waiting on your approval`);
   }
   if (failed.length > 0) lines.push(`${countRuns(failed.length)} failed`);
+  // A run the operator stopped is over, but it never failed; it gets its
+  // own line rather than being counted into "failed".
+  if (cancelled.length > 0) lines.push(`${countRuns(cancelled.length)} cancelled`);
   if (unresolved.length > 0) lines.push(`${countRuns(unresolved.length)} ended without a result`);
   if (stillGoing > 0) lines.push(`${countRuns(stillGoing)} still going`);
   if (complete.length > 0) lines.push(`${countRuns(complete.length)} finished`);

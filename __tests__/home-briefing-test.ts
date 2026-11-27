@@ -33,6 +33,7 @@ describe('buildHomeBriefing', () => {
     const briefing = buildHomeBriefing([earlier], LAST_SEEN, LAST_SEEN + 120_000)!;
     expect(briefing.finished.complete).toHaveLength(0);
     expect(briefing.finished.failed).toHaveLength(0);
+    expect(briefing.finished.cancelled).toHaveLength(0);
     expect(briefing.finished.unresolved).toHaveLength(0);
     expect(briefing.live).toHaveLength(0);
     expect(briefing.pendingApprovals).toBe(0);
@@ -44,12 +45,14 @@ describe('buildHomeBriefing', () => {
         run({ id: 'a', status: 'complete' }),
         run({ id: 'b', status: 'failed', finishedAt: LAST_SEEN + 90_000 }),
         run({ id: 'c', status: 'unresolved', finishedAt: LAST_SEEN + 120_000 }),
+        run({ id: 'd', status: 'cancelled', finishedAt: LAST_SEEN + 100_000 }),
       ],
       LAST_SEEN,
     )!;
     expect(briefing.finished.complete.map((r) => r.id)).toEqual(['a']);
     expect(briefing.finished.failed.map((r) => r.id)).toEqual(['b']);
     expect(briefing.finished.unresolved.map((r) => r.id)).toEqual(['c']);
+    expect(briefing.finished.cancelled.map((r) => r.id)).toEqual(['d']);
   });
 
   test('counts a run that finished mid-flight as news even when it started before the leave', () => {
@@ -95,9 +98,11 @@ describe('buildHomeBriefing', () => {
     expect(briefing.live).toHaveLength(0);
   });
 
-  test('ends a cancelled run in the failed group — it did not finish well', () => {
+  test('gives a cancelled run its own fate — the operator stopped it, it did not fail', () => {
     const briefing = buildHomeBriefing([run({ status: 'cancelled' })], LAST_SEEN)!;
-    expect(briefing.finished.failed.map((r) => r.id)).toEqual(['run-1']);
+    expect(briefing.finished.cancelled.map((r) => r.id)).toEqual(['run-1']);
+    expect(briefing.finished.failed).toHaveLength(0);
+    expect(homeBriefingSummary(briefing).lines).toEqual(['1 run cancelled']);
   });
 
   test('carries over a restored run whose fate was never learned — still going, not news', () => {
@@ -111,6 +116,7 @@ describe('buildHomeBriefing', () => {
     expect(briefing.live.map((r) => r.id)).toEqual(['restored']);
     expect(briefing.finished.unresolved).toHaveLength(0);
     expect(briefing.finished.failed).toHaveLength(0);
+    expect(briefing.finished.cancelled).toHaveLength(0);
     expect(homeBriefingSummary(briefing).lines).toEqual(['1 run still going']);
   });
 
@@ -124,7 +130,8 @@ describe('buildHomeBriefing', () => {
 
     expect(restored[0].finishedAt).toEqual(expect.any(Number));
     expect(briefing.live).toHaveLength(0);
-    expect(briefing.finished.failed.map((r) => r.id)).toEqual(['local-1234-abcd']);
+    expect(briefing.finished.cancelled.map((r) => r.id)).toEqual(['local-1234-abcd']);
+    expect(briefing.finished.failed).toHaveLength(0);
   });
 
   test('a settle re-poll that confirms a real end turns the same run into news', async () => {

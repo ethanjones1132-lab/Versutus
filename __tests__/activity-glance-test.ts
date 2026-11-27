@@ -1,4 +1,7 @@
 import { DAY_MS, RIBBON_TICKS, dayRibbon, glanceFigures, ribbonPosition } from '@/lib/activity/glance';
+import { partitionRunsByState } from '@/lib/activity/run-partition';
+import { teamPresence } from '@/lib/activity/presence';
+import { buildHomeBriefing } from '@/lib/home/briefing';
 import type { ActivityRun } from '@/lib/gateway/runs';
 
 const NOW = 1_800_000_000_000;
@@ -73,6 +76,26 @@ describe('the day ribbon', () => {
       ['restored', 'working'],
       ['settled', 'settled'],
     ]);
+  });
+
+  test('a restored run with no learned fate is live in the glance, Activity, the drawer and Home at once', () => {
+    // The shape `normalizeRestoredRuns` hands back after the app closed under a
+    // run: `unresolved` with no finish of its own. The gateway may still be
+    // executing it, so every surface must say it is going — one predicate,
+    // four readers — rather than one calling it working, one finished and one
+    // leaving it out.
+    const restored = run('restored', 'unresolved', 5 * 60_000, { finishedAt: undefined, botId: 'forge' });
+
+    const figures = glanceFigures(0, [restored], NOW);
+    expect(figures.find((figure) => figure.key === 'working')?.value).toBe(1);
+    expect(figures.find((figure) => figure.key === 'done')?.value).toBe(0);
+
+    expect(partitionRunsByState([restored]).inFlightRuns.map((r) => r.id)).toEqual(['restored']);
+    expect(teamPresence([restored]).get('forge')).toBe('working');
+
+    const briefing = buildHomeBriefing([restored], NOW - HOUR, NOW)!;
+    expect(briefing.live.map((r) => r.id)).toEqual(['restored']);
+    expect(briefing.finished.unresolved).toHaveLength(0);
   });
 
   test('beads are the last day of runs, oldest first, each marked by what it needs', () => {

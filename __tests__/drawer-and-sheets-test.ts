@@ -33,6 +33,27 @@ describe('the drawer says what each teammate is doing', () => {
     );
   });
 
+  test('a restored run whose fate was never learned still means its Bot is working', () => {
+    // `unresolved` with no finish of its own: the gateway may still be running
+    // it, so the roster must not go quiet about that Bot while the glance and
+    // Activity call the same row live.
+    const restored: ActivityRun = {
+      id: 'restored',
+      botId: 'forge',
+      status: 'unresolved',
+      prompt: 'restored',
+      startedAt: 0,
+      events: [],
+    };
+    expect(teamPresence([restored]).get('forge')).toBe('working');
+    // A waiting run for the same Bot still outranks it.
+    expect(teamPresence([restored, { ...restored, id: 'wait', status: 'waiting-approval' }]).get('forge')).toBe(
+      'needs-you',
+    );
+    // Once a settle learns a real end, the row carries a finish and is quiet.
+    expect(teamPresence([{ ...restored, finishedAt: 1 }]).has('forge')).toBe(false);
+  });
+
   test('the current destination is marked with the same light bar as a sheet row, and the count wears amber', () => {
     const drawer = source('src', 'components', 'nav', 'side-drawer-content.tsx');
     expect(drawer).toContain('backgroundColor: tokens.rowSelected');

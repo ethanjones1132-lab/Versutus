@@ -1,4 +1,5 @@
 import type { ActivityRun } from '@/lib/gateway/runs';
+import { runIsInFlight } from '@/lib/activity/run-partition';
 
 /** What a teammate is doing right now, as the drawer says it. */
 export type TeamPresence = 'needs-you' | 'working';
@@ -8,13 +9,16 @@ export type TeamPresence = 'needs-you' | 'working';
  * waiting on the operator "needs you" (that outranks working — it is the one
  * that asks for something); a Bot with a run in flight is "working". A Bot
  * with neither has no entry, and the drawer says nothing about it.
+ *
+ * "In flight" is `runIsInFlight`, the same answer the glance and Activity use,
+ * so a restored row whose fate was never learned is working here too.
  */
 export function teamPresence(runs: readonly ActivityRun[]): ReadonlyMap<string, TeamPresence> {
   const presence = new Map<string, TeamPresence>();
   for (const run of runs) {
     if (!run.botId) continue;
     if (run.status === 'waiting-approval') presence.set(run.botId, 'needs-you');
-    else if (run.status === 'running' && presence.get(run.botId) !== 'needs-you') presence.set(run.botId, 'working');
+    else if (runIsInFlight(run) && presence.get(run.botId) !== 'needs-you') presence.set(run.botId, 'working');
   }
   return presence;
 }

@@ -7,6 +7,7 @@
  */
 
 import type { ActivityRun } from '@/lib/gateway/runs';
+import { runIsInFlight } from '@/lib/activity/run-partition';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -17,25 +18,18 @@ export type GlanceFigure = {
 };
 
 /**
- * A run restored from disk whose fate this device never learned — `unresolved`
- * with no finish of its own. The gateway may still be executing it, so it is
- * in flight until a settle re-poll gives it a real end; counting it as neither
- * working nor settled is what made Activity disagree with itself about it.
- */
-function inFlightAfterRestore(run: ActivityRun): boolean {
-  return run.status === 'unresolved' && typeof run.finishedAt !== 'number';
-}
-
-/**
  * The glance's figures. "Needs you" is the approval inbox's count — the same
  * number the drawer carries — so a run waiting on an approval is not counted
  * twice. "Failed" appears only when something did, so a good day reads as
  * three calm numbers.
+ *
+ * Which runs are still going is not this module's question: it reads
+ * `runIsInFlight` so the glance agrees with Activity and the drawer.
  */
 export function glanceFigures(pendingApprovals: number, runs: ActivityRun[], now: number): GlanceFigure[] {
   const since = now - DAY_MS;
   const endedToday = (run: ActivityRun) => (run.finishedAt ?? run.startedAt) >= since;
-  const working = runs.filter((run) => run.status === 'running' || inFlightAfterRestore(run)).length;
+  const working = runs.filter((run) => runIsInFlight(run) && run.status !== 'waiting-approval').length;
   const done = runs.filter((run) => run.status === 'complete' && endedToday(run)).length;
   const failed = runs.filter((run) => run.status === 'failed' && endedToday(run)).length;
   const figures: GlanceFigure[] = [
@@ -87,7 +81,7 @@ export function dayRibbon(runs: ActivityRun[], now: number, spanMs: number = DAY
       at: ribbonPosition(now - run.startedAt, spanMs),
       state: run.status === 'waiting-approval'
         ? 'waiting'
-        : run.status === 'running' || inFlightAfterRestore(run)
+        : runIsInFlight(run)
           ? 'working'
           : 'settled',
     }));

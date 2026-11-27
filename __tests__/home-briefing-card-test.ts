@@ -27,7 +27,7 @@ function run(
 
 function briefing(overrides: Partial<HomeBriefing> = {}): HomeBriefing {
   return {
-    finished: { complete: [], failed: [], unresolved: [] },
+    finished: { complete: [], failed: [], cancelled: [], unresolved: [] },
     live: [],
     pendingApprovals: 0,
     ...overrides,
@@ -47,17 +47,34 @@ describe('homeBriefingSummary', () => {
         finished: {
           complete: [run('a', 'complete', 1)],
           failed: [run('b', 'failed', 2)],
+          cancelled: [run('d', 'cancelled', 4)],
           unresolved: [run('c', 'unresolved', 3)],
         },
       }),
     );
-    expect(summary.finishedCount).toBe(3);
+    expect(summary.finishedCount).toBe(4);
     expect(summary.isEmpty).toBe(false);
     expect(summary.lines).toEqual([
       '1 run failed',
+      '1 run cancelled',
       '1 run ended without a result',
       '1 run finished',
     ]);
+  });
+
+  test('a cancelled run is never reported as a failure', () => {
+    const summary = homeBriefingSummary(
+      briefing({
+        finished: {
+          complete: [],
+          failed: [],
+          cancelled: [run('a', 'cancelled', 1)],
+          unresolved: [],
+        },
+      }),
+    );
+    expect(summary.lines).toEqual(['1 run cancelled']);
+    expect(summary.lines.some((line) => line.includes('failed'))).toBe(false);
   });
 
   test('surfaces the approvals waiting on the operator', () => {
@@ -87,6 +104,7 @@ describe('homeBriefingSummary', () => {
         finished: {
           complete: [run('a', 'complete', 1), run('b', 'complete', 2)],
           failed: [],
+          cancelled: [],
           unresolved: [],
         },
       }),
