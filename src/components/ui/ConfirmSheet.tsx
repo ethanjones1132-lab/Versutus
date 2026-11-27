@@ -50,7 +50,7 @@ export function ConfirmSheet({
           <Button label="Cancel" variant="ghost" onPress={onCancel} />
           <Button
             label={confirmLabel}
-            variant={danger ? 'primary' : 'secondary'}
+            variant={danger ? 'destructive' : 'secondary'}
             busy={busy}
             onPress={() => {
               void haptics.success();

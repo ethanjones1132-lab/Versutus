@@ -11,7 +11,7 @@ describe('terminal 404 restart lifecycle', () => {
   });
 
   it('preserves the typed input, visible error, and non-404 live session', () => {
-    expect(src).toContain('setInput(value);');
+    expect(src).toContain('setInput((current) => (current.length === 0 ? value : current));');
     expect(src).toContain('setTerminalError(message);');
     expect(src).toContain('Any other failure (network blip, 500) leaves the session alive.');
     expect(src).toContain('sessionRef.current?.close();');

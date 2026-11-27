@@ -71,7 +71,7 @@ describe('terminal error card mode coverage', () => {
     // The send catch derives the message once now — it also reads it to tell a
     // dead session from a blip — so the inline `setTerminalError(error …)` form
     // it used to call is gone by design, but the failure is still surfaced.
-    expect(src).toContain('setInput(value);\n      setTerminalError(message);');
+    expect(src).toContain('setInput((current) => (current.length === 0 ? value : current));\n      setTerminalError(message);');
   });
 
   test('the shell pane still gates on shell mode', () => {

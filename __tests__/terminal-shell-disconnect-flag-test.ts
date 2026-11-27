@@ -72,7 +72,7 @@ describe('terminal shell disconnect flag', () => {
 
   test('a rejected send restores the input and only clears the flag on a 404', () => {
     const src = readScreen();
-    expect(src).toContain('setInput(value);');
+    expect(src).toContain('setInput((current) => (current.length === 0 ? value : current));');
     expect(src).toContain('if (message.includes(\'404\'))');
     expect(src).toContain('setTerminalConnected(false);');
   });

@@ -50,7 +50,9 @@ describe('confirm sheet busy state', () => {
 
   test('the confirm Button keeps its variant and haptics wiring', () => {
     const src = readConfirmSheet();
-    expect(src).toContain("variant={danger ? 'primary' : 'secondary'}");
+    // A danger confirm is the same red action as Deny in
+    // approval-decision-card.tsx; only the plain confirm stays secondary.
+    expect(src).toContain("variant={danger ? 'destructive' : 'secondary'}");
     // The success haptic, now via the wrapper that cannot reject.
     expect(src).toContain('haptics.success()');
     expect(src).toContain('onConfirm();');

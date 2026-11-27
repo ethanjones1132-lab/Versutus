@@ -177,8 +177,10 @@ export function TerminalScreen() {
       await sendTerminalInput(gateway.url, session.sid, payload, gateway.token);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      // Restore the typed text so a failed send does not lose the input.
-      setInput(value);
+      // Restore the text the failed send cleared, but only while the field is
+      // still empty: anything typed during the round-trip belongs to the
+      // operator and must not be overwritten.
+      setInput((current) => (current.length === 0 ? value : current));
       setTerminalError(message);
       // A 404 means the gateway no longer knows this session — the stream is
       // gone. Any other failure (network blip, 500) leaves the session alive.
