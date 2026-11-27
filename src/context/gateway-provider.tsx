@@ -19,6 +19,8 @@ import { serverSideCancelForCommand } from '@/lib/gateway/cancel';
 import { isAuthRejection, isConnectionError, isUserAbort } from '@/lib/gateway/errors';
 import { currentWebOrigin, savedAddressUnreachableCopy } from '@/lib/gateway/web-origin';
 import { keyValueStorage } from '@/lib/storage/key-value';
+import { captureTurnChange } from '@/lib/chat/turn-change-capture';
+import { getSharedTurnChangeStore } from '@/hooks/use-turn-change-row';
 import {
   clearRecentBotShortcutsForGateway,
   createBotShortcutRecorder,
@@ -3080,7 +3082,19 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             // Stop settled this bubble on its own terms; a `[DONE]` that lands
             // after it must not re-open the turn or promote its tools.
             if (!bubble || isStoppedTurn(bubble)) return prev;
-            return finalizeStreamingMessage(prev, turnId);
+            const next = finalizeStreamingMessage(prev, turnId);
+            // The turn's own evidence is live only now: write its change record
+            // before the next mount can only ask the store. A refused save is
+            // caught inside, so this never fails the finished turn.
+            void captureTurnChange({
+              turnId,
+              sessionId: sessionIdRef.current,
+              backendId: selectedBackendIdRef.current,
+              turnMessages: next,
+              outcome: 'finished',
+              store: getSharedTurnChangeStore(),
+            });
+            return next;
           });
           turnSeqRef.current.delete(turnId);
           turnAttemptsRef.current.delete(turnId);
@@ -3090,7 +3104,20 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             // A restart of the Gate under the turn is an interruption with a
             // reason, not a failure — and never a finished half answer.
             if (isGateRestartFailure(error)) {
-              setMessages((prev) => markInterrupted(prev, turnId, interruptedTurnCopy('gate_restart')));
+              setMessages((prev) => {
+                const next = markInterrupted(prev, turnId, interruptedTurnCopy('gate_restart'));
+                // An interrupted turn has no claim to "nothing changed": it
+                // writes only when what streamed already names a change.
+                void captureTurnChange({
+                  turnId,
+                  sessionId: sessionIdRef.current,
+                  backendId: selectedBackendIdRef.current,
+                  turnMessages: next,
+                  outcome: 'interrupted',
+                  store: getSharedTurnChangeStore(),
+                });
+                return next;
+              });
             }
             // A dropped stream keeps the orb and its text: the turn may well be
             // running, and the ladder below asks rather than assumes.
@@ -5286,6 +5313,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // The turn id this send is the owner of, so its `finally` can leave a
       // later send's id alone.
       let ownTurnId: string | null = runId;
+      // The session this turn runs in, captured for its change record: the Gate
+      // may create one mid-turn, and the operator may move chats while it runs.
+      // The record still belongs to the conversation the turn actually ran in.
+      let turnSessionId: string | undefined = sessionIdRef.current;
       /**
        * Whether the GATE has the turn: its stream started, or it replayed the
        * turn this id already named. It is not the same fact as "the call
@@ -5353,6 +5384,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             setCurrentSessionId(outcome.sessionId);
           }
         }
+        turnSessionId = sessionIdRef.current;
 
         await client.streamChat(
           conversationMessages,
@@ -5401,6 +5433,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               turnIdRef.current = turnId;
             },
             onSession: (sessionId) => {
+              // The turn's own session, even when this thread has already
+              // pinned another: the change record keys on what ran.
+              turnSessionId = sessionId;
               // A turn sent without a session makes the Gate create one. Not
               // adopting its id left the phone holding no thread: the next turn
               // created another, and this one was only reachable by history.
@@ -5436,7 +5471,22 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
         batcher.flush();
         // Mark as complete
-        setMessages((prev) => finalizeStreamingMessage(prev, runId));
+        setMessages((prev) => {
+          const next = finalizeStreamingMessage(prev, runId);
+          // The turn's tool arguments are live only here; write the change
+          // record the row will read on its next mount. A finished turn with no
+          // write-like call still saves an empty record, so "nothing changed"
+          // is an answer rather than a store miss.
+          void captureTurnChange({
+            turnId: ownTurnId ?? runId,
+            sessionId: turnSessionId ?? sessionIdRef.current,
+            backendId: selectedBackendId ?? selectedBackendIdRef.current ?? gateway?.backendId,
+            turnMessages: next,
+            outcome: 'finished',
+            store: getSharedTurnChangeStore(),
+          });
+          return next;
+        });
         setLastError(null);
         // A turn that completed on the pinned model is the strongest proof it
         // runs: drop any lock a previous failed turn recorded (the operator
@@ -5559,14 +5609,40 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           // answer — so the reason is the copy on the bubble and the journal
           // decides what the turn actually became.
           batcher.flush();
-          setMessages((prev) => markInterrupted(prev, runId, interruptedTurnCopy('gate_restart')));
+          setMessages((prev) => {
+            const next = markInterrupted(prev, runId, interruptedTurnCopy('gate_restart'));
+            // Interrupted: only what streamed can license a record.
+            void captureTurnChange({
+              turnId: ownTurnId ?? runId,
+              sessionId: turnSessionId ?? sessionIdRef.current,
+              backendId: selectedBackendId ?? selectedBackendIdRef.current ?? gateway?.backendId,
+              turnMessages: next,
+              outcome: 'interrupted',
+              store: getSharedTurnChangeStore(),
+            });
+            return next;
+          });
           setLastError(null);
           resumeRunningTurnsRef.current('interrupted', runId);
           return 'sent';
         }
         if (isConnectionError(error)) {
           batcher.flush();
-          setMessages((prev) => markInterrupted(prev, runId, message));
+          setMessages((prev) => {
+            const next = markInterrupted(prev, runId, message);
+            // The stream may have already named a write-like call; that is
+            // evidence, so it is saved. Nothing else is guessed for a turn whose
+            // outcome is unknown.
+            void captureTurnChange({
+              turnId: ownTurnId ?? runId,
+              sessionId: turnSessionId ?? sessionIdRef.current,
+              backendId: selectedBackendId ?? selectedBackendIdRef.current ?? gateway?.backendId,
+              turnMessages: next,
+              outcome: 'interrupted',
+              store: getSharedTurnChangeStore(),
+            });
+            return next;
+          });
           setLastError(message);
           // The Gate keeps a turn running once this phone stops listening, so
           // the answer may well land there without the phone ever seeing it
@@ -6844,7 +6920,30 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // only a turn that streamed nothing at all leaves nothing behind. EVERY
     // placeholder is settled, the way the old filter removed every streaming
     // message — naming one run left any other orb wedged forever.
-    setMessages((prev) => stopStreamedTurns(prev));
+    setMessages((prev) => {
+      const next = stopStreamedTurns(prev);
+      for (const message of prev) {
+        if (!message.streaming || !message.text.trim()) continue;
+        const turnId = message.turnId
+          ?? (message.id.startsWith('run-') ? message.id.slice('run-'.length) : undefined);
+        const settled = next.find((candidate) => candidate.id === message.id);
+        if (!turnId || !settled) continue;
+        // A stop is not a finished turn: it saves only when the stream already
+        // named a write-like call. An empty record would claim "nothing
+        // changed" for work the operator cancelled mid-flight.
+        void captureTurnChange({
+          turnId,
+          sessionId: sessionIdRef.current,
+          backendId: selectedBackendIdRef.current,
+          // A bubble keyed `run-${turnId}` may carry the id only in its key;
+          // the collector reads the turn off the message, so name it there.
+          turnMessages: [settled.turnId ? settled : { ...settled, turnId }],
+          outcome: 'interrupted',
+          store: getSharedTurnChangeStore(),
+        });
+      }
+      return next;
+    });
   }, [stopTurnFollow]);
 
   const reloadHistory = useCallback(async () => {
