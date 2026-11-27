@@ -201,20 +201,6 @@ export type BotSpendReport = {
 };
 
 /**
- * One scoped catalogue read per roster Bot, folded into rows.
- *
- * The reads run `READ_BOT_SPEND_CONCURRENCY` at a time rather than one at a
- * time: sequential on a 10-Bot roster bound one screen open at N×RTT
- * (measured ~823 ms at a realistic 80 ms/read), and a full-parallel burst
- * from a phone is exactly the load `withGetSessionsRetry`'s backoff exists
- * to absorb — two at once is the honesty-preserving middle.
- *
- * A Bot whose read is refused or unreachable is caught here and kept as a
- * named `{ ok: false }` read — dropping it would read as a Bot that spent
- * nothing. A read that answers with something that is not a session list is
- * the same failure, decided by `sessionSpendReadFromUnknown`.
- */
-/**
  * How many per-Bot reads `readBotSpend` runs at once.
  *
  * On a 10-Bot roster the sequential fold bound one screen open at N×RTT
@@ -286,6 +272,15 @@ async function readRosterByConcurrency(
   return results;
 }
 
+/**
+ * One scoped catalogue read per roster Bot, folded into rows. The reads run
+ * `READ_BOT_SPEND_CONCURRENCY` at a time.
+ *
+ * A Bot whose read is refused or unreachable is caught here and kept as a
+ * named `{ ok: false }` read — dropping it would read as a Bot that spent
+ * nothing. A read that answers with something that is not a session list is
+ * the same failure, decided by `sessionSpendReadFromUnknown`.
+ */
 export async function readBotSpend(
   source: BotSpendSource,
   options: { signal?: AbortSignal } = {},

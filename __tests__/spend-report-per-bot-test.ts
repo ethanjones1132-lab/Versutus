@@ -213,6 +213,28 @@ describe('botSpendRows', () => {
   });
 });
 
+describe('the per-Bot read documents its contract where readers find it', () => {
+  test('readBotSpend carries the fold and failure contract, and the constant keeps the concurrency note', () => {
+    const src = readSource('src', 'lib', 'gateway', 'spend-report.ts');
+    const contract = 'named `{ ok: false }` read';
+
+    // The block that explains the fold and names the failure belongs to the
+    // function that implements it, not stranded above the constant.
+    const beforeFunction = src.slice(0, src.indexOf('export async function readBotSpend'));
+    const functionDoc = beforeFunction.slice(beforeFunction.lastIndexOf('/**'));
+    expect(functionDoc).toContain('folded into rows');
+    expect(functionDoc).toContain(contract);
+
+    // ... and no duplicate of it is left above the concurrency constant.
+    const beforeConstant = src.slice(0, src.indexOf('export const READ_BOT_SPEND_CONCURRENCY'));
+    expect(beforeConstant).not.toContain(contract);
+
+    const constantDoc = beforeConstant.slice(beforeConstant.lastIndexOf('/**'));
+    expect(constantDoc).toContain('How many per-Bot reads');
+    expect(constantDoc).toContain('Two at once');
+  });
+});
+
 describe('spend-report reuses the shipped folds', () => {
   test('the per-Bot fold imports sessionUsage and totalUsage instead of re-adding tokens', () => {
     // P5 says the per-Bot breakdown is "N existing reads" folded with the
