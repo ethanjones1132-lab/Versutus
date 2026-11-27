@@ -34,6 +34,7 @@ import { SessionChangesSheet } from '@/components/chat/session-changes-sheet';
 import { ConfirmationSheet } from '@/components/chat/confirmation-sheet';
 import { MessageActionsSheet } from '@/components/chat/message-actions-sheet';
 import { MessageBubble } from '@/components/chat/message-bubble';
+import { TurnChangeRow } from '@/components/chat/turn-change-row';
 import { PairingSheet } from '@/components/chat/pairing-sheet';
 import { ThreadConfigSheet, type SessionItem } from '@/components/chat/thread-config-sheet';
 import { SlashCommandPalette } from '@/components/chat/slash-command-palette';
@@ -2969,10 +2970,20 @@ export function ChatScreen() {
             onResume={canResumeTurn ? handleResumeMessage : undefined}
             onLongPress={setActionMessage}
           />
+          {/* A finished assistant turn may have changed files on the PC. The row
+              reads only the turn's stored record (VS-094); a missing record
+              says so in one line rather than guessing a list. */}
+          {item.message.role === 'assistant' && !item.message.streaming && item.message.turnId ? (
+            <TurnChangeRow
+              turnId={item.message.turnId}
+              sessionId={currentSessionId}
+              backendId={selectedBackendId}
+            />
+          ) : null}
         </>
       );
     },
-    [cancelCommand, canResumeTurn, handleResumeMessage, retryCommand],
+    [cancelCommand, canResumeTurn, currentSessionId, handleResumeMessage, retryCommand, selectedBackendId],
   );
 
   if (!activeGateway) {
