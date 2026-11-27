@@ -11,24 +11,10 @@
 //   or the gateway's own verdict on a routine — never a line composed here.
 // - A read that named nothing produces no line at all, rather than "0 runs".
 
+import { runIsInFlight } from '@/lib/activity/run-partition';
 import { describeCronHealth, type CronJob } from '@/lib/gateway/cron';
 import { isTerminalRunStatus, type ActivityRun } from '@/lib/gateway/runs';
 import type { ConnectionStatus } from '@/lib/gateway/types';
-
-/**
- * The statuses an ActivityRun carries while the work is still this client's
- * business — the Activity tab's own live set (src/app/(tabs)/activity.tsx:107,
- * the same pair run-card.tsx:66 and buildHomeBriefing call live).
- *
- * Deliberately NOT `isTerminalRunStatus`: that regex reads GATEWAY status
- * strings, and an ActivityRun is `unresolved` exactly when the gateway never
- * said a terminal word before this client stopped polling (runs.ts:145-149).
- * The regex answers false for a run that is over.
- */
-const IN_FLIGHT_RUN_STATUSES: ReadonlySet<ActivityRun['status']> = new Set([
-  'running',
-  'waiting-approval',
-]);
 
 /**
  * The small shape a widget renders: this client's connection, how much work is
@@ -163,14 +149,21 @@ export function glanceableSnapshot(
   for (const bot of facts.bots ?? []) addBot(bot.id);
 
   for (const run of facts.runs) {
-    if (IN_FLIGHT_RUN_STATUSES.has(run.status)) {
+    // `runIsInFlight` is the one verdict the Activity list, the glance, the
+    // drawer and Home read — including a restored row whose fate this device
+    // never learned. Deliberately not `isTerminalRunStatus`: that regex reads
+    // GATEWAY status strings and answers false for a run that is over, while
+    // the shared predicate keeps the unfinished restored row in flight until a
+    // settle re-poll gives it a real end (runs.ts:145-149).
+    if (runIsInFlight(run)) {
       runsInFlight += 1;
       if (run.status === 'waiting-approval') approvalsPending += 1;
       runs.push({ title: runTitle(run), state: runState(run) });
       continue;
     }
-    // Nothing to report from a run the gateway never judged: `unresolved` is
-    // over, but it carries no verdict, and a line here would claim one.
+    // Nothing to report from a settled run the gateway never judged: an
+    // `unresolved` row that carries a learned finish is over, but it holds no
+    // verdict, and a line here would claim one.
     if (!isTerminalRunStatus(run.status)) continue;
     const text = runResult(run);
     if (!text) continue;

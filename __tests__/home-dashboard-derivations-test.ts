@@ -13,6 +13,17 @@ function readSource(): string {
 }
 
 describe('home dashboard derived values are memoized', () => {
+  test('activeRuns folds through runIsInFlight, not a private status pair', () => {
+    // Home used to answer the in-flight question with its own copy of the
+    // status pair, so a restored row whose fate this device never learned was
+    // in flight on Activity, the glance, the drawer and the widget but not
+    // here. The shared predicate is now the one verdict all four surfaces read.
+    const src = readSource();
+    expect(src).toMatch(/import \{ runIsInFlight \} from '@\/lib\/activity\/run-partition';/);
+    expect(src).toMatch(/const activeRuns = useMemo\(\s*\(\) => activityRuns\.filter\(runIsInFlight\),\s*\[activityRuns\],\s*\)/);
+    expect(src).not.toContain("run.status === 'running' || run.status === 'waiting-approval'");
+  });
+
   test('useMemo is imported from react', () => {
     // The dashboard re-derived its gateway list, run filter, capability count,
     // channel glance and runs-supported flag on every render — including each

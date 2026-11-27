@@ -23,6 +23,7 @@ import { useGateway } from '@/context/gateway-provider';
 import { useGatewayDiscovery } from '@/hooks/use-gateway-discovery';
 import { useGatewayReachability } from '@/hooks/use-gateway-reachability';
 import { useTokens } from '@/hooks/use-tokens';
+import { runIsInFlight } from '@/lib/activity/run-partition';
 import { describeAutoRetry } from '@/lib/connection/retry-ladder';
 import { humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import type { GatewayProfile } from '@/lib/gateway/types';
@@ -89,8 +90,11 @@ export function GatewayHomeDashboard() {
   // channel glance or runs-supported flag (iter-099). These live above the
   // empty-state early return so the hooks run in the same order every render.
   const connected = status === 'connected' && !!activeGateway;
+  // `runIsInFlight` is the one verdict Home, Activity, the drawer and the
+  // widget share, so a restored row whose fate was never learned still counts
+  // here instead of Home calling the same run finished.
   const activeRuns = useMemo(
-    () => activityRuns.filter((run) => run.status === 'running' || run.status === 'waiting-approval'),
+    () => activityRuns.filter(runIsInFlight),
     [activityRuns],
   );
   const capabilityCount = useMemo(

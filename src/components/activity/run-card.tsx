@@ -7,6 +7,7 @@ import { Card, Icon, PressableScale, Text } from '@/components/ui';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import { useNow } from '@/hooks/use-now';
+import { runIsInFlight } from '@/lib/activity/run-partition';
 import { watchedRunSpanMs } from '@/lib/fleet/scorecard';
 import { formatDuration, formatRelativeTime } from '@/lib/format';
 import { haptics } from '@/lib/haptics';
@@ -54,7 +55,10 @@ function LiveElapsed({ startedAt }: { startedAt: number }) {
 export const RunCard = memo(function RunCard({ run, onStop, onOpenTranscript, onRetry, highlighted = false }: RunCardProps) {
   const tokens = useTokens();
   const [expanded, setExpanded] = useState(false);
-  const live = run.status === 'running' || run.status === 'waiting-approval';
+  // The shared verdict, not a second copy of the status pair: a row restored
+  // from disk whose fate this device never learned is in flight too, so it
+  // ticks, keeps its Stop, and stays out of the finished styling.
+  const live = runIsInFlight(run);
   const latestEvent = run.events.length > 0 ? run.events[run.events.length - 1] : null;
   /**
    * The span this card may print, or `null` for a run this device never watched

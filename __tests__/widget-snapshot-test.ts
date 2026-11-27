@@ -132,6 +132,25 @@ describe('glanceableSnapshot', () => {
     expect(snapshot.lastResult).toBeUndefined();
   });
 
+  test('a restored run whose fate this device never learned is in flight', () => {
+    // No finish of its own: the gateway may still be executing it, and the
+    // glance, Activity, the drawer and Home already count it as going. The
+    // widget reads the same `runIsInFlight` verdict instead of its own set.
+    const snapshot = glanceableSnapshot(
+      {
+        status: 'connected',
+        runs: [run({ id: 'restored', status: 'unresolved', finishedAt: undefined, summary: undefined })],
+        routines: [],
+      },
+      NOW,
+    );
+
+    expect(snapshot.runsInFlight).toBe(1);
+    expect(snapshot.approvalsPending).toBe(0);
+    expect(snapshot.runs).toEqual([{ title: 'do the thing', state: 'Running' }]);
+    expect(snapshot.lastResult).toBeUndefined();
+  });
+
   test('the newest judged run contributes its own summary, in its own words', () => {
     const snapshot = glanceableSnapshot(
       {

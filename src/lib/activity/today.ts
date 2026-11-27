@@ -6,6 +6,7 @@
 
 import type { ActivityCoverage, ActivityItem } from '@/lib/gateway/activity-feed';
 import type { ActivityRun } from '@/lib/gateway/runs';
+import { runIsInFlight } from '@/lib/activity/run-partition';
 
 export type TodayActivityGroup = { key: string; title: string; items: ActivityItem[] };
 
@@ -83,9 +84,11 @@ export function groupActivityForToday(
 
 /**
  * The app's own runs that are still moving or holding for the operator.
- * ActivityRun uses `running` and `waiting-approval`; anything settled belongs
- * in the day's history instead, and an unknown outcome is not progress.
+ * `runIsInFlight` is the one verdict the glance, the drawer, Home and the
+ * widget share, so a row restored from disk whose fate this device never
+ * learned stays here — the gateway may still be executing it — until a settle
+ * re-poll gives it a real end. Anything settled belongs in the day's history.
  */
 export function liveRunsForToday(runs: ActivityRun[]): ActivityRun[] {
-  return runs.filter((run) => run.status === 'running' || run.status === 'waiting-approval');
+  return runs.filter(runIsInFlight);
 }
