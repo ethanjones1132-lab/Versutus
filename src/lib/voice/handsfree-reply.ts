@@ -51,12 +51,17 @@ export function handsfreeReplyForTurn(
 
 /**
  * Whether the reply failed rather than completed: the connection interrupted
- * it, or the stream error was written onto the bubble. A failed reply is never
- * spoken, and ends the call as `send-failed`.
+ * it, or the error path authored the bubble itself. The failure is a fact the
+ * message carries — `interrupted`, or `synthetic: 'error'` for the notice
+ * `convertStreamError` writes (`message-reducer.ts`) — never the shape of the
+ * words. A model reply that happens to begin with `Error:` is an ordinary
+ * answer and is spoken; only the app's own notice is suppressed. A failed reply
+ * is never spoken: a turn whose reply is that notice never becomes the answer,
+ * so the reply watchdog runs out and ends the call as `send-failed`.
  */
 export function isFailedReply(message: ChatMessage): boolean {
   if (message.interrupted) return true;
-  return message.text.trimStart().startsWith('Error:');
+  return message.synthetic === 'error';
 }
 
 /** Whether the text already spoken is still an unchanged prefix of the reply. */

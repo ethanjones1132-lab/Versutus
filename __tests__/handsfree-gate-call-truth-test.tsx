@@ -1025,39 +1025,90 @@ describe('a Gate commit cues the operator, and the dot follows the captured voic
   });
 });
 
+const phoneTarget: HandsfreeCallTarget = { ...target, transport: 'phone' };
+
+/** A phone-engine call, with a turn sent and the reply the send created. */
+async function sendPhoneTurn(text: string): Promise<string> {
+  mockNative.getAvailability.mockResolvedValue({
+    recognition: true,
+    synthesis: true,
+    maxSpeechInputLength: 200,
+  });
+  await call(async () => {
+    expect((await latest().start(phoneTarget)).result).toBe('started');
+  });
+  await call(async () => {
+    nativeEvent('final', { text });
+    // The grace window elapses and the turn is sent with the id it made.
+    await jest.advanceTimersByTimeAsync(HANDSFREE_GRACE_MS + 100);
+  });
+  const options = mockGateway.sendChatInput.mock.calls[0]?.[1] as
+    | { messageId: string }
+    | undefined;
+  if (!options) throw new Error('the turn was never sent');
+  return options.messageId;
+}
+
+/**
+ * The assistant row that answers `turnId`, with exactly this much in it, plus
+ * whatever else the row really says about itself — the error path's own
+ * `synthetic: 'error'`, for one.
+ */
+function reply(
+  turnId: string,
+  text: string,
+  streaming = true,
+  extra: Record<string, unknown> = {},
+): void {
+  mockMessages.messages = [
+    { id: turnId, role: 'user', text: 'book a table' },
+    { id: 'r1', role: 'assistant', text, streaming, ...extra },
+  ];
+}
+
+describe('a reply is spoken unless the turn itself failed', () => {
+  test('a reply whose words begin with Error: is spoken, and the call carries on', async () => {
+    const turnId = await sendPhoneTurn('what went wrong');
+    const answer = 'Error: the printer is offline. Restart it and try again.';
+
+    await call(async () => {
+      // An ordinary answer that happens to open with the app's error prefix:
+      // the words are the model's, not the notice a failed turn leaves.
+      reply(turnId, answer, false);
+      repaint();
+    });
+
+    expect(mockNative.speak).toHaveBeenCalledWith({ chunks: [answer] });
+    expect(latest().phase).toBe('speaking');
+    expect(latest().active).toBe(true);
+  });
+
+  test("the error path's own notice is not spoken, and the silent turn still ends the call", async () => {
+    const turnId = await sendPhoneTurn('what went wrong');
+
+    await call(async () => {
+      // What `convertStreamError` leaves when the turn had no words to keep:
+      // its notice, authored by the app (`synthetic: 'error'`), not the model.
+      reply(turnId, 'Error: the PC could not answer', false, { synthetic: 'error' });
+      repaint();
+    });
+    // A failed reply never becomes the answer, so the turn is still waiting.
+    expect(latest().phase).toBe('sending');
+    expect(mockNative.speak).not.toHaveBeenCalled();
+
+    await call(async () => {
+      // The watchdog is where a turn that produced no reply ends the call.
+      await jest.advanceTimersByTimeAsync(HANDSFREE_REPLY_WATCHDOG_MS + 5_000);
+      await jest.advanceTimersByTimeAsync(50);
+    });
+
+    expect(mockNative.speak).not.toHaveBeenCalled();
+    expect(latest().lastEndReason).toBe('send-failed');
+    expect(latest().active).toBe(false);
+  });
+});
+
 describe('a reply that appears with no words in it does not park the call', () => {
-  const phoneTarget: HandsfreeCallTarget = { ...target, transport: 'phone' };
-
-  /** A phone-engine call, with a turn sent and the reply the send created. */
-  async function sendPhoneTurn(text: string): Promise<string> {
-    mockNative.getAvailability.mockResolvedValue({
-      recognition: true,
-      synthesis: true,
-      maxSpeechInputLength: 200,
-    });
-    await call(async () => {
-      expect((await latest().start(phoneTarget)).result).toBe('started');
-    });
-    await call(async () => {
-      nativeEvent('final', { text });
-      // The grace window elapses and the turn is sent with the id it made.
-      await jest.advanceTimersByTimeAsync(HANDSFREE_GRACE_MS + 100);
-    });
-    const options = mockGateway.sendChatInput.mock.calls[0]?.[1] as
-      | { messageId: string }
-      | undefined;
-    if (!options) throw new Error('the turn was never sent');
-    return options.messageId;
-  }
-
-  /** The assistant row that answers `turnId`, with exactly this much in it. */
-  function reply(turnId: string, text: string, streaming = true): void {
-    mockMessages.messages = [
-      { id: turnId, role: 'user', text: 'book a table' },
-      { id: 'r1', role: 'assistant', text, streaming },
-    ];
-  }
-
   test('an empty reply reopens the microphone instead of waiting forever', async () => {
     const turnId = await sendPhoneTurn('book a table');
     await call(async () => {

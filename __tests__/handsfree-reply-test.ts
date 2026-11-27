@@ -77,8 +77,19 @@ describe('isFailedReply', () => {
     expect(isFailedReply(message({ id: 'r', role: 'assistant', interrupted: true }))).toBe(true);
   });
 
-  test('an error written onto the bubble has failed', () => {
-    expect(isFailedReply(message({ id: 'r', role: 'assistant', text: 'Error: boom' }))).toBe(true);
+  test('the error notice the error path authored has failed', () => {
+    // `convertStreamError` marks its own notice `synthetic: 'error'`; that is
+    // the fact this reads, not the copy it happens to start with.
+    expect(isFailedReply(message({ id: 'r', role: 'assistant', text: 'Error: boom', synthetic: 'error' }))).toBe(
+      true,
+    );
+  });
+
+  test('a reply whose text starts with Error: is an ordinary answer, not a failure', () => {
+    expect(isFailedReply(message({ id: 'r', role: 'assistant', text: 'Error: boom' }))).toBe(false);
+    expect(isFailedReply(message({ id: 'r', role: 'assistant', text: '  Error: the tool returned 500' }))).toBe(
+      false,
+    );
   });
 
   test('a completed reply has not', () => {
