@@ -66,6 +66,21 @@ function fakeStore(overrides: Partial<FakeStore> = {}): FakeStore {
 
 const loading = (store: FakeStore) => async () => store;
 
+/** A SecureStore stand-in that actually holds what is written to it. */
+function mapStore(): FakeStore {
+  const items = new Map<string, string>();
+  return {
+    isAvailableAsync: jest.fn(async () => true),
+    getItemAsync: jest.fn(async (key: string) => items.get(key) ?? null),
+    setItemAsync: jest.fn(async (key: string, value: string) => {
+      items.set(key, value);
+    }),
+    deleteItemAsync: jest.fn(async (key: string) => {
+      items.delete(key);
+    }),
+  };
+}
+
 describe('a SecureStore that throws', () => {
   const originalDev = globals.__DEV__;
   let warnSpy: jest.SpyInstance;
@@ -106,7 +121,8 @@ describe('a SecureStore that throws', () => {
     await secureKeyValueStorage.setItem('versutus:gateways', '[]', loading(store));
 
     expect(store.setItemAsync).toHaveBeenCalledTimes(2);
-    expect(store.setItemAsync).toHaveBeenLastCalledWith('versutus_gateways', '[]');
+    // The colon is escaped, not replaced: the mapping must stay injective.
+    expect(store.setItemAsync).toHaveBeenLastCalledWith('versutus_3a_gateways', '[]');
   });
 
   test('a read that keeps throwing names the operation and the cause, not a missing store', async () => {
@@ -224,5 +240,72 @@ describe('the pre-SecureStore value', () => {
     expect(loaded).toBe(legacy);
     expect(store.setItemAsync).toHaveBeenCalledWith(toSecureStoreKey('versutus:gateways'), legacy);
     expect(await AsyncStorage.getItem('versutus:gateways')).toBeNull();
+  });
+});
+
+/**
+ * The old key mapping replaced every character outside `[A-Za-z0-9._-]` with
+ * `_`, so two logical keys that sanitized alike named ONE SecureStore item:
+ * "a:b" and "a_b" read and overwrote each other's secret. These cases pin the
+ * injective mapping and the move of values older builds wrote under the lossy
+ * name.
+ */
+describe('two logical keys that sanitized alike', () => {
+  test('map to different SecureStore keys, and every key in use stays distinct', () => {
+    const keysInUse = [
+      'versutus:gateways',
+      'versutus:active-gateway',
+      'versutus:device-identity',
+      'versutus:device-auth-token:v1',
+      'versutus:expo-push-token:v1',
+      'versutus:gateways:corrupt-next',
+    ];
+
+    expect(toSecureStoreKey('a:b')).not.toBe(toSecureStoreKey('a_b'));
+    expect(new Set(keysInUse.map((key) => toSecureStoreKey(key))).size).toBe(keysInUse.length);
+
+    // Distinct is not enough: every name still has to be one SecureStore accepts.
+    for (const key of [...keysInUse, 'a:b', 'a_b', '']) {
+      expect(toSecureStoreKey(key)).toMatch(/^[\w.-]+$/);
+    }
+  });
+
+  test('a write to one is not readable through the other', async () => {
+    const store = mapStore();
+
+    await secureKeyValueStorage.setItem('gateway:a', 'first-secret', loading(store));
+    await secureKeyValueStorage.setItem('gateway_a', 'second-secret', loading(store));
+
+    await expect(secureKeyValueStorage.getItem('gateway:a', loading(store))).resolves.toBe(
+      'first-secret',
+    );
+    await expect(secureKeyValueStorage.getItem('gateway_a', loading(store))).resolves.toBe(
+      'second-secret',
+    );
+  });
+
+  test('a value an older build wrote under the lossy name is moved, not lost', async () => {
+    const store = mapStore();
+    // The name the old mapping wrote "versutus:gateways" under.
+    await store.setItemAsync('versutus_gateways', 'old-secret');
+
+    await expect(secureKeyValueStorage.getItem('versutus:gateways', loading(store))).resolves.toBe(
+      'old-secret',
+    );
+
+    await expect(store.getItemAsync(toSecureStoreKey('versutus:gateways'))).resolves.toBe(
+      'old-secret',
+    );
+    await expect(store.getItemAsync('versutus_gateways')).resolves.toBeNull();
+  });
+
+  test('a removal also removes the name an older build wrote the key under', async () => {
+    const store = mapStore();
+    await store.setItemAsync('versutus_gateways', 'old-secret');
+
+    await secureKeyValueStorage.removeItem('versutus:gateways', loading(store));
+
+    await expect(store.getItemAsync('versutus_gateways')).resolves.toBeNull();
+    await expect(store.getItemAsync(toSecureStoreKey('versutus:gateways'))).resolves.toBeNull();
   });
 });

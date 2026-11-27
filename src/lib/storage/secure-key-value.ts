@@ -54,11 +54,45 @@ function discardLegacyWebValue(key: string): void {
 }
 
 /**
- * SecureStore only accepts a restricted key alphabet. Keep the logical key
- * unchanged for the AsyncStorage fallback so values written by older builds
- * can still be read and migrated.
+ * The characters SecureStore accepts unchanged. `_` is accepted too, but it is
+ * reserved here as the escape marker, so it takes the escaped form as well.
+ */
+const SECURE_KEY_PASSTHROUGH = /^[A-Za-z0-9.-]$/;
+
+/**
+ * SecureStore only accepts a restricted key alphabet, and the mapping into it
+ * has to be injective. Replacing every other character with `_` was lossy:
+ * "a:b" and "a_b" named the same item, so two different logical keys could
+ * read and overwrite each other's secret.
+ *
+ * So `_` is reserved as an escape marker and every character outside the
+ * accepted alphabet becomes `_<hex codepoint>_`, including `_` itself. No
+ * passthrough character is `_`, so an escape can always be told apart from
+ * text, and no two logical keys can share an item. An empty key becomes `_`,
+ * which no escaped key can produce.
+ *
+ * The AsyncStorage fallback keeps the logical key unchanged, so a value an
+ * older build wrote there can still be found and migrated.
  */
 export function toSecureStoreKey(key: string): string {
+  let encoded = '';
+  for (const character of key) {
+    if (SECURE_KEY_PASSTHROUGH.test(character)) {
+      encoded += character;
+      continue;
+    }
+    const codePoint = character.codePointAt(0) ?? 0;
+    encoded += `_${codePoint.toString(16)}_`;
+  }
+  return encoded || '_';
+}
+
+/**
+ * The lossy mapping older builds wrote with, kept only to find a value that
+ * already exists under it and move it into the key space above. Nothing is
+ * ever written here any more.
+ */
+function legacySecureStoreKey(key: string): string {
   const normalized = key.replace(/[^A-Za-z0-9._-]/g, '_');
   return normalized || 'versutus';
 }
@@ -164,6 +198,23 @@ export const secureKeyValueStorage = {
         const value = await store.getItemAsync(secureKey);
         if (value !== null) return value;
 
+        // An older build wrote this key under the lossy mapping. Ask that name
+        // once and move the value into the injective key space; the new name is
+        // always asked for first, so a value written since is never shadowed.
+        const legacySecureKey = legacySecureStoreKey(key);
+        if (legacySecureKey !== secureKey) {
+          const legacySecureValue = await store.getItemAsync(legacySecureKey);
+          if (legacySecureValue !== null) {
+            try {
+              await store.setItemAsync(secureKey, legacySecureValue);
+              await store.deleteItemAsync(legacySecureKey);
+            } catch {
+              // Keep answering with the value found; a later read retries the move.
+            }
+            return legacySecureValue;
+          }
+        }
+
         // Older builds fell back to AsyncStorage after SecureStore rejected
         // colon-delimited keys. Migrate that value into the valid key space.
         const legacyValue = await AsyncStorage.getItem(key);
@@ -221,6 +272,10 @@ export const secureKeyValueStorage = {
       const removed = await runSecureStore('remove', key, async () => {
         if (!(await store.isAvailableAsync())) return STORE_ABSENT;
         await store.deleteItemAsync(secureKey);
+        // Also remove the name an older build wrote it under. Left behind, it
+        // would be found by a later read and resurrect the removed secret.
+        const legacySecureKey = legacySecureStoreKey(key);
+        if (legacySecureKey !== secureKey) await store.deleteItemAsync(legacySecureKey);
         await AsyncStorage.removeItem(key);
       });
       if (removed !== STORE_ABSENT) return;
