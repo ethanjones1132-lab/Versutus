@@ -7,23 +7,26 @@ import { useTokens } from '@/hooks/use-tokens';
 import { useNow } from '@/hooks/use-now';
 import type { GatewayCapabilitySnapshot, GatewayCapabilityGroup } from '@/lib/gateway/types';
 
+const isReadyCapability = (group: GatewayCapabilityGroup) =>
+  group.status === 'ready' || group.status === 'available';
+
 export function GatewayCapabilities({ snapshot }: { snapshot: GatewayCapabilitySnapshot }) {
   const { groups, checkedAt, status: snapStatus } = snapshot;
   const [showAll, setShowAll] = useState(false);
 
   // Undeclared groups exist in no gateway this app knows; they are not
-  // capabilities the connected one lacks, so they stay out of the ratio.
+  // capabilities the connected one lacks, so they stay out of the ratio and
+  // out of the toggle. Both the "not offered" count and the list the toggle
+  // expands to read `counted`, so the number always matches what a tap shows
+  // and undeclared groups never surface as missing capabilities.
   const counted = useMemo(() => groups.filter((group) => group.status !== 'undeclared'), [groups]);
-  const readyGroups = useMemo(
-    () => counted.filter((group) => group.status === 'ready' || group.status === 'available'),
+  const readyGroups = useMemo(() => counted.filter(isReadyCapability), [counted]);
+  const otherGroups = useMemo(
+    () => counted.filter((group) => !isReadyCapability(group)),
     [counted],
   );
-  const otherGroups = useMemo(
-    () => groups.filter((group) => group.status !== 'ready' && group.status !== 'available'),
-    [groups],
-  );
-  const visible = showAll ? groups : readyGroups.length > 0 ? readyGroups : groups.slice(0, 6);
-  const hiddenCount = Math.max(0, groups.length - visible.length);
+  const visible = showAll ? counted : readyGroups.length > 0 ? readyGroups : counted.slice(0, 6);
+  const hiddenCount = Math.max(0, counted.length - visible.length);
 
   return (
     <Card padding={Spacing.three} style={styles.card}>

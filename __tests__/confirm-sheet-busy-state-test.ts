@@ -94,19 +94,21 @@ describe('confirm sheet busy state', () => {
   });
 
   test('no other ConfirmSheet call site passes busy', () => {
-    // Two files are deliberately absent, each with its own pin:
+    // Four files are deliberately absent, each with its own pin:
     // cron-job-sheet.tsx, whose Remove sheet carries busy={acting}
-    // (cron-job-remove-busy-state-test.ts), and the two gateway Remove sheets,
+    // (cron-job-remove-busy-state-test.ts); the two gateway Remove sheets,
     // which carry busy={deletePending} because their confirm now awaits the
     // storage write (saved-gateway-remove-hint-test.ts, "the destructive
-    // ConfirmSheet keeps its wording, and adds only the failure branch"). Both
-    // are the named follow-up this kit half was shipped for.
+    // ConfirmSheet keeps its wording, and adds only the failure branch"); and
+    // paired-devices-pane.tsx, whose revoke sheet now carries
+    // busy={revokePending} behind a ref guard so a double tap cannot send two
+    // device.revoke calls (paired-devices-revoke-in-flight-test.ts). Each is
+    // the named follow-up its kit half was shipped for.
     const others = [
       ['src', 'components', 'chat', 'thread-config-sheet.tsx'],
       ['src', 'components', 'chat', 'group-room-action-sheet.tsx'],
       ['src', 'components', 'gateway', 'environment-actions-sheet.tsx'],
       ['src', 'components', 'gateway', 'capabilities-section.tsx'],
-      ['src', 'components', 'gateway', 'paired-devices-pane.tsx'],
       ['src', 'components', 'gateway', 'provider-actions-sheet.tsx'],
     ];
     for (const rel of others) {

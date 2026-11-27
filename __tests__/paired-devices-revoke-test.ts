@@ -60,8 +60,12 @@ describe('paired-devices revoke', () => {
     expect(src).toMatch(/useState<string\s*\|\s*null>\(\s*null\s*\)/);
 
     // The map over devices places a Revoke button only on the non-revoked
-    // branch and opens the ConfirmSheet for the tapped row's deviceId.
-    expect(src).toMatch(/onPress=\{\(\) => setRevokeTarget\(device\.deviceId\)\}/);
+    // branch and opens the ConfirmSheet for the tapped row's deviceId. The
+    // tap also clears any refusal left over from a previous device, so the
+    // next sheet never shows the last device's error.
+    expect(src).toMatch(
+      /onPress=\{\(\) => \{\s*setRevokeError\(null\);\s*setRevokeTarget\(device\.deviceId\);\s*\}\}/,
+    );
 
     // The ConfirmSheet confirms into gatewayRequest('device.revoke', { deviceId: ... }).
     // The pane may snapshot revokeTarget into a local before awaiting so a

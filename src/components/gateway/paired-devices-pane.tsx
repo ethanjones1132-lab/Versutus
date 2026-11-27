@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { Badge, Button, Card, ConfirmSheet, ErrorCard, ListRow, Skeleton, Text } from '@/components/ui';
@@ -31,6 +31,11 @@ export function PairedDevicesPane() {
   const [error, setError] = useState<string | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
+  const [revokePending, setRevokePending] = useState(false);
+  // The in-flight revoke, in a ref: two confirms inside one frame come off
+  // the same rendered closure, and `setRevokePending` has not landed yet, so
+  // the state read alone cannot tell the second press from the first.
+  const revokePendingRef = useRef(false);
   const gatewayId = activeGateway?.id;
   const visible =
     status === 'connected' && !!gatewayId && pairedDevicesVisibleOn({ kind: activeGateway?.kind });
@@ -64,7 +69,12 @@ export function PairedDevicesPane() {
 
   const executeRevoke = useCallback(async () => {
     const target = revokeTarget;
-    if (!target) return;
+    // A second confirm while the write is in flight is not a second revoke.
+    // The ref, not the state: two taps inside one frame both come off this
+    // same closure, and `setRevokePending` has not re-rendered anything yet.
+    if (!target || revokePendingRef.current) return;
+    revokePendingRef.current = true;
+    setRevokePending(true);
     setRevokeError(null);
     try {
       await gatewayRequest('device.revoke', { deviceId: target });
@@ -75,6 +85,9 @@ export function PairedDevicesPane() {
       // sheet open and name the Gate's reason so the operator can retry —
       // no local optimistic mutation.
       setRevokeError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      revokePendingRef.current = false;
+      setRevokePending(false);
     }
   }, [gatewayRequest, load, revokeTarget]);
 
@@ -131,7 +144,10 @@ export function PairedDevicesPane() {
                     label="Revoke"
                     variant="ghost"
                     size="sm"
-                    onPress={() => setRevokeTarget(device.deviceId)}
+                    onPress={() => {
+                      setRevokeError(null);
+                      setRevokeTarget(device.deviceId);
+                    }}
                     accessibilityHint="Opens a confirmation, then removes this device's token from the Gate. Other paired devices keep working."
                   />
                 ) : null}
@@ -152,6 +168,7 @@ export function PairedDevicesPane() {
           setRevokeError(null);
         }}
         onConfirm={executeRevoke}
+        busy={revokePending}
       />
     </Card>
   );

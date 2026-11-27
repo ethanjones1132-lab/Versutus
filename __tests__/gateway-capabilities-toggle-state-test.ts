@@ -86,6 +86,16 @@ describe('GatewayCapabilities show-all toggle screen-reader state', () => {
     expect(src).toMatch(/\{otherGroups\.length > 0 \?\s*\(/);
   });
 
+  test('the not-offered list and its count both derive from counted, not the raw groups', () => {
+    const src = readGatewayCapabilitiesSource();
+    // Undeclared groups exist in no gateway this app knows, so they must not
+    // inflate the toggle's "Show N not offered" or appear when it expands.
+    // Both the list and the number read `counted`, so the count matches what
+    // a tap reveals. A revert to `groups` reads one undeclared group too many.
+    expect(src).toMatch(/const otherGroups = useMemo\(\s*\(\) => counted\.filter/);
+    expect(src).toMatch(/const hiddenCount = Math\.max\(0, counted\.length - visible\.length\)/);
+  });
+
   test('accessibilityState appears on the toggle Pressable and nowhere else', () => {
     const src = readGatewayCapabilitiesSource();
     // Only the toggle Pressable carries accessibilityState. The card has no
