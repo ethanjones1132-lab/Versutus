@@ -58,7 +58,7 @@ Deferred on purpose, and tracked: New Agent creation, routines, `@mention` hando
 - **Chat** — streaming markdown, executable-first slash command palette, sessions, model picker and `/model set` override, durable offline outbox, tool-call cards when the stream or history exposes them, inline run approvals.
 - **Activity** — start an agentic run, watch live events, approve or deny, stop, persisted history, profile-scoped gateway targets.
 - **Tools** — Shell when the gateway advertises a terminal; otherwise RPC / Agent.
-- **Connecting** — saved gateways, configured host candidates (Tailscale names or LAN IPs) probed on launch, manual add, `versutus://add` deep links. Automatic LAN discovery (mDNS) is not in this build: its native module crashed under the New Architecture.
+- **Connecting** — saved gateways, configured host candidates (Tailscale names or LAN IPs) probed on launch, manual add, `versutus://add` deep links (the address only — a link never carries a token). Automatic LAN discovery (mDNS) is not in this build: its native module crashed under the New Architecture.
 - **Identity** — SecureStore-backed profiles, tokens, device identity; Gate pairing for custom and OpenClaw access grants.
 - **Voice** — hold-to-talk dictation into the composer (never auto-sends), optional per-Bot spoken replies, and a separate opt-in hands-free call. See [Voice](#voice).
 
@@ -120,8 +120,15 @@ npm start          # then: npm run android | npm run ios | npm run web
 Point the app at a gateway by saved profile, a configured host, or deep link:
 
 ```text
-versutus://add?url=https%3A%2F%2Fpc.example.ts.net&token=API_KEY&name=Home%20PC&agentId=main
+versutus://add?url=https%3A%2F%2Fpc.example.ts.net
 ```
+
+A pairing link carries the gateway address, and may prefill the display name and
+agent fields. It never carries a token: the token field starts empty, and only
+your own paste under **Advanced options**, or a token the gateway grants during
+the handshake, ever reaches it. A linked address also waits for you to confirm
+it before Save appears — the link names where this device would connect, and
+Save sends the device identity there.
 
 Hosts can also be supplied via the `EXPO_PUBLIC_HERMES_GATEWAY_HOSTS` and
 `EXPO_PUBLIC_OPENCLAW_GATEWAY_HOSTS` environment variables.

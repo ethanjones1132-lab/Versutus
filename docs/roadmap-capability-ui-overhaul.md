@@ -37,7 +37,7 @@ Constraint: read https://docs.expo.dev/versions/v56.0.0/ before writing any code
 - Gate: `tsc --noEmit` 0 errors, `expo lint` 0 problems.
 
 **M5 — Integration (completed 2026-08-10)**
-- Deep-link router uses Expo Linking v56 `useURL`/`parse`; `versutus://add?url=…&token=…&name=…&agentId=…` opens the add flow with fields prefilled. Add flow exposes transport security before saving.
+- Deep-link router uses Expo Linking v56 `useURL`/`parse`; `versutus://add?url=…&name=…&agentId=…` opens the add flow with fields prefilled. A link's `token` is never read: the token field starts empty, and only the operator's paste or a token the gateway grants during the handshake fills it. Add flow exposes transport security before saving.
 - Offline chat outbox: disconnected input creates a visible queued user bubble, persists in memory through reconnect, and flushes through the normal chat/command pipeline once the connection is live.
 - Gateway profiles now persist discovered `tlsFingerprint`; `TransportSecurityCard` distinguishes TLS/WSS from cleartext and explicitly says the discovery fingerprint is observed, not verified by Expo fetch. No cosmetic “pinned” claim remains in the new settings surfaces.
 - Onboarding routes collapsed to shared `components/onboarding/onboarding-screen.tsx`: secure-storage copy, stronger hierarchy, haptics, connection timeline, structured error card, and unified Android/iOS/web behavior.
@@ -88,7 +88,7 @@ Constraint: read https://docs.expo.dev/versions/v56.0.0/ before writing any code
 6. No agents surface: agent registry/status only reachable as slash-command text; `agentId` targeting exists on the profile but has no UI.
 7. Terminal output is one concatenated string in a `ScrollView` — no ANSI parsing, no virtualization, degrades on long sessions; session dies on tab switch.
 8. Remaining unmapped command families execute nothing (guidance-only): channels detail, approvals list, env, artifacts, agents, devices, talk, logs, session abort/compact — several have real Hermes REST routes available.
-9. Deep-link add (`versutus://add?url=…&token=…`) — scheme registered in `app.json`, zero handling code.
+9. Deep-link add (`versutus://add?url=…`) — scheme registered in `app.json`, zero handling code.
 10. No offline outbox: sending while disconnected just fails.
 11. TLS fingerprint from beacons displayed, never verified.
 12. iOS is a re-export in places (`settings.ios.tsx`); `.android.tsx` splits have diverged from base files; web gets little QA.
@@ -137,7 +137,7 @@ Ordered by user-visible value per unit of effort. Each item lists target files.
 13. Append-only virtualized output (FlatList of chunks), ANSI color parsing, keep-alive across tab switches (move `TerminalSession` into a provider-scoped ref), input history (up-arrow style recall), structured command blocks. Files: `app/(tabs)/terminal.android.tsx`, `lib/terminal/client.ts`, `components/terminal/`.
 
 ### Phase C6 — Integration & remote-readiness
-14. **Deep-link add**: handle `versutus://add?url=&token=&name=` → prefill `gateway/add` → one-tap save. Files: `app/gateway/add.tsx`, `expo-linking` handler in `_layout.tsx`.
+14. **Deep-link add**: handle `versutus://add?url=&name=` → prefill `gateway/add` → one-tap save; a link never carries a token. Files: `app/gateway/add.tsx`, `expo-linking` handler in `_layout.tsx`.
 15. **Offline outbox**: queue `sendChatInput` payloads when `status !== 'connected'`; flush on connect with user-visible "queued" state on the bubble. Files: provider, `lib/gateway/messages.ts`.
 16. **TLS pinning**: verify beacon `tlsFingerprint` on first HTTPS connect (TOFU), surface mismatch as a blocking error card. Files: `lib/gateway/url.ts`, `client.ts`.
 17. Background/foreground polish: local notification for run-complete while app is alive but backgrounded is done (ADR-0001) — extend to stream-completion only when backgrounded (suppress when foregrounded).
