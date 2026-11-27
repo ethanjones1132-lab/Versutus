@@ -190,13 +190,22 @@ export function subscribeAppLock(listener: () => void): () => void {
  * on the way off, so the stored shape never depends on which value came last.
  * Subscribers are notified on the way out whatever the write did, so the gate
  * re-reads the flag itself rather than trusting the value handed to the switch.
+ *
+ * The outcome is returned, as `saveWidgetResultHidden` does: a write the store
+ * refused leaves the flag where it was, so the Settings switch has to go back
+ * to that value and name the refusal rather than keep claiming a lock this
+ * phone does not hold. A failed write is still not a lockout — it means the
+ * lock is off, which is the safe direction.
  */
-export async function saveAppLock(enabled: boolean): Promise<void> {
+export async function saveAppLock(enabled: boolean): Promise<boolean> {
+  let stored = false;
   try {
     await keyValueStorage.setItem(APP_LOCK_STORAGE_KEY, JSON.stringify(appLockFromStored(enabled)));
+    stored = true;
   } catch {
     // best-effort: a failed write means the lock is off, never a lockout.
   } finally {
     for (const listener of listeners) listener();
   }
+  return stored;
 }

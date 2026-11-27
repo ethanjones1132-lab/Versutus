@@ -24,7 +24,6 @@ export default function AddGatewayScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
     url?: string | string[];
-    token?: string | string[];
     name?: string | string[];
     sessionKey?: string | string[];
     agentId?: string | string[];
@@ -33,7 +32,11 @@ export default function AddGatewayScreen() {
   const [name, setName] = useState(() => firstParam(params.name) ?? 'Home PC');
   const [url, setUrl] = useState(() => firstParam(params.url) ?? '');
   const [showAdvanced, setShowAdvanced] = useState(() => Boolean(firstParam(params.agentId)));
-  const [token, setToken] = useState(() => firstParam(params.token) ?? '');
+  // A link may not hand this sheet a credential: it starts empty, and only the
+  // operator's own paste or a token the gateway grants during the handshake
+  // ever reaches the form. The link's token is not read at all, so the address
+  // an external link names can never arrive with a bearer token attached.
+  const [token, setToken] = useState('');
   const [sessionKey, setSessionKey] = useState(() => firstParam(params.sessionKey) ?? 'agent:main:main');
   const [agentId, setAgentId] = useState(() => firstParam(params.agentId) ?? 'main');
   const [saving, setSaving] = useState(false);
@@ -43,11 +46,12 @@ export default function AddGatewayScreen() {
   const [saveError, setSaveError] = useState<string | null>(null);
 
   // A link is untrusted input: any app or web page can open the custom scheme
-  // and name a host of its choice, and Save sends this device's identity (and
-  // whatever token is in the form) to exactly that address. What a link fills
-  // in is a request, not a decision — hold Save until the operator confirms
-  // the address the link asked for, and treat the operator's own edit of the
-  // field as their decision, not the link's.
+  // and name a host of its choice, and Save sends this device's identity to
+  // exactly that address. It cannot hand over a credential either: the token
+  // field starts empty and the link's `token` param is never read. What a link
+  // fills in is a request, not a decision — hold Save until the operator
+  // confirms the address the link asked for, and treat the operator's own edit
+  // of the field as their decision, not the link's.
   const linkUrl = (firstParam(params.url) ?? '').trim();
   const [linkAddressConfirmed, setLinkAddressConfirmed] = useState(false);
   const linkAddressPending = linkUrl.length > 0 && !linkAddressConfirmed && url.trim() === linkUrl;
@@ -68,8 +72,8 @@ export default function AddGatewayScreen() {
 
         // 0b. Cleartext to a host off the trusted local network is refused
         // before anything is sent to it. The link's address is untrusted input
-        // and Save would otherwise hand this device's identity — and any token
-        // the link carried — to whatever host it names.
+        // and Save would otherwise hand this device's identity to whatever host
+        // it names.
         const refusal = cleartextRefusalMessage(normalizedUrl);
         if (refusal) {
           setSaveError(refusal);
@@ -251,7 +255,7 @@ export default function AddGatewayScreen() {
           {/* A link names where this device would connect. Save only exists
               after the operator confirms that address: one tap on an external
               link must never be the whole decision, and the address is named
-              in full here, with the token a link may have carried. */}
+              in full here. The link brings no token — only the address. */}
           {linkAddressPending ? null : (
             <Button
               label="Save & connect"
@@ -264,9 +268,8 @@ export default function AddGatewayScreen() {
           {linkAddressPending ? (
             <View style={styles.linkConfirm}>
               <Text variant="caption" color="secondary">
-                This link asks to connect to {linkUrl}. Save sends this device&apos;s identity,
-                and any token the link carried, to that address. Use this address, or edit
-                the URL above.
+                This link asks to connect to {linkUrl}. Save sends this device&apos;s identity
+                to that address. Use this address, or edit the URL above.
               </Text>
               <Button
                 label="Use this address"

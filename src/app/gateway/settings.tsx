@@ -141,6 +141,9 @@ export default function GatewaySettingsScreen() {
   const [copied, setCopied] = useState<'id' | null>(null);
   const [appLock, setAppLock] = useState(false);
   const [appLockReason, setAppLockReason] = useState<AppLockUnavailableReason | null>(null);
+  // A lock whose write the store refused is not held, so the row says so where
+  // the switch is rather than leaving the switch on a value this phone lacks.
+  const [appLockError, setAppLockError] = useState<string | null>(null);
   const [voiceEngine, setVoiceEngine] = useState<VoiceEnginePreference>(settings.voiceEngine);
   const [voiceCapabilities, setVoiceCapabilities] = useState<VoiceEngineCapabilities | null>(null);
   // Distinguish the first in-flight read from a refusal: null capabilities
@@ -232,10 +235,22 @@ export default function GatewaySettingsScreen() {
     };
   }, []);
 
-  const handleAppLock = useCallback((next: boolean) => {
-    setAppLock(next);
-    void saveAppLock(next);
-  }, []);
+  const handleAppLock = useCallback(
+    (next: boolean) => {
+      const previous = appLock;
+      setAppLock(next);
+      setAppLockError(null);
+      void saveAppLock(next).then((stored) => {
+        if (stored) return;
+        // The write did not land. The switch goes back to what this phone
+        // actually holds and the row names the refusal: a switch left on a
+        // value that is not there claims a lock the store does not have.
+        setAppLock(previous);
+        setAppLockError('This phone could not store that preference, so it is not kept.');
+      });
+    },
+    [appLock],
+  );
 
   const readVoiceCapabilities = useCallback(async (): Promise<
     { ok: true; capabilities: VoiceEngineCapabilities } | { ok: false; error: string }
@@ -699,7 +714,10 @@ export default function GatewaySettingsScreen() {
           <RowGroup>
             <RowGroupRow
               title={APP_LOCK_LABEL}
-              detail={appLockReason ? appLockUnavailableCopy(appLockReason) : APP_LOCK_SUMMARY}
+              detail={
+                appLockError ??
+                (appLockReason ? appLockUnavailableCopy(appLockReason) : APP_LOCK_SUMMARY)
+              }
               icon={{ ios: 'faceid', android: 'fingerprint', web: 'fingerprint' }}
               chevron={false}
               trailing={

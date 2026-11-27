@@ -164,6 +164,7 @@ import { createElement, type ElementType } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
 import GatewaySettingsScreen from '@/app/gateway/settings';
+import { APP_LOCK_LABEL, APP_LOCK_STORAGE_KEY } from '@/lib/settings/app-lock';
 import { loadAppSettings, saveAppSettings } from '@/lib/settings/app-settings';
 import { DeviceIdentityError } from '@/lib/gateway/errors';
 import { pushDeviceParams } from '@/lib/notifications/push-registration';
@@ -695,6 +696,33 @@ describe('a preference the phone could not store is never claimed (PRIV-1, V-1)'
     await settle();
 
     expect(switchFor(WIDGET_PRIVACY_LABEL).value).toBe(true);
+    expect(text()).not.toContain('This phone could not store that preference');
+  });
+
+  test('the app-lock switch goes back to the stored value when the write is refused', async () => {
+    await mount();
+    expect(switchFor(APP_LOCK_LABEL).value).toBe(false);
+
+    mockFailKeys.add(APP_LOCK_STORAGE_KEY);
+    await act(async () => {
+      switchFor(APP_LOCK_LABEL).onValueChange(true);
+    });
+    await settle();
+
+    // `saveAppLock` answers whether the write landed. A refused one leaves the
+    // lock off, so the switch must not keep claiming it is holding.
+    expect(switchFor(APP_LOCK_LABEL).value).toBe(false);
+    expect(text()).toContain('This phone could not store that preference, so it is not kept.');
+  });
+
+  test('a stored app-lock preference stays selected', async () => {
+    await mount();
+    await act(async () => {
+      switchFor(APP_LOCK_LABEL).onValueChange(true);
+    });
+    await settle();
+
+    expect(switchFor(APP_LOCK_LABEL).value).toBe(true);
     expect(text()).not.toContain('This phone could not store that preference');
   });
 

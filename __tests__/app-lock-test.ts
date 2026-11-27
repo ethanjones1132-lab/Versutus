@@ -164,6 +164,18 @@ describe('the stored flag', () => {
     expect(mockSetItem).toHaveBeenCalledWith(APP_LOCK_STORAGE_KEY, 'false');
   });
 
+  test('a write that landed answers true, so the switch may keep its value', async () => {
+    await expect(saveAppLock(true)).resolves.toBe(true);
+  });
+
+  test('a refused write answers false, so the switch can go back to the stored value', async () => {
+    // The switch used to have no way to learn this: `saveAppLock` swallowed the
+    // error and answered nothing, so a refused write left the switch on a lock
+    // the store does not hold.
+    mockSetItem.mockRejectedValueOnce(new Error('the keychain is locked'));
+    await expect(saveAppLock(true)).resolves.toBe(false);
+  });
+
   test('a device that never opted in reads off', async () => {
     expect(await loadAppLock()).toBe(false);
   });

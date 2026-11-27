@@ -72,7 +72,7 @@ jest.mock('@/lib/settings/app-lock', () => ({
   APP_LOCK_LABEL: 'App lock',
   APP_LOCK_SUMMARY: 'Require authentication to open the app.',
   appLockUnavailableCopy: () => 'App lock is unavailable.',
-  saveAppLock: jest.fn(async () => undefined),
+  saveAppLock: jest.fn(async () => true),
 }));
 jest.mock('@/lib/settings/app-lock-device', () => ({ deviceAppLockState: jest.fn(async () => ({ enabled: false, reason: null })) }));
 jest.mock('@/lib/settings/widget-privacy', () => ({

@@ -165,10 +165,23 @@ test('a link address is named on screen and Save is held until it is confirmed',
   expect(confirm()).toBeDefined();
 
   // Nothing can leave the device: there is no Save control at all, even though
-  // the URL and token are already filled in from the link.
+  // the URL is already filled in from the link.
   expect(button('Save & connect')).toBeUndefined();
   expect(mockAddGateway).not.toHaveBeenCalled();
   expect(mockConnectGateway).not.toHaveBeenCalled();
+});
+
+test('a link cannot fill the token field: its token is never accepted', async () => {
+  // README's pairing-link form carries `token`, and the sheet used to take it
+  // into the form. A link is untrusted input, so a credential it names is not
+  // this device's to send: the field starts empty whatever the link carries.
+  await mount({ url: LINK_URL, token: 'link-token', agentId: 'main' });
+
+  const tokenField = renderer.root
+    .findAllByType(TEXT_FIELD)
+    .find((node) => node.props.secureTextEntry === true);
+  expect(tokenField).toBeDefined();
+  expect(tokenField?.props.value).toBe('');
 });
 
 test('confirming the address arms Save without sending anything by itself', async () => {
