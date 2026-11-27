@@ -67,7 +67,11 @@ export function rewriteHttpUrlHost(url: string, ipv4: string): string | null {
 export function rewriteHttpBaseHost(baseUrl: string, ipv4: string): string | null {
   const rewritten = rewriteHttpUrlHost(baseUrl, ipv4);
   if (!rewritten) return null;
-  return new URL(rewritten).origin;
+  // Keep the base path: a gateway served under `/gate` must keep it when its
+  // host is swapped for the advertised IPv4. A root base stays slash-free, the
+  // shape callers already build URL strings from.
+  const parsed = new URL(rewritten);
+  return parsed.pathname === '/' && !parsed.search && !parsed.hash ? parsed.origin : rewritten;
 }
 
 // A hostname whose lookup failed is remembered for two minutes: MagicDNS

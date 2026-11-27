@@ -82,7 +82,10 @@ function classifyHandoff(packet: BotHandoffPacket | null, parsed: unknown): BotH
     return { ok: false, reason: WRONG_KIND_REASON };
   }
   const raw = parsed as Record<string, unknown>;
-  if (raw.format !== BOT_HANDOFF_FORMAT && raw.format !== undefined) {
+  // A missing format is not "no Bot record": the file may carry a perfectly
+  // good `bot` and the operator only needs to know the header is missing. Only
+  // a packet that names the right format and version can be missing its Bot.
+  if (raw.format !== BOT_HANDOFF_FORMAT) {
     return { ok: false, reason: WRONG_KIND_REASON };
   }
   if (raw.version !== BOT_HANDOFF_VERSION) {

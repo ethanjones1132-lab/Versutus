@@ -59,11 +59,77 @@ export type SessionChangeFile = {
 
 export type SessionChanges = { files: SessionChangeFile[]; supported: boolean };
 
+/**
+ * Fill a manifest route template.
+ *
+ * Every value is one path segment, so it is URL-encoded here: an id carrying
+ * `/`, `?` or `#` must not truncate the route to an unrelated one, and the
+ * fallback branches already encode for the same reason. A placeholder the
+ * caller did not supply is a broken template, not an empty segment — silently
+ * producing `//` hides the mismatch until the Gate answers 404.
+ */
 function interpolatePath(path: string, vars: Record<string, string>): string {
   return path.replace(/\{(\w+)\}|:(\w+)/g, (_match, named?: string, colon?: string) => {
     const key = named ?? colon ?? '';
-    return vars[key] ?? '';
+    if (!Object.hasOwn(vars, key)) {
+      throw new Error(`The gateway's route template names "{${key}}", but the app has no value for it.`);
+    }
+    return encodeURIComponent(vars[key]);
   });
+}
+
+/**
+ * Hand a response back whose body releases an abort listener when it settles.
+ *
+ * `authorizedFetch` keeps the caller's abort listener for the WHOLE life of the
+ * response body — a cancel after headers must still stop the reader — so it
+ * cannot be dropped at headers, and a session-long caller signal accumulated one
+ * closure per finished turn. The passthrough releases on close/error/cancel,
+ * keeping the wiring without the growth. A runtime that will not let the body be
+ * shimmed is left byte-for-byte as before, except for the cleanup.
+ */
+function releaseWhenBodySettles(response: Response, release: () => void): Response {
+  const body = response.body;
+  if (!body) {
+    release();
+    return response;
+  }
+  if (typeof ReadableStream !== 'function') return response;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  let released = false;
+  const finish = () => {
+    if (released) return;
+    released = true;
+    release();
+  };
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      reader ??= body.getReader();
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          finish();
+          controller.close();
+          return;
+        }
+        if (value) controller.enqueue(value);
+      } catch (error) {
+        finish();
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      finish();
+      return reader ? reader.cancel(reason) : undefined;
+    },
+  });
+  try {
+    Object.defineProperty(response, 'body', { value: stream, configurable: true });
+  } catch {
+    // The runtime owns the body; leave it usable and release what we can.
+    release();
+  }
+  return response;
 }
 
 /** A row the roster can draw: it must at least name the Bot. */
@@ -474,9 +540,6 @@ export class ManifestClient implements PortalClient {
     if (endpointsRecord.chat && !endpointsRecord.chat_completions) {
       endpointsRecord.chat_completions = endpointsRecord.chat;
     }
-    if (endpointsRecord.health && !endpointsRecord.health_detailed) {
-      // health alone is enough for a diagnostics glance on a chat-only gate
-    }
 
     const features: Record<string, boolean | string> = {};
     for (const [key, value] of Object.entries(manifestCaps)) {
@@ -635,15 +698,18 @@ export class ManifestClient implements PortalClient {
     // in-flight registry holds — otherwise `disconnect()` could not stop a turn
     // whose signal belonged to the provider, which is every turn the app sends.
     const callerSignal = options?.signal;
+    const onCallerAbort = () => controller.abort();
     if (callerSignal) {
       if (callerSignal.aborted) controller.abort();
-      else callerSignal.addEventListener('abort', () => controller.abort(), { once: true });
+      else callerSignal.addEventListener('abort', onCallerAbort, { once: true });
     }
     const signal = controller.signal;
     // Registered for the whole life of the turn, so a client that is discarded
     // mid-stream stops the stream instead of leaving it reading for a thread the
-    // phone has left.
-    this.pendingRuns.set(turnId, { runId: turnId, abortController: controller });
+    // phone has left. The exact entry is kept so this call's cleanup cannot
+    // delete a later turn that was sent under the same, resent turn id.
+    const pendingRun = { runId: turnId, abortController: controller };
+    this.pendingRuns.set(turnId, pendingRun);
 
     try {
       const response = await streamingFetch(`${this.transport.baseUrl}${path}`, {
@@ -703,8 +769,13 @@ export class ManifestClient implements PortalClient {
       return frames.text;
     } finally {
       // The turn is over however it ended, so the registry must not keep a
-      // controller no request is listening to any more.
-      this.pendingRuns.delete(turnId);
+      // controller no request is listening to any more. A queued line resent
+      // under the same turn id owns the entry now: only this call's own entry
+      // may be dropped, or a still-running stream would lose its abort handle.
+      if (this.pendingRuns.get(turnId) === pendingRun) this.pendingRuns.delete(turnId);
+      // The caller owns this signal and reuses it for the life of the session;
+      // a listener left behind is one closure (and one controller) per turn.
+      callerSignal?.removeEventListener('abort', onCallerAbort);
     }
   }
 
@@ -978,7 +1049,7 @@ export class ManifestClient implements PortalClient {
     scope: RoutineScope,
   ): Promise<void> {
     const template = this.requireEndpoint('jobUpdate');
-    const path = interpolatePath(template, { id: encodeURIComponent(jobId) });
+    const path = interpolatePath(template, { id: jobId });
     await this.rootTransport.request(
       'PATCH',
       this.withRoutineScope(path, scope),
@@ -1394,11 +1465,20 @@ export class ManifestClient implements PortalClient {
       else callerSignal.addEventListener('abort', onCallerAbort, { once: true });
     }
     try {
-      return await streamingFetch(`${this.rootTransport.baseUrl}${path}`, {
+      const response = await streamingFetch(`${this.rootTransport.baseUrl}${path}`, {
         ...init,
         headers,
         signal: controller.signal,
       });
+      // With a caller signal the listener is needed until the body settles, not
+      // just until headers; the shim releases it there instead of leaking one
+      // listener per turn onto a signal the provider reuses all session.
+      return callerSignal
+        ? releaseWhenBodySettles(response, () => callerSignal.removeEventListener('abort', onCallerAbort))
+        : response;
+    } catch (error) {
+      callerSignal?.removeEventListener('abort', onCallerAbort);
+      throw error;
     } finally {
       clearTimeout(timer);
     }

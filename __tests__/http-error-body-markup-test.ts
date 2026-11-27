@@ -41,10 +41,14 @@ describe('messageFromHttpErrorBody on a non-JSON error body', () => {
     expect(message).not.toContain('filler');
   });
 
-  test('a long non-markup body keeps today’s text, length unchanged', () => {
-    // So this change touches markup only.
+  test('a long non-markup body is quoted in bounded form, not dumped whole', () => {
     const body = `upstream said no ${'in detail '.repeat(200)}`.trim();
-    expect(messageFromHttpErrorBody(body, 500)).toBe(body);
+    const message = messageFromHttpErrorBody(body, 500);
+
+    expect(message.length).toBeLessThan(400);
+    expect(message.length).toBeLessThan(body.length);
+    expect(message.startsWith('upstream said no')).toBe(true);
+    expect(message.endsWith('…')).toBe(true);
   });
 
   test('a plain sentence is still passed through', () => {

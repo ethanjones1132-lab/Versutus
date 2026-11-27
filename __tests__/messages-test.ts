@@ -1,5 +1,18 @@
 import { extractToolCalls, historyToChatMessages } from '@/lib/gateway/messages';
 
+declare const __dirname: string;
+
+const SEP = __dirname.includes('\\') ? '\\' : '/';
+const nodeFs = jest.requireActual('fs') as {
+  readFileSync(path: string, encoding: string): string;
+};
+
+function readSource(...parts: string[]): string {
+  return nodeFs
+    .readFileSync([__dirname, '..', ...parts].join(SEP), 'utf8')
+    .replace(/\r\n/g, '\n');
+}
+
 describe('extractToolCalls', () => {
   test('reads OpenAI tool_calls arrays', () => {
     expect(
@@ -62,5 +75,22 @@ describe('historyToChatMessages', () => {
       { role: 'user', content: 'a', timestamp: 1, __openclaw: { id: 'oc-99' } },
     ]);
     expect(messages[0].id).toBe('oc-99');
+  });
+
+  test('a tool-only turn has empty text, and a prose turn keeps its text unchanged', () => {
+    const [toolOnly] = historyToChatMessages([
+      { role: 'assistant', content: [{ type: 'tool_use', name: 'bash', input: { cmd: 'ls' } }] },
+    ]);
+    expect(toolOnly.text).toBe('');
+
+    const [prose] = historyToChatMessages([{ role: 'assistant', content: 'Here is the answer.' }]);
+    expect(prose.text).toBe('Here is the answer.');
+  });
+
+  test('the mapping writes `text` directly, with no self-identical ternary', () => {
+    // `text || (toolCalls.length > 0 ? '' : text)` equals `text`; the dead
+    // branch reads as if tool-only turns were meant to lose their prose.
+    const source = readSource('src', 'lib', 'gateway', 'messages.ts');
+    expect(source).not.toMatch(/text\s*\|\|\s*\(toolCalls\.length\s*>\s*0\s*\?\s*''\s*:\s*text\)/);
   });
 });

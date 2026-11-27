@@ -1,5 +1,11 @@
+/**
+ * How much of a non-JSON refusal may be quoted back. A proxy 502 page is
+ * already named; a plain-text body can still be a whole log or SPA dump, and
+ * the caption is not the place for it.
+ */
+const NON_JSON_MESSAGE_MAX_LENGTH = 300;
+
 export function messageFromHttpErrorBody(errorText: string, status: number): string {
-  const fallback = errorText || `HTTP ${status}`;
   try {
     const parsed = JSON.parse(errorText) as { message?: unknown; error?: unknown };
     if (typeof parsed?.message === 'string' && parsed.message.trim()) {
@@ -21,7 +27,10 @@ export function messageFromHttpErrorBody(errorText: string, status: number): str
   if (errorText.trim().startsWith('<')) {
     return `The gateway or something in front of it answered HTTP ${status} with a web page instead of JSON.`;
   }
-  return fallback;
+  // Plain text that is not JSON is still wire text: quote a bounded, single-line
+  // excerpt rather than the whole body. An empty body keeps the bare status.
+  const said = pageSnippet(errorText, NON_JSON_MESSAGE_MAX_LENGTH);
+  return said || `HTTP ${status}`;
 }
 
 /**

@@ -73,6 +73,15 @@ describe('retrying through an advertised IPv4', () => {
     expect(rewritten).toBeNull();
   });
 
+  test('keeps a base path prefix instead of dropping it to the origin', () => {
+    expect(rewriteHttpBaseHost('http://my-pc.example.ts.net:8760/gate', '100.101.102.103')).toBe(
+      'http://100.101.102.103:8760/gate',
+    );
+    expect(
+      rewriteHttpBaseHost('http://my-pc.example.ts.net:8760/gate/v1?x=1', '100.101.102.103'),
+    ).toBe('http://100.101.102.103:8760/gate/v1?x=1');
+  });
+
   test('rewrites a full http stream URL onto the IPv4 and keeps the path', () => {
     expect(
       rewriteHttpUrlHost(

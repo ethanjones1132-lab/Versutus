@@ -356,7 +356,9 @@ export function historyToChatMessages(messages: unknown[]): ChatMessage[] {
     result.push({
       id,
       role,
-      text: text || (toolCalls.length > 0 ? '' : text),
+      // A tool-only turn genuinely has no prose; an empty turn with neither text
+      // nor tools was skipped above, so `text` is the whole answer here.
+      text,
       timestamp: message.timestamp,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       reasoning: reasoning ? reasoning : undefined,

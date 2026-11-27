@@ -5,6 +5,7 @@ import { effectiveModel, resolveSendModel, withSelectedModel,
   stalePinNote,
   connectDefaultModel,
   firstAvailableModelId,
+  providerDisplayName,
 } from '@/lib/gateway/model-selection';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
@@ -489,5 +490,24 @@ describe('the first model a connected composer may pin', () => {
     expect(firstAvailableModelId([{ id: 'nvidia/model', available: false }])).toBeUndefined();
     expect(firstAvailableModelId([{ id: '', available: true }])).toBeUndefined();
     expect(firstAvailableModelId([])).toBeUndefined();
+  });
+});
+
+describe('providerDisplayName', () => {
+  test('a catalog id that names an Object.prototype member is not a known spelling', () => {
+    // A plain table lookup (`PROVIDER_NAMES[key]`) would return the inherited
+    // function/object here and hand a non-string to the picker's section title.
+    expect(providerDisplayName('constructor')).toBe('Constructor');
+    expect(providerDisplayName('toString')).toBe('toString');
+    expect(providerDisplayName('__proto__')).toBe('__proto__');
+    expect(providerDisplayName('hasOwnProperty')).toBe('hasOwnProperty');
+    for (const id of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      expect(typeof providerDisplayName(id)).toBe('string');
+    }
+  });
+
+  test('known spellings still win over the capitalised-id fallback', () => {
+    expect(providerDisplayName('openai')).toBe('OpenAI');
+    expect(providerDisplayName('z-ai')).toBe('Z.ai');
   });
 });

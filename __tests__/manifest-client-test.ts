@@ -1,4 +1,5 @@
 import { ManifestClient } from '@/lib/gateway/manifest-client';
+import { isAuthRejection } from '@/lib/gateway/errors';
 import { HEALTH_INTERVAL_MS } from '@/lib/gateway/connection-monitor';
 import type { GatewayIdentity } from '@/lib/portal/identify';
 import type { GatewayProfile } from '@/lib/gateway/types';
@@ -618,6 +619,112 @@ describe('ManifestClient.streamChat', () => {
     expect(tools[tools.length - 1]?.name).toBe('web_search');
     expect(tools[tools.length - 1]?.detail).toBe('{"q":"x"}');
   });
+
+  test('a non-ok chat answer keeps its HTTP status and Gate error code', async () => {
+    // A 403 whose body never says "401"/"unauthorized" used to lose the status
+    // and be retried as if the path were merely down.
+    (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
+      Promise.resolve({
+        ok: false,
+        status: 403,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({ error: { message: 'Key lacks the chat scope', code: 'insufficient_scope' } }),
+          ),
+      } as unknown as Response),
+    );
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    const failure = await client
+      .streamChat([{ role: 'user', content: 'hi' }], () => undefined, { model: 'm' })
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({ status: 403, code: 'insufficient_scope' });
+    expect(isAuthRejection(failure)).toBe(true);
+  });
+
+  test('a resent turn id does not let the first stream delete the second’s abort handle', async () => {
+    // A queued line resent under the same turn id overwrites the registry entry;
+    // the first request's cleanup must not remove the still-running second one,
+    // or disconnect() can no longer stop it.
+    const signals: AbortSignal[] = [];
+    let releaseFirst: (() => void) | null = null;
+    (globalThis as { fetch: unknown }).fetch = jest.fn((_url: unknown, init?: RequestInit) => {
+      signals.push(init?.signal as AbortSignal);
+      const index = signals.length;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (index === 1) {
+            releaseFirst = () => {
+              controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+              controller.close();
+            };
+          } else {
+            init?.signal?.addEventListener(
+              'abort',
+              () => controller.error(new Error('canceled')),
+              { once: true },
+            );
+          }
+        },
+      });
+      return Promise.resolve({ ok: true, status: 200, body } as unknown as Response);
+    });
+
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    const first = client.streamChat([{ role: 'user', content: 'a' }], () => undefined, {
+      model: 'm',
+      turnId: 'resent',
+    });
+    const second = client.streamChat([{ role: 'user', content: 'b' }], () => undefined, {
+      model: 'm',
+      turnId: 'resent',
+    });
+    await Promise.resolve();
+    releaseFirst!();
+    await first;
+    client.disconnect();
+    expect(signals[1]?.aborted).toBe(true);
+    await expect(second).rejects.toBeTruthy();
+  });
+
+  test('a finished turn removes its abort listener from a reused caller signal', async () => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+            controller.close();
+          },
+        }),
+      } as unknown as Response),
+    );
+
+    const caller = new AbortController();
+    const added: unknown[] = [];
+    const removed: unknown[] = [];
+    const realAdd = caller.signal.addEventListener.bind(caller.signal);
+    jest
+      .spyOn(caller.signal, 'addEventListener')
+      .mockImplementation(((type: string, listener: EventListenerOrEventListenerObject, options?: AddEventListenerOptions) => {
+        if (type === 'abort') added.push(listener);
+        realAdd(type, listener, options);
+      }) as typeof caller.signal.addEventListener);
+    jest
+      .spyOn(caller.signal, 'removeEventListener')
+      .mockImplementation(((type: string, listener: EventListenerOrEventListenerObject) => {
+        if (type === 'abort') removed.push(listener);
+      }) as typeof caller.signal.removeEventListener);
+
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    await client.streamChat([{ role: 'user', content: 'hi' }], () => undefined, {
+      model: 'm',
+      signal: caller.signal,
+    });
+
+    expect(added).toHaveLength(1);
+    expect(removed).toEqual(added);
+  });
 });
 
 describe('ManifestClient — capabilities the manifest does not advertise', () => {
@@ -936,6 +1043,54 @@ describe('ManifestClient sessions and runs when advertised', () => {
     expect(String(fetchMock.mock.calls[0][0])).toContain(
       '/v1/sessions/plain/messages?lang=en&limit=9',
     );
+  });
+
+  test('an advertised template URL-encodes the id too, matching the fallback branch', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ object: 'list', data: [] }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = clientWithEndpoints({
+      health: '/health',
+      sessions: '/v1/sessions',
+      sessionMessages: '/v1/sessions/{sessionId}/messages',
+    });
+    await client.getSessionMessages('weird/id?x#y', 7);
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      '/v1/sessions/weird%2Fid%3Fx%23y/messages?limit=7',
+    );
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('/v1/sessions/weird/id');
+  });
+
+  test('a template placeholder the caller did not supply fails instead of becoming //', async () => {
+    const client = clientWithEndpoints({
+      health: '/health',
+      sessions: '/v1/sessions',
+      sessionMessages: '/v1/sessions/{sessionKey}/messages',
+    });
+    await expect(client.getSessionMessages('plain', 9)).rejects.toThrow(/sessionKey/);
+  });
+
+  test('a routine job id is encoded once, not twice', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ ok: true }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = clientWithEndpoints({
+      health: '/health',
+      jobUpdate: '/v1/cron/jobs/{id}',
+    });
+    await client.updateJob('job/one', { name: 'n', schedule: '* * * * *', prompt: 'p' }, {
+      backendId: 'hermes-local',
+    });
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/v1/cron/jobs/job%2Fone');
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('job%252Fone');
   });
 
   test('getSessions appends bot= when a bot is selected', async () => {
@@ -1619,5 +1774,56 @@ describe('ManifestClient.authorizedFetch', () => {
     await client.authorizedFetch('/v1/runs');
     await jest.advanceTimersByTimeAsync(61_000);
     expect(signals[0]?.aborted).toBe(false);
+  });
+
+  test('a consumed response body releases the caller abort listener', async () => {
+    // The listener must live until the body settles (a cancel after headers
+    // still has to reach the reader), but no longer: the provider reuses its
+    // signal for the whole session, so one closure per finished turn accumulates.
+    (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('ok'));
+            controller.close();
+          },
+        }),
+      } as unknown as Response),
+    );
+
+    const caller = new AbortController();
+    const added: unknown[] = [];
+    const removed: unknown[] = [];
+    const realAdd = caller.signal.addEventListener.bind(caller.signal);
+    jest
+      .spyOn(caller.signal, 'addEventListener')
+      .mockImplementation(((type: string, listener: EventListenerOrEventListenerObject, options?: AddEventListenerOptions) => {
+        if (type === 'abort') added.push(listener);
+        realAdd(type, listener, options);
+      }) as typeof caller.signal.addEventListener);
+    jest
+      .spyOn(caller.signal, 'removeEventListener')
+      .mockImplementation(((type: string, listener: EventListenerOrEventListenerObject) => {
+        if (type === 'abort') removed.push(listener);
+      }) as typeof caller.signal.removeEventListener);
+
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    const response = await client.authorizedFetch('/v1/runs', { signal: caller.signal });
+    expect(added).toHaveLength(1);
+    expect(removed).toHaveLength(0);
+    // Read through `response.body` (the shim the fix installs); the mocked
+    // response has no `text()`, and the shim releases the listener as the
+    // wrapped stream settles.
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+    let settled = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      settled += new TextDecoder().decode(value);
+    }
+    expect(settled).toBe('ok');
+    expect(removed).toEqual(added);
   });
 });

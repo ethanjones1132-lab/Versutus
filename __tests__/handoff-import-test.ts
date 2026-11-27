@@ -62,6 +62,17 @@ describe('parseBotHandoffText reads what the export wrote', () => {
     expect(noBot.ok).toBe(false);
     if (!noBot.ok) expect(noBot.reason).toContain('no Bot record');
 
+    // A Bot record with no format is a wrong header, not a missing Bot: the
+    // operator must be told the file is not a packet, not that their Bot is gone.
+    const noFormat = parseBotHandoffText(
+      JSON.stringify({ version: BOT_HANDOFF_VERSION, bot: { id: 'scout' } }),
+    );
+    expect(noFormat.ok).toBe(false);
+    if (!noFormat.ok) {
+      expect(noFormat.reason).toContain('not a Versutus Bot handoff packet');
+      expect(noFormat.reason).not.toContain('no Bot record');
+    }
+
     expect(parseBotHandoffText(null)).toEqual({ ok: false, reason: expect.any(String) });
     expect(parseBotHandoffText(undefined)).toEqual({ ok: false, reason: expect.any(String) });
   });
