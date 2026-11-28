@@ -207,6 +207,15 @@ describe('the reachability wave in the hook', () => {
     // gives false negatives, so a reachable tailnet gateway is probed with 6s.
     expect(hookSource).toContain('const PROBE_TIMEOUT_MS = 6000;');
   });
+
+  test('the hook never discards the wave promise as a no-op', () => {
+    // `void wave.settled` read a property and threw it away: it awaited
+    // nothing and attached no handler, so it only looked like a completion
+    // hook. startProbeWave already routes both outcomes to release(), and the
+    // effect's own cleanup releases the claim, so the statement is gone
+    // rather than pretending to run something.
+    expect(hookSource).not.toContain('wave.settled');
+  });
 });
 
 describe('planProbeWave', () => {

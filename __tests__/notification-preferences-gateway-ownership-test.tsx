@@ -253,6 +253,30 @@ test('a switch reads B before anything of A is editable, and B alone unlocks B',
   expect(preferences.synced).toBe(true);
 });
 
+test('a switch drops the previous gateway row before the load timer runs', async () => {
+  expect(preferences.synced).toBe(true);
+  expect(preferences.prefs).toMatchObject(ROW_A);
+
+  // Hold B's read so the assertion sees the switch itself, not a settled read.
+  const heldB = deferred<Record<string, unknown>>();
+  readReplies.push(heldB);
+  mockGatewayState.id = 'gw-b';
+  await act(async () => {
+    renderer.update(createElement(Harness));
+  });
+
+  // Deliberately no `flush()`: the scheduled load has not run yet, so only the
+  // switch effect can have taken A's row and its unlock off the screen.
+  expect(preferences.synced).toBe(false);
+  expect(preferences.prefs).toEqual(PLACEHOLDER);
+
+  // B's own read is still what unlocks and paints B.
+  heldB.resolve(ROW_B);
+  await flush();
+  expect(preferences.synced).toBe(true);
+  expect(preferences.prefs).toMatchObject(ROW_B);
+});
+
 test('a write waiting on the phone identity is dropped, not sent through B', async () => {
   // Take a write on A and hold it in the device-id await that precedes the
   // RPC, so the operator can switch while it is still unsent.

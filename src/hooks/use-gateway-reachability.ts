@@ -104,8 +104,6 @@ export function useGatewayReachability({
       onReleased: (stranded) => setResults((previous) => withoutWaveChecking(previous, stranded)),
     });
 
-    void wave.settled;
-
     return () => {
       cancelled = true;
       // The claim is given back HERE, before the replacement effect runs: this

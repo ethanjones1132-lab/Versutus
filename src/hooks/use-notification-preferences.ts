@@ -252,12 +252,24 @@ export function useNotificationPreferences() {
   // on screen, the row a refusal rolls back to and the unlock belonged to the
   // gateway being left, so all three are relinquished with it: until the new
   // gateway answers, its switches are placeholders that stay locked.
+  // The row on screen and its unlock belong to the gateway they were read for,
+  // so a switch makes both false in the very commit that renders it: otherwise
+  // the first frame after a switch draws the left gateway's values as this
+  // gateway's, still unlocked. Adjusted during render (React's own pattern for
+  // derived state) rather than in an effect, so no frame is ever painted with
+  // the previous gateway's row. `load` repeats the same clearing at its start
+  // for the reconnect case, where the id is unchanged.
+  const [rowGatewayId, setRowGatewayId] = useState(activeGatewayId);
+  if (rowGatewayId !== activeGatewayId) {
+    setRowGatewayId(activeGatewayId);
+    setPrefs(DEFAULT_PREFS);
+    setSynced(false);
+  }
+
   useEffect(() => {
     gatewayEpochRef.current += 1;
     activeGatewayIdRef.current = activeGatewayId;
     confirmedRef.current = DEFAULT_PREFS;
-    // Retire write ownership immediately; the scheduled load clears the UI
-    // row and synced state before starting the new gateway's read.
     syncedEpochRef.current = -1;
     const stale = queueRef.current;
     queueRef.current = [];

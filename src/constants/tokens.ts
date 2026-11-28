@@ -1,4 +1,3 @@
-import { Platform } from 'react-native';
 import { Easing } from 'react-native-reanimated';
 
 /**
@@ -165,23 +164,3 @@ export const FontFamily = {
   monoBold: 'JetBrainsMono_700Bold',
 } as const;
 
-export const Fonts = Platform.select({
-  ios: {
-    sans: FontFamily.sans,
-    serif: 'ui-serif',
-    rounded: 'ui-rounded',
-    mono: FontFamily.mono,
-  },
-  default: {
-    sans: FontFamily.sans,
-    serif: 'serif',
-    rounded: FontFamily.sans,
-    mono: FontFamily.mono,
-  },
-  web: {
-    sans: 'Instrument Sans, var(--font-display)',
-    serif: 'var(--font-serif)',
-    rounded: 'Instrument Sans, var(--font-rounded)',
-    mono: 'JetBrains Mono, var(--font-mono)',
-  },
-});
