@@ -68,6 +68,7 @@ jest.mock('@/hooks/use-tokens', () => ({
 }));
 
 import { createElement } from 'react';
+import { StyleSheet, View } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
 import {
@@ -184,5 +185,44 @@ describe('the native canvas only animates a fleet that is working', () => {
     expect(mockReanimated.cancelAnimation).toHaveBeenCalled();
     expect(mockReanimated.withRepeat).toHaveBeenCalledTimes(1);
     expect(pulse()).toBe(0.5);
+  });
+});
+
+describe('the native canvas paints the box its layout used', () => {
+  let renderer: ReactTestRenderer | null = null;
+
+  afterEach(async () => {
+    if (renderer) {
+      const doomed = renderer;
+      renderer = null;
+      await act(async () => {
+        doomed.unmount();
+      });
+    }
+  });
+
+  test('an unspecified height defaults to size, matching the SVG fallback', async () => {
+    await act(async () => {
+      renderer = create(createElement(ConstellationCanvas, { model: quietFleet(), size: 320 }));
+    });
+
+    // The layout is computed for `height ?? size`; the paint box must be the
+    // same box or the stars are placed for a square and drawn in an
+    // undefined-height canvas that depends on Skia's own default.
+    const host = renderer!.root.findAllByType(View);
+    expect(host).toHaveLength(1);
+    const style = StyleSheet.flatten(host[0].props.style);
+    expect(style).toMatchObject({ width: 320, height: 320 });
+  });
+
+  test('an explicit height is still honoured', async () => {
+    await act(async () => {
+      renderer = create(
+        createElement(ConstellationCanvas, { model: quietFleet(), size: 320, height: 240 }),
+      );
+    });
+
+    const host = renderer!.root.findAllByType(View);
+    expect(StyleSheet.flatten(host[0].props.style)).toMatchObject({ width: 320, height: 240 });
   });
 });

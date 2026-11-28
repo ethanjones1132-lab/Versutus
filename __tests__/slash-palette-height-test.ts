@@ -74,9 +74,12 @@ test('slash palette component wires dynamic maxHeight via helper', () => {
   expect(src).toContain('keyboardShouldPersistTaps=\"handled\"');
 });
 
-test('palette list still has a 380 base style with dynamic override', () => {
+test('palette list height comes only from the dynamic helper, with no dead base copy', () => {
   const src = readSource('src', 'components', 'chat', 'slash-command-palette.tsx');
-  expect(src).toContain('styles.list');
-  // base style keeps 380 as fallback; dynamic style overrides it per window
-  expect(src).toContain('maxHeight: 380');
+  // The SectionList always receives the helper's value inline, so a static
+  // maxHeight in the style object would never apply — it is gone rather than
+  // left to mislead anyone tuning the palette height.
+  expect(src).toContain('maxHeight: listMaxHeight');
+  expect(src).not.toContain('maxHeight: 380');
+  expect(src).not.toMatch(/list:\s*\{[^}]*maxHeight/);
 });

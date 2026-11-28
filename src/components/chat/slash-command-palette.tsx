@@ -123,7 +123,7 @@ export function SlashCommandPalette({
         <SectionList
           sections={sections}
           keyExtractor={(item) => item.value}
-          style={[styles.list, { maxHeight: listMaxHeight }]}
+          style={{ maxHeight: listMaxHeight }}
           stickySectionHeadersEnabled={false}
           keyboardShouldPersistTaps="handled"
           removeClippedSubviews
@@ -205,7 +205,6 @@ export function SlashCommandPalette({
 
 const styles = StyleSheet.create({
   search: { marginBottom: Spacing.two },
-  list: { maxHeight: 380 },
   sectionHeader: {
     marginTop: Spacing.two,
     marginBottom: Spacing.one,

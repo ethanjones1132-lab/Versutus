@@ -96,11 +96,20 @@ export function CapabilitiesSection() {
 
   function startEdit(instance: RegistryInstance) {
     const kind = kinds.find((entry) => entry.id === instance.kind);
-    const fields = kind?.configFields ?? [];
+    if (!kind) {
+      // The editor renders only when the instance's kind is in the registry.
+      // Setting a draft without one left the operator on the list with no
+      // explanation and no way to edit; say why instead.
+      setError(
+        `The "${instance.kind}" kind is not available from this gateway, so "${instance.label}" cannot be edited here.`,
+      );
+      return;
+    }
     const values: Record<string, string> = {};
-    for (const field of fields) {
+    for (const field of kind.configFields) {
       values[field.key] = stringifyFieldValue(field, instance.config[field.key]);
     }
+    setError(null);
     setDraft({
       mode: 'edit',
       id: instance.id,

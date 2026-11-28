@@ -75,13 +75,18 @@ function GatewayRow({
   onDelete: () => void;
 }) {
   const tokens = useTokens();
-  const secureLabel =
-    gateway.discoverySource === 'tailscale' || gateway.url.startsWith('wss://')
-      ? 'Private network'
-      : gateway.discoverySource ?? 'Added manually';
   // Default collapsed keeps the row slim; the full URL is one tap away when a
   // connection fails and the operator must read the address to debug it.
   const [urlExpanded, setUrlExpanded] = useState(false);
+  // The transport the row names, not a guess about the network: only a gateway
+  // discovered on Tailscale is Tailscale; any wss:// address is TLS whatever
+  // host it is on.
+  const secureLabel =
+    gateway.discoverySource === 'tailscale'
+      ? 'Tailscale'
+      : gateway.url.startsWith('wss://')
+        ? 'TLS'
+        : gateway.discoverySource ?? 'Added manually';
 
   return (
     <Card

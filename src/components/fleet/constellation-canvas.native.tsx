@@ -99,7 +99,11 @@ function routineArc(edge: { x1: number; y1: number; x2: number; y2: number }) {
 
 function SkiaConstellation({ model, size: width, height }: ConstellationCanvasProps) {
   const tokens = useTokens();
-  const layout = constellationLayout(model, width, height);
+  // Default to a square box, exactly as the SVG fallback does: the layout math
+  // gets `height ?? size`, so the paint box must match it or the map and its
+  // nodes are laid out in one box and drawn in another.
+  const boxHeight = height ?? width;
+  const layout = constellationLayout(model, width, boxHeight);
   const pulse = useSharedValue(0);
   const running = shouldPulse(model);
 
@@ -124,8 +128,8 @@ function SkiaConstellation({ model, size: width, height }: ConstellationCanvasPr
   const runningGlow = useDerivedValue(() => 0.55 + 0.45 * pulse.value);
 
   return (
-    <View style={[styles.canvas, { width, height }]}>
-      <Canvas style={{ width, height }}>
+    <View style={[styles.canvas, { width, height: boxHeight }]}>
+      <Canvas style={{ width, height: boxHeight }}>
         {/* The night sky: one soft halo behind the graph on live icons, so the
             connected world reads as lit while saved ones stay in shadow. */}
         {layout.nodes

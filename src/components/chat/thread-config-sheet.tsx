@@ -104,9 +104,17 @@ const SECTION_LABELS: Record<ThreadConfigMode, string> = {
 };
 
 function formatContext(context?: number): string | undefined {
-  if (!context) return undefined;
-  if (context >= 1000) return `${Math.round(context / 1000)}k ctx`;
-  return `${context} ctx`;
+  if (!context || context <= 0) return undefined;
+  if (context < 1000) return `${context} ctx`;
+  // One decimal where it says something (1500 → "1.5k ctx"), none on a whole
+  // count (2000 → "2k ctx"). A count that would round up to "1000k" reads in
+  // millions instead (1,000,000 → "1M ctx").
+  const thousands = Math.round(context / 100) / 10;
+  if (thousands < 1000) {
+    return `${Number.isInteger(thousands) ? thousands : thousands.toFixed(1)}k ctx`;
+  }
+  const millions = Math.round(context / 100_000) / 10;
+  return `${Number.isInteger(millions) ? millions : millions.toFixed(1)}M ctx`;
 }
 
 export type ThreadConfigSheetProps = {
