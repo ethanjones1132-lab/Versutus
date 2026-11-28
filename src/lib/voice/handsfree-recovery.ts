@@ -22,21 +22,91 @@ import {
 } from '@/lib/gateway/composer-draft';
 import { keyValueStorage } from '@/lib/storage/key-value';
 
+// Partials arrive several times a second, and only the newest transcript is
+// recovery-relevant. Writes are coalesced per thread: a burst costs one write
+// of the last transcript instead of one per partial, writes for a thread never
+// overlap (so their completion order cannot reverse), and a transcript that
+// arrives while a write is in flight is still persisted next. A caller's
+// promise resolves after its text — or a newer transcript that supersedes it —
+// has been written, so a final result and the send path still flush.
+type RecoveryWriteQueue = {
+  /** Newest transcript a caller has asked to persist. */
+  latest: string;
+  /** Callers waiting for their transcript (or a newer one) to be written. */
+  waiters: Array<() => void>;
+  scheduled: boolean;
+  running: boolean;
+};
+
+const recoveryWrites = new Map<string, RecoveryWriteQueue>();
+
+async function runRecoveryWrite(key: string, queue: RecoveryWriteQueue): Promise<void> {
+  if (queue.running) return;
+  queue.running = true;
+  // Capture the newest text and this pass's waiters. A partial that arrives
+  // during the await replaces `latest` and joins the next pass.
+  const text = queue.latest;
+  const waiters = queue.waiters;
+  queue.waiters = [];
+  try {
+    if (!text.trim()) {
+      await keyValueStorage.removeItem(key);
+    } else {
+      await keyValueStorage.setItem(key, JSON.stringify(text));
+    }
+  } catch {
+    // best-effort: a storage failure must not break a live call
+  } finally {
+    queue.running = false;
+  }
+  for (const waiter of waiters) waiter();
+  if (queue.waiters.length > 0) {
+    // A newer transcript arrived while this write ran: persist it next rather
+    // than dropping it.
+    if (recoveryWrites.get(key) === queue) scheduleRecoveryWrite(key, queue);
+  } else if (recoveryWrites.get(key) === queue) {
+    recoveryWrites.delete(key);
+  }
+}
+
+function scheduleRecoveryWrite(key: string, queue: RecoveryWriteQueue): void {
+  if (queue.scheduled || queue.running) return;
+  queue.scheduled = true;
+  // One microtask lets a burst of synchronous partials collapse before the
+  // first write starts.
+  void Promise.resolve().then(() => {
+    queue.scheduled = false;
+    if (recoveryWrites.get(key) === queue) void runRecoveryWrite(key, queue);
+  });
+}
+
+/** Resolves once no write is queued or running for the thread. */
+function whenRecoveryWritesIdle(key: string): Promise<void> {
+  const queue = recoveryWrites.get(key);
+  if (!queue) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    queue.waiters.push(resolve);
+    if (queue.scheduled || queue.running) return;
+    if (recoveryWrites.get(key) === queue) recoveryWrites.delete(key);
+    resolve();
+  });
+}
+
 /** Persist the newest transcript for a thread. Best-effort, like the draft. */
-export async function saveHandsfreeRecovery(
+export function saveHandsfreeRecovery(
   thread: ComposerDraftThread,
   text: string,
 ): Promise<void> {
   const key = recoveryStorageKey(thread);
-  try {
-    if (!text.trim()) {
-      await keyValueStorage.removeItem(key);
-      return;
-    }
-    await keyValueStorage.setItem(key, JSON.stringify(text));
-  } catch {
-    // best-effort: a storage failure must not break a live call
-  }
+  return new Promise<void>((resolve) => {
+    const existing = recoveryWrites.get(key);
+    const queue: RecoveryWriteQueue =
+      existing ?? { latest: text, waiters: [], scheduled: false, running: false };
+    queue.latest = text;
+    queue.waiters.push(resolve);
+    if (!existing) recoveryWrites.set(key, queue);
+    scheduleRecoveryWrite(key, queue);
+  });
 }
 
 /** The stored transcript for a thread, or undefined when none survived. */
@@ -55,8 +125,14 @@ export async function loadHandsfreeRecovery(
 
 /** Drop the stored transcript. A thread with none is untouched. */
 export async function clearHandsfreeRecovery(thread: ComposerDraftThread): Promise<void> {
+  const key = recoveryStorageKey(thread);
+  // A queued transcript is dropped rather than written; a write already in
+  // flight is allowed to finish first, so the clear cannot be overtaken by it.
+  const queued = recoveryWrites.get(key);
+  if (queued) queued.latest = '';
   try {
-    await keyValueStorage.removeItem(recoveryStorageKey(thread));
+    if (queued) await whenRecoveryWritesIdle(key);
+    await keyValueStorage.removeItem(key);
   } catch {
     // best-effort: a failed clear is retried on the next terminal path
   }

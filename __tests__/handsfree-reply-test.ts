@@ -344,3 +344,14 @@ describe('planHandsfreeSpeech — a streaming terminator at the end of the buffe
     expect(replay.cursor).toEqual(first.cursor);
   });
 });
+
+test('the failure doc describes the reopen-listening turn, not a call-ending failure', () => {
+  // The reducer routes `reply-failed` back to listening (handsfree-session.ts);
+  // the doc above `isFailedReply` used to claim the call ends as `send-failed`.
+  const nodeFs = jest.requireActual('fs') as {
+    readFileSync(path: string, encoding: string): string;
+  };
+  const source = nodeFs.readFileSync('src/lib/voice/handsfree-reply.ts', 'utf8');
+  expect(source).toMatch(/reopens[\s\S]{0,40}recognition/);
+  expect(source).not.toContain('ends the call as `send-failed`');
+});

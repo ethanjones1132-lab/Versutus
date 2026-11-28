@@ -41,4 +41,33 @@ describe('terminal output model', () => {
     // A shorter redraw only overwrites the columns it covers.
     expect(terminalLinesFromText('abcdef\rxy').map((line) => line.text)).toEqual(['xycdef']);
   });
+
+  test('splits a long line at a code-point boundary, never between surrogate halves', () => {
+    const text = `${'a'.repeat(8191)}😀${'b'.repeat(20)}`;
+    const lines = terminalLinesFromText(text);
+
+    // Nothing is dropped, and the emoji stays whole in the continuation.
+    expect(lines.map((line) => line.text).join('')).toBe(text);
+    expect(lines[0].text).toHaveLength(8191);
+    expect(lines[1].text.startsWith('😀')).toBe(true);
+    for (const line of lines) {
+      for (let index = 0; index < line.text.length; index += 1) {
+        const code = line.text.charCodeAt(index);
+        if (code >= 0xd800 && code <= 0xdbff) {
+          const next = line.text.charCodeAt(index + 1);
+          expect(next >= 0xdc00 && next <= 0xdfff).toBe(true);
+        }
+      }
+    }
+  });
+
+  test('splits a long line at an escape boundary, never leaving a sequence tail as text', () => {
+    // The old fixed-offset cut landed inside `ESC[31m`, so `31m` painted as text.
+    const text = `${'a'.repeat(8190)}\u001b[31m${'b'.repeat(10)}\u001b[0m`;
+    const lines = terminalLinesFromText(text);
+
+    expect(lines.map((line) => line.text).join('')).toBe(text);
+    expect(lines[0].text).not.toMatch(/\u001b\[$/);
+    expect(lines[1].text.startsWith('\u001b[31m')).toBe(true);
+  });
 });

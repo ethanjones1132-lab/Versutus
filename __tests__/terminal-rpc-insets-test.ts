@@ -44,3 +44,13 @@ test('terminal-screen RPC ScrollView uses rpc insets helper and handled taps', (
   // RPC ScrollView is the only ScrollView with commandContent/commandScroll — ensure it has handled taps
   expect(src).toContain('keyboardShouldPersistTaps="handled"');
 });
+
+test('the padding comment names the token whose value is the literal', () => {
+  // The base literal is 16, which is Spacing.three; the comment used to call it
+  // Spacing.four (now 24), so a reader reasoned from a value that never applied.
+  const source = nodeFs.readFileSync('src/lib/terminal/rpc-insets.ts', 'utf8');
+  expect(source).toContain('Spacing.three (16)');
+  expect(source).not.toContain('Spacing.four (16)');
+  const tokens = nodeFs.readFileSync('src/constants/tokens.ts', 'utf8');
+  expect(tokens).toMatch(/\bthree:\s*16\b/);
+});

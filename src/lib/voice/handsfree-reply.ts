@@ -56,8 +56,9 @@ export function handsfreeReplyForTurn(
  * `convertStreamError` writes (`message-reducer.ts`) — never the shape of the
  * words. A model reply that happens to begin with `Error:` is an ordinary
  * answer and is spoken; only the app's own notice is suppressed. A failed reply
- * is never spoken: a turn whose reply is that notice never becomes the answer,
- * so the reply watchdog runs out and ends the call as `send-failed`.
+ * is never spoken: its turn emits `reply-failed`, which stops speech and reopens
+ * recognition for the next turn instead of ending the call, so the operator can
+ * simply say the next thing.
  */
 export function isFailedReply(message: ChatMessage): boolean {
   if (message.interrupted) return true;

@@ -65,7 +65,9 @@ export type JsonExitSignal = {
 /**
  * Read a command result's top-level shape for an exit narrative. A nonzero
  * `exitCode`, a non-empty `error`, `ok === false`, or a status outside the
- * success set all mark the output as failed so the sheet can accent it.
+ * success set all mark the output as failed so the sheet can accent it. A
+ * `message` field is informational text (a success result carries one), so it
+ * never marks the command failed by itself.
  */
 export function jsonExitSignal(value: unknown): JsonExitSignal {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -79,7 +81,7 @@ export function jsonExitSignal(value: unknown): JsonExitSignal {
     return { failed: true, label: `exit ${numericExit}` };
   }
 
-  const error = record.error ?? record.message;
+  const error = record.error;
   const hasError = typeof error === 'string' && error.length > 0;
   if (hasError) {
     return { failed: true, label: typeof error === 'string' ? error.slice(0, 80) : 'error' };

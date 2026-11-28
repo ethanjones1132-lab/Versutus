@@ -1,4 +1,4 @@
-import { ansiPlainText, ansiPlainTextUpTo } from '@/lib/terminal/ansi';
+import { ansiPlainText, ansiPlainTextUpTo, ansiSequenceEnd } from '@/lib/terminal/ansi';
 
 export type TerminalLine = {
   id: number;
@@ -31,12 +31,41 @@ function applyCarriageReturns(current: string, span: string): string {
   return text;
 }
 
-/** Split one logical line into rendered lines no longer than MAX_LINE_LENGTH. */
+/**
+ * Split one logical line into rendered lines of about MAX_LINE_LENGTH, cutting
+ * only at code-point and escape-sequence boundaries so a surrogate pair or an
+ * SGR/OSC sequence is never divided between lines.
+ */
 function splitLine(text: string): string[] {
   if (text.length <= MAX_LINE_LENGTH) return [text];
   const segments: string[] = [];
-  for (let at = 0; at < text.length; at += MAX_LINE_LENGTH) {
-    segments.push(text.slice(at, at + MAX_LINE_LENGTH));
+  let at = 0;
+  while (at < text.length) {
+    let end = Math.min(at + MAX_LINE_LENGTH, text.length);
+    if (end < text.length) {
+      // A surrogate pair is one code point, so a cut between its halves would
+      // leave a lone surrogate in each segment. Keep the pair together.
+      const last = text.charCodeAt(end - 1);
+      if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+      // Never start a continuation with the tail of an escape sequence: move
+      // the cut in front of a sequence that would straddle it. A single
+      // sequence wider than the cap is carried whole rather than split.
+      for (let cursor = at; cursor < end; ) {
+        if (text.charCodeAt(cursor) !== 0x1b) {
+          cursor += 1;
+          continue;
+        }
+        const sequenceEnd = ansiSequenceEnd(text, cursor);
+        if (sequenceEnd <= end) {
+          cursor = sequenceEnd;
+          continue;
+        }
+        end = cursor > at ? cursor : Math.max(sequenceEnd, end + 1);
+        break;
+      }
+    }
+    segments.push(text.slice(at, end));
+    at = end;
   }
   return segments;
 }
@@ -111,8 +140,11 @@ export function isPromptLine(text: string): boolean {
   const stem = visible.slice(0, match.index).trimEnd();
   if (stem.length === 0) return true; // bare `$`, `>`, …
   if (/^\d+$/.test(stem)) return false; // `123$` is output, not a prompt
-  // Paths, user@host, drives and (env) prefixes are unambiguous.
-  if (/[\\/@:~]|\(.*\)/.test(stem)) return true;
+  // Paths, user@host, drives, home dirs and (env) prefixes are unambiguous.
+  if (/[\\/@~]|\(.*\)/.test(stem)) return true;
+  // A colon alone is not evidence of a prompt: `Price:` and `CPU usage: 45%`
+  // are ordinary output that happens to end in a terminator character.
+  if (stem.includes(':')) return false;
   // Short command-style names keep coverage (`mysql>`) without over-matching.
   return stem.length <= 6;
 }

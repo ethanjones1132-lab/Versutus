@@ -118,6 +118,54 @@ describe('saveHandsfreeRecovery / loadHandsfreeRecovery', () => {
   });
 });
 
+// Partials arrive several times a second. Only the newest transcript matters,
+// and fire-and-forget writes could otherwise land out of order.
+describe('the recovery write is coalesced', () => {
+  test('a burst of partials costs one write of the newest transcript', async () => {
+    const thread = bot();
+    mockSet.mockImplementation(async (key: string, value: string) => {
+      backing.set(key, value);
+    });
+
+    const pending = ['book', 'book a', 'book a table', 'book a table for two'].map((text) =>
+      saveHandsfreeRecovery(thread, text),
+    );
+    await Promise.all(pending);
+
+    // The burst collapsed before the first write started: one setItem, carrying
+    // the newest words rather than one call per partial.
+    expect(mockSet).toHaveBeenCalledTimes(1);
+    expect(mockSet).toHaveBeenCalledWith(
+      recoveryStorageKey(thread),
+      JSON.stringify('book a table for two'),
+    );
+    expect(await loadHandsfreeRecovery(thread)).toBe('book a table for two');
+  });
+
+  test('a transcript that arrives during a write is still persisted next', async () => {
+    const thread = bot();
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mockSet.mockImplementation(async (key: string, value: string) => {
+      backing.set(key, value);
+      if (value === JSON.stringify('first')) await blocked;
+    });
+
+    const first = saveHandsfreeRecovery(thread, 'first');
+    // Let the first write reach storage, then send a newer transcript while it
+    // is still blocked.
+    await Promise.resolve();
+    const second = saveHandsfreeRecovery(thread, 'second');
+    release();
+    await Promise.all([first, second]);
+
+    expect(mockSet).toHaveBeenCalledTimes(2);
+    expect(await loadHandsfreeRecovery(thread)).toBe('second');
+  });
+});
+
 describe('clearHandsfreeRecovery', () => {
   test('removes the record', async () => {
     await saveHandsfreeRecovery(bot(), 'book a table');

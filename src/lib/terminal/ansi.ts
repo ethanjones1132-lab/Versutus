@@ -153,6 +153,16 @@ function scanEscape(text: string, start: number): EscapeScan {
   return { end: cursor, sgr: null };
 }
 
+/**
+ * Index just after the control sequence that starts at `start` (an ESC byte).
+ * Exposed so a caller that must cut text at a safe boundary — the terminal's
+ * long-line splitter — can tell whether a cut would land in the middle of a
+ * sequence, without keeping a second, disagreeing parser.
+ */
+export function ansiSequenceEnd(text: string, start: number): number {
+  return scanEscape(text, start).end;
+}
+
 function applySgr(rawParams: string, state: { fg: AnsiColor; bg: AnsiColor; bold: boolean; dim: boolean }) {
   const params =
     rawParams.length === 0

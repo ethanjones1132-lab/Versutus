@@ -211,6 +211,16 @@ describe('isPromptLine', () => {
     expect(isPromptLine('')).toBe(false);
   });
 
+  test('rejects prose that only ends in a terminator after a colon', () => {
+    // The colon used to be treated as proof of a path, so ordinary output was
+    // accented as the prompt the operator had typed at.
+    expect(isPromptLine('CPU usage: 45%')).toBe(false);
+    expect(isPromptLine('Price: $')).toBe(false);
+    // The shapes that really are prompts still qualify.
+    expect(isPromptLine('~$')).toBe(true);
+    expect(isPromptLine('mysql>')).toBe(true);
+  });
+
   test('rejects absurdly long lines', () => {
     expect(isPromptLine(`${'a'.repeat(97)}$`)).toBe(false);
   });

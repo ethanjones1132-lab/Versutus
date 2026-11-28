@@ -114,6 +114,13 @@ describe('jsonExitSignal', () => {
     expect(signal.label).toContain('boom');
   });
 
+  test('an informational message on a success result is not a failure', () => {
+    // A successful RPC result carries `message` routinely; only `error` says
+    // the command failed, so the sheet must not accent these rows.
+    expect(jsonExitSignal({ ok: true, message: 'saved' })).toEqual({ failed: false });
+    expect(jsonExitSignal({ message: 'saved' })).toEqual({ failed: false });
+  });
+
   test('flags ok:false and in-flight statuses', () => {
     expect(jsonExitSignal({ ok: false }).failed).toBe(true);
     expect(jsonExitSignal({ status: 'running' }).failed).toBe(true);
