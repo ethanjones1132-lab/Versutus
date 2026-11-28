@@ -18,6 +18,25 @@ import { ProviderStore } from '../core/providers/store.mjs';
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+/**
+ * Read the same thing until `done` accepts it, or a stall ceiling passes.
+ *
+ * The ceiling is not a test budget: the behaviour under test is the state
+ * changing, not how quickly a loaded box gets there. It exists only so a hook
+ * that never fires fails the test instead of hanging it, which is why it is far
+ * longer than any reload needs — a debounce plus a whole-state rebuild is
+ * ordinary work, and timing it is what made the check red on a busy machine.
+ */
+async function until(read, done, { ceilingMs = 30_000, intervalMs = 25 } = {}) {
+  const deadline = Date.now() + ceilingMs;
+  let value = await read();
+  while (!done(value) && Date.now() <= deadline) {
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    value = await read();
+  }
+  return value;
+}
+
 /** A compute the test settles by hand, so a run can be held open. */
 function controlledCompute(onStart) {
   const runs = [];
@@ -281,12 +300,16 @@ test('the manifest follows a real chat turn through the debounced reload', async
     await turn.text();
     assert.equal(turn.status, 502, 'a refused upstream is still an upstream failure');
 
-    const deadline = Date.now() + 3000;
-    let entry;
-    do {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      entry = await advertised();
-    } while (entry.readiness.state === before.readiness.state && Date.now() < deadline);
+    // Wait on the readiness the turn produced, not on a clock: what has to land
+    // is the debounced reload's manifest write, and on a loaded box the reload
+    // plus the provider state write legitimately outlasts any budget short
+    // enough to look like a timeout. The ceiling inside `until` only gives up on
+    // a real stall, so a Gate that never moves the verdict still fails.
+    const entry = await until(
+      advertised,
+      (advertisement) => advertisement?.readiness?.state !== undefined
+        && advertisement.readiness.state !== before.readiness.state,
+    );
 
     assert.equal(
       entry.readiness.state,

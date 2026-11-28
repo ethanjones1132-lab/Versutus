@@ -20,6 +20,25 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
+/**
+ * Poll `check` until it holds, or a stall ceiling passes.
+ *
+ * Setup a test depends on is an event, not a moment: the Gate attaches an
+ * environment on its first read, and on a loaded box that read is still in
+ * flight when an assertion would otherwise fire — which is how a restore came
+ * back `unknown_session` for a session nobody had looked for yet. The ceiling
+ * only guards against a fixture that never gets there, so it is generous by
+ * design and never stands in for the answer being asserted.
+ */
+async function waitFor(check, { ceilingMs = 10_000, intervalMs = 10 } = {}) {
+  const deadline = Date.now() + ceilingMs;
+  while (!(await check())) {
+    if (Date.now() > deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return true;
+}
+
 function session(id, source = 'hermes', extra = {}) {
   return {
     id,
@@ -261,11 +280,34 @@ test('a scope-less restore reaches the Bot-scoped environment the index last lis
 test('an environment that cannot answer does not hold up the ones that can', async () => {
   // The sweep is bounded per environment: Claude Code here never returns, and
   // Hermes still has the session. Before the bound the tap simply hung.
-  const { gate, rpc } = await makeGate({ gateOptions: { sessionLookupBoundMs: 40 }, backends: { claude: { hang: true } } });
+  //
+  // The bound is a stall guard, not a performance budget. At 40 ms a loaded box
+  // could spend the whole bound attaching Hermes, count that environment as
+  // "not here" and answer `unknown_session` for a session it had — so it sits
+  // far above anything these in-process fixtures need, and the sweep answers as
+  // soon as the environment that can answer does, not when the bound expires.
+  const calls = [];
+  const { gate, rpc } = await makeGate({
+    calls,
+    gateOptions: { sessionLookupBoundMs: 10_000 },
+    backends: { claude: { hang: true } },
+  });
   try {
+    // Drive Hermes to its ready state first: an environment attaches on its
+    // first read, and that attach is not what this test is about.
+    const warm = await rpc('session.restore', { sessionId: 'api_1', backendId: 'zzz-hermes' });
+    assert.equal(warm.status, 200, JSON.stringify(warm.body));
+
     const restored = await rpc('session.restore', { sessionId: 'api_1' });
     assert.equal(restored.status, 200, JSON.stringify(restored.body));
     assert.equal(restored.body.result.id, 'api_1');
+
+    // The 200 is only meaningful if the environment that cannot answer was
+    // really asked: wait for its read to begin rather than racing it.
+    assert.ok(
+      await waitFor(() => calls.some((call) => call.startsWith('claude:'))),
+      `the environment that cannot answer must have been asked: ${JSON.stringify(calls)}`,
+    );
   } finally {
     await gate.close();
   }
@@ -278,10 +320,16 @@ test('a get-by-id read that never returns is bounded like any other candidate', 
   // here a second Hermes-shaped environment hangs on that read and must count
   // as "not here" while the one that can answer wins.
   const { gate, rpc } = await makeGate({
-    gateOptions: { sessionLookupBoundMs: 40 },
+    // The bound is a stall guard here too: the environment that can answer must
+    // not lose to a loaded box's attach time (see the test above).
+    gateOptions: { sessionLookupBoundMs: 10_000 },
     backends: { slowHermes: true },
   });
   try {
+    // Attach the environment that can answer before the sweep races it.
+    const warm = await rpc('session.restore', { sessionId: 'api_1', backendId: 'zzz-hermes' });
+    assert.equal(warm.status, 200, JSON.stringify(warm.body));
+
     const restored = await rpc('session.restore', { sessionId: 'api_1' });
     assert.equal(restored.status, 200, JSON.stringify(restored.body));
     assert.equal(restored.body.result.id, 'api_1');
